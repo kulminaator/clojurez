@@ -106,6 +106,20 @@ pub fn core_mod(self: *Value, args: list.List, _: *Env) anyerror!Value {
     return Value.intValue(@rem(a, b));
 }
 
+pub fn core_inc(self: *Value, args: list.List, _: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const n = try toInt(args.items[0]);
+    return Value.intValue(n + 1);
+}
+
+pub fn core_dec(self: *Value, args: list.List, _: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const n = try toInt(args.items[0]);
+    return Value.intValue(n - 1);
+}
+
 // Comparison functions
 pub fn core_eq(self: *Value, args: list.List, _: *Env) anyerror!Value {
     _ = self;
@@ -392,7 +406,19 @@ pub fn core_vec(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     var new_vec: vec.Vector = .empty;
     errdefer new_vec.deinit(env_env.allocator);
     for (args.items) |arg| {
-        try new_vec.append(env_env.allocator, try arg.clone(env_env.allocator));
+        switch (arg.type) {
+            .list => {
+                for (arg.list_val.items) |item| {
+                    try new_vec.append(env_env.allocator, try item.clone(env_env.allocator));
+                }
+            },
+            .vector => {
+                for (arg.vec_val.items) |item| {
+                    try new_vec.append(env_env.allocator, try item.clone(env_env.allocator));
+                }
+            },
+            else => try new_vec.append(env_env.allocator, try arg.clone(env_env.allocator)),
+        }
     }
     return Value.vectorValue(new_vec);
 }
@@ -420,7 +446,8 @@ pub fn core_println(self: *Value, args: list.List, env_env: *Env) anyerror!Value
     _ = self;
     var buf: [256]u8 = undefined;
     var writer = stdout_file.writer(std.Options.debug_io, &buf);
-    for (args.items) |arg| {
+    for (args.items, 0..) |arg, i| {
+        if (i > 0) try writer.interface.writeAll(" ");
         const s = try arg.fmt(env_env.allocator);
         defer env_env.allocator.free(s);
         if (arg.type == .string and s.len >= 2 and s[0] == '"' and s[s.len - 1] == '"') {
@@ -468,6 +495,201 @@ pub fn core_read_line(self: *Value, args: list.List, env_env: *Env) anyerror!Val
     return Value.stringValue(env_env.allocator, buf[0..end]);
 }
 
+// Map functions
+pub fn core_get(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len < 1) return error.ArityError;
+    const map_val = args.items[0];
+    if (map_val.type != .map) return error.TypeError;
+    if (args.items.len == 1) return Value.nilValue();
+    const key = args.items[1];
+    for (map_val.map_val.items) |entry| {
+        if (entry.key.equals(key)) {
+            return try entry.value.clone(env_env.allocator);
+        }
+    }
+    return Value.nilValue();
+}
+
+pub fn core_assoc(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len < 1) return error.ArityError;
+    const map_val = args.items[0];
+    if (map_val.type != .map) return error.TypeError;
+
+    var new_map: Value.Map = .empty;
+    errdefer {
+        for (new_map.items) |*entry| {
+            entry.key.deinit(env_env.allocator);
+            entry.value.deinit(env_env.allocator);
+        }
+        env_env.allocator.free(new_map.items);
+    }
+
+    // Copy existing entries
+    for (map_val.map_val.items) |entry| {
+        try new_map.append(env_env.allocator, .{
+            .key = try entry.key.clone(env_env.allocator),
+            .value = try entry.value.clone(env_env.allocator),
+        });
+    }
+
+    // Apply key-value pairs
+    var i: usize = 1;
+    while (i + 1 < args.items.len) : (i += 2) {
+        const key = args.items[i];
+        const value = args.items[i + 1];
+        // Update existing key or append new
+        var found = false;
+        var j: usize = 0;
+        while (j < new_map.items.len) : (j += 1) {
+            if (new_map.items[j].key.equals(key)) {
+                new_map.items[j].value.deinit(env_env.allocator);
+                new_map.items[j].value = try value.clone(env_env.allocator);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            try new_map.append(env_env.allocator, .{
+                .key = try key.clone(env_env.allocator),
+                .value = try value.clone(env_env.allocator),
+            });
+        }
+    }
+
+    return Value.mapValue(new_map);
+}
+
+// Collection functions
+pub fn core_conj(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len < 2) return error.ArityError;
+    const coll = args.items[0];
+    switch (coll.type) {
+        .vector => {
+            var new_vec: vec.Vector = .empty;
+            errdefer new_vec.deinit(env_env.allocator);
+            for (coll.vec_val.items) |item| {
+                try new_vec.append(env_env.allocator, try item.clone(env_env.allocator));
+            }
+            for (args.items[1..]) |item| {
+                try new_vec.append(env_env.allocator, try item.clone(env_env.allocator));
+            }
+            return Value.vectorValue(new_vec);
+        },
+        .list => {
+            var new_list: list.List = .empty;
+            errdefer new_list.deinit(env_env.allocator);
+            // For lists, conj prepends (like Clojure)
+            var i: usize = args.items.len - 1;
+            while (true) {
+                try new_list.append(env_env.allocator, try args.items[i].clone(env_env.allocator));
+                if (i == 1) break;
+                i -= 1;
+            }
+            for (coll.list_val.items) |item| {
+                try new_list.append(env_env.allocator, try item.clone(env_env.allocator));
+            }
+            return Value.listValue(new_list);
+        },
+        else => return error.TypeError,
+    }
+}
+
+pub fn core_pop(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const coll = args.items[0];
+    switch (coll.type) {
+        .vector => {
+            if (coll.vec_val.items.len == 0) return Value.vectorValue(.empty);
+            var new_vec: vec.Vector = .empty;
+            errdefer new_vec.deinit(env_env.allocator);
+            const len = coll.vec_val.items.len - 1;
+            var i: usize = 0;
+            while (i < len) : (i += 1) {
+                try new_vec.append(env_env.allocator, try coll.vec_val.items[i].clone(env_env.allocator));
+            }
+            return Value.vectorValue(new_vec);
+        },
+        .list => {
+            if (coll.list_val.items.len == 0) return Value.listValue(.empty);
+            var new_list: list.List = .empty;
+            errdefer new_list.deinit(env_env.allocator);
+            const len = coll.list_val.items.len - 1;
+            var i: usize = 0;
+            while (i < len) : (i += 1) {
+                try new_list.append(env_env.allocator, try coll.list_val.items[i].clone(env_env.allocator));
+            }
+            return Value.listValue(new_list);
+        },
+        else => return error.TypeError,
+    }
+}
+
+pub fn core_last(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const coll = args.items[0];
+    switch (coll.type) {
+        .vector => {
+            if (coll.vec_val.items.len == 0) return Value.nilValue();
+            return try coll.vec_val.items[coll.vec_val.items.len - 1].clone(env_env.allocator);
+        },
+        .list => {
+            if (coll.list_val.items.len == 0) return Value.nilValue();
+            return try coll.list_val.items[coll.list_val.items.len - 1].clone(env_env.allocator);
+        },
+        else => return error.TypeError,
+    }
+}
+
+pub fn core_reverse(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const coll = args.items[0];
+    switch (coll.type) {
+        .vector => {
+            var new_vec: vec.Vector = .empty;
+            errdefer new_vec.deinit(env_env.allocator);
+            var i: usize = coll.vec_val.items.len;
+            while (i > 0) {
+                i -= 1;
+                try new_vec.append(env_env.allocator, try coll.vec_val.items[i].clone(env_env.allocator));
+            }
+            return Value.vectorValue(new_vec);
+        },
+        .list => {
+            var new_list: list.List = .empty;
+            errdefer new_list.deinit(env_env.allocator);
+            var i: usize = coll.list_val.items.len;
+            while (i > 0) {
+                i -= 1;
+                try new_list.append(env_env.allocator, try coll.list_val.items[i].clone(env_env.allocator));
+            }
+            return Value.listValue(new_list);
+        },
+        else => return error.TypeError,
+    }
+}
+
+pub fn core_range(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len < 1 or args.items.len > 2) return error.ArityError;
+    const end = try toInt(args.items[args.items.len - 1]);
+    const start: i64 = if (args.items.len == 2) try toInt(args.items[0]) else 0;
+
+    var new_list: list.List = .empty;
+    errdefer new_list.deinit(env_env.allocator);
+
+    var i: i64 = start;
+    while (i < end) : (i += 1) {
+        try new_list.append(env_env.allocator, Value.intValue(i));
+    }
+    return Value.listValue(new_list);
+}
+
 // Helper functions
 fn isIntF64(f: f64) bool {
     if (std.math.isNan(f) or std.math.isInf(f)) return false;
@@ -504,6 +726,8 @@ pub fn registerCoreFunctions(env: *Env) anyerror!void {
     try env.put(allocator, "mult", Value.builtinFnValue(core_mult));
     try env.put(allocator, "div", Value.builtinFnValue(core_div));
     try env.put(allocator, "mod", Value.builtinFnValue(core_mod));
+    try env.put(allocator, "inc", Value.builtinFnValue(core_inc));
+    try env.put(allocator, "dec", Value.builtinFnValue(core_dec));
 
     // Comparison
     try env.put(allocator, "eq", Value.builtinFnValue(core_eq));
@@ -542,6 +766,17 @@ pub fn registerCoreFunctions(env: *Env) anyerror!void {
     try env.put(allocator, "print", Value.builtinFnValue(core_print));
     try env.put(allocator, "println", Value.builtinFnValue(core_println));
     try env.put(allocator, "read-line", Value.builtinFnValue(core_read_line));
+
+    // Maps
+    try env.put(allocator, "get", Value.builtinFnValue(core_get));
+    try env.put(allocator, "assoc", Value.builtinFnValue(core_assoc));
+
+    // Collection operations
+    try env.put(allocator, "conj", Value.builtinFnValue(core_conj));
+    try env.put(allocator, "pop", Value.builtinFnValue(core_pop));
+    try env.put(allocator, "last", Value.builtinFnValue(core_last));
+    try env.put(allocator, "reverse", Value.builtinFnValue(core_reverse));
+    try env.put(allocator, "range", Value.builtinFnValue(core_range));
 
     // Clojure-style aliases
     try env.put(allocator, "+", Value.builtinFnValue(core_plus));

@@ -153,16 +153,21 @@ pub const Parser = struct {
     }
 
     fn readMap(self: *Parser) anyerror!Value {
-        // For now, maps are represented as lists of key-value pairs
         try self.advance(); // consume '{'
-        var items = list.empty();
-        errdefer items.deinit(self.allocator);
+        var entries: Value.Map = .empty;
+        errdefer {
+            for (entries.items) |*entry| {
+                entry.key.deinit(self.allocator);
+                entry.value.deinit(self.allocator);
+            }
+            self.allocator.free(entries.items);
+        }
 
         while (true) {
             switch (self.current) {
                 .close_brace => {
                     try self.advance();
-                    return Value.listValue(items);
+                    return Value.mapValue(entries);
                 },
                 .eof => return error.UnexpectedEof,
                 .comma => {
@@ -171,8 +176,9 @@ pub const Parser = struct {
                 },
                 else => {},
             }
-            const form = try self.readForm();
-            try items.append(self.allocator, form);
+            const key = try self.readForm();
+            const value = try self.readForm();
+            try entries.append(self.allocator, .{ .key = key, .value = value });
         }
     }
 

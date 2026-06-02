@@ -15,9 +15,17 @@ pub const Type = enum {
     keyword,
     list,
     vector,
+    map,
     function,
     builtin_fn,
 };
+
+pub const MapEntry = struct {
+    key: Self,
+    value: Self,
+};
+
+pub const Map = std.ArrayListUnmanaged(MapEntry);
 
 pub const BuiltinFn = *const fn (self: *Self, args: list.List, env: *Env) anyerror!Self;
 
@@ -32,6 +40,7 @@ sym_val: []const u8 = "",
 kw_val: []const u8 = "",
 list_val: list.List = list.List.empty,
 vec_val: vec.Vector = vec.Vector.empty,
+map_val: Map = .empty,
 fn_val: FnData = .{ .params = list.List.empty, .body = list.List.empty, .env = undefined },
 builtin_fn_val: BuiltinFn = undefined,
 
@@ -140,6 +149,10 @@ pub fn vectorValue(v: vec.Vector) Self {
     return .{ .type = .vector, .vec_val = v };
 }
 
+pub fn mapValue(m: Map) Self {
+    return .{ .type = .map, .map_val = m };
+}
+
 pub fn fnValue(params: list.List, body: list.List, env: Env) Self {
     return .{ .type = .function, .fn_val = .{ .params = params, .body = body, .env = env } };
 }
@@ -156,6 +169,13 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
         .keyword => allocator.free(self.kw_val),
         .list => self.list_val.deinit(allocator),
         .vector => self.vec_val.deinit(allocator),
+        .map => {
+            for (self.map_val.items) |*entry| {
+                entry.key.deinit(allocator);
+                entry.value.deinit(allocator);
+            }
+            allocator.free(self.map_val.items);
+        },
         .function => {
             self.fn_val.params.deinit(allocator);
             self.fn_val.body.deinit(allocator);
@@ -176,6 +196,24 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
         .keyword => return keywordValue(allocator, self.kw_val),
         .list => return listValue(try self.list_val.clone(allocator)),
         .vector => return vectorValue(try self.vec_val.clone(allocator)),
+        .map => {
+            var new_map: Map = .empty;
+            errdefer {
+                for (new_map.items) |*entry| {
+                    entry.key.deinit(allocator);
+                    entry.value.deinit(allocator);
+                }
+                allocator.free(new_map.items);
+            }
+            try new_map.ensureTotalCapacity(allocator, self.map_val.items.len);
+            for (self.map_val.items) |entry| {
+                try new_map.append(allocator, .{
+                    .key = try entry.key.clone(allocator),
+                    .value = try entry.value.clone(allocator),
+                });
+            }
+            return mapValue(new_map);
+        },
         .function => {
             const fnv = self.fn_val;
             return fnValue(
@@ -206,6 +244,14 @@ pub fn equals(self: Self, other: Self) bool {
         .string => return std.mem.eql(u8, self.str_val, other.str_val),
         .symbol => return std.mem.eql(u8, self.sym_val, other.sym_val),
         .keyword => return std.mem.eql(u8, self.kw_val, other.kw_val),
+        .map => {
+            if (self.map_val.items.len != other.map_val.items.len) return false;
+            for (self.map_val.items, 0..) |entry, i| {
+                const other_entry = other.map_val.items[i];
+                if (!entry.key.equals(other_entry.key) or !entry.value.equals(other_entry.value)) return false;
+            }
+            return true;
+        },
         else => return false,
     }
 }
@@ -221,7 +267,29 @@ pub fn fmt(self: Self, allocator: Allocator) anyerror![]const u8 {
         .keyword => try std.fmt.allocPrint(allocator, ":{s}", .{self.kw_val}),
         .list => try list.fmt(self.list_val, allocator),
         .vector => try vec.fmt(self.vec_val, allocator),
+        .map => try mapFmt(self.map_val, allocator),
         .function => allocator.dupe(u8, "#function"),
         .builtin_fn => allocator.dupe(u8, "#builtin"),
     };
+}
+
+pub fn mapFmt(m: Map, allocator: Allocator) anyerror![]const u8 {
+    if (m.items.len == 0) return allocator.dupe(u8, "{}");
+
+    var buf: std.ArrayList(u8) = .empty;
+    errdefer buf.deinit(allocator);
+
+    try buf.append(allocator, '{');
+    for (m.items, 0..) |entry, i| {
+        if (i > 0) try buf.append(allocator, ' ');
+        const key_s = try entry.key.fmt(allocator);
+        defer allocator.free(key_s);
+        const val_s = try entry.value.fmt(allocator);
+        defer allocator.free(val_s);
+        try buf.appendSlice(allocator, key_s);
+        try buf.append(allocator, ' ');
+        try buf.appendSlice(allocator, val_s);
+    }
+    try buf.append(allocator, '}');
+    return buf.toOwnedSlice(allocator);
 }

@@ -133,6 +133,42 @@ run_test "vector destructure" '((fn [[a b]] (+ a b)) [1 2])' "3"
 run_test "nested destructure" '((fn [[[a b] c]] (+ a b c)) [[1 2] 3])' "6"
 
 echo ""
+echo "=== Map Tests ==="
+run_test "map literal" '{:a 1 :b 2}' "{:a 1 :b 2}"
+run_test "get from map" '(get {:a 1 :b 2} :a)' "1"
+run_test "get missing key" '(get {:a 1} :b)' "nil"
+run_test "assoc new key" '(assoc {:a 1} :b 2)' "{:a 1 :b 2}"
+run_test "assoc multiple" '(assoc {:a 1} :b 2 :c 3)' "{:a 1 :b 2 :c 3}"
+
+echo ""
+echo "=== Collection Tests ==="
+run_test "conj vector" '(conj [1 2] 3)' "[1 2 3]"
+run_test "pop vector" '(pop [1 2 3])' "[1 2]"
+run_test "last vector" '(last [1 2 3])' "3"
+run_test "reverse vector" '(reverse [1 2 3])' "[3 2 1]"
+run_test "range" '(range 1 4)' "(1 2 3)"
+
+echo ""
+echo "=== Namespace Tests ==="
+run_test "ns declaration" '(ns my.core)' "nil"
+
+echo ""
+echo "=== Hanoi Sample ==="
+# Run the hanoi sample and check output
+hanoi_result=$(timeout 10 ./main samples/sample_2_hanoi/hanoi/core.clj 2>&1 | tail -n +5)
+expected_hanoi=$(cat samples/sample_2_hanoi/expected_output.txt)
+TOTAL=$((TOTAL + 1))
+if [ "$hanoi_result" = "$expected_hanoi" ]; then
+    echo "PASS: hanoi sample"
+    PASS=$((PASS + 1))
+else
+    echo "FAIL: hanoi sample"
+    echo "  Expected: $expected_hanoi"
+    echo "  Got:      $hanoi_result"
+    FAIL=$((FAIL + 1))
+fi
+
+echo ""
 echo "=== Fibonacci Sample ==="
 # Run the fibonacci sample and check output
 fib_result=$(timeout 10 ./main samples/sample_1_fibonacci/core.clj 2>&1 | tail -1)

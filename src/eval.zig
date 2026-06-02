@@ -53,6 +53,24 @@ fn evalRec(allocator: Allocator, form: Value, env: *Env, depth: usize) anyerror!
             }
             return Value.vectorValue(new_vec);
         },
+        .map => {
+            // Maps evaluate key-value pairs element-wise
+            var new_map: Value.Map = .empty;
+            errdefer {
+                for (new_map.items) |*entry| {
+                    entry.key.deinit(allocator);
+                    entry.value.deinit(allocator);
+                }
+                allocator.free(new_map.items);
+            }
+            for (form.map_val.items) |entry| {
+                try new_map.append(allocator, .{
+                    .key = try evalRec(allocator, entry.key, env, depth + 1),
+                    .value = try evalRec(allocator, entry.value, env, depth + 1),
+                });
+            }
+            return Value.mapValue(new_map);
+        },
         .function, .builtin_fn => return try form.clone(allocator),
     }
     unreachable;
@@ -68,6 +86,11 @@ fn evalList(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerro
         const name = first.sym_val;
 
         // Special forms that don't evaluate their arguments
+        // ns - namespace declaration (no-op for our simple VM)
+        if (std.mem.eql(u8, name, "ns")) {
+            return Value.nilValue();
+        }
+
         if (std.mem.eql(u8, name, "quote")) {
             if (l.items.len != 2) return error.ArityError;
             return try l.items[1].clone(allocator);
@@ -99,7 +122,7 @@ fn evalList(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerro
         if (std.mem.eql(u8, name, "let")) {
             if (l.items.len < 2) return error.ArityError;
             const bindings = l.items[1];
-            if (bindings.type != .list) return error.TypeError;
+            if (bindings.type != .list and bindings.type != .vector) return error.TypeError;
             return try evalLet(allocator, bindings, l.items[2..], env, depth + 1);
         }
 
@@ -150,7 +173,13 @@ fn evalList(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerro
 
             const cloned_params = try params_list.clone(allocator);
             const cloned_body = try body_list.clone(allocator);
-            const fn_env = try env.clone(allocator);
+            // Create fn_env with parent = env so it can see all global symbols
+            // including the function itself (for recursion)
+            const fn_env: Env = .{
+                .allocator = allocator,
+                .entries = .empty,
+                .parent = env,
+            };
             const fn_val = Value.fnValue(cloned_params, cloned_body, fn_env);
             try env.put(allocator, fname.sym_val, fn_val);
             return try fname.clone(allocator);
@@ -338,16 +367,23 @@ fn evalDo(allocator: Allocator, forms: []const Value, env: *Env, depth: usize) a
 }
 
 fn evalLet(allocator: Allocator, bindings: Value, body: []const Value, env: *Env, depth: usize) anyerror!Value {
-    if (bindings.type != .list) return error.TypeError;
+    if (bindings.type != .list and bindings.type != .vector) return error.TypeError;
 
     var new_env = try env.clone(allocator);
     defer new_env.deinit(allocator);
 
+    const items = switch (bindings.type) {
+        .list => bindings.list_val.items,
+        .vector => bindings.vec_val.items,
+        else => unreachable,
+    };
+
     var i: usize = 0;
-    while (i < bindings.list_val.items.len) : (i += 2) {
-        const sym = bindings.list_val.items[i];
+    while (i < items.len) : (i += 2) {
+        const sym = items[i];
         if (sym.type != .symbol) return error.TypeError;
-        const val = try evalRec(allocator, bindings.list_val.items[i + 1], env, depth);
+        // Evaluate binding value in new_env so later bindings can reference earlier ones
+        const val = try evalRec(allocator, items[i + 1], &new_env, depth);
         try new_env.put(allocator, sym.sym_val, val);
     }
 
@@ -374,16 +410,22 @@ fn evalCond(allocator: Allocator, clauses: []const Value, env: *Env, depth: usiz
 }
 
 fn evalLoop(allocator: Allocator, bindings: Value, body: []const Value, env: *Env, depth: usize) anyerror!Value {
-    if (bindings.type != .list) return error.TypeError;
+    if (bindings.type != .list and bindings.type != .vector) return error.TypeError;
 
     var new_env = try env.clone(allocator);
     defer new_env.deinit(allocator);
 
+    const items = switch (bindings.type) {
+        .list => bindings.list_val.items,
+        .vector => bindings.vec_val.items,
+        else => unreachable,
+    };
+
     var i: usize = 0;
-    while (i < bindings.list_val.items.len) : (i += 2) {
-        const sym = bindings.list_val.items[i];
+    while (i < items.len) : (i += 2) {
+        const sym = items[i];
         if (sym.type != .symbol) return error.TypeError;
-        const val = try evalRec(allocator, bindings.list_val.items[i + 1], env, depth);
+        const val = try evalRec(allocator, items[i + 1], env, depth);
         try new_env.put(allocator, sym.sym_val, val);
     }
 
