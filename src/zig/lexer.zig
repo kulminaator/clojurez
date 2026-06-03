@@ -17,10 +17,11 @@ pub const Token = union(enum) {
     symbol: []const u8,
     keyword: []const u8,
     queue_tag: void,
+    fn_shorthand: []const u8, // body text of #( ... )
 
     pub fn deinit(self: Token, allocator: Allocator) void {
         switch (self) {
-            .string, .number, .symbol, .keyword => |s| allocator.free(s),
+            .string, .number, .symbol, .keyword, .fn_shorthand => |s| allocator.free(s),
             else => {},
         }
     }
@@ -42,6 +43,7 @@ pub const Token = union(enum) {
             .symbol => |s| .{ .symbol = try allocator.dupe(u8, s) },
             .keyword => |s| .{ .keyword = try allocator.dupe(u8, s) },
             .queue_tag => .{ .queue_tag = {} },
+            .fn_shorthand => |s| .{ .fn_shorthand = try allocator.dupe(u8, s) },
         };
     }
 };
@@ -222,6 +224,11 @@ pub const Lexer = struct {
         const ch = self.input[self.pos];
         switch (ch) {
             '{' => { self.pos += 1; return .{ .set_open = {} }; },
+            '(' => {
+                // #(body) — anonymous function shorthand
+                self.pos += 1; // skip '('
+                return self.readFnShorthand();
+            },
             else => {
                 // Check for #queue(...)
                 if (std.mem.startsWith(u8, self.input[self.pos..], "queue(")) {
@@ -237,6 +244,59 @@ pub const Lexer = struct {
                 return .{ .symbol = result };
             },
         }
+    }
+
+    /// Read #(body) anonymous function shorthand.
+    /// Returns the body text (between the parens) as a fn_shorthand token.
+    fn readFnShorthand(self: *Lexer) anyerror!Token {
+        var buf: std.ArrayList(u8) = .empty;
+        errdefer buf.deinit(self.allocator);
+
+        var depth: usize = 1;
+        var in_string = false;
+        var escape_next = false;
+
+        while (self.pos < self.input.len) {
+            const ch = self.input[self.pos];
+
+            if (escape_next) {
+                try buf.append(self.allocator, ch);
+                self.pos += 1;
+                escape_next = false;
+                continue;
+            }
+
+            if (ch == '\\' and in_string) {
+                try buf.append(self.allocator, ch);
+                self.pos += 1;
+                escape_next = true;
+                continue;
+            }
+
+            if (ch == '"') {
+                in_string = !in_string;
+                try buf.append(self.allocator, ch);
+                self.pos += 1;
+                continue;
+            }
+
+            if (!in_string) {
+                if (ch == '(') {
+                    depth += 1;
+                } else if (ch == ')') {
+                    depth -= 1;
+                    if (depth == 0) {
+                        self.pos += 1; // skip closing ')'
+                        return .{ .fn_shorthand = try buf.toOwnedSlice(self.allocator) };
+                    }
+                }
+            }
+
+            try buf.append(self.allocator, ch);
+            self.pos += 1;
+        }
+
+        return error.UnexpectedEof;
     }
 };
 

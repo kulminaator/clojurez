@@ -17,6 +17,8 @@ pub const Parser = struct {
     lexer: Lexer,
     current: Token = .{ .eof = {} },
     allocator: Allocator,
+    // Fn shorthand mode: when true, % symbols are intercepted
+    fn_shorthand_args: ?*FnShorthandArgs = null,
 
     pub fn init(allocator: Allocator, input: []const u8) anyerror!Parser {
         var lexer = Lexer.init(allocator, input);
@@ -104,6 +106,14 @@ pub const Parser = struct {
             },
             .keyword => |s| {
                 const val = try Value.keywordValue(self.allocator, s);
+                self.current.deinit(self.allocator);
+                self.current = .{ .eof = {} };
+                try self.advance();
+                return val;
+            },
+            .fn_shorthand => |body_text| {
+                // Parse body with arg tracking: intercept % symbols during parsing
+                const val = try self.readFnShorthand(body_text);
                 self.current.deinit(self.allocator);
                 self.current = .{ .eof = {} };
                 try self.advance();
@@ -277,6 +287,12 @@ pub const Parser = struct {
     }
 
     fn parseSymbol(self: *Parser, s: []const u8) anyerror!Value {
+        // In fn shorthand mode, intercept % symbols
+        if (self.fn_shorthand_args) |args| {
+            if (s.len > 0 and s[0] == '%') {
+                return args.registerArg(self.allocator, s);
+            }
+        }
         // Handle special literal symbols
         if (std.mem.eql(u8, s, "true")) return Value.boolValue(true);
         if (std.mem.eql(u8, s, "false")) return Value.boolValue(false);
@@ -298,6 +314,113 @@ pub const Parser = struct {
         }
         return .{ .type = .symbol, .sym_val = duped };
     }
+
+    /// Expand #(body) shorthand into (fn [params] body).
+    /// Parses body with arg tracking: % symbols are intercepted during parsing.
+    fn readFnShorthand(self: *Parser, body_text: []const u8) anyerror!Value {
+        // Wrap body in parens so it parses as a single form
+        const wrapped_len = body_text.len + 2;
+        var wrapped_buf: [1024]u8 = undefined;
+        var wrapped: []u8 = if (wrapped_len <= wrapped_buf.len)
+            wrapped_buf[0..wrapped_len]
+        else
+            try self.allocator.alloc(u8, wrapped_len);
+        const owned = wrapped_len > wrapped_buf.len;
+        defer if (owned) self.allocator.free(wrapped);
+        wrapped[0] = '(';
+        @memcpy(wrapped[1 .. 1 + body_text.len], body_text);
+        wrapped[wrapped_len - 1] = ')';
+
+        // Create arg tracker
+        var args: FnShorthandArgs = .{
+            .allocator = self.allocator,
+            .arg_symbols = undefined,
+        };
+        @memset(&args.arg_symbols, null);
+
+        // Create sub-parser with fn shorthand mode
+        var body_parser = try Parser.init(self.allocator, wrapped);
+        body_parser.fn_shorthand_args = &args;
+        defer body_parser.deinit();
+
+        // Parse the body - % symbols are intercepted by parseSymbol
+        const body_form = try body_parser.parse();
+
+        // Build (fn [params] body)
+        var fn_form: list.List = .empty;
+        try fn_form.append(self.allocator, try self.symValue("fn"));
+
+        // Build params vector from tracked args
+        var params_vec: vec.Vector = .empty;
+        try args.buildParams(self.allocator, &params_vec);
+
+        try fn_form.append(self.allocator, Value.vectorValue(params_vec));
+        // Don't deinit params_vec — items transferred to fn_form
+        try fn_form.append(self.allocator, body_form);
+
+        return Value.listValue(fn_form);
+    }
+
+    /// Tracks % arg references during fn shorthand parsing.
+    const FnShorthandArgs = struct {
+        allocator: Allocator,
+        max_positional: usize = 0,
+        has_rest: bool = false,
+        // Cache for generated arg symbols (index 1-based, [0] unused)
+        arg_symbols: [32]?[]const u8 = undefined,
+
+        /// Register a % arg reference and return the corresponding symbol.
+        fn registerArg(self: *FnShorthandArgs, allocator: Allocator, s: []const u8) anyerror!Value {
+            if (std.mem.eql(u8, s, "%")) {
+                // bare % → %1
+                return self.getArgSymbol(1);
+            } else if (std.mem.eql(u8, s, "%&")) {
+                self.has_rest = true;
+                const rest_name = try allocator.dupe(u8, "%&");
+                return .{ .type = .symbol, .sym_val = rest_name };
+            } else if (s.len >= 2 and std.ascii.isDigit(s[1])) {
+                const n = std.fmt.parseInt(usize, s[1..], 10) catch return error.TypeError;
+                return self.getArgSymbol(n);
+            }
+            return error.TypeError;
+        }
+
+        fn getArgSymbol(self: *FnShorthandArgs, n: usize) anyerror!Value {
+            if (n > self.max_positional) self.max_positional = n;
+            if (n >= self.arg_symbols.len) {
+                // Dynamic allocation for high arg numbers
+                const name = try std.fmt.allocPrint(self.allocator, "%{d}", .{n});
+                return .{ .type = .symbol, .sym_val = name };
+            }
+            if (self.arg_symbols[n] == null) {
+                const name = try std.fmt.allocPrint(self.allocator, "%{d}", .{n});
+                self.arg_symbols[n] = name;
+            }
+            return .{ .type = .symbol, .sym_val = self.arg_symbols[n].? };
+        }
+
+        /// Build the params vector from tracked args.
+        fn buildParams(self: *FnShorthandArgs, allocator: Allocator, params_vec: *vec.Vector) anyerror!void {
+            var i: usize = 1;
+            while (i <= self.max_positional) : (i += 1) {
+                const name = try std.fmt.allocPrint(allocator, "%{d}", .{i});
+                try params_vec.append(allocator, .{ .type = .symbol, .sym_val = name });
+            }
+            if (self.has_rest) {
+                const rest_name = try allocator.dupe(u8, "%&");
+                try params_vec.append(allocator, .{ .type = .symbol, .sym_val = rest_name });
+            }
+        }
+
+        fn deinit(self: *FnShorthandArgs) void {
+            var i: usize = 1;
+            while (i < self.arg_symbols.len) : (i += 1) {
+                if (self.arg_symbols[i] != null) {
+                    self.allocator.free(self.arg_symbols[i]);
+                }
+            }
+        }
+    };
 };
 
 test "parser: empty list" {
@@ -449,4 +572,67 @@ test "parser: nil" {
     var form = try p.parse();
     defer form.deinit(allocator);
     try std.testing.expect(form.type == .nil);
+}
+
+test "parser: fn shorthand single arg" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.brk_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var p = try Parser.init(allocator, "#(identity %)");
+    defer p.deinit();
+    var form = try p.parse();
+    defer form.deinit(allocator);
+
+    // Should expand to (fn [%1] (identity %1))
+    try std.testing.expect(form.type == .list);
+    try std.testing.expect(form.list_val.items.len == 3);
+    try std.testing.expect(std.mem.eql(u8, form.list_val.items[0].sym_val, "fn"));
+    try std.testing.expect(form.list_val.items[1].type == .vector);
+    try std.testing.expect(form.list_val.items[1].vec_val.items.len == 1);
+    try std.testing.expect(std.mem.eql(u8, form.list_val.items[1].vec_val.items[0].sym_val, "%1"));
+    // Check body: (identity %1)
+    try std.testing.expect(form.list_val.items[2].type == .list);
+    try std.testing.expect(form.list_val.items[2].list_val.items.len == 2);
+    try std.testing.expect(std.mem.eql(u8, form.list_val.items[2].list_val.items[1].sym_val, "%1"));
+}
+
+test "parser: fn shorthand no args" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.brk_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var p = try Parser.init(allocator, "#(identity 42)");
+    defer p.deinit();
+    var form = try p.parse();
+    defer form.deinit(allocator);
+
+    // Should expand to (fn [] (identity 42))
+    try std.testing.expect(form.type == .list);
+    try std.testing.expect(form.list_val.items.len == 3);
+    try std.testing.expect(std.mem.eql(u8, form.list_val.items[0].sym_val, "fn"));
+    try std.testing.expect(form.list_val.items[1].type == .vector);
+    try std.testing.expect(form.list_val.items[1].vec_val.items.len == 0);
+}
+
+test "parser: fn shorthand two args" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.brk_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var p = try Parser.init(allocator, "#(+ %1 %2)");
+    defer p.deinit();
+    var form = try p.parse();
+    defer form.deinit(allocator);
+
+    try std.testing.expect(form.type == .list);
+    try std.testing.expect(form.list_val.items.len == 3);
+    try std.testing.expect(form.list_val.items[1].vec_val.items.len == 2);
+    try std.testing.expect(std.mem.eql(u8, form.list_val.items[1].vec_val.items[0].sym_val, "%1"));
+    try std.testing.expect(std.mem.eql(u8, form.list_val.items[1].vec_val.items[1].sym_val, "%2"));
+    // Check body: (+ %1 %2)
+    try std.testing.expect(form.list_val.items[2].type == .list);
+    try std.testing.expect(form.list_val.items[2].list_val.items.len == 3);
+    try std.testing.expect(std.mem.eql(u8, form.list_val.items[2].list_val.items[1].sym_val, "%1"));
+    try std.testing.expect(std.mem.eql(u8, form.list_val.items[2].list_val.items[2].sym_val, "%2"));
 }
