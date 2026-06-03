@@ -193,7 +193,7 @@ pub fn core_partial(self: *Value, args: list.List, env_env: *Env) anyerror!Value
     }
     try final_env.put("__partial_args", Value.listValue(stored_args));
 
-    return Value.fnValue(cloned_params, cloned_body, final_env, null, false);
+    return try Value.fnValueSingle(env_env.allocator, cloned_params, cloned_body, final_env, null, false);
 }
 
 // comp - compose functions (right to left)
@@ -238,7 +238,7 @@ pub fn core_comp(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     const cloned_body = try body.clone(env_env.allocator);
     const final_env = try fn_env.clone(env_env.allocator);
 
-    return Value.fnValue(cloned_params, cloned_body, final_env, null, false);
+    return try Value.fnValueSingle(env_env.allocator, cloned_params, cloned_body, final_env, null, false);
 }
 
 // fnil - provide default values for nil arguments
@@ -300,7 +300,7 @@ pub fn core_fnil(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     const cloned_body = try body.clone(env_env.allocator);
     const final_env = try fn_env.clone(env_env.allocator);
 
-    return Value.fnValue(cloned_params, cloned_body, final_env, null, false);
+    return try Value.fnValueSingle(env_env.allocator, cloned_params, cloned_body, final_env, null, false);
 }
 
 // juxt - juxtaposition of functions
@@ -343,7 +343,7 @@ pub fn core_juxt(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     const cloned_body = try body.clone(env_env.allocator);
     const final_env = try fn_env.clone(env_env.allocator);
 
-    return Value.fnValue(cloned_params, cloned_body, final_env, null, false);
+    return try Value.fnValueSingle(env_env.allocator, cloned_params, cloned_body, final_env, null, false);
 }
 
 // ---- Registration ----

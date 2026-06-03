@@ -15,6 +15,7 @@ pub const EvalError = error{
     ArityError,
     RecursionLimit,
     ReplExit,
+    Recur, // internal: used by recur to signal loop/fn tail call
 };
 
 const MAX_RECURSION = 1000;
@@ -254,37 +255,76 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
             return try evalCond(allocator, arena_alloc, l.items[1..], env, depth + 1);
         }
 
-        // defn - define a named function
+        // defn - define a named function (supports multi-arity)
+        // (defn name docstring? ([params] body...)+)
         if (std.mem.eql(u8, name, "defn")) {
             if (l.items.len < 3) return error.ArityError;
             const fname = l.items[1];
             if (fname.type != .symbol) return error.TypeError;
             // Handle optional docstring
-            const has_docstring = l.items.len >= 3 and l.items[2].type == .string;
-            const params_idx: usize = if (has_docstring) 3 else 2;
-            if (params_idx >= l.items.len) return error.ArityError;
-            const params = l.items[params_idx];
-            if (params.type != .list and params.type != .vector) return error.TypeError;
-            const params_list = if (params.type == .vector) try listFromVector(arena_alloc, params.vec_val) else params.list_val;
-            const body = if (l.items.len >= params_idx + 1) l.items[params_idx + 1..] else &[_]Value{};
+            var idx: usize = 2;
+            if (idx < l.items.len and l.items[idx].type == .string) {
+                idx += 1;
+            }
+            if (idx >= l.items.len) return error.ArityError;
 
-            var body_list: list.List = .empty;
-            errdefer body_list.deinit(arena_alloc);
-            try body_list.append(arena_alloc, try Value.symValue(allocator, "do"));
-            for (body) |form_item| {
-                try body_list.append(arena_alloc, try form_item.clone(arena_alloc));
+            var arities: std.ArrayListUnmanaged(Value.Arity) = .empty;
+            errdefer {
+                for (arities.items) |*a| {
+                    a.params.deinit(arena_alloc);
+                    a.body.deinit(arena_alloc);
+                    if (a.rest_name) |rn| arena_alloc.free(rn);
+                }
+                arena_alloc.free(arities.items);
             }
 
-            // Parse params for variadic support (& rest)
-            var parsed = try parseParams(arena_alloc, params_list);
-            defer {
-                parsed.params.deinit(arena_alloc);
-                if (parsed.rest_name) |rn| arena_alloc.free(rn);
+            // Parse ([params] body...)+ pairs
+            while (idx < l.items.len) {
+                const params_form = l.items[idx];
+                if (params_form.type != .list and params_form.type != .vector) return error.TypeError;
+                const params_list = if (params_form.type == .vector) try listFromVector(arena_alloc, params_form.vec_val) else params_form.list_val;
+                idx += 1;
+
+                // Collect body forms until next [params] or end
+                const body_start = idx;
+                while (idx < l.items.len) {
+                    const next = l.items[idx];
+                    // Check if this looks like a new parameter list (to support multi-arity)
+                    // A vector is a new param list only if:
+                    // 1. It looks like params (symbols only)
+                    // 2. There's at least one item after it (body)
+                    if (looksLikeParamList(next) and idx + 1 < l.items.len) {
+                        break;
+                    }
+                    idx += 1;
+                }
+                const body_forms = l.items[body_start..idx];
+
+                // Wrap body in a do block
+                var body_list: list.List = .empty;
+                errdefer body_list.deinit(arena_alloc);
+                try body_list.append(arena_alloc, try Value.symValue(allocator, "do"));
+                for (body_forms) |form_item| {
+                    try body_list.append(arena_alloc, try form_item.clone(arena_alloc));
+                }
+
+                // Parse params for variadic support (& rest)
+                var parsed = try parseParams(arena_alloc, params_list);
+                defer {
+                    parsed.params.deinit(arena_alloc);
+                    if (parsed.rest_name) |rn| arena_alloc.free(rn);
+                }
+
+                const cloned_params = try parsed.params.clone(arena_alloc);
+                const cloned_body = try body_list.clone(arena_alloc);
+                const cloned_rest = if (parsed.rest_name) |rn| try arena_alloc.dupe(u8, rn) else null;
+                try arities.append(arena_alloc, Value.Arity{
+                    .params = cloned_params,
+                    .body = cloned_body,
+                    .rest_name = cloned_rest,
+                });
             }
 
-            const cloned_params = try parsed.params.clone(arena_alloc);
-            const cloned_body = try body_list.clone(arena_alloc);
-            const cloned_rest = if (parsed.rest_name) |rn| try arena_alloc.dupe(u8, rn) else null;
             // Create fn_env with parent = env so it can see all global symbols
             // including the function itself (for recursion)
             const fn_env: Env = .{
@@ -292,7 +332,7 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
                 .entries = .empty,
                 .parent = env,
             };
-            var fn_val = Value.fnValue(cloned_params, cloned_body, fn_env, cloned_rest, false);
+            var fn_val = Value.fnValue(arities, fn_env, false);
             // Clone to main allocator before storing in persistent env
             const persistent_fn = try fn_val.clone(allocator);
             fn_val.deinit(arena_alloc);
@@ -300,74 +340,154 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
             return try fname.clone(arena_alloc);
         }
 
-        // fn - define a function
+        // fn - define a function (supports multi-arity)
+        // (fn name? ([params] body...)+)
         if (std.mem.eql(u8, name, "fn")) {
             if (l.items.len < 2) return error.ArityError;
-            const params = l.items[1];
-            if (params.type != .list and params.type != .vector) return error.TypeError;
-            const params_list = if (params.type == .vector) try listFromVector(arena_alloc, params.vec_val) else params.list_val;
-            const body = if (l.items.len >= 3) l.items[2..] else &[_]Value{};
+            var idx: usize = 1;
+            // Skip optional name
+            if (l.items[idx].type == .symbol) {
+                idx += 1;
+            }
+            if (idx >= l.items.len) return error.ArityError;
 
-            // Wrap body in a do block
-            var body_list: list.List = .empty;
-            errdefer body_list.deinit(arena_alloc);
-            try body_list.append(arena_alloc, try Value.symValue(allocator, "do"));
-            for (body) |form_item| {
-                try body_list.append(arena_alloc, try form_item.clone(arena_alloc));
+            var arities: std.ArrayListUnmanaged(Value.Arity) = .empty;
+            errdefer {
+                for (arities.items) |*a| {
+                    a.params.deinit(arena_alloc);
+                    a.body.deinit(arena_alloc);
+                    if (a.rest_name) |rn| arena_alloc.free(rn);
+                }
+                arena_alloc.free(arities.items);
             }
 
-            // Parse params for variadic support (& rest)
-            var parsed = try parseParams(arena_alloc, params_list);
-            defer {
-                parsed.params.deinit(arena_alloc);
-                if (parsed.rest_name) |rn| arena_alloc.free(rn);
+            // Parse ([params] body...)+ pairs
+            while (idx < l.items.len) {
+                const params_form = l.items[idx];
+                if (params_form.type != .list and params_form.type != .vector) return error.TypeError;
+                const params_list = if (params_form.type == .vector) try listFromVector(arena_alloc, params_form.vec_val) else params_form.list_val;
+                idx += 1;
+
+                // Collect body forms until next [params] or end
+                const body_start = idx;
+                while (idx < l.items.len) {
+                    const next = l.items[idx];
+                    // Check if this looks like a new parameter list (to support multi-arity)
+                    // A vector is a new param list only if:
+                    // 1. It looks like params (symbols only)
+                    // 2. There's at least one item after it (body)
+                    if (looksLikeParamList(next) and idx + 1 < l.items.len) {
+                        break;
+                    }
+                    idx += 1;
+                }
+                const body_forms = l.items[body_start..idx];
+
+                // Wrap body in a do block
+                var body_list: list.List = .empty;
+                errdefer body_list.deinit(arena_alloc);
+                try body_list.append(arena_alloc, try Value.symValue(allocator, "do"));
+                for (body_forms) |form_item| {
+                    try body_list.append(arena_alloc, try form_item.clone(arena_alloc));
+                }
+
+                // Parse params for variadic support (& rest)
+                var parsed = try parseParams(arena_alloc, params_list);
+                defer {
+                    parsed.params.deinit(arena_alloc);
+                    if (parsed.rest_name) |rn| arena_alloc.free(rn);
+                }
+
+                const cloned_params = try parsed.params.clone(arena_alloc);
+                const cloned_body = try body_list.clone(arena_alloc);
+                const cloned_rest = if (parsed.rest_name) |rn| try arena_alloc.dupe(u8, rn) else null;
+                try arities.append(arena_alloc, Value.Arity{
+                    .params = cloned_params,
+                    .body = cloned_body,
+                    .rest_name = cloned_rest,
+                });
             }
 
-            const cloned_params = try parsed.params.clone(arena_alloc);
-            const cloned_body = try body_list.clone(arena_alloc);
-            const cloned_rest = if (parsed.rest_name) |rn| try arena_alloc.dupe(u8, rn) else null;
             const fn_env = try env.clone(arena_alloc);
-            return Value.fnValue(cloned_params, cloned_body, fn_env, cloned_rest, false);
+            return Value.fnValue(arities, fn_env, false);
         }
 
         // defmacro - define a macro (like defn but args are passed unevaluated)
+        // (defmacro name docstring? ([params] body...)+)
         if (std.mem.eql(u8, name, "defmacro")) {
             if (l.items.len < 3) return error.ArityError;
             const macro_name = l.items[1];
             if (macro_name.type != .symbol) return error.TypeError;
             // Handle optional docstring
-            const has_docstring = l.items.len >= 3 and l.items[2].type == .string;
-            const params_idx: usize = if (has_docstring) 3 else 2;
-            if (params_idx >= l.items.len) return error.ArityError;
-            const params = l.items[params_idx];
-            if (params.type != .list and params.type != .vector) return error.TypeError;
-            const params_list = if (params.type == .vector) try listFromVector(arena_alloc, params.vec_val) else params.list_val;
-            const body = if (l.items.len >= params_idx + 1) l.items[params_idx + 1..] else &[_]Value{};
+            var idx: usize = 2;
+            if (idx < l.items.len and l.items[idx].type == .string) {
+                idx += 1;
+            }
+            if (idx >= l.items.len) return error.ArityError;
 
-            // Wrap body in a do block
-            var body_list: list.List = .empty;
-            errdefer body_list.deinit(arena_alloc);
-            try body_list.append(arena_alloc, try Value.symValue(allocator, "do"));
-            for (body) |form_item| {
-                try body_list.append(arena_alloc, try form_item.clone(arena_alloc));
+            var arities: std.ArrayListUnmanaged(Value.Arity) = .empty;
+            errdefer {
+                for (arities.items) |*a| {
+                    a.params.deinit(arena_alloc);
+                    a.body.deinit(arena_alloc);
+                    if (a.rest_name) |rn| arena_alloc.free(rn);
+                }
+                arena_alloc.free(arities.items);
             }
 
-            // Parse params for variadic support (& rest)
-            var parsed = try parseParams(arena_alloc, params_list);
-            defer {
-                parsed.params.deinit(arena_alloc);
-                if (parsed.rest_name) |rn| arena_alloc.free(rn);
+            // Parse ([params] body...)+ pairs
+            while (idx < l.items.len) {
+                const params_form = l.items[idx];
+                if (params_form.type != .list and params_form.type != .vector) return error.TypeError;
+                const params_list = if (params_form.type == .vector) try listFromVector(arena_alloc, params_form.vec_val) else params_form.list_val;
+                idx += 1;
+
+                // Collect body forms until next [params] or end
+                const body_start = idx;
+                while (idx < l.items.len) {
+                    const next = l.items[idx];
+                    // Check if this looks like a new parameter list (to support multi-arity)
+                    // A vector is a new param list only if:
+                    // 1. It looks like params (symbols only)
+                    // 2. There's at least one item after it (body)
+                    if (looksLikeParamList(next) and idx + 1 < l.items.len) {
+                        break;
+                    }
+                    idx += 1;
+                }
+                const body_forms = l.items[body_start..idx];
+
+                // Wrap body in a do block
+                var body_list: list.List = .empty;
+                errdefer body_list.deinit(arena_alloc);
+                try body_list.append(arena_alloc, try Value.symValue(allocator, "do"));
+                for (body_forms) |form_item| {
+                    try body_list.append(arena_alloc, try form_item.clone(arena_alloc));
+                }
+
+                // Parse params for variadic support (& rest)
+                var parsed = try parseParams(arena_alloc, params_list);
+                defer {
+                    parsed.params.deinit(arena_alloc);
+                    if (parsed.rest_name) |rn| arena_alloc.free(rn);
+                }
+
+                const cloned_params = try parsed.params.clone(arena_alloc);
+                const cloned_body = try body_list.clone(arena_alloc);
+                const cloned_rest = if (parsed.rest_name) |rn| try arena_alloc.dupe(u8, rn) else null;
+                try arities.append(arena_alloc, Value.Arity{
+                    .params = cloned_params,
+                    .body = cloned_body,
+                    .rest_name = cloned_rest,
+                });
             }
 
-            const cloned_params = try parsed.params.clone(arena_alloc);
-            const cloned_body = try body_list.clone(arena_alloc);
-            const cloned_rest = if (parsed.rest_name) |rn| try arena_alloc.dupe(u8, rn) else null;
             const fn_env: Env = .{
                 .allocator = allocator,
                 .entries = .empty,
                 .parent = env,
             };
-            var macro_fn = Value.fnValue(cloned_params, cloned_body, fn_env, cloned_rest, true);
+            var macro_fn = Value.fnValue(arities, fn_env, true);
             // Clone to main allocator before storing in persistent env
             const persistent_macro = try macro_fn.clone(allocator);
             macro_fn.deinit(arena_alloc);
@@ -395,14 +515,14 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
         // recur - tail recursion
         if (std.mem.eql(u8, name, "recur")) {
             if (l.items.len < 2) return error.ArityError;
-            // Simplified: just evaluate and return the last arg
-            // Full recur would need to jump back to the loop/fn bindings
+            // Signal recur: return a special marker list
+            // First element is a special symbol "__recur__", rest are evaluated new values
             var results: list.List = .empty;
             errdefer results.deinit(arena_alloc);
+            try results.append(arena_alloc, try Value.symValue(allocator, "__recur__"));
             for (l.items[1..]) |arg| {
                 try results.append(arena_alloc, try evalRec(allocator, arena_alloc, arg, env, depth + 1));
             }
-            if (results.items.len == 1) return results.items[0];
             return Value.listValue(results);
         }
 
@@ -793,26 +913,66 @@ fn evalCond(allocator: Allocator, arena_alloc: Allocator, clauses: []const Value
 fn evalLoop(allocator: Allocator, arena_alloc: Allocator, bindings: Value, body: []const Value, env: *Env, depth: usize) anyerror!Value {
     if (bindings.type != .list and bindings.type != .vector) return error.TypeError;
 
-    var new_env = try env.clone(arena_alloc);
-    defer new_env.deinit(arena_alloc);
-
-    const items = switch (bindings.type) {
+    const bind_items = switch (bindings.type) {
         .list => bindings.list_val.items,
         .vector => bindings.vec_val.items,
         else => unreachable,
     };
 
+    // Extract binding names
+    var bind_names: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (bind_names.items) |name| arena_alloc.free(name);
+        arena_alloc.free(bind_names.items);
+    }
     var i: usize = 0;
-    while (i < items.len) : (i += 2) {
-        const sym = items[i];
+    while (i < bind_items.len) : (i += 2) {
+        const sym = bind_items[i];
         if (sym.type != .symbol) return error.TypeError;
-        const val = try evalRec(allocator, arena_alloc, items[i + 1], env, depth);
+        try bind_names.append(arena_alloc, try arena_alloc.dupe(u8, sym.sym_val));
+    }
+
+    // Initialize environment with initial binding values
+    var new_env = try env.clone(arena_alloc);
+    defer new_env.deinit(arena_alloc);
+
+    i = 0;
+    while (i < bind_items.len) : (i += 2) {
+        const sym = bind_items[i];
+        const val = try evalRec(allocator, arena_alloc, bind_items[i + 1], env, depth);
         try new_env.put(sym.sym_val, val);
     }
 
-    // For a simple loop, just evaluate the body
-    // A full implementation would support recur to rebind loop variables
-    return try evalDo(allocator, arena_alloc, body, &new_env, depth);
+    // Loop: evaluate body, check for recur marker, rebind and repeat
+    var loop_depth: usize = depth;
+    while (true) {
+        if (loop_depth > MAX_RECURSION) return error.RecursionLimit;
+
+        var result = try evalDo(allocator, arena_alloc, body, &new_env, loop_depth);
+
+        // Check for recur marker: list starting with __recur__ symbol
+        if (result.type == .list and result.list_val.items.len > 0 and
+            result.list_val.items[0].type == .symbol and
+            std.mem.eql(u8, result.list_val.items[0].sym_val, "__recur__"))
+        {
+            const recur_vals = result.list_val.items[1..];
+            if (recur_vals.len != bind_names.items.len) {
+                result.deinit(arena_alloc);
+                return error.ArityError;
+            }
+            // Rebind loop variables with new values
+            var j: usize = 0;
+            while (j < recur_vals.len) : (j += 1) {
+                const new_val = try recur_vals[j].clone(allocator);
+                try new_env.put(bind_names.items[j], new_val);
+            }
+            result.deinit(arena_alloc);
+            loop_depth += 1;
+            continue;
+        }
+
+        return result;
+    }
 }
 
 fn call(allocator: Allocator, arena_alloc: Allocator, op: Value, args_list: list.List, env: *Env, depth: usize) anyerror!Value {
@@ -822,6 +982,29 @@ fn call(allocator: Allocator, arena_alloc: Allocator, op: Value, args_list: list
     switch (op.type) {
         .function => {
             const fn_data = op.fn_val;
+            const arg_count = args.items.len;
+
+            // Find matching arity: exact match first, then variadic with enough args
+            var matched_arity: ?*const Value.Arity = null;
+            var i: usize = 0;
+            while (i < fn_data.arities.items.len) : (i += 1) {
+                const arity = &fn_data.arities.items[i];
+                const min_args = arity.params.items.len;
+                const has_rest = arity.rest_name != null;
+                if (has_rest) {
+                    if (arg_count >= min_args) {
+                        matched_arity = arity;
+                        break;
+                    }
+                } else {
+                    if (arg_count == min_args) {
+                        matched_arity = arity;
+                        break;
+                    }
+                }
+            }
+            if (matched_arity == null) return error.ArityError;
+            const arity = matched_arity.?;
 
             // Optimization: skip env clone if no local entries
             var new_env: Env = undefined;
@@ -836,40 +1019,32 @@ fn call(allocator: Allocator, arena_alloc: Allocator, op: Value, args_list: list
             }
             defer new_env.deinit(arena_alloc);
 
-            const min_args = fn_data.params.items.len;
-            const has_rest = fn_data.rest_name != null;
-
-            // Check arity: must have at least min_args, or any number if variadic
-            if (!has_rest and args.items.len != min_args) {
-                return error.ArityError;
-            }
-            if (has_rest and args.items.len < min_args) {
-                return error.ArityError;
-            }
+            const min_args = arity.params.items.len;
+            const has_rest = arity.rest_name != null;
 
             // Bind regular parameters to arguments (with destructuring support)
-            var i: usize = 0;
-            while (i < fn_data.params.items.len) : (i += 1) {
-                const param = fn_data.params.items[i];
-                try bindParam(allocator, arena_alloc, param, args.items[i], &new_env);
+            var j: usize = 0;
+            while (j < arity.params.items.len) : (j += 1) {
+                const param = arity.params.items[j];
+                try bindParam(allocator, arena_alloc, param, args.items[j], &new_env);
             }
 
             // Bind rest parameter to remaining args as a list
             if (has_rest and args.items.len > min_args) {
                 var rest_list: list.List = .empty;
                 errdefer rest_list.deinit(arena_alloc);
-                var j: usize = min_args;
-                while (j < args.items.len) : (j += 1) {
-                    try rest_list.append(arena_alloc, try args.items[j].clone(arena_alloc));
+                var k: usize = min_args;
+                while (k < args.items.len) : (k += 1) {
+                    try rest_list.append(arena_alloc, try args.items[k].clone(arena_alloc));
                 }
-                try new_env.put(fn_data.rest_name.?, Value.listValue(rest_list));
+                try new_env.put(arity.rest_name.?, Value.listValue(rest_list));
             } else if (has_rest) {
                 // No extra args: bind empty list to rest parameter
-                try new_env.put(fn_data.rest_name.?, Value.listValue(.empty));
+                try new_env.put(arity.rest_name.?, Value.listValue(.empty));
             }
 
             // Evaluate the function body
-            return try evalRec(allocator, arena_alloc, Value.listValue(fn_data.body), &new_env, depth);
+            return try evalRec(allocator, arena_alloc, Value.listValue(arity.body), &new_env, depth);
         },
         .builtin_fn => {
             var op_mut = op;
@@ -1055,6 +1230,27 @@ fn listFromVector(arena_alloc: Allocator, v: vec.Vector) anyerror!list.List {
         try result.append(arena_alloc, try item.clone(arena_alloc));
     }
     return result;
+}
+
+// Check if a form looks like a parameter list (vector/list of symbols, possibly with & rest)
+fn looksLikeParamList(form: Value) bool {
+    const items = switch (form.type) {
+        .vector => form.vec_val.items,
+        .list => form.list_val.items,
+        else => return false,
+    };
+    if (items.len == 0) return false;
+    var found_amp = false;
+    for (items) |item| {
+        if (item.type == .symbol and std.mem.eql(u8, item.sym_val, "&")) {
+            if (found_amp) return false; // duplicate &
+            found_amp = true;
+            continue;
+        }
+        if (!found_amp and item.type != .symbol) return false;
+        if (found_amp and item.type != .symbol) return false;
+    }
+    return true;
 }
 
 // Thread-last macro: (->> x (f 1) (g 2 3)) => (g 2 3 (f 1 x))
@@ -1263,6 +1459,13 @@ fn evalTake(allocator: Allocator, arena_alloc: Allocator, n_form: Value, coll_fo
         else => return error.TypeError,
     };
 
+    // Handle lazy_seq: force and then take
+    if (coll.type == .lazy_seq) {
+        const forced = try forceLazySeq(allocator, arena_alloc, coll, env, depth);
+        coll.deinit(arena_alloc);
+        coll = forced;
+    }
+
     // Handle range_val: take n elements from range
     if (coll.type == .range_val) {
         defer coll.deinit(arena_alloc);
@@ -1333,6 +1536,29 @@ fn callValue(allocator: Allocator, arena_alloc: Allocator, f: Value, args: list.
     switch (f.type) {
         .function => {
             const fn_data = f.fn_val;
+            const arg_count = args.items.len;
+
+            // Find matching arity
+            var matched_arity: ?*const Value.Arity = null;
+            var i: usize = 0;
+            while (i < fn_data.arities.items.len) : (i += 1) {
+                const arity = &fn_data.arities.items[i];
+                const min_args = arity.params.items.len;
+                const has_rest = arity.rest_name != null;
+                if (has_rest) {
+                    if (arg_count >= min_args) {
+                        matched_arity = arity;
+                        break;
+                    }
+                } else {
+                    if (arg_count == min_args) {
+                        matched_arity = arity;
+                        break;
+                    }
+                }
+            }
+            if (matched_arity == null) return error.ArityError;
+            const arity = matched_arity.?;
 
             // Optimization: skip env clone if no local entries
             var new_env: Env = undefined;
@@ -1347,11 +1573,11 @@ fn callValue(allocator: Allocator, arena_alloc: Allocator, f: Value, args: list.
             }
             defer new_env.deinit(arena_alloc);
 
-            var i: usize = 0;
-            while (i < fn_data.params.items.len) : (i += 1) {
-                try bindParam(allocator, arena_alloc, fn_data.params.items[i], args.items[i], &new_env);
+            var j: usize = 0;
+            while (j < arity.params.items.len) : (j += 1) {
+                try bindParam(allocator, arena_alloc, arity.params.items[j], args.items[j], &new_env);
             }
-            return try evalRec(allocator, arena_alloc, Value.listValue(fn_data.body), &new_env, depth);
+            return try evalRec(allocator, arena_alloc, Value.listValue(arity.body), &new_env, depth);
         },
         .builtin_fn => {
             var f_mut = f;

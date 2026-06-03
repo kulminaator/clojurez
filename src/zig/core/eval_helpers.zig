@@ -19,6 +19,29 @@ pub fn callBuiltin(allocator: Allocator, f: Value, args_list: list.List, env: *V
     switch (f.type) {
         .function => {
             const fn_data = f.fn_val;
+            const arg_count = args_list.items.len;
+
+            // Find matching arity
+            var matched_arity: ?*const Value.Arity = null;
+            var ai: usize = 0;
+            while (ai < fn_data.arities.items.len) : (ai += 1) {
+                const arity = &fn_data.arities.items[ai];
+                const min_args = arity.params.items.len;
+                const has_rest = arity.rest_name != null;
+                if (has_rest) {
+                    if (arg_count >= min_args) {
+                        matched_arity = arity;
+                        break;
+                    }
+                } else {
+                    if (arg_count == min_args) {
+                        matched_arity = arity;
+                        break;
+                    }
+                }
+            }
+            if (matched_arity == null) return error.ArityError;
+            const arity = matched_arity.?;
 
             // Optimization: if function env has no local entries, skip clone
             // and create a thin wrapper pointing to the parent
@@ -35,19 +58,12 @@ pub fn callBuiltin(allocator: Allocator, f: Value, args_list: list.List, env: *V
             }
             defer new_env.deinit(allocator);
 
-            const min_args = fn_data.params.items.len;
-            const has_rest = fn_data.rest_name != null;
-
-            if (!has_rest and args_list.items.len != min_args) {
-                return error.ArityError;
-            }
-            if (has_rest and args_list.items.len < min_args) {
-                return error.ArityError;
-            }
+            const min_args = arity.params.items.len;
+            const has_rest = arity.rest_name != null;
 
             var i: usize = 0;
-            while (i < fn_data.params.items.len) : (i += 1) {
-                const param = fn_data.params.items[i];
+            while (i < arity.params.items.len) : (i += 1) {
+                const param = arity.params.items[i];
                 if (param.type == .symbol) {
                     try new_env.put(param.sym_val, try args_list.items[i].clone(allocator));
                 }
@@ -60,12 +76,12 @@ pub fn callBuiltin(allocator: Allocator, f: Value, args_list: list.List, env: *V
                 while (j < args_list.items.len) : (j += 1) {
                     try rest_list.append(allocator, try args_list.items[j].clone(allocator));
                 }
-                try new_env.put(fn_data.rest_name.?, Value.listValue(rest_list));
+                try new_env.put(arity.rest_name.?, Value.listValue(rest_list));
             } else if (has_rest) {
-                try new_env.put(fn_data.rest_name.?, Value.listValue(.empty));
+                try new_env.put(arity.rest_name.?, Value.listValue(.empty));
             }
 
-            return try evalBody(allocator, fn_data.body, &new_env);
+            return try evalBody(allocator, arity.body, &new_env);
         },
         .builtin_fn => {
             var f_mut = f;
@@ -186,7 +202,7 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
                     const cloned_params = try params_list.clone(allocator);
                     const cloned_body = try body_list.clone(allocator);
                     const fn_env = try env.clone(allocator);
-                    return Value.fnValue(cloned_params, cloned_body, fn_env, null, false);
+                    return try Value.fnValueSingle(allocator, cloned_params, cloned_body, fn_env, null, false);
                 }
             }
             const op = try evalForm(allocator, first, env);

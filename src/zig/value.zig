@@ -86,18 +86,23 @@ vec_val: vec.Vector = vec.Vector.empty,
 map_val: Map = .empty,
 set_val: Set = .empty,
 queue_val: Queue = .empty,
-fn_val: FnData = .{ .params = list.List.empty, .body = list.List.empty, .env = undefined, .rest_name = null },
+fn_val: FnData = .{ .arities = .empty, .env = undefined },
 builtin_fn_val: BuiltinFn = undefined,
 lazy_seq_val: LazySeq = .{},
 lazy_map_val: ?*LazyMapData = null,
 range_val: ?*RangeData = null,
 atom_val: ?*AtomData = null,
 
-pub const FnData = struct {
+// Single arity: one [params] + body forms + optional rest param
+pub const Arity = struct {
     params: list.List,
     body: list.List,
-    env: Env,
     rest_name: ?[]const u8 = null, // variadic rest parameter name (e.g., & args)
+};
+
+pub const FnData = struct {
+    arities: std.ArrayListUnmanaged(Arity) = .empty, // multi-arity support
+    env: Env,
     is_macro: bool = false, // true if this is a macro (args passed unevaluated)
 };
 
@@ -305,8 +310,16 @@ pub fn rangeValue(allocator: Allocator, start: i64, end: i64, step: i64) anyerro
     return .{ .type = .range_val, .range_val = data };
 }
 
-pub fn fnValue(params: list.List, body: list.List, env: Env, rest_name: ?[]const u8, is_macro: bool) Self {
-    return .{ .type = .function, .fn_val = .{ .params = params, .body = body, .env = env, .rest_name = rest_name, .is_macro = is_macro } };
+pub fn fnValue(arities: std.ArrayListUnmanaged(Arity), env: Env, is_macro: bool) Self {
+    return .{ .type = .function, .fn_val = .{ .arities = arities, .env = env, .is_macro = is_macro } };
+}
+
+/// Create a single-arity function (convenience wrapper)
+pub fn fnValueSingle(allocator: Allocator, params: list.List, body: list.List, env: Env, rest_name: ?[]const u8, is_macro: bool) anyerror!Self {
+    var arities: std.ArrayListUnmanaged(Arity) = .empty;
+    errdefer allocator.free(arities.items);
+    try arities.append(allocator, Arity{ .params = params, .body = body, .rest_name = rest_name });
+    return fnValue(arities, env, is_macro);
 }
 
 pub fn builtinFnValue(fn_ptr: BuiltinFn) Self {
@@ -361,12 +374,15 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
             }
         },
         .function => {
-            self.fn_val.params.deinit(allocator);
-            self.fn_val.body.deinit(allocator);
-            self.fn_val.env.deinit(allocator);
-            if (self.fn_val.rest_name) |rn| {
-                allocator.free(rn);
+            for (self.fn_val.arities.items) |*arity| {
+                arity.params.deinit(allocator);
+                arity.body.deinit(allocator);
+                if (arity.rest_name) |rn| {
+                    allocator.free(rn);
+                }
             }
+            allocator.free(self.fn_val.arities.items);
+            self.fn_val.env.deinit(allocator);
         },
         .builtin_fn => {},
         .atom => {
@@ -479,17 +495,28 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
         },
         .function => {
             const fnv = self.fn_val;
-            var cloned_rest: ?[]const u8 = null;
-            if (fnv.rest_name) |rn| {
-                cloned_rest = try allocator.dupe(u8, rn);
+            var cloned_arities: std.ArrayListUnmanaged(Arity) = .empty;
+            errdefer {
+                for (cloned_arities.items) |*ca| {
+                    ca.params.deinit(allocator);
+                    ca.body.deinit(allocator);
+                    if (ca.rest_name) |rn| allocator.free(rn);
+                }
+                allocator.free(cloned_arities.items);
             }
-            return fnValue(
-                try fnv.params.clone(allocator),
-                try fnv.body.clone(allocator),
-                try fnv.env.clone(allocator),
-                cloned_rest,
-                fnv.is_macro,
-            );
+            try cloned_arities.ensureTotalCapacity(allocator, fnv.arities.items.len);
+            for (fnv.arities.items) |arity| {
+                var cloned_rest: ?[]const u8 = null;
+                if (arity.rest_name) |rn| {
+                    cloned_rest = try allocator.dupe(u8, rn);
+                }
+                try cloned_arities.append(allocator, Arity{
+                    .params = try arity.params.clone(allocator),
+                    .body = try arity.body.clone(allocator),
+                    .rest_name = cloned_rest,
+                });
+            }
+            return fnValue(cloned_arities, try fnv.env.clone(allocator), fnv.is_macro);
         },
         .builtin_fn => return builtinFnValue(self.builtin_fn_val),
     }

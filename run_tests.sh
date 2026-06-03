@@ -590,6 +590,44 @@ run_test "if-let nil" '(if-let [x nil] (* x 2) "nope")' '"nope"'
 run_test "if-let false" '(if-let [x false] "yes" "no")' '"no"'
 
 echo ""
+echo "=== Multi-arity Functions ==="
+run_test "multi-arity defn single arg" '(do (defn foo [a] a [a b] (+ a b)) (foo 1))' '1'
+run_test "multi-arity defn two args" '(do (defn foo [a] a [a b] (+ a b)) (foo 1 2))' '3'
+run_test "multi-arity fn single arg" '((fn [a] a [a b] (+ a b)) 1)' '1'
+run_test "multi-arity fn two args" '((fn [a] a [a b] (+ a b)) 1 2)' '3'
+run_test "multi-arity defn three arities" '(do (defn bar [] 0 [a] a [a b] (+ a b)) (bar))' '0'
+run_test "multi-arity defn three arities 1" '(do (defn bar [] 0 [a] a [a b] (+ a b)) (bar 5))' '5'
+run_test "multi-arity defn three arities 2" '(do (defn bar [] 0 [a] a [a b] (+ a b)) (bar 3 4))' '7'
+
+# loop/recur with multiple bindings
+echo ""
+echo "=== Loop/Recur Multiple Bindings ==="
+run_test "loop recur two bindings" '(loop [x 0 y 10] (if (< x y) (recur (+ x 1) (- y 1)) x))' '5'
+run_test "loop recur three bindings" '(loop [a 0 b 1 c 2] (if (< a 5) (recur (+ a 1) (+ b 1) (+ c 1)) a))' '5'
+run_test "loop recur single binding" '(loop [x 0] (if (< x 3) (recur (+ x 1)) x))' '3'
+run_test "loop recur no recur" '(loop [x 10] x)' '10'
+
+# assoc on nil
+echo ""
+echo "=== Assoc on Nil ==="
+run_test "assoc nil single kv" '(assoc nil :a 1)' '{:a 1}'
+run_test "assoc nil multiple kvs" '(assoc nil :a 1 :b 2)' '{:a 1 :b 2}'
+run_test "assoc nil then assoc" '(assoc (assoc nil :a 1) :b 2)' '{:a 1 :b 2}'
+
+# take with lazy-seq from variables
+echo ""
+echo "=== Take with Lazy-seq from Variables ==="
+run_test "take from lazy-seq variable" '(let [xs (lazy-seq (list 1 2 3 4 5))] (take 3 xs))' '(1 2 3)'
+run_test "take all from lazy-seq variable" '(let [xs (lazy-seq (list 1 2))] (take 5 xs))' '(1 2)'
+run_test "take zero from lazy-seq variable" '(let [xs (lazy-seq (list 1 2 3))] (take 0 xs))' '()'
+
+# lazy-seq scoping
+echo ""
+echo "=== Lazy-seq Scoping ==="
+run_test "lazy-seq uses let helper" '(let [f (fn [x] (+ x 1))] (doall (lazy-seq (list (f 5)))))' '(6)'
+run_test "lazy-seq multiple let refs" '(let [inc2 (fn [x] (+ x 2))] (doall (lazy-seq (list (inc2 1) (inc2 2) (inc2 3)))))' '(3 4 5)'
+
+echo ""
 echo "=== Summary ==="
 echo "Total: $TOTAL, Passed: $PASS, Failed: $FAIL"
 

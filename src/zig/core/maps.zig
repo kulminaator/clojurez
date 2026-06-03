@@ -31,6 +31,10 @@ pub fn core_assoc(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     }
 
     // Map assoc: (assoc map key val & more-kvs)
+    // If map is nil, start with an empty map (Clojure behavior)
+    if (first.type == .nil) {
+        return assocMap(Value.mapValue(.empty), args, env_env);
+    }
     if (first.type != .map) return error.TypeError;
     return assocMap(first, args, env_env);
 }
