@@ -7,6 +7,7 @@ const eval = @import("eval.zig");
 const repl = @import("repl.zig");
 const core_clj = @import("core_clj.zig");
 const debug_allocator = @import("debug_allocator.zig");
+const slab_allocator = @import("slab_allocator.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -14,12 +15,18 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // Memory trace: toggle with CLJVM_MEM_TRACE=1 (stderr) or CLJVM_MEM_TRACE=file:path
     // The tracing condition is evaluated once at startup. When disabled, log_fn is null
     // so every alloc/free has zero overhead beyond the wrapped allocator call.
+
+    // Slab allocator: sits between page_allocator and debug_allocator.
+    // Reduces system calls by batching small allocations into large pages.
+    var slab = slab_allocator.SlabAllocator.init(std.heap.page_allocator);
+    defer slab.deinit();
+
     var debug_alloc: debug_allocator.DebugAllocator = undefined;
     if (debug_allocator.getMemTraceConfig(init.environ)) |trace_cfg| {
         defer std.heap.page_allocator.free(trace_cfg);
-        debug_alloc = debug_allocator.DebugAllocator.init(std.heap.page_allocator, trace_cfg);
+        debug_alloc = debug_allocator.DebugAllocator.init(slab.allocator(), trace_cfg);
     } else {
-        debug_alloc = debug_allocator.DebugAllocator.init(std.heap.page_allocator, null);
+        debug_alloc = debug_allocator.DebugAllocator.init(slab.allocator(), null);
     }
     defer debug_alloc.deinit();
     const allocator = debug_alloc.allocator();
