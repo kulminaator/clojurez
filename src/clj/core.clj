@@ -137,6 +137,7 @@
 (defn doall
   "Realizes all elements of a lazy sequence and returns it."
   [coll]
+  (dorun coll)
   coll)
 
 (defn into-array
@@ -147,3 +148,27 @@
 ;; ---- Trampoline ----
 ;; Implemented as Zig built-in because loop/recur is simplified
 ;; and doesn't support actual tail recursion in this VM
+
+;; ---- Macros ----
+
+(defmacro when-let
+  "bindings => binding-form test
+
+  When test is true, evaluates body with binding-form bound to the value of test."
+  [bindings & body]
+  (let [form (nth bindings 0)
+        tst (nth bindings 1)]
+    (list 'let
+          (list '__when_let_temp tst)
+          (list 'when '__when_let_temp
+                (concat (list 'let (list form '__when_let_temp)) body)))))
+
+(defmacro time
+  "Evaluates expr and prints the time it took. Returns the value of expr."
+  [expr]
+  (list 'let
+        (list '__start (list 'nano-time) '__ret expr)
+        (list 'println (list 'str "Elapsed time: "
+                              (list '/ (list '- (list 'nano-time) '__start) 1000000.0)
+                              " msecs"))
+        '__ret))

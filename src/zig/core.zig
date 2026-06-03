@@ -676,6 +676,15 @@ pub fn core_spit(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return Value.nilValue();
 }
 
+// nano-time - returns the current value of the running CPU's high-resolution performance counter in nanoseconds
+pub fn core_nano_time(self: *Value, args: list.List, _: *Env) anyerror!Value {
+    _ = self;
+    _ = args;
+    var ts: std.os.linux.timespec = undefined;
+    _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts);
+    return Value.intValue((ts.sec * 1_000_000_000) + ts.nsec);
+}
+
 // Map functions
 pub fn core_get(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
@@ -1763,7 +1772,7 @@ fn evalForm(allocator: Allocator, form: Value, env: *Env) anyerror!Value {
                     const cloned_params = try params_list.clone(allocator);
                     const cloned_body = try body_list.clone(allocator);
                     const fn_env = try env.clone(allocator);
-                    return Value.fnValue(cloned_params, cloned_body, fn_env, null);
+                    return Value.fnValue(cloned_params, cloned_body, fn_env, null, false);
                 }
             }
             // Evaluate operator
@@ -2008,7 +2017,7 @@ pub fn core_partial(self: *Value, args: list.List, env_env: *Env) anyerror!Value
     }
     try final_env.put(env_env.allocator, "__partial_args", Value.listValue(stored_args));
 
-    return Value.fnValue(cloned_params, cloned_body, final_env, null);
+    return Value.fnValue(cloned_params, cloned_body, final_env, null, false);
 }
 
 // comp - compose functions (right to left)
@@ -2059,7 +2068,7 @@ pub fn core_comp(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     const cloned_body = try body.clone(env_env.allocator);
     const final_env = try fn_env.clone(env_env.allocator);
 
-    return Value.fnValue(cloned_params, cloned_body, final_env, null);
+    return Value.fnValue(cloned_params, cloned_body, final_env, null, false);
 }
 
 // fnil - provide default values for nil arguments
@@ -2128,7 +2137,7 @@ pub fn core_fnil(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     const cloned_body = try body.clone(env_env.allocator);
     const final_env = try fn_env.clone(env_env.allocator);
 
-    return Value.fnValue(cloned_params, cloned_body, final_env, null);
+    return Value.fnValue(cloned_params, cloned_body, final_env, null, false);
 }
 
 // juxt - juxtaposition of functions
@@ -2174,7 +2183,7 @@ pub fn core_juxt(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     const cloned_body = try body.clone(env_env.allocator);
     const final_env = try fn_env.clone(env_env.allocator);
 
-    return Value.fnValue(cloned_params, cloned_body, final_env, null);
+    return Value.fnValue(cloned_params, cloned_body, final_env, null, false);
 }
 
 // atom - create a mutable reference
@@ -2282,6 +2291,9 @@ pub fn registerCoreFunctions(env: *Env) anyerror!void {
     try env.put(allocator, "read-line", Value.builtinFnValue(core_read_line));
     try env.put(allocator, "spit", Value.builtinFnValue(core_spit));
     try env.put(allocator, "slurp", Value.builtinFnValue(core_slurp));
+
+    // Time functions
+    try env.put(allocator, "nano-time", Value.builtinFnValue(core_nano_time));
 
     // Maps
     try env.put(allocator, "get", Value.builtinFnValue(core_get));

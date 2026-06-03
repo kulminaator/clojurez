@@ -239,7 +239,7 @@ fn evalList(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerro
                 .entries = .empty,
                 .parent = env,
             };
-            const fn_val = Value.fnValue(cloned_params, cloned_body, fn_env, cloned_rest);
+            const fn_val = Value.fnValue(cloned_params, cloned_body, fn_env, cloned_rest, false);
             try env.put(allocator, fname.sym_val, fn_val);
             return try fname.clone(allocator);
         }
@@ -271,7 +271,49 @@ fn evalList(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerro
             const cloned_body = try body_list.clone(allocator);
             const cloned_rest = if (parsed.rest_name) |rn| try allocator.dupe(u8, rn) else null;
             const fn_env = try env.clone(allocator);
-            return Value.fnValue(cloned_params, cloned_body, fn_env, cloned_rest);
+            return Value.fnValue(cloned_params, cloned_body, fn_env, cloned_rest, false);
+        }
+
+        // defmacro - define a macro (like defn but args are passed unevaluated)
+        if (std.mem.eql(u8, name, "defmacro")) {
+            if (l.items.len < 3) return error.ArityError;
+            const macro_name = l.items[1];
+            if (macro_name.type != .symbol) return error.TypeError;
+            // Handle optional docstring
+            const has_docstring = l.items.len >= 3 and l.items[2].type == .string;
+            const params_idx: usize = if (has_docstring) 3 else 2;
+            if (params_idx >= l.items.len) return error.ArityError;
+            const params = l.items[params_idx];
+            if (params.type != .list and params.type != .vector) return error.TypeError;
+            const params_list = if (params.type == .vector) try listFromVector(allocator, params.vec_val) else params.list_val;
+            const body = if (l.items.len >= params_idx + 1) l.items[params_idx + 1..] else &[_]Value{};
+
+            // Wrap body in a do block
+            var body_list: list.List = .empty;
+            errdefer body_list.deinit(allocator);
+            try body_list.append(allocator, try Value.symValue(allocator, "do"));
+            for (body) |form_item| {
+                try body_list.append(allocator, try form_item.clone(allocator));
+            }
+
+            // Parse params for variadic support (& rest)
+            var parsed = try parseParams(allocator, params_list);
+            defer {
+                parsed.params.deinit(allocator);
+                if (parsed.rest_name) |rn| allocator.free(rn);
+            }
+
+            const cloned_params = try parsed.params.clone(allocator);
+            const cloned_body = try body_list.clone(allocator);
+            const cloned_rest = if (parsed.rest_name) |rn| try allocator.dupe(u8, rn) else null;
+            const fn_env: Env = .{
+                .allocator = allocator,
+                .entries = .empty,
+                .parent = env,
+            };
+            const macro_fn = Value.fnValue(cloned_params, cloned_body, fn_env, cloned_rest, true);
+            try env.put(allocator, macro_name.sym_val, macro_fn);
+            return try macro_name.clone(allocator);
         }
 
         // do - evaluate a sequence of forms
@@ -398,6 +440,59 @@ fn evalList(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerro
             return Value.lazySeqValue(thunk);
         }
 
+        // dorun - realize a lazy sequence for side effects, return nil
+        // (dorun coll) or (dorun n coll)
+        if (std.mem.eql(u8, name, "dorun")) {
+            if (l.items.len < 2 or l.items.len > 3) return error.ArityError;
+            const dorun_args = l.items[1..];
+            var n: ?usize = null;
+            var coll_form: Value = undefined;
+            if (dorun_args.len == 2) {
+                var n_val = try evalRec(allocator, dorun_args[0], env, depth + 1);
+                defer n_val.deinit(allocator);
+                const n_int: i64 = switch (n_val.type) {
+                    .integer => n_val.int_val,
+                    .float => @as(i64, @intFromFloat(n_val.float_val)),
+                    else => return error.TypeError,
+                };
+                n = @as(usize, @intCast(n_int));
+                coll_form = dorun_args[1];
+            } else {
+                coll_form = dorun_args[0];
+            }
+            var coll = try evalRec(allocator, coll_form, env, depth + 1);
+            defer coll.deinit(allocator);
+            // Force lazy_seq if needed
+            if (coll.type == .lazy_seq) {
+                const forced = try forceLazySeq(allocator, coll, env, depth + 1);
+                coll.deinit(allocator);
+                coll = forced;
+            }
+            // Iterate through the collection (realizing it), optionally up to n elements
+            var items: []const Value = undefined;
+            switch (coll.type) {
+                .list => items = coll.list_val.items,
+                .vector => items = coll.vec_val.items,
+                .set => items = coll.set_val.items,
+                .queue => items = coll.queue_val.items,
+                else => return Value.nilValue(),
+            }
+            var count: usize = 0;
+            var i: usize = 0;
+            while (i < items.len) : (i += 1) {
+                if (n) |limit| {
+                    if (count >= limit) break;
+                }
+                // Force nested lazy sequences
+                const item = items[i];
+                if (item.type == .lazy_seq) {
+                    _ = try forceLazySeq(allocator, item, env, depth + 1);
+                }
+                count += 1;
+            }
+            return Value.nilValue();
+        }
+
         // iterate - repeatedly apply f to init, collecting results
         // Handle both (iterate f init) and (iterate init f) for thread-last compatibility
         if (std.mem.eql(u8, name, "iterate")) {
@@ -427,7 +522,24 @@ fn evalList(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerro
     }
 
     // Evaluate the operator
-    const op = try evalRec(allocator, first, env, depth + 1);
+    var op = try evalRec(allocator, first, env, depth + 1);
+
+    // Check if operator is a macro
+    if (op.type == .function and op.fn_val.is_macro) {
+        // Macro: pass unevaluated arguments
+        var macro_args: list.List = .empty;
+        errdefer macro_args.deinit(allocator);
+        for (l.items[1..]) |arg| {
+            try macro_args.append(allocator, try arg.clone(allocator));
+        }
+        // Call the macro with unevaluated args
+        var expanded = try call(allocator, op, macro_args, env, depth + 1);
+        op.deinit(allocator);
+        // Evaluate the expanded form
+        const result = try evalRec(allocator, expanded, env, depth + 1);
+        expanded.deinit(allocator);
+        return result;
+    }
 
     // Evaluate all arguments
     var args: list.List = .empty;

@@ -190,6 +190,13 @@ run_test "trampoline mutual recursion" '(do (defn even? [n] (if (zero? n) true (
 # iterate
 run_test "iterate builtin" "(take 5 (iterate inc 0))" "(0 1 2 3 4)"
 
+# defmacro
+run_test "defmacro basic" '(do (defmacro my-if [test then-expr] (list (quote if) test then-expr)) (my-if true 42))' '42'
+run_test "defmacro false branch" '(do (defmacro my-if [test then-expr] (list (quote if) test then-expr)) (my-if false 42))' 'nil'
+run_test "defmacro with arithmetic" '(do (defmacro double [x] (list (quote +) x x)) (+ 1 (double 5)))' '11'
+run_test "defmacro variadic" '(do (defmacro my-let [bindings & body] (cons (quote let) (cons bindings body))) (my-let [x 1 y 2] (+ x y)))' '3'
+run_test "defmacro returns symbol" '(defmacro my-macro [x] x)' 'my-macro'
+
 echo ""
 echo "=== I/O Tests ==="
 # println prints to stdout and returns nil

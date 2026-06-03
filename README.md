@@ -70,8 +70,9 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 - **Maps:** `get`, `assoc`, `keys`, `vals`, `dissoc`, `merge`, `contains?`
 - **Sets:** `set`, `set?`, `disj`, `contains?`
 - **Collections:** `conj`, `pop`, `last`, `reverse`, `range`, `peek`, `empty?`, `not-empty`, `seq`, `count`
-- **Sequence operations:** `reduce`, `flatten`, `filter`, `remove`, `every?`, `some`, `distinct?`, `next`, `nthnext`, `drop`
+- **Sequence operations:** `reduce`, `flatten`, `filter`, `remove`, `every?`, `some`, `distinct?`, `next`, `nthnext`, `drop`, `dorun`, `doall`
 - **Functional tools:** `apply`, `if-not`, `partial`, `comp`, `fnil`, `juxt`
+- **Time:** `nano-time`
 - **Atoms:** `atom`, `swap!`, `reset!`
 
 ### Clojure Core Library
@@ -83,6 +84,7 @@ Many common functions are implemented in `core.clj` itself, keeping the Zig VM l
 - `union`, `intersection`, `difference`, `subset?`, `superset?`
 - `select-keys`
 - `into`, `keep`, `update`
+- `when-let` (macro), `time` (macro)
 
 ## Build
 
@@ -252,8 +254,9 @@ See [GUIDELINES.md](GUIDELINES.md) for testing standards.
 
 - Core data types (nil, bool, int, float, string, symbol, keyword, list, vector, map, set, queue, atom)
 - Special forms (def, defn, fn, if, when, cond, let, do, quote, quasiquote, set!, and, or, loop, recur, binding, var, deref, lazy-seq, ns)
+- Macros (`defmacro` with full macro expansion support)
 - Threading macros (`->`, `->>`)
-- Sequence operations (iterate, map, take, reduce, flatten, filter, remove, every?, some, distinct?, next, nthnext, drop)
+- Sequence operations (iterate, map, take, reduce, flatten, filter, remove, every?, some, distinct?, next, nthnext, drop, dorun, doall)
 - Vector destructuring in function parameters
 - Arithmetic, comparison, boolean, type check, string, I/O functions (including `spit`/`slurp` for file I/O)
 - Map operations (get, assoc, keys, vals, dissoc, merge, contains?)
@@ -261,13 +264,13 @@ See [GUIDELINES.md](GUIDELINES.md) for testing standards.
 - Collection operations (conj, pop, last, reverse, range, peek, empty?, not-empty, seq, count)
 - Functional tools (apply, if-not, partial, comp, fnil, juxt)
 - Atoms (atom, swap!, reset!)
-- Clojure core library bootstrapped from `.clj` files
+- Time functions (nano-time)
+- Clojure core library bootstrapped from `.clj` files (includes when-let, time macros)
 
 ## What's Missing
 
 - **Namespaces** (`ns` declaration is a no-op; no true namespace isolation)
 - **Transients** (mutable versions of persistent data structures)
-- **Macros** (code generation at compile time)
 - **Shorthand syntax** (`~` for unquote, `~@` for unquote-splicing, backtick for quasiquote, `@` for deref — use full names instead)
 - **Java interop** (not applicable for a standalone VM)
 

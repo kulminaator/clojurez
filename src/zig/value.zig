@@ -73,6 +73,7 @@ pub const FnData = struct {
     body: list.List,
     env: Env,
     rest_name: ?[]const u8 = null, // variadic rest parameter name (e.g., & args)
+    is_macro: bool = false, // true if this is a macro (args passed unevaluated)
 };
 
 pub const Env = struct {
@@ -236,8 +237,8 @@ pub fn lazySeqValue(thunk: ?*LazySeqThunk) Self {
     return .{ .type = .lazy_seq, .lazy_seq_val = .{ .thunk = thunk } };
 }
 
-pub fn fnValue(params: list.List, body: list.List, env: Env, rest_name: ?[]const u8) Self {
-    return .{ .type = .function, .fn_val = .{ .params = params, .body = body, .env = env, .rest_name = rest_name } };
+pub fn fnValue(params: list.List, body: list.List, env: Env, rest_name: ?[]const u8, is_macro: bool) Self {
+    return .{ .type = .function, .fn_val = .{ .params = params, .body = body, .env = env, .rest_name = rest_name, .is_macro = is_macro } };
 }
 
 pub fn builtinFnValue(fn_ptr: BuiltinFn) Self {
@@ -385,6 +386,7 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
                 try fnv.body.clone(allocator),
                 try fnv.env.clone(allocator),
                 cloned_rest,
+                fnv.is_macro,
             );
         },
         .builtin_fn => return builtinFnValue(self.builtin_fn_val),

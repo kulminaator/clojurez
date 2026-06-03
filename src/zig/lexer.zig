@@ -245,7 +245,7 @@ fn isSymbolChar(ch: u8) bool {
         ch == '-' or ch == '+' or ch == '*' or ch == '/' or
         ch == '<' or ch == '>' or ch == '=' or ch == '!' or
         ch == '?' or ch == '%' or ch == '&' or ch == '^' or
-        ch == '.' or ch == '@' or
+        ch == '.' or ch == '@' or ch == '_' or
         // Accept non-ASCII bytes (UTF-8 continuation and start bytes)
         // This allows Unicode characters in symbol names
         ch >= 0x80;
