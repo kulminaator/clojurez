@@ -210,24 +210,33 @@ pub fn core_reverse(self: *Value, args: list.List, env_env: *Env) anyerror!Value
             }
             return Value.listValue(new_list);
         },
+        .range_val => {
+            const rd: *Value.RangeData = coll.range_val.?;
+            const len: usize = if (rd.step > 0 and rd.end > rd.start) @as(usize, @intCast(@divTrunc(rd.end - rd.start + rd.step - 1, rd.step))) else 0;
+            var new_list: list.List = .empty;
+            errdefer new_list.deinit(env_env.allocator);
+            var v: i64 = rd.start + ((@as(i64, @intCast(len)) - 1) * rd.step);
+            var i: usize = 0;
+            while (i < len) : (i += 1) {
+                try new_list.append(env_env.allocator, Value.intValue(v));
+                v -= rd.step;
+            }
+            return Value.listValue(new_list);
+        },
         else => return error.TypeError,
     }
 }
 
 pub fn core_range(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
-    if (args.items.len < 1 or args.items.len > 2) return error.ArityError;
+    if (args.items.len < 1 or args.items.len > 3) return error.ArityError;
     const end = try toInt(args.items[args.items.len - 1]);
-    const start: i64 = if (args.items.len == 2) try toInt(args.items[0]) else 0;
+    const start: i64 = if (args.items.len >= 2) try toInt(args.items[args.items.len - 2]) else 0;
+    const step: i64 = if (args.items.len == 3) try toInt(args.items[0]) else 1;
+    if (step == 0) return error.TypeError; // avoid infinite range
 
-    var new_list: list.List = .empty;
-    errdefer new_list.deinit(env_env.allocator);
-
-    var i: i64 = start;
-    while (i < end) : (i += 1) {
-        try new_list.append(env_env.allocator, Value.intValue(i));
-    }
-    return Value.listValue(new_list);
+    // Return a lazy range — integers are generated on demand
+    return Value.rangeValue(env_env.allocator, start, end, step);
 }
 
 pub fn core_peek(self: *Value, args: list.List, env_env: *Env) anyerror!Value {

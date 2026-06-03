@@ -165,7 +165,7 @@ run_test "keyword from keyword" '(keyword :baz)' ":baz"
 run_test "keyword namespaced" '(keyword "ns" "name")' ":ns/name"
 
 # map (as first-class function)
-run_test "map as fn" "(map inc (list 1 2 3))" "(2 3 4)"
+run_test "map as fn" "(doall (map inc (list 1 2 3)))" "(2 3 4)"
 
 # mapcat
 run_test "mapcat" '(mapcat (fn [x] (list x (* x x))) (list 1 2 3))' "(1 1 2 4 3 9)"
@@ -212,7 +212,7 @@ run_test "thread-first basic" '(-> 1 (+ 2) (* 3))' "9"
 echo ""
 echo "=== Sequence Functions ==="
 run_test "iterate" "(take 5 (iterate (fn [x] (+ x 1)) 0))" "(0 1 2 3 4)"
-run_test "map" "(map (fn [x] (* x 2)) (list 1 2 3))" "(2 4 6)"
+run_test "map" "(doall (map (fn [x] (* x 2)) (list 1 2 3)))" "(2 4 6)"
 run_test "take" "(take 3 (list 1 2 3 4 5))" "(1 2 3)"
 
 echo ""
@@ -234,7 +234,7 @@ run_test "conj vector" '(conj [1 2] 3)' "[1 2 3]"
 run_test "pop vector" '(pop [1 2 3])' "[1 2]"
 run_test "last vector" '(last [1 2 3])' "3"
 run_test "reverse vector" '(reverse [1 2 3])' "[3 2 1]"
-run_test "range" '(range 1 4)' "(1 2 3)"
+run_test "range" '(doall (range 1 4))' "(1 2 3)"
 
 echo ""
 echo "=== Namespace Tests ==="
@@ -371,7 +371,7 @@ run_test_cmd "cons" "$VM -e '(cons 0 (list 1 2))'" "(0 1 2)"
 run_test_cmd "second" "$VM -e '(second (list 1 2 3))'" "2"
 run_test_cmd "third" "$VM -e '(third (list 1 2 3))'" "3"
 
-run_test "map builtin" '(map (fn [x] (* x 2)) (list 1 2 3))' "(2 4 6)"
+run_test "map builtin" '(doall (map (fn [x] (* x 2)) (list 1 2 3)))' "(2 4 6)"
 run_test "filter" '(filter (fn [x] (> x 2)) (list 1 2 3 4))' "(3 4)"
 run_test "reduce" '(reduce + 0 (list 1 2 3 4))' "10"
 run_test "take" '(take 3 (list 1 2 3 4 5))' "(1 2 3)"

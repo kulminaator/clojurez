@@ -19,7 +19,20 @@ pub fn callBuiltin(allocator: Allocator, f: Value, args_list: list.List, env: *V
     switch (f.type) {
         .function => {
             const fn_data = f.fn_val;
-            var new_env = try fn_data.env.clone(allocator);
+
+            // Optimization: if function env has no local entries, skip clone
+            // and create a thin wrapper pointing to the parent
+            var new_env: Value.Env = undefined;
+            const has_locals = fn_data.env.entries.entries.len > 0;
+            if (has_locals) {
+                new_env = try fn_data.env.clone(allocator);
+            } else {
+                new_env = .{
+                    .allocator = allocator,
+                    .entries = .empty,
+                    .parent = fn_data.env.parent,
+                };
+            }
             defer new_env.deinit(allocator);
 
             const min_args = fn_data.params.items.len;

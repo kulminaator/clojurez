@@ -7,6 +7,7 @@ const vec = @import("../vector.zig");
 const Env = Value.Env;
 const helpers = @import("helpers.zig");
 const eval_helpers = @import("eval_helpers.zig");
+const arithmetic = @import("arithmetic.zig");
 
 const toInt = helpers.toInt;
 const Allocator = std.mem.Allocator;
@@ -18,24 +19,16 @@ pub fn core_map(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     const f = args.items[0];
     const coll = args.items[1];
 
-    var items: []const Value = undefined;
+    // Validate that coll is a supported collection type
     switch (coll.type) {
-        .list => items = coll.list_val.items,
-        .vector => items = coll.vec_val.items,
+        .list, .vector, .range_val => {},
         else => return error.TypeError,
     }
 
-    var result: list.List = .empty;
-    errdefer result.deinit(allocator);
-
-    for (items) |item| {
-        var arg_list: list.List = .empty;
-        errdefer arg_list.deinit(allocator);
-        try arg_list.append(allocator, try item.clone(allocator));
-        const mapped = try eval_helpers.callBuiltin(allocator, f, arg_list, env_env);
-        try result.append(allocator, mapped);
-    }
-    return Value.listValue(result);
+    // Return a lazy_map — elements are computed on demand by dorun
+    const cloned_f = try f.clone(allocator);
+    const cloned_coll = try coll.clone(allocator);
+    return Value.lazyMapValue(allocator, cloned_f, cloned_coll);
 }
 
 pub fn core_mapcat(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
@@ -94,6 +87,64 @@ pub fn core_reduce(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
         coll = args.items[1];
     }
 
+    // Handle range_val directly (no list allocation needed)
+    if (coll.type == .range_val) {
+        const rd: *Value.RangeData = coll.range_val.?;
+        const len: usize = if (rd.step > 0 and rd.end > rd.start) @as(usize, @intCast(@divTrunc(rd.end - rd.start + rd.step - 1, rd.step))) else 0;
+
+        // Fast path: reduce + on range (all integers)
+        if (f.type == .builtin_fn and f.builtin_fn_val == arithmetic.core_plus) {
+            if (len == 0) {
+                if (init_val) |iv| return try iv.clone(env_env.allocator);
+                return Value.nilValue();
+            }
+            if (init_val) |iv| {
+                var acc: i64 = if (iv.type == .integer) iv.int_val else @as(i64, @intFromFloat(iv.float_val));
+                var v: i64 = rd.start;
+                var count: usize = 0;
+                while (count < len) : (count += 1) {
+                    acc += v;
+                    v += rd.step;
+                }
+                return Value.intValue(acc);
+            }
+            // No init: use first element as initial
+            var acc: i64 = rd.start;
+            var v: i64 = rd.start + rd.step;
+            var count: usize = 1;
+            while (count < len) : (count += 1) {
+                acc += v;
+                v += rd.step;
+            }
+            return Value.intValue(acc);
+        }
+
+        // General path for range: iterate with function calls
+        if (len == 0) {
+            if (init_val) |iv| return try iv.clone(env_env.allocator);
+            return Value.nilValue();
+        }
+        var acc: Value = undefined;
+        if (init_val) |iv| {
+            acc = try iv.clone(env_env.allocator);
+        } else {
+            acc = Value.intValue(rd.start);
+        }
+        var v: i64 = if (init_val != null) rd.start else rd.start + rd.step;
+        var count: usize = if (init_val != null) 0 else 1;
+        while (count < len) : (count += 1) {
+            var arg_list: list.List = .empty;
+            defer arg_list.deinit(env_env.allocator);
+            try arg_list.append(env_env.allocator, try acc.clone(env_env.allocator));
+            try arg_list.append(env_env.allocator, Value.intValue(v));
+            const new_acc = try eval_helpers.callBuiltin(env_env.allocator, f, arg_list, env_env);
+            acc.deinit(env_env.allocator);
+            acc = new_acc;
+            v += rd.step;
+        }
+        return acc;
+    }
+
     var items: []const Value = undefined;
     switch (coll.type) {
         .list => items = coll.list_val.items,
@@ -108,6 +159,36 @@ pub fn core_reduce(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
         return Value.nilValue();
     }
 
+    // Fast path: reduce with + on integer lists
+    if (f.type == .builtin_fn and f.builtin_fn_val == arithmetic.core_plus) {
+        var all_ints = true;
+        for (items) |item| {
+            if (item.type != .integer) { all_ints = false; break; }
+        }
+        if (all_ints) {
+            if (init_val) |iv| {
+                if (iv.type == .integer or iv.type == .float) {
+                    var acc: i64 = if (iv.type == .integer) iv.int_val else @as(i64, @intFromFloat(iv.float_val));
+                    var idx: usize = 0;
+                    while (idx < items.len) : (idx += 1) {
+                        acc += items[idx].int_val;
+                    }
+                    return Value.intValue(acc);
+                }
+            } else if (items.len == 1) {
+                return Value.intValue(items[0].int_val);
+            } else {
+                var acc: i64 = items[0].int_val;
+                var idx: usize = 1;
+                while (idx < items.len) : (idx += 1) {
+                    acc += items[idx].int_val;
+                }
+                return Value.intValue(acc);
+            }
+        }
+    }
+
+    // General path
     var acc: Value = undefined;
     if (init_val) |iv| {
         acc = try iv.clone(env_env.allocator);
