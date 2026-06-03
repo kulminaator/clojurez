@@ -59,15 +59,17 @@ pub const Token = union(enum) {
 pub const Lexer = struct {
     input: []const u8,
     pos: usize = 0,
+    token_start: usize = 0,
     allocator: Allocator,
 
     pub fn init(allocator: Allocator, input: []const u8) Lexer {
-        return .{ .input = input, .pos = 0, .allocator = allocator };
+        return .{ .input = input, .pos = 0, .token_start = 0, .allocator = allocator };
     }
 
     pub fn nextToken(self: *Lexer) anyerror!Token {
         self.skipWhitespace();
         self.skipComments();
+        self.token_start = self.pos;
 
         if (self.pos >= self.input.len) return .{ .eof = {} };
 

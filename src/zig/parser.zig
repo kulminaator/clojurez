@@ -35,6 +35,13 @@ pub const Parser = struct {
         self.current.deinit(self.allocator);
     }
 
+    /// Return the number of bytes consumed from the input so far.
+    /// Returns the start position of the current (lookahead) token,
+    /// which is exactly where the previously parsed form ended.
+    pub fn consumed(self: *const Parser) usize {
+        return self.lexer.token_start;
+    }
+
     pub fn parse(self: *Parser) anyerror!Value {
         return self.readForm();
     }
