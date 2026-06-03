@@ -83,6 +83,54 @@ pub const Parser = struct {
                 try quoted.append(self.allocator, form);
                 return Value.listValue(quoted);
             },
+            .backtick => {
+                // `x is shorthand for (quasiquote x)
+                self.current.deinit(self.allocator);
+                self.current = .{ .eof = {} };
+                try self.advance();
+                const form = try self.readForm();
+                var qq: list.List = .empty;
+                errdefer qq.deinit(self.allocator);
+                try qq.append(self.allocator, try self.symValue("quasiquote"));
+                try qq.append(self.allocator, form);
+                return Value.listValue(qq);
+            },
+            .deref => {
+                // @x is shorthand for (deref x)
+                self.current.deinit(self.allocator);
+                self.current = .{ .eof = {} };
+                try self.advance();
+                const form = try self.readForm();
+                var deref_list: list.List = .empty;
+                errdefer deref_list.deinit(self.allocator);
+                try deref_list.append(self.allocator, try self.symValue("deref"));
+                try deref_list.append(self.allocator, form);
+                return Value.listValue(deref_list);
+            },
+            .unquote => {
+                // ~x is shorthand for (unquote x)
+                self.current.deinit(self.allocator);
+                self.current = .{ .eof = {} };
+                try self.advance();
+                const form = try self.readForm();
+                var uq: list.List = .empty;
+                errdefer uq.deinit(self.allocator);
+                try uq.append(self.allocator, try self.symValue("unquote"));
+                try uq.append(self.allocator, form);
+                return Value.listValue(uq);
+            },
+            .unquote_splicing => {
+                // ~@x is shorthand for (unquote-splicing x)
+                self.current.deinit(self.allocator);
+                self.current = .{ .eof = {} };
+                try self.advance();
+                const form = try self.readForm();
+                var uqs: list.List = .empty;
+                errdefer uqs.deinit(self.allocator);
+                try uqs.append(self.allocator, try self.symValue("unquote-splicing"));
+                try uqs.append(self.allocator, form);
+                return Value.listValue(uqs);
+            },
             .string => |s| {
                 const val = try Value.stringValue(self.allocator, s);
                 self.current.deinit(self.allocator);

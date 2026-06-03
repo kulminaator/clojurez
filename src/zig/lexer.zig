@@ -12,6 +12,10 @@ pub const Token = union(enum) {
     set_open: void,
     comma: void,
     quote: void,
+    backtick: void,
+    deref: void,
+    unquote: void,
+    unquote_splicing: void,
     string: []const u8,
     number: []const u8,
     symbol: []const u8,
@@ -38,6 +42,10 @@ pub const Token = union(enum) {
             .set_open => .{ .set_open = {} },
             .comma => .{ .comma = {} },
             .quote => .{ .quote = {} },
+            .backtick => .{ .backtick = {} },
+            .deref => .{ .deref = {} },
+            .unquote => .{ .unquote = {} },
+            .unquote_splicing => .{ .unquote_splicing = {} },
             .string => |s| .{ .string = try allocator.dupe(u8, s) },
             .number => |s| .{ .number = try allocator.dupe(u8, s) },
             .symbol => |s| .{ .symbol = try allocator.dupe(u8, s) },
@@ -74,6 +82,16 @@ pub const Lexer = struct {
             '}' => { self.pos += 1; return .{ .close_brace = {} }; },
             ',' => { self.pos += 1; return .{ .comma = {} }; },
             '\'' => { self.pos += 1; return .{ .quote = {} }; },
+            '`' => { self.pos += 1; return .{ .backtick = {} }; },
+            '@' => { self.pos += 1; return .{ .deref = {} }; },
+            '~' => {
+                self.pos += 1;
+                if (self.pos < self.input.len and self.input[self.pos] == '@') {
+                    self.pos += 1;
+                    return .{ .unquote_splicing = {} };
+                }
+                return .{ .unquote = {} };
+            },
             '#' => return self.readDispatch(),
             '"' => return self.readString(),
             else => {
@@ -305,7 +323,7 @@ fn isSymbolChar(ch: u8) bool {
         ch == '-' or ch == '+' or ch == '*' or ch == '/' or
         ch == '<' or ch == '>' or ch == '=' or ch == '!' or
         ch == '?' or ch == '%' or ch == '&' or ch == '^' or
-        ch == '.' or ch == '@' or ch == '_' or
+        ch == '.' or ch == '_' or
         // Accept non-ASCII bytes (UTF-8 continuation and start bytes)
         // This allows Unicode characters in symbol names
         ch >= 0x80;

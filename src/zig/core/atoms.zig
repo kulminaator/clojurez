@@ -5,6 +5,21 @@ const list = @import("../list.zig");
 const Env = Value.Env;
 const eval_helpers = @import("eval_helpers.zig");
 
+pub fn core_deref(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const arg = args.items[0];
+    // Extract value from atom
+    if (arg.type == .atom) {
+        if (arg.atom_val) |data| {
+            return try data.value.clone(env_env.allocator);
+        }
+        return Value.nilValue();
+    }
+    // For non-atoms, return as-is
+    return try arg.clone(env_env.allocator);
+}
+
 pub fn core_atom(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
@@ -54,6 +69,7 @@ pub fn core_reset_bang(self: *Value, args: list.List, env_env: *Env) anyerror!Va
 
 pub fn registerAtomFunctions(env: *Env) anyerror!void {
     try env.put("atom", Value.builtinFnValue(core_atom));
+    try env.put("deref", Value.builtinFnValue(core_deref));
     try env.put("swap!", Value.builtinFnValue(core_swap_bang));
     try env.put("reset!", Value.builtinFnValue(core_reset_bang));
 }

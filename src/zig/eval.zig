@@ -430,10 +430,20 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
             return try sym.clone(arena_alloc);
         }
 
-        // deref (deref) - get the value of a var
+        // deref - get the value of a derefable object (atom, var, etc.)
         if (std.mem.eql(u8, name, "deref") or std.mem.eql(u8, name, "@")) {
             if (l.items.len != 2) return error.ArityError;
-            const arg = try evalRec(allocator, arena_alloc, l.items[1], env, depth + 1);
+            var arg = try evalRec(allocator, arena_alloc, l.items[1], env, depth + 1);
+            // Extract value from atom
+            if (arg.type == .atom) {
+                if (arg.atom_val) |data| {
+                    const val = try data.value.clone(arena_alloc);
+                    arg.deinit(arena_alloc);
+                    return val;
+                }
+                arg.deinit(arena_alloc);
+                return Value.nilValue();
+            }
             return arg;
         }
 
@@ -970,15 +980,22 @@ fn unquoteProcess(allocator: Allocator, arena_alloc: Allocator, form: Value, env
             var result: list.List = .empty;
             errdefer result.deinit(arena_alloc);
             for (form.list_val.items) |item| {
-                var processed = try unquoteProcess(allocator, arena_alloc, item, env, depth);
-                if (processed.type == .list and isUnquoteSpliceResult(processed)) {
-                    for (processed.list_val.items) |elem| {
-                        try result.append(arena_alloc, try elem.clone(arena_alloc));
+                // Check for unquote-splicing: splice elements directly into result
+                if (item.type == .list and item.list_val.items.len == 2) {
+                    const uq_first = item.list_val.items[0];
+                    if (uq_first.type == .symbol and std.mem.eql(u8, uq_first.sym_val, "unquote-splicing")) {
+                        var splice_result = try evalRec(allocator, arena_alloc, item.list_val.items[1], env, depth);
+                        if (splice_result.type == .list) {
+                            for (splice_result.list_val.items) |elem| {
+                                try result.append(arena_alloc, try elem.clone(arena_alloc));
+                            }
+                        }
+                        splice_result.deinit(arena_alloc);
+                        continue;
                     }
-                    processed.deinit(arena_alloc);
-                } else {
-                    try result.append(arena_alloc, processed);
                 }
+                const processed = try unquoteProcess(allocator, arena_alloc, item, env, depth);
+                try result.append(arena_alloc, processed);
             }
             return Value.listValue(result);
         },
@@ -992,11 +1009,6 @@ fn unquoteProcess(allocator: Allocator, arena_alloc: Allocator, form: Value, env
         },
         else => return try form.clone(arena_alloc),
     }
-}
-
-fn isUnquoteSpliceResult(v: Value) bool {
-    _ = v;
-    return false; // Simplified
 }
 
 // Bind a parameter to an argument, supporting destructuring
