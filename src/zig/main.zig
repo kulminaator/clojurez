@@ -6,13 +6,22 @@ const parser = @import("parser.zig");
 const eval = @import("eval.zig");
 const repl = @import("repl.zig");
 const core_clj = @import("core_clj.zig");
+const debug_allocator = @import("debug_allocator.zig");
 
 const Allocator = std.mem.Allocator;
 
 pub fn main(init: std.process.Init.Minimal) anyerror!void {
-    var arena = std.heap.ArenaAllocator.init(std.heap.brk_allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
+    // Memory trace: toggle with CLJVM_MEM_TRACE=1 (stderr) or CLJVM_MEM_TRACE=file:path
+    var debug_alloc: debug_allocator.DebugAllocator = .{
+        .wrapped = std.heap.page_allocator,
+    };
+    const trace_cfg = debug_allocator.getMemTraceConfig(init.environ);
+    if (trace_cfg) |cfg| {
+        defer std.heap.page_allocator.free(cfg);
+        debug_alloc = debug_allocator.DebugAllocator.init(std.heap.page_allocator, cfg);
+        defer debug_alloc.deinit();
+    }
+    const allocator = debug_alloc.allocator();
 
     // Create global environment
     var env: Env = Env.init(allocator);
@@ -89,7 +98,9 @@ fn runExpression(allocator: Allocator, expr: []const u8, env: *Env) anyerror!voi
     var p = try parser.Parser.init(allocator, expr);
     defer p.deinit();
 
-    const form = try p.parse();
+    var form = Value.nilValue();
+    errdefer form.deinit(allocator);
+    form = try p.parse();
     var result = try eval.eval(allocator, form, env);
     defer result.deinit(allocator);
 

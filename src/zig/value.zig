@@ -113,6 +113,16 @@ pub const Env = struct {
     }
 
     pub fn put(self: *Env, allocator: Allocator, name: []const u8, value: Self) anyerror!void {
+        // First ensure the put will succeed (may grow the hash map)
+        // Then deinit the old value to avoid memory leaks
+        errdefer {
+            // If put fails after deinit, we can't recover the old value.
+            // This is an OOM situation anyway.
+        }
+        const old_ptr = self.entries.getPtr(name);
+        if (old_ptr) |old_val| {
+            old_val.deinit(allocator);
+        }
         try self.entries.put(allocator, name, value);
     }
 

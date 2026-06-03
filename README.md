@@ -133,6 +133,36 @@ Core functions (`inc`, `dec`, `into`, `even?`, `odd?`, `cons`, `update`, etc.) a
 ./main -e '(into [] (list 1 2 3))'  ;; => [1 2 3]
 ```
 
+### Memory Tracing
+
+The VM includes a built-in memory trace allocator for debugging memory issues. Toggle it via the `CLJVM_MEM_TRACE` environment variable. Off by default with zero overhead.
+
+**Trace to stderr:**
+```bash
+CLJVM_MEM_TRACE=1 ./main -e '(+ 1 2 3)'
+```
+
+**Trace to a file:**
+```bash
+CLJVM_MEM_TRACE=/tmp/mem.log ./main -e '(+ 1 2 3)'
+```
+
+Each allocation, free, resize, and remap is logged with size, pointer address, and running live memory count. At program exit a summary is printed:
+
+```
+=== Memory trace summary ===
+  Allocations:     1234
+  Frees:           1200
+  Net allocs:       34
+  Total allocated: 98765 bytes
+  Total freed:     95000 bytes
+  Peak memory:     12000 bytes
+  Current memory:  3765 bytes
+=== Memory trace ended ===
+```
+
+This is useful for verifying that `def` rebindings, `let` scopes, and function calls properly free unreachable values.
+
 ## Examples
 
 ```clojure
@@ -228,6 +258,7 @@ src/
     ├── parser.zig     — S-expression parser
     ├── eval.zig       — Evaluator / VM core (special forms, threading, sequences)
     ├── core.zig       — Built-in functions (Zig)
+    ├── debug_allocator.zig — Memory trace allocator (CLJVM_MEM_TRACE)
     └── repl.zig       — Read-Eval-Print loop
 
 run_tests.sh       — Test runner

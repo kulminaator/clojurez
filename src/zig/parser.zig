@@ -72,6 +72,7 @@ pub const Parser = struct {
             .quote => {
                 // 'x is shorthand for (quote x)
                 self.current.deinit(self.allocator);
+                self.current = .{ .eof = {} };
                 try self.advance();
                 const form = try self.readForm();
                 var quoted: list.List = .empty;
@@ -83,29 +84,34 @@ pub const Parser = struct {
             .string => |s| {
                 const val = try Value.stringValue(self.allocator, s);
                 self.current.deinit(self.allocator);
+                self.current = .{ .eof = {} };
                 try self.advance();
                 return val;
             },
             .number => |s| {
                 const val = try self.parseNumber(s);
                 self.current.deinit(self.allocator);
+                self.current = .{ .eof = {} };
                 try self.advance();
                 return val;
             },
             .symbol => |s| {
                 const val = try self.parseSymbol(s);
                 self.current.deinit(self.allocator);
+                self.current = .{ .eof = {} };
                 try self.advance();
                 return val;
             },
             .keyword => |s| {
                 const val = try Value.keywordValue(self.allocator, s);
                 self.current.deinit(self.allocator);
+                self.current = .{ .eof = {} };
                 try self.advance();
                 return val;
             },
             else => {
                 self.current.deinit(self.allocator);
+                self.current = .{ .eof = {} };
                 try self.advance();
                 return try self.readForm();
             },

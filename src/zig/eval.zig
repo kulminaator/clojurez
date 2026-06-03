@@ -522,6 +522,7 @@ fn evalList(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerro
 
     // Evaluate the operator
     var op = try evalRec(allocator, first, env, depth + 1);
+    defer op.deinit(allocator);
 
     // Check if operator is a macro
     if (op.type == .function and op.fn_val.is_macro) {
@@ -533,7 +534,6 @@ fn evalList(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerro
         }
         // Call the macro with unevaluated args
         var expanded = try call(allocator, op, macro_args, env, depth + 1);
-        op.deinit(allocator);
         // Evaluate the expanded form
         const result = try evalRec(allocator, expanded, env, depth + 1);
         expanded.deinit(allocator);
@@ -543,13 +543,17 @@ fn evalList(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerro
     // Evaluate all arguments
     var args: list.List = .empty;
     errdefer args.deinit(allocator);
-    _ = &args; // silence unused warning
     for (l.items[1..]) |arg| {
         try args.append(allocator, try evalRec(allocator, arg, env, depth + 1));
     }
 
+    // Transfer ownership of args to call (call will deinit it).
+    // Reset local copy to prevent double-free from errdefer.
+    const transferred = args;
+    args = list.List.empty;
+
     // Call the function
-    return try call(allocator, op, args, env, depth + 1);
+    return try call(allocator, op, transferred, env, depth + 1);
 }
 
 fn evalDo(allocator: Allocator, forms: []const Value, env: *Env, depth: usize) anyerror!Value {
@@ -558,6 +562,7 @@ fn evalDo(allocator: Allocator, forms: []const Value, env: *Env, depth: usize) a
 
     for (forms) |form| {
         result.deinit(allocator);
+        result = Value.nilValue();
         result = try evalRec(allocator, form, env, depth);
     }
     return result;
