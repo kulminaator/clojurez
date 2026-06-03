@@ -3,7 +3,6 @@ const Value = @import("value.zig");
 const list = @import("list.zig");
 const vec = @import("vector.zig");
 const Env = Value.Env;
-const core = @import("core.zig");
 const parser = @import("parser.zig");
 
 const Allocator = std.mem.Allocator;

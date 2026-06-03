@@ -1,0 +1,215 @@
+// Map built-in functions: get, assoc, keys, vals, dissoc, merge, hash-map
+const std = @import("std");
+const Value = @import("../value.zig");
+const list = @import("../list.zig");
+const Env = Value.Env;
+
+pub fn core_get(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len < 1) return error.ArityError;
+    const map_val = args.items[0];
+    if (map_val.type != .map) return error.TypeError;
+    if (args.items.len == 1) return Value.nilValue();
+    const key = args.items[1];
+    for (map_val.map_val.items) |entry| {
+        if (entry.key.equals(key)) {
+            return try entry.value.clone(env_env.allocator);
+        }
+    }
+    return Value.nilValue();
+}
+
+pub fn core_assoc(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len < 1) return error.ArityError;
+    const map_val = args.items[0];
+    if (map_val.type != .map) return error.TypeError;
+
+    var new_map: Value.Map = .empty;
+    errdefer {
+        for (new_map.items) |*entry| {
+            entry.key.deinit(env_env.allocator);
+            entry.value.deinit(env_env.allocator);
+        }
+        env_env.allocator.free(new_map.items);
+    }
+
+    for (map_val.map_val.items) |entry| {
+        try new_map.append(env_env.allocator, .{
+            .key = try entry.key.clone(env_env.allocator),
+            .value = try entry.value.clone(env_env.allocator),
+        });
+    }
+
+    var i: usize = 1;
+    while (i + 1 < args.items.len) : (i += 2) {
+        const key = args.items[i];
+        const value = args.items[i + 1];
+        var found = false;
+        var j: usize = 0;
+        while (j < new_map.items.len) : (j += 1) {
+            if (new_map.items[j].key.equals(key)) {
+                new_map.items[j].value.deinit(env_env.allocator);
+                new_map.items[j].value = try value.clone(env_env.allocator);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            try new_map.append(env_env.allocator, .{
+                .key = try key.clone(env_env.allocator),
+                .value = try value.clone(env_env.allocator),
+            });
+        }
+    }
+
+    return Value.mapValue(new_map);
+}
+
+pub fn core_keys(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const map_val = args.items[0];
+    if (map_val.type != .map) return error.TypeError;
+
+    var result: list.List = .empty;
+    errdefer result.deinit(env_env.allocator);
+    for (map_val.map_val.items) |entry| {
+        try result.append(env_env.allocator, try entry.key.clone(env_env.allocator));
+    }
+    return Value.listValue(result);
+}
+
+pub fn core_vals(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const map_val = args.items[0];
+    if (map_val.type != .map) return error.TypeError;
+
+    var result: list.List = .empty;
+    errdefer result.deinit(env_env.allocator);
+    for (map_val.map_val.items) |entry| {
+        try result.append(env_env.allocator, try entry.value.clone(env_env.allocator));
+    }
+    return Value.listValue(result);
+}
+
+pub fn core_dissoc(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len < 2) return error.ArityError;
+    const map_val = args.items[0];
+    if (map_val.type != .map) return error.TypeError;
+
+    var new_map: Value.Map = .empty;
+    errdefer {
+        for (new_map.items) |*entry| {
+            entry.key.deinit(env_env.allocator);
+            entry.value.deinit(env_env.allocator);
+        }
+        env_env.allocator.free(new_map.items);
+    }
+
+    for (map_val.map_val.items) |entry| {
+        var should_keep = true;
+        var i: usize = 1;
+        while (i < args.items.len) : (i += 1) {
+            if (entry.key.equals(args.items[i])) {
+                should_keep = false;
+                break;
+            }
+        }
+        if (should_keep) {
+            try new_map.append(env_env.allocator, .{
+                .key = try entry.key.clone(env_env.allocator),
+                .value = try entry.value.clone(env_env.allocator),
+            });
+        }
+    }
+    return Value.mapValue(new_map);
+}
+
+pub fn core_hash_map(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len % 2 != 0) return error.ArityError;
+
+    var new_map: Value.Map = .empty;
+    errdefer {
+        for (new_map.items) |*entry| {
+            entry.key.deinit(env_env.allocator);
+            entry.value.deinit(env_env.allocator);
+        }
+        env_env.allocator.free(new_map.items);
+    }
+
+    var i: usize = 0;
+    while (i < args.items.len) : (i += 2) {
+        const key = args.items[i];
+        const value = args.items[i + 1];
+        var found = false;
+        var j: usize = 0;
+        while (j < new_map.items.len) : (j += 1) {
+            if (new_map.items[j].key.equals(key)) {
+                new_map.items[j].value.deinit(env_env.allocator);
+                new_map.items[j].value = try value.clone(env_env.allocator);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            try new_map.append(env_env.allocator, .{
+                .key = try key.clone(env_env.allocator),
+                .value = try value.clone(env_env.allocator),
+            });
+        }
+    }
+    return Value.mapValue(new_map);
+}
+
+pub fn core_merge(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len == 0) return Value.mapValue(.empty);
+
+    var result: Value.Map = .empty;
+    errdefer {
+        for (result.items) |*entry| {
+            entry.key.deinit(env_env.allocator);
+            entry.value.deinit(env_env.allocator);
+        }
+        env_env.allocator.free(result.items);
+    }
+
+    for (args.items) |arg| {
+        if (arg.type != .map) continue;
+        for (arg.map_val.items) |entry| {
+            var found = false;
+            var j: usize = 0;
+            while (j < result.items.len) : (j += 1) {
+                if (result.items[j].key.equals(entry.key)) {
+                    result.items[j].value.deinit(env_env.allocator);
+                    result.items[j].value = try entry.value.clone(env_env.allocator);
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                try result.append(env_env.allocator, .{
+                    .key = try entry.key.clone(env_env.allocator),
+                    .value = try entry.value.clone(env_env.allocator),
+                });
+            }
+        }
+    }
+    return Value.mapValue(result);
+}
+
+pub fn registerMapFunctions(env: *Env) anyerror!void {
+    const allocator = env.allocator;
+    try env.put(allocator, "get", Value.builtinFnValue(core_get));
+    try env.put(allocator, "assoc", Value.builtinFnValue(core_assoc));
+    try env.put(allocator, "keys", Value.builtinFnValue(core_keys));
+    try env.put(allocator, "vals", Value.builtinFnValue(core_vals));
+    try env.put(allocator, "dissoc", Value.builtinFnValue(core_dissoc));
+    try env.put(allocator, "merge", Value.builtinFnValue(core_merge));
+    try env.put(allocator, "hash-map", Value.builtinFnValue(core_hash_map));
+}
+

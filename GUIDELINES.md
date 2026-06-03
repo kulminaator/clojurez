@@ -45,7 +45,45 @@ Our design is a **minimal Zig VM** with **Clojure code on top of it**.
 
 ---
 
-## 1. Timeout Policy
+## 1. Code Size Limits
+
+**No Zig source file may exceed 1,000 lines. No single function may exceed 80 lines.**
+
+These are hard limits. When a file or function approaches its limit, it must be split before more functionality is added.
+
+### File Size Limit: 1,000 lines
+
+- Count all lines including imports, comments, blank lines, and tests.
+- When a file reaches **800 lines**, plan a split. At **1,000 lines**, a split is mandatory.
+- Split by **logical domain**: group related functions together (e.g., arithmetic, comparison, I/O, maps, sets).
+- Place domain-specific modules in a subdirectory (e.g., `core/arithmetic.zig`, `core/maps.zig`).
+- The parent file becomes a coordinator that imports sub-modules and delegates registration.
+
+### Function Size Limit: 80 lines
+
+- Count all lines from the `fn` signature to the closing `}`.
+- When a function reaches **60 lines**, look for sub-tasks to extract into helper functions.
+- Extract helpers that:
+  - Handle a distinct sub-task (e.g., argument validation, type switching, result construction)
+  - Are reusable across multiple functions
+  - Improve readability by giving a name to a complex operation
+- Mark extracted helpers as `fn` (private) unless they are needed by other modules, in which case place them in a shared `helpers.zig`.
+
+### Rationale
+
+- **Readability**: A developer should be able to understand a function in one screen and a file in one sitting.
+- **Testability**: Smaller functions and files are easier to test in isolation.
+- **Maintainability**: Changes are localized — modifying one feature doesn't risk breaking unrelated code.
+- **Code review**: Smaller diffs are faster to review and less error-prone.
+
+### Enforcement
+
+- These limits should be checked during code review.
+- If a file or function exceeds its limit, the review should request a split before merging.
+
+---
+
+## 2. Timeout Policy
 
 **All tests must complete within 10 seconds.** This applies to:
 
@@ -76,23 +114,36 @@ The REPL is inherently interactive and can loop forever if fed malformed input o
 
 ---
 
-## 2. Code Coverage Requirements
+## 3. Code Coverage Requirements
 
 **Minimum target: 80% line coverage across the entire codebase.**
 
 ### Coverage by Module
 
-| Module       | Minimum Coverage | Notes                              |
-| ------------ | ---------------- | ---------------------------------- |
-| `lexer.zig`  | 90%              | Tokenization is foundational       |
-| `parser.zig` | 90%              | Parsing is foundational            |
-| `value.zig`  | 95%              | Core data structures               |
-| `eval.zig`   | 85%              | Evaluator logic, special forms     |
-| `core.zig`   | 80%              | Built-in functions                 |
-| `repl.zig`   | 70%              | Hard to test interactively         |
-| `main.zig`   | 80%              | CLI argument handling              |
-| `list.zig`   | 90%              | Collection utilities               |
-| `vector.zig` | 90%              | Collection utilities               |
+| Module                        | Minimum Coverage | Notes                              |
+| ----------------------------- | ---------------- | ---------------------------------- |
+| `lexer.zig`                   | 90%              | Tokenization is foundational       |
+| `parser.zig`                  | 90%              | Parsing is foundational            |
+| `value.zig`                   | 95%              | Core data structures               |
+| `eval.zig`                    | 85%              | Evaluator logic, special forms     |
+| `core.zig`                    | 80%              | Coordinator + higher-order fns     |
+| `core/arithmetic.zig`         | 80%              | +, -, *, /, rem                    |
+| `core/comparison.zig`         | 80%              | =, !=, <, >, <=, >=, not           |
+| `core/type_predicates.zig`    | 80%              | nil?, number?, string?, etc.       |
+| `core/strings.zig`            | 80%              | str, utf8-valid?                   |
+| `core/sequences.zig`          | 80%              | count, first, rest, nth, list, vec |
+| `core/seq_ops.zig`            | 80%              | map, reduce, filter, flatten, etc. |
+| `core/maps.zig`               | 80%              | get, assoc, keys, vals, merge      |
+| `core/sets.zig`               | 80%              | set, set?, disj                    |
+| `core/collections.zig`        | 80%              | conj, pop, last, reverse, range    |
+| `core/io.zig`                 | 80%              | print, println, spit, slurp        |
+| `core/atoms.zig`              | 80%              | atom, swap!, reset!                |
+| `core/eval_helpers.zig`       | 80%              | Shared callBuiltin/evalForm        |
+| `core/helpers.zig`            | 80%              | Shared numeric helpers             |
+| `repl.zig`                    | 70%              | Hard to test interactively         |
+| `main.zig`                    | 80%              | CLI argument handling              |
+| `list.zig`                    | 90%              | Collection utilities               |
+| `vector.zig`                  | 90%              | Collection utilities               |
 
 ### Measuring Coverage
 
@@ -118,7 +169,7 @@ The following are acceptable exclusions (documented with `// coverage: excluded`
 
 ---
 
-## 3. Test Categories
+## 4. Test Categories
 
 ### 3.1 Unit Tests
 
@@ -174,7 +225,7 @@ timeout 10s ./main --repl < /tmp/repl_test.clj
 
 ---
 
-## 4. Test Naming Conventions
+## 5. Test Naming Conventions
 
 ### Unit Tests (Zig `test` blocks)
 
@@ -201,7 +252,7 @@ Examples:
 
 ---
 
-## 5. Error Handling Tests
+## 6. Error Handling Tests
 
 Every public function must have tests for:
 
@@ -219,7 +270,7 @@ test "core::div: division by zero" {
 
 ---
 
-## 6. Regression Tests
+## 7. Regression Tests
 
 When a bug is fixed, add a test that reproduces the bug before the fix. Name it:
 
@@ -231,7 +282,7 @@ This ensures the bug never reappears.
 
 ---
 
-## 7. Test Execution
+## 8. Test Execution
 
 ### Running All Tests
 
@@ -270,7 +321,7 @@ Every pull request must:
 
 ---
 
-## 8. Anti-Patterns
+## 9. Anti-Patterns
 
 ### ❌ Never Do This
 
@@ -290,7 +341,7 @@ Every pull request must:
 
 ---
 
-## 9. Test Data
+## 10. Test Data
 
 Store test fixtures in `tests/fixtures/`:
 
@@ -313,7 +364,7 @@ tests/
 
 ---
 
-## 10. Coverage Reporting
+## 11. Coverage Reporting
 
 Generate coverage reports regularly:
 
@@ -329,7 +380,7 @@ The coverage report should be part of the CI/CD pipeline and posted as a comment
 
 ---
 
-## 11. Incremental Development
+## 12. Incremental Development
 
 ### Split Tasks into Small Steps
 
@@ -409,6 +460,8 @@ Before starting a task, ask:
 | Rule | Requirement |
 | ---- | ----------- |
 | Design | Minimal Zig VM, Clojure code on top |
+| File size | Max 1,000 lines per `.zig` file |
+| Function size | Max 80 lines per function |
 | Task size | Small, verifiable increments |
 | Iteration | Test after every meaningful change |
 | Compile | Fix errors immediately, never accumulate |
