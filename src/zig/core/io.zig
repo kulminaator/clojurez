@@ -132,12 +132,11 @@ pub fn core_nano_time(self: *Value, args: list.List, _: *Env) anyerror!Value {
 }
 
 pub fn registerIOFunctions(env: *Env) anyerror!void {
-    const allocator = env.allocator;
-    try env.put(allocator, "print", Value.builtinFnValue(core_print));
-    try env.put(allocator, "println", Value.builtinFnValue(core_println));
-    try env.put(allocator, "read-line", Value.builtinFnValue(core_read_line));
-    try env.put(allocator, "spit", Value.builtinFnValue(core_spit));
-    try env.put(allocator, "slurp", Value.builtinFnValue(core_slurp));
-    try env.put(allocator, "nano-time", Value.builtinFnValue(core_nano_time));
+    try env.put("print", Value.builtinFnValue(core_print));
+    try env.put("println", Value.builtinFnValue(core_println));
+    try env.put("read-line", Value.builtinFnValue(core_read_line));
+    try env.put("spit", Value.builtinFnValue(core_spit));
+    try env.put("slurp", Value.builtinFnValue(core_slurp));
+    try env.put("nano-time", Value.builtinFnValue(core_nano_time));
 }
 

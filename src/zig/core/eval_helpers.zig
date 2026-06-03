@@ -49,7 +49,7 @@ pub fn callBuiltin(allocator: Allocator, f: Value, args_list: list.List, env: *V
             while (i < fn_data.params.items.len) : (i += 1) {
                 const param = fn_data.params.items[i];
                 if (param.type == .symbol) {
-                    try new_env.put(allocator, param.sym_val, try args_list.items[i].clone(allocator));
+                    try new_env.put(param.sym_val, try args_list.items[i].clone(allocator));
                 }
             }
 
@@ -60,9 +60,9 @@ pub fn callBuiltin(allocator: Allocator, f: Value, args_list: list.List, env: *V
                 while (j < args_list.items.len) : (j += 1) {
                     try rest_list.append(allocator, try args_list.items[j].clone(allocator));
                 }
-                try new_env.put(allocator, fn_data.rest_name.?, Value.listValue(rest_list));
+                try new_env.put(fn_data.rest_name.?, Value.listValue(rest_list));
             } else if (has_rest) {
-                try new_env.put(allocator, fn_data.rest_name.?, Value.listValue(.empty));
+                try new_env.put(fn_data.rest_name.?, Value.listValue(.empty));
             }
 
             return try evalBody(allocator, fn_data.body, &new_env);
@@ -161,7 +161,7 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
                         const sym = bind_items[bi];
                         if (sym.type != .symbol) return error.TypeError;
                         const val = try evalForm(allocator, bind_items[bi + 1], env);
-                        try new_env.put(allocator, sym.sym_val, val);
+                        try new_env.put(sym.sym_val, val);
                     }
                     var result: Value = Value.nilValue();
                     errdefer result.deinit(allocator);

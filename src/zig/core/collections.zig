@@ -303,13 +303,12 @@ fn toInt(v: Value) anyerror!i64 {
 }
 
 pub fn registerCollectionFunctions(env: *Env) anyerror!void {
-    const allocator = env.allocator;
-    try env.put(allocator, "conj", Value.builtinFnValue(core_conj));
-    try env.put(allocator, "pop", Value.builtinFnValue(core_pop));
-    try env.put(allocator, "last", Value.builtinFnValue(core_last));
-    try env.put(allocator, "reverse", Value.builtinFnValue(core_reverse));
-    try env.put(allocator, "range", Value.builtinFnValue(core_range));
-    try env.put(allocator, "peek", Value.builtinFnValue(core_peek));
-    try env.put(allocator, "contains?", Value.builtinFnValue(core_contains_q));
+    try env.put("conj", Value.builtinFnValue(core_conj));
+    try env.put("pop", Value.builtinFnValue(core_pop));
+    try env.put("last", Value.builtinFnValue(core_last));
+    try env.put("reverse", Value.builtinFnValue(core_reverse));
+    try env.put("range", Value.builtinFnValue(core_range));
+    try env.put("peek", Value.builtinFnValue(core_peek));
+    try env.put("contains?", Value.builtinFnValue(core_contains_q));
 }
 

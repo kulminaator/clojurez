@@ -70,17 +70,21 @@ pub fn runRepl(allocator: Allocator, env: *Value.Env) anyerror!void {
 
 /// Returns true if the REPL should exit (e.g., quit/exit called)
 fn evaluateAndPrint(allocator: Allocator, input: []const u8, env: *Value.Env) anyerror!bool {
-    var p = try parser.Parser.init(allocator, input);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var p = try parser.Parser.init(arena_alloc, input);
     defer p.deinit();
     var form = try p.parse();
-    var result = eval.eval(allocator, form, env) catch |err| {
+    var result = eval.eval(allocator, arena_alloc, form, env) catch |err| {
         switch (err) {
             eval.EvalError.ReplExit => {
-                form.deinit(allocator);
+                form.deinit(arena_alloc);
                 return true; // signal exit
             },
             else => {
-                form.deinit(allocator);
+                form.deinit(arena_alloc);
                 try writeStdout("Error: ");
                 try writeStdout(@errorName(err));
                 try writeStdout("\n");
@@ -90,7 +94,7 @@ fn evaluateAndPrint(allocator: Allocator, input: []const u8, env: *Value.Env) an
     };
     const formatted = try result.fmt(allocator);
     defer allocator.free(formatted);
-    result.deinit(allocator);
+    result.deinit(arena_alloc);
     try writeStdout(formatted);
     try writeStdout("\n");
     return false;

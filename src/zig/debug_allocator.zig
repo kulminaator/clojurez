@@ -4,10 +4,20 @@ const Alignment = std.mem.Alignment;
 
 /// Debug allocator wrapper that logs every alloc/realloc/free operation.
 /// Toggle with CLJVM_MEM_TRACE=1 (stderr) or CLJVM_MEM_TRACE=file:path
+///
+/// The tracing condition (CLJVM_MEM_TRACE) is evaluated exactly once at startup.
+/// When disabled, the vtable points to non-tracing functions that delegate
+/// directly to the wrapped allocator with zero overhead (no branches, no logging,
+/// no counter updates).
 pub const DebugAllocator = struct {
     const Self = @This();
 
     wrapped: Allocator,
+
+    // Vtable stored inline so the pointer remains valid for the lifetime of this struct.
+    // Function pointers are set once at init based on CLJVM_MEM_TRACE.
+    vtable: std.mem.Allocator.VTable,
+
     active: bool = false,
     log_file: ?std.Io.File = null,
     alloc_count: usize = 0,
@@ -20,13 +30,19 @@ pub const DebugAllocator = struct {
     pub fn init(wrapped: Allocator, log_path: ?[]const u8) Self {
         var self: Self = .{
             .wrapped = wrapped,
+            .vtable = .{
+                .alloc = if (log_path != null) allocFnTrace else allocFnNoTrace,
+                .resize = if (log_path != null) resizeFnTrace else resizeFnNoTrace,
+                .remap = if (log_path != null) remapFnTrace else remapFnNoTrace,
+                .free = if (log_path != null) freeFnTrace else freeFnNoTrace,
+            },
             .active = log_path != null,
         };
 
         if (log_path) |path| {
             if (!std.mem.eql(u8, path, "stderr")) {
                 const cwd = std.Io.Dir.cwd();
-                self.log_file = std.Io.Dir.openFile(cwd, std.Options.debug_io, path, .{ .mode = .write_only }) catch null;
+                self.log_file = std.Io.Dir.createFile(cwd, std.Options.debug_io, path, .{}) catch null;
             }
             self.emitRaw("=== Memory trace started");
             if (!std.mem.eql(u8, path, "stderr")) {
@@ -73,46 +89,43 @@ pub const DebugAllocator = struct {
     pub fn allocator(self: *Self) Allocator {
         return .{
             .ptr = self,
-            .vtable = &.{
-                .alloc = allocFn,
-                .resize = resizeFn,
-                .remap = remapFn,
-                .free = freeFn,
-            },
+            .vtable = &self.vtable,
         };
     }
 
-    fn allocFn(ctx: *anyopaque, len: usize, alignment: Alignment, ret_addr: usize) ?[*]u8 {
+    // === Tracing functions (logged) ===
+
+    fn allocFnTrace(ctx: *anyopaque, len: usize, alignment: Alignment, ret_addr: usize) ?[*]u8 {
         _ = ret_addr;
         const self: *Self = @ptrCast(@alignCast(ctx));
         const result = self.wrapped.rawAlloc(len, alignment, @returnAddress()) orelse {
-            if (self.active) logMsg(self, "ALLOC FAIL  size={d}\n", .{len});
+            self.logMsg("ALLOC FAIL  size={d}\n", .{len});
             return null;
         };
         self.alloc_count += 1;
         self.total_allocated += len;
         self.current_memory += len;
         if (self.current_memory > self.peak_memory) self.peak_memory = self.current_memory;
-        if (self.active) logMsg(self, "ALLOC       size={d:<10} ptr={*} live={d}\n", .{ len, result, self.current_memory });
+        self.logMsg("ALLOC       size={d:<10} ptr={*} live={d}\n", .{ len, result, self.current_memory });
         return result;
     }
 
-    fn resizeFn(ctx: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, ret_addr: usize) bool {
+    fn resizeFnTrace(ctx: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, ret_addr: usize) bool {
         _ = ret_addr;
         const self: *Self = @ptrCast(@alignCast(ctx));
         const old_len = memory.len;
         const result = self.wrapped.rawResize(memory, alignment, new_len, @returnAddress());
-        if (result and self.active) {
+        if (result) {
             self.total_freed += old_len;
             self.total_allocated += new_len;
             self.current_memory = self.current_memory - old_len + new_len;
             if (self.current_memory > self.peak_memory) self.peak_memory = self.current_memory;
-            logMsg(self, "RESIZE OK   old={d:<10} new={d:<10} ptr={*} live={d}\n", .{ old_len, new_len, memory.ptr, self.current_memory });
+            self.logMsg("RESIZE OK   old={d:<10} new={d:<10} ptr={*} live={d}\n", .{ old_len, new_len, memory.ptr, self.current_memory });
         }
         return result;
     }
 
-    fn remapFn(ctx: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+    fn remapFnTrace(ctx: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
         _ = ret_addr;
         const self: *Self = @ptrCast(@alignCast(ctx));
         const old_len = memory.len;
@@ -126,14 +139,14 @@ pub const DebugAllocator = struct {
                 self.current_memory -= old_len - new_len;
             }
             if (self.current_memory > self.peak_memory) self.peak_memory = self.current_memory;
-            if (self.active) logMsg(self, "REMAP       old={d:<10} new={d:<10} ptr={*} live={d}\n", .{ old_len, new_len, ptr, self.current_memory });
-        } else if (self.active) {
-            logMsg(self, "REMAP FAIL  old={d:<10} new={d:<10}\n", .{ old_len, new_len });
+            self.logMsg("REMAP       old={d:<10} new={d:<10} ptr={*} live={d}\n", .{ old_len, new_len, ptr, self.current_memory });
+        } else {
+            self.logMsg("REMAP FAIL  old={d:<10} new={d:<10}\n", .{ old_len, new_len });
         }
         return result;
     }
 
-    fn freeFn(ctx: *anyopaque, memory: []u8, alignment: Alignment, ret_addr: usize) void {
+    fn freeFnTrace(ctx: *anyopaque, memory: []u8, alignment: Alignment, ret_addr: usize) void {
         _ = ret_addr;
         const self: *Self = @ptrCast(@alignCast(ctx));
         const n = memory.len;
@@ -141,8 +154,36 @@ pub const DebugAllocator = struct {
         self.free_count += 1;
         self.total_freed += n;
         if (n > self.current_memory) self.current_memory = 0 else self.current_memory -= n;
-        if (self.active) logMsg(self, "FREE        size={d:<10} ptr={*} live={d}\n", .{ n, memory.ptr, self.current_memory });
+        self.logMsg("FREE        size={d:<10} ptr={*} live={d}\n", .{ n, memory.ptr, self.current_memory });
     }
+
+    // === Non-tracing functions (zero overhead) ===
+
+    fn allocFnNoTrace(ctx: *anyopaque, len: usize, alignment: Alignment, ret_addr: usize) ?[*]u8 {
+        _ = ret_addr;
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        return self.wrapped.rawAlloc(len, alignment, @returnAddress());
+    }
+
+    fn resizeFnNoTrace(ctx: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, ret_addr: usize) bool {
+        _ = ret_addr;
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        return self.wrapped.rawResize(memory, alignment, new_len, @returnAddress());
+    }
+
+    fn remapFnNoTrace(ctx: *anyopaque, memory: []u8, alignment: Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
+        _ = ret_addr;
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        return self.wrapped.rawRemap(memory, alignment, new_len, @returnAddress());
+    }
+
+    fn freeFnNoTrace(ctx: *anyopaque, memory: []u8, alignment: Alignment, ret_addr: usize) void {
+        _ = ret_addr;
+        const self: *Self = @ptrCast(@alignCast(ctx));
+        self.wrapped.rawFree(memory, alignment, @returnAddress());
+    }
+
+    // === Internal helpers (only used by tracing functions) ===
 
     fn emitRaw(self: *const Self, msg: []const u8) void {
         self.writeRaw(msg);
@@ -150,28 +191,24 @@ pub const DebugAllocator = struct {
 
     fn writeRaw(self: *const Self, msg: []const u8) void {
         if (self.log_file) |f| {
-            var buf: [1]u8 = undefined;
-            var w = f.writer(std.Options.debug_io, &buf);
-            w.interface.writeAll(msg) catch {};
+            std.Io.File.writeStreamingAll(f, std.Options.debug_io, msg) catch {};
         } else {
-            var buf: [1]u8 = undefined;
-            var w = std.Io.File.stderr().writer(std.Options.debug_io, &buf);
-            w.interface.writeAll(msg) catch {};
+            std.Io.File.writeStreamingAll(std.Io.File.stderr(), std.Options.debug_io, msg) catch {};
         }
+    }
+
+    fn logMsg(self: *const Self, comptime fmt: []const u8, args: anytype) void {
+        const inner = std.fmt.allocPrint(std.heap.page_allocator, fmt, args) catch return;
+        defer std.heap.page_allocator.free(inner);
+        const full = std.fmt.allocPrint(std.heap.page_allocator, "MEM_TRACE: {s}", .{inner}) catch return;
+        defer std.heap.page_allocator.free(full);
+        self.writeRaw(full);
     }
 };
 
-fn logMsg(self: *const DebugAllocator, comptime fmt: []const u8, args: anytype) void {
-    if (!self.active) return;
-    const inner = std.fmt.allocPrint(std.heap.page_allocator, fmt, args) catch return;
-    defer std.heap.page_allocator.free(inner);
-    const full = std.fmt.allocPrint(std.heap.page_allocator, "MEM_TRACE: {s}", .{inner}) catch return;
-    defer std.heap.page_allocator.free(full);
-    self.writeRaw(full);
-}
-
 /// Check if memory tracing is enabled via CLJVM_MEM_TRACE env var.
-/// Returns null if disabled, or the log target ("stderr" or file path) if enabled.
+/// Called exactly once at startup. Returns null if disabled, or the log
+/// target ("stderr" or file path) if enabled.
 pub fn getMemTraceConfig(environ: std.process.Environ) ?[]const u8 {
     const val = std.process.Environ.getPosix(environ, "CLJVM_MEM_TRACE") orelse return null;
     if (val.len == 0) return null;

@@ -49,6 +49,12 @@ pub const LazySeqThunk = struct {
     env: Env,
 };
 
+// Ref-counted atom data for proper shared ownership
+pub const AtomData = struct {
+    value: Self,
+    ref_count: usize = 1,
+};
+
 // Lazy map: holds a function, a collection, and a current index.
 // Iterated element-by-element by dorun without materializing the full result.
 pub const LazyMapData = struct {
@@ -85,7 +91,7 @@ builtin_fn_val: BuiltinFn = undefined,
 lazy_seq_val: LazySeq = .{},
 lazy_map_val: ?*LazyMapData = null,
 range_val: ?*RangeData = null,
-atom_val: ?*Self = null,
+atom_val: ?*AtomData = null,
 
 pub const FnData = struct {
     params: list.List,
@@ -131,18 +137,38 @@ pub const Env = struct {
         return new_env;
     }
 
-    pub fn put(self: *Env, allocator: Allocator, name: []const u8, value: Self) anyerror!void {
-        // First ensure the put will succeed (may grow the hash map)
-        // Then deinit the old value to avoid memory leaks
-        errdefer {
-            // If put fails after deinit, we can't recover the old value.
-            // This is an OOM situation anyway.
-        }
-        const old_ptr = self.entries.getPtr(name);
-        if (old_ptr) |old_val| {
+    pub fn put(self: *Env, name: []const u8, value: Self) anyerror!void {
+        // Uses self.allocator for all allocations.
+        // StringArrayHashMapUnmanaged stores key POINTERS (not copies),
+        // so we must dupe the key to self.allocator to ensure it outlives
+        // any temporary arena where the original may have been allocated.
+        const allocator = self.allocator;
+
+        // Deinit old value if key exists
+        const existing = self.entries.getPtr(name);
+        if (existing) |old_val| {
             old_val.deinit(allocator);
         }
-        try self.entries.put(allocator, name, value);
+
+        // Dupe key to main allocator (StringArrayHashMap stores pointers)
+        const owned_key = try allocator.dupe(u8, name);
+        errdefer allocator.free(owned_key);
+
+        if (existing) |_| {
+            // Key exists: update value in-place, replace key pointer
+            // Find the entry by iterating
+            var it = self.entries.iterator();
+            while (it.next()) |entry| {
+                if (std.mem.eql(u8, entry.key_ptr.*, name)) {
+                    entry.key_ptr.* = owned_key;
+                    entry.value_ptr.* = value;
+                    return;
+                }
+            }
+            // Should not reach here, but fall through to put as fallback
+        }
+
+        try self.entries.put(allocator, owned_key, value);
     }
 
     pub fn get(self: *Env, name: []const u8) ?Self {
@@ -253,13 +279,14 @@ pub fn queueValue(q: Queue) Self {
 }
 
 pub fn atomValue(allocator: Allocator, initial: Self) anyerror!Self {
-    const val = try allocator.create(Self);
-    val.* = try initial.clone(allocator);
-    return .{ .type = .atom, .atom_val = val };
+    const data = try allocator.create(AtomData);
+    data.* = .{ .value = try initial.clone(allocator), .ref_count = 1 };
+    return .{ .type = .atom, .atom_val = data };
 }
 
-pub fn atomValueShared(ptr: *Self) Self {
-    return .{ .type = .atom, .atom_val = ptr };
+pub fn atomValueShared(data: *AtomData) Self {
+    data.ref_count += 1;
+    return .{ .type = .atom, .atom_val = data };
 }
 
 pub fn lazySeqValue(thunk: ?*LazySeqThunk) Self {
@@ -343,10 +370,14 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
         },
         .builtin_fn => {},
         .atom => {
-            // Don't deinit inner value — atoms share pointers via clone.
-            // The arena allocator in main will clean up everything.
-            // Only destroy the pointer itself if this is the owner.
-            _ = self.atom_val;
+            // Ref-counted: decrement and free when last reference is gone
+            if (self.atom_val) |data| {
+                data.ref_count -= 1;
+                if (data.ref_count == 0) {
+                    data.value.deinit(allocator);
+                    allocator.destroy(data);
+                }
+            }
         },
     }
 }
@@ -440,9 +471,9 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
             return nilValue();
         },
         .atom => {
-            // Clone atom by sharing the same pointer (atoms are identity-based)
-            if (self.atom_val) |val| {
-                return atomValueShared(val);
+            // Clone atom by sharing the same AtomData (atoms are identity-based)
+            if (self.atom_val) |data| {
+                return atomValueShared(data);
             }
             return nilValue();
         },
@@ -469,7 +500,7 @@ pub fn isTruthy(self: Self) bool {
         .nil => false,
         .bool => self.bool_val,
         .atom => {
-            if (self.atom_val) |val| return val.isTruthy();
+            if (self.atom_val) |data| return data.value.isTruthy();
             return false;
         },
         else => true,
@@ -548,8 +579,8 @@ pub fn fmt(self: Self, allocator: Allocator) anyerror![]const u8 {
             return allocator.dupe(u8, "#range()");
         },
         .atom => {
-            if (self.atom_val) |val| {
-                const inner_str = try val.fmt(allocator);
+            if (self.atom_val) |data| {
+                const inner_str = try data.value.fmt(allocator);
                 defer allocator.free(inner_str);
                 return try std.fmt.allocPrint(allocator, "#atom({s})", .{inner_str});
             }

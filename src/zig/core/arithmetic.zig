@@ -101,17 +101,16 @@ pub fn core_mod(self: *Value, args: list.List, _: *Env) anyerror!Value {
 }
 
 pub fn registerArithmeticFunctions(env: *Env) anyerror!void {
-    const allocator = env.allocator;
-    try env.put(allocator, "plus", Value.builtinFnValue(core_plus));
-    try env.put(allocator, "minus", Value.builtinFnValue(core_minus));
-    try env.put(allocator, "mult", Value.builtinFnValue(core_mult));
-    try env.put(allocator, "div", Value.builtinFnValue(core_div));
-    try env.put(allocator, "mod", Value.builtinFnValue(core_mod));
+    try env.put("plus", Value.builtinFnValue(core_plus));
+    try env.put("minus", Value.builtinFnValue(core_minus));
+    try env.put("mult", Value.builtinFnValue(core_mult));
+    try env.put("div", Value.builtinFnValue(core_div));
+    try env.put("mod", Value.builtinFnValue(core_mod));
     // Clojure-style aliases
-    try env.put(allocator, "+", Value.builtinFnValue(core_plus));
-    try env.put(allocator, "-", Value.builtinFnValue(core_minus));
-    try env.put(allocator, "*", Value.builtinFnValue(core_mult));
-    try env.put(allocator, "/", Value.builtinFnValue(core_div));
-    try env.put(allocator, "rem", Value.builtinFnValue(core_mod));
+    try env.put("+", Value.builtinFnValue(core_plus));
+    try env.put("-", Value.builtinFnValue(core_minus));
+    try env.put("*", Value.builtinFnValue(core_mult));
+    try env.put("/", Value.builtinFnValue(core_div));
+    try env.put("rem", Value.builtinFnValue(core_mod));
 }
 

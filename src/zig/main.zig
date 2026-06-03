@@ -12,15 +12,16 @@ const Allocator = std.mem.Allocator;
 
 pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // Memory trace: toggle with CLJVM_MEM_TRACE=1 (stderr) or CLJVM_MEM_TRACE=file:path
-    var debug_alloc: debug_allocator.DebugAllocator = .{
-        .wrapped = std.heap.page_allocator,
-    };
-    const trace_cfg = debug_allocator.getMemTraceConfig(init.environ);
-    if (trace_cfg) |cfg| {
-        defer std.heap.page_allocator.free(cfg);
-        debug_alloc = debug_allocator.DebugAllocator.init(std.heap.page_allocator, cfg);
-        defer debug_alloc.deinit();
+    // The tracing condition is evaluated once at startup. When disabled, log_fn is null
+    // so every alloc/free has zero overhead beyond the wrapped allocator call.
+    var debug_alloc: debug_allocator.DebugAllocator = undefined;
+    if (debug_allocator.getMemTraceConfig(init.environ)) |trace_cfg| {
+        defer std.heap.page_allocator.free(trace_cfg);
+        debug_alloc = debug_allocator.DebugAllocator.init(std.heap.page_allocator, trace_cfg);
+    } else {
+        debug_alloc = debug_allocator.DebugAllocator.init(std.heap.page_allocator, null);
     }
+    defer debug_alloc.deinit();
     const allocator = debug_alloc.allocator();
 
     // Create global environment
@@ -71,6 +72,7 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
 }
 
 /// Load the embedded Clojure core library silently (no output for defn names).
+/// Uses main allocator directly since all values must persist.
 fn loadCoreLibrary(allocator: Allocator, env: *Env) anyerror!void {
     const content = core_clj.core_clj_source;
 
@@ -81,7 +83,7 @@ fn loadCoreLibrary(allocator: Allocator, env: *Env) anyerror!void {
     defer forms.deinit(allocator);
 
     for (forms.items) |form| {
-        var result = try eval.eval(allocator, form, env);
+        var result = try eval.eval(allocator, allocator, form, env);
         result.deinit(allocator);
         // Silent: don't print results during core library loading
     }
@@ -95,14 +97,18 @@ fn countArgs(args: std.process.Args) usize {
 }
 
 fn runExpression(allocator: Allocator, expr: []const u8, env: *Env) anyerror!void {
-    var p = try parser.Parser.init(allocator, expr);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var p = try parser.Parser.init(arena_alloc, expr);
     defer p.deinit();
 
     var form = Value.nilValue();
-    errdefer form.deinit(allocator);
+    errdefer form.deinit(arena_alloc);
     form = try p.parse();
-    var result = try eval.eval(allocator, form, env);
-    defer result.deinit(allocator);
+    var result = try eval.eval(allocator, arena_alloc, form, env);
+    defer result.deinit(arena_alloc);
 
     const formatted = try result.fmt(allocator);
     defer allocator.free(formatted);
@@ -119,14 +125,18 @@ fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void 
     const content = try reader.interface.allocRemaining(allocator, std.Io.Limit.limited(1024 * 1024));
     defer allocator.free(content);
 
-    var p = try parser.Parser.init(allocator, content);
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var p = try parser.Parser.init(arena_alloc, content);
     defer p.deinit();
 
     var forms = try p.parseAll();
-    defer forms.deinit(allocator);
+    defer forms.deinit(arena_alloc);
 
     for (forms.items) |form| {
-        var result = try eval.eval(allocator, form, env);
+        var result = try eval.eval(allocator, arena_alloc, form, env);
 
         // Print non-nil results (like Clojure REPL)
         if (!result.equals(Value.nilValue())) {
@@ -136,7 +146,7 @@ fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void 
             try writeStdout("\n");
         }
 
-        result.deinit(allocator);
+        result.deinit(arena_alloc);
     }
 }
 

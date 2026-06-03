@@ -19,10 +19,11 @@ pub fn core_swap_bang(self: *Value, args: list.List, env_env: *Env) anyerror!Val
     if (atom.atom_val == null) return error.TypeError;
 
     const f = args.items[1];
+    const data = atom.atom_val.?;
 
     var call_args: list.List = .empty;
     errdefer call_args.deinit(env_env.allocator);
-    try call_args.append(env_env.allocator, try atom.atom_val.?.clone(env_env.allocator));
+    try call_args.append(env_env.allocator, try data.value.clone(env_env.allocator));
     var i: usize = 2;
     while (i < args.items.len) : (i += 1) {
         try call_args.append(env_env.allocator, try args.items[i].clone(env_env.allocator));
@@ -30,8 +31,8 @@ pub fn core_swap_bang(self: *Value, args: list.List, env_env: *Env) anyerror!Val
 
     const new_val = try eval_helpers.callBuiltin(env_env.allocator, f, call_args, env_env);
 
-    atom.atom_val.?.deinit(env_env.allocator);
-    atom.atom_val.?.* = new_val;
+    data.value.deinit(env_env.allocator);
+    data.value = new_val;
 
     return try new_val.clone(env_env.allocator);
 }
@@ -43,17 +44,17 @@ pub fn core_reset_bang(self: *Value, args: list.List, env_env: *Env) anyerror!Va
     if (atom.type != .atom) return error.TypeError;
     if (atom.atom_val == null) return error.TypeError;
 
+    const data = atom.atom_val.?;
     const new_val = try args.items[1].clone(env_env.allocator);
-    atom.atom_val.?.deinit(env_env.allocator);
-    atom.atom_val.?.* = new_val;
+    data.value.deinit(env_env.allocator);
+    data.value = new_val;
 
     return try new_val.clone(env_env.allocator);
 }
 
 pub fn registerAtomFunctions(env: *Env) anyerror!void {
-    const allocator = env.allocator;
-    try env.put(allocator, "atom", Value.builtinFnValue(core_atom));
-    try env.put(allocator, "swap!", Value.builtinFnValue(core_swap_bang));
-    try env.put(allocator, "reset!", Value.builtinFnValue(core_reset_bang));
+    try env.put("atom", Value.builtinFnValue(core_atom));
+    try env.put("swap!", Value.builtinFnValue(core_swap_bang));
+    try env.put("reset!", Value.builtinFnValue(core_reset_bang));
 }
 

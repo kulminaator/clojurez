@@ -255,13 +255,12 @@ pub fn core_merge(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 }
 
 pub fn registerMapFunctions(env: *Env) anyerror!void {
-    const allocator = env.allocator;
-    try env.put(allocator, "get", Value.builtinFnValue(core_get));
-    try env.put(allocator, "assoc", Value.builtinFnValue(core_assoc));
-    try env.put(allocator, "keys", Value.builtinFnValue(core_keys));
-    try env.put(allocator, "vals", Value.builtinFnValue(core_vals));
-    try env.put(allocator, "dissoc", Value.builtinFnValue(core_dissoc));
-    try env.put(allocator, "merge", Value.builtinFnValue(core_merge));
-    try env.put(allocator, "hash-map", Value.builtinFnValue(core_hash_map));
+    try env.put("get", Value.builtinFnValue(core_get));
+    try env.put("assoc", Value.builtinFnValue(core_assoc));
+    try env.put("keys", Value.builtinFnValue(core_keys));
+    try env.put("vals", Value.builtinFnValue(core_vals));
+    try env.put("dissoc", Value.builtinFnValue(core_dissoc));
+    try env.put("merge", Value.builtinFnValue(core_merge));
+    try env.put("hash-map", Value.builtinFnValue(core_hash_map));
 }
 

@@ -30,8 +30,7 @@ pub fn core_utf8_valid_q(self: *Value, args: list.List, _: *Env) anyerror!Value 
 }
 
 pub fn registerStringFunctions(env: *Env) anyerror!void {
-    const allocator = env.allocator;
-    try env.put(allocator, "str", Value.builtinFnValue(core_str));
-    try env.put(allocator, "utf8-valid?", Value.builtinFnValue(core_utf8_valid_q));
+    try env.put("str", Value.builtinFnValue(core_str));
+    try env.put("utf8-valid?", Value.builtinFnValue(core_utf8_valid_q));
 }
 

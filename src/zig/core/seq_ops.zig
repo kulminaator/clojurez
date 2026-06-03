@@ -313,6 +313,7 @@ pub fn core_nthnext(self: *Value, args: list.List, env_env: *Env) anyerror!Value
     if (@as(usize, @intCast(n)) >= items.len) return Value.nilValue();
 
     var result: list.List = .empty;
+    try result.ensureTotalCapacity(env_env.allocator, items.len - @as(usize, @intCast(n)));
     errdefer result.deinit(env_env.allocator);
     var i: usize = @as(usize, @intCast(n));
     while (i < items.len) : (i += 1) {
@@ -506,18 +507,17 @@ pub fn core_drop(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 }
 
 pub fn registerSequenceOpFunctions(env: *Env) anyerror!void {
-    const allocator = env.allocator;
-    try env.put(allocator, "map", Value.builtinFnValue(core_map));
-    try env.put(allocator, "mapcat", Value.builtinFnValue(core_mapcat));
-    try env.put(allocator, "reduce", Value.builtinFnValue(core_reduce));
-    try env.put(allocator, "flatten", Value.builtinFnValue(core_flatten));
-    try env.put(allocator, "filter", Value.builtinFnValue(core_filter));
-    try env.put(allocator, "remove", Value.builtinFnValue(core_remove));
-    try env.put(allocator, "every?", Value.builtinFnValue(core_every_q));
-    try env.put(allocator, "some", Value.builtinFnValue(core_some));
-    try env.put(allocator, "distinct?", Value.builtinFnValue(core_distinct_q));
-    try env.put(allocator, "next", Value.builtinFnValue(core_next));
-    try env.put(allocator, "nthnext", Value.builtinFnValue(core_nthnext));
-    try env.put(allocator, "drop", Value.builtinFnValue(core_drop));
+    try env.put("map", Value.builtinFnValue(core_map));
+    try env.put("mapcat", Value.builtinFnValue(core_mapcat));
+    try env.put("reduce", Value.builtinFnValue(core_reduce));
+    try env.put("flatten", Value.builtinFnValue(core_flatten));
+    try env.put("filter", Value.builtinFnValue(core_filter));
+    try env.put("remove", Value.builtinFnValue(core_remove));
+    try env.put("every?", Value.builtinFnValue(core_every_q));
+    try env.put("some", Value.builtinFnValue(core_some));
+    try env.put("distinct?", Value.builtinFnValue(core_distinct_q));
+    try env.put("next", Value.builtinFnValue(core_next));
+    try env.put("nthnext", Value.builtinFnValue(core_nthnext));
+    try env.put("drop", Value.builtinFnValue(core_drop));
 }
 

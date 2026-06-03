@@ -166,13 +166,12 @@ pub fn core_vec(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 }
 
 pub fn registerSequenceFunctions(env: *Env) anyerror!void {
-    const allocator = env.allocator;
-    try env.put(allocator, "count", Value.builtinFnValue(core_count));
-    try env.put(allocator, "first", Value.builtinFnValue(core_first));
-    try env.put(allocator, "rest", Value.builtinFnValue(core_rest));
-    try env.put(allocator, "nth", Value.builtinFnValue(core_nth));
-    try env.put(allocator, "concat", Value.builtinFnValue(core_concat));
-    try env.put(allocator, "list", Value.builtinFnValue(core_list));
-    try env.put(allocator, "vec", Value.builtinFnValue(core_vec));
+    try env.put("count", Value.builtinFnValue(core_count));
+    try env.put("first", Value.builtinFnValue(core_first));
+    try env.put("rest", Value.builtinFnValue(core_rest));
+    try env.put("nth", Value.builtinFnValue(core_nth));
+    try env.put("concat", Value.builtinFnValue(core_concat));
+    try env.put("list", Value.builtinFnValue(core_list));
+    try env.put("vec", Value.builtinFnValue(core_vec));
 }
 

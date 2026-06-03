@@ -108,7 +108,8 @@ pub fn core_trampoline(self: *Value, args: list.List, env_env: *Env) anyerror!Va
     const allocator = env_env.allocator;
     if (args.items.len < 1) return error.ArityError;
 
-    var current = args.items[0];
+    // Clone to main allocator — args may be on arena
+    var current = try args.items[0].clone(allocator);
     if (args.items.len > 1) {
         var call_args: list.List = .empty;
         errdefer call_args.deinit(allocator);
@@ -156,14 +157,14 @@ pub fn core_partial(self: *Value, args: list.List, env_env: *Env) anyerror!Value
     var fn_env = try env_env.clone(env_env.allocator);
     defer fn_env.deinit(env_env.allocator);
 
-    try fn_env.put(env_env.allocator, "__partial_fn", try f.clone(env_env.allocator));
+    try fn_env.put("__partial_fn", try f.clone(env_env.allocator));
     var partial_args: list.List = .empty;
     errdefer partial_args.deinit(env_env.allocator);
     var i: usize = 1;
     while (i < args.items.len) : (i += 1) {
         try partial_args.append(env_env.allocator, try args.items[i].clone(env_env.allocator));
     }
-    try fn_env.put(env_env.allocator, "__partial_args", Value.listValue(partial_args));
+    try fn_env.put("__partial_args", Value.listValue(partial_args));
 
     var params_list: list.List = .empty;
     errdefer params_list.deinit(env_env.allocator);
@@ -183,14 +184,14 @@ pub fn core_partial(self: *Value, args: list.List, env_env: *Env) anyerror!Value
     const cloned_params = try params_list.clone(env_env.allocator);
     const cloned_body = try body.clone(env_env.allocator);
     var final_env = try env_env.clone(env_env.allocator);
-    try final_env.put(env_env.allocator, "__partial_fn", try f.clone(env_env.allocator));
+    try final_env.put("__partial_fn", try f.clone(env_env.allocator));
     var stored_args: list.List = .empty;
     errdefer stored_args.deinit(env_env.allocator);
     i = 1;
     while (i < args.items.len) : (i += 1) {
         try stored_args.append(env_env.allocator, try args.items[i].clone(env_env.allocator));
     }
-    try final_env.put(env_env.allocator, "__partial_args", Value.listValue(stored_args));
+    try final_env.put("__partial_args", Value.listValue(stored_args));
 
     return Value.fnValue(cloned_params, cloned_body, final_env, null, false);
 }
@@ -208,7 +209,7 @@ pub fn core_comp(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     var i: usize = 0;
     while (i < args.items.len) : (i += 1) {
         const key = try std.fmt.allocPrint(env_env.allocator, "__comp_fn_{d}", .{i});
-        try fn_env.put(env_env.allocator, key, try args.items[i].clone(env_env.allocator));
+        try fn_env.put(key, try args.items[i].clone(env_env.allocator));
     }
 
     var params: list.List = .empty;
@@ -250,12 +251,12 @@ pub fn core_fnil(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     var fn_env = try env_env.clone(env_env.allocator);
     defer fn_env.deinit(env_env.allocator);
 
-    try fn_env.put(env_env.allocator, "__fnil_fn", try f.clone(env_env.allocator));
+    try fn_env.put("__fnil_fn", try f.clone(env_env.allocator));
 
     var d: usize = 0;
     while (d < defaults_count) : (d += 1) {
         const key = try std.fmt.allocPrint(env_env.allocator, "__fnil_default_{d}", .{d});
-        try fn_env.put(env_env.allocator, key, try args.items[d + 1].clone(env_env.allocator));
+        try fn_env.put(key, try args.items[d + 1].clone(env_env.allocator));
     }
 
     var params: list.List = .empty;
@@ -313,7 +314,7 @@ pub fn core_juxt(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     var i: usize = 0;
     while (i < args.items.len) : (i += 1) {
         const key = try std.fmt.allocPrint(env_env.allocator, "__juxt_fn_{d}", .{i});
-        try fn_env.put(env_env.allocator, key, try args.items[i].clone(env_env.allocator));
+        try fn_env.put(key, try args.items[i].clone(env_env.allocator));
     }
 
     var params: list.List = .empty;
@@ -348,7 +349,6 @@ pub fn core_juxt(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 // ---- Registration ----
 
 pub fn registerCoreFunctions(env: *Env) anyerror!void {
-    const allocator = env.allocator;
 
     // Register all domain module functions
     try arithmetic.registerArithmeticFunctions(env);
@@ -364,29 +364,29 @@ pub fn registerCoreFunctions(env: *Env) anyerror!void {
     try atoms.registerAtomFunctions(env);
 
     // Collection predicates (kept here)
-    try env.put(allocator, "empty?", Value.builtinFnValue(core_empty_q));
-    try env.put(allocator, "not-empty", Value.builtinFnValue(core_not_empty));
-    try env.put(allocator, "seq", Value.builtinFnValue(core_seq));
+    try env.put("empty?", Value.builtinFnValue(core_empty_q));
+    try env.put("not-empty", Value.builtinFnValue(core_not_empty));
+    try env.put("seq", Value.builtinFnValue(core_seq));
 
     // Higher-order functions (kept here)
-    try env.put(allocator, "apply", Value.builtinFnValue(core_apply));
-    try env.put(allocator, "trampoline", Value.builtinFnValue(core_trampoline));
-    try env.put(allocator, "if-not", Value.builtinFnValue(core_if_not));
-    try env.put(allocator, "partial", Value.builtinFnValue(core_partial));
-    try env.put(allocator, "comp", Value.builtinFnValue(core_comp));
-    try env.put(allocator, "fnil", Value.builtinFnValue(core_fnil));
-    try env.put(allocator, "juxt", Value.builtinFnValue(core_juxt));
+    try env.put("apply", Value.builtinFnValue(core_apply));
+    try env.put("trampoline", Value.builtinFnValue(core_trampoline));
+    try env.put("if-not", Value.builtinFnValue(core_if_not));
+    try env.put("partial", Value.builtinFnValue(core_partial));
+    try env.put("comp", Value.builtinFnValue(core_comp));
+    try env.put("fnil", Value.builtinFnValue(core_fnil));
+    try env.put("juxt", Value.builtinFnValue(core_juxt));
 
     // Clojure-style aliases (re-registered for convenience)
-    try env.put(allocator, "not", Value.builtinFnValue(comparison.core_not));
-    try env.put(allocator, "str", Value.builtinFnValue(strings.core_str));
-    try env.put(allocator, "count", Value.builtinFnValue(sequences.core_count));
-    try env.put(allocator, "first", Value.builtinFnValue(sequences.core_first));
-    try env.put(allocator, "rest", Value.builtinFnValue(sequences.core_rest));
-    try env.put(allocator, "nth", Value.builtinFnValue(sequences.core_nth));
-    try env.put(allocator, "concat", Value.builtinFnValue(sequences.core_concat));
-    try env.put(allocator, "list", Value.builtinFnValue(sequences.core_list));
-    try env.put(allocator, "vec", Value.builtinFnValue(sequences.core_vec));
+    try env.put("not", Value.builtinFnValue(comparison.core_not));
+    try env.put("str", Value.builtinFnValue(strings.core_str));
+    try env.put("count", Value.builtinFnValue(sequences.core_count));
+    try env.put("first", Value.builtinFnValue(sequences.core_first));
+    try env.put("rest", Value.builtinFnValue(sequences.core_rest));
+    try env.put("nth", Value.builtinFnValue(sequences.core_nth));
+    try env.put("concat", Value.builtinFnValue(sequences.core_concat));
+    try env.put("list", Value.builtinFnValue(sequences.core_list));
+    try env.put("vec", Value.builtinFnValue(sequences.core_vec));
 
     // defn is handled as a special form alias in the evaluator
 }

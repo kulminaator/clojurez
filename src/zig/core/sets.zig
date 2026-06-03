@@ -77,9 +77,8 @@ pub fn core_disj(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 }
 
 pub fn registerSetFunctions(env: *Env) anyerror!void {
-    const allocator = env.allocator;
-    try env.put(allocator, "set", Value.builtinFnValue(core_set));
-    try env.put(allocator, "set?", Value.builtinFnValue(core_set_q));
-    try env.put(allocator, "disj", Value.builtinFnValue(core_disj));
+    try env.put("set", Value.builtinFnValue(core_set));
+    try env.put("set?", Value.builtinFnValue(core_set_q));
+    try env.put("disj", Value.builtinFnValue(core_disj));
 }
 

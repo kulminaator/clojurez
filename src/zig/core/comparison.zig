@@ -87,17 +87,16 @@ pub fn core_not(self: *Value, args: list.List, _: *Env) anyerror!Value {
 }
 
 pub fn registerComparisonFunctions(env: *Env) anyerror!void {
-    const allocator = env.allocator;
-    try env.put(allocator, "eq", Value.builtinFnValue(core_eq));
-    try env.put(allocator, "not-eq", Value.builtinFnValue(core_not_eq));
-    try env.put(allocator, "<", Value.builtinFnValue(core_less));
-    try env.put(allocator, ">", Value.builtinFnValue(core_greater));
-    try env.put(allocator, "<=", Value.builtinFnValue(core_less_eq));
-    try env.put(allocator, ">=", Value.builtinFnValue(core_greater_eq));
+    try env.put("eq", Value.builtinFnValue(core_eq));
+    try env.put("not-eq", Value.builtinFnValue(core_not_eq));
+    try env.put("<", Value.builtinFnValue(core_less));
+    try env.put(">", Value.builtinFnValue(core_greater));
+    try env.put("<=", Value.builtinFnValue(core_less_eq));
+    try env.put(">=", Value.builtinFnValue(core_greater_eq));
     // Boolean
-    try env.put(allocator, "not", Value.builtinFnValue(core_not));
+    try env.put("not", Value.builtinFnValue(core_not));
     // Clojure-style aliases
-    try env.put(allocator, "=", Value.builtinFnValue(core_eq));
-    try env.put(allocator, "!=", Value.builtinFnValue(core_not_eq));
+    try env.put("=", Value.builtinFnValue(core_eq));
+    try env.put("!=", Value.builtinFnValue(core_not_eq));
 }
 

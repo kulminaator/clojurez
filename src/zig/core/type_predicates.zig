@@ -133,22 +133,21 @@ pub fn core_keyword(self: *Value, args: list.List, env_env: *Env) anyerror!Value
 }
 
 pub fn registerTypePredicateFunctions(env: *Env) anyerror!void {
-    const allocator = env.allocator;
-    try env.put(allocator, "nil?", Value.builtinFnValue(core_nil_q));
-    try env.put(allocator, "number?", Value.builtinFnValue(core_number_q));
-    try env.put(allocator, "string?", Value.builtinFnValue(core_string_q));
-    try env.put(allocator, "list?", Value.builtinFnValue(core_list_q));
-    try env.put(allocator, "symbol?", Value.builtinFnValue(core_symbol_q));
-    try env.put(allocator, "keyword?", Value.builtinFnValue(core_keyword_q));
-    try env.put(allocator, "true?", Value.builtinFnValue(core_true_q));
-    try env.put(allocator, "false?", Value.builtinFnValue(core_false_q));
-    try env.put(allocator, "fn?", Value.builtinFnValue(core_fn_q));
-    try env.put(allocator, "vector?", Value.builtinFnValue(core_vector_q));
-    try env.put(allocator, "map?", Value.builtinFnValue(core_map_q));
-    try env.put(allocator, "queue?", Value.builtinFnValue(core_queue_q));
-    try env.put(allocator, "coll?", Value.builtinFnValue(core_coll_q));
-    try env.put(allocator, "sequential?", Value.builtinFnValue(core_sequential_q));
+    try env.put("nil?", Value.builtinFnValue(core_nil_q));
+    try env.put("number?", Value.builtinFnValue(core_number_q));
+    try env.put("string?", Value.builtinFnValue(core_string_q));
+    try env.put("list?", Value.builtinFnValue(core_list_q));
+    try env.put("symbol?", Value.builtinFnValue(core_symbol_q));
+    try env.put("keyword?", Value.builtinFnValue(core_keyword_q));
+    try env.put("true?", Value.builtinFnValue(core_true_q));
+    try env.put("false?", Value.builtinFnValue(core_false_q));
+    try env.put("fn?", Value.builtinFnValue(core_fn_q));
+    try env.put("vector?", Value.builtinFnValue(core_vector_q));
+    try env.put("map?", Value.builtinFnValue(core_map_q));
+    try env.put("queue?", Value.builtinFnValue(core_queue_q));
+    try env.put("coll?", Value.builtinFnValue(core_coll_q));
+    try env.put("sequential?", Value.builtinFnValue(core_sequential_q));
     // Type constructors
-    try env.put(allocator, "keyword", Value.builtinFnValue(core_keyword));
+    try env.put("keyword", Value.builtinFnValue(core_keyword));
 }
 
