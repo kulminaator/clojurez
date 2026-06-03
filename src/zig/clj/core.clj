@@ -149,7 +149,109 @@
 ;; Implemented as Zig built-in because loop/recur is simplified
 ;; and doesn't support actual tail recursion in this VM
 
+;; ---- Functional utilities ----
+
+(defn constantly
+  "Returns a function that takes any number of arguments and returns x."
+  [x]
+  (fn [& args] x))
+
+(defn complement
+  "Takes a fn f and returns a fn that takes the same arguments as f,
+   has the same effects, if any, and returns the opposite truth value."
+  [f]
+  (fn [& args] (not (apply f args))))
+
+;; ---- Collection utilities ----
+
+(defn empty
+  "Returns an empty collection of the same category as coll, or nil."
+  [coll]
+  (cond
+    (list? coll) ()
+    (vector? coll) []
+    (map? coll) {}
+    (set? coll) #{}
+    (queue? coll) #queue()
+    :else nil))
+
+;; ---- Nested associative operations ----
+
+(defn get-in-helper [m ks]
+  (if (seq ks)
+    (if (map? m)
+      (get-in-helper (get m (first ks)) (rest ks))
+      nil)
+    m))
+
+(defn get-in
+  "Returns the value in a nested associative structure,
+   where ks is a sequence of keys. Returns nil if the key is not present."
+  [m ks]
+  (get-in-helper m ks))
+
+(defn assoc-in
+  "Associates a value in a nested associative structure, where ks is a
+   sequence of keys and v is the new value. If any levels do not exist,
+   hash-maps will be created."
+  [m ks v]
+  (if (empty? (rest ks))
+    (assoc m (first ks) v)
+    (assoc m (first ks) (assoc-in (or (get m (first ks)) {}) (rest ks) v))))
+
+;; ---- Map construction ----
+
+(defn zipmap-helper [ks vs m]
+  (if (and (seq ks) (seq vs))
+    (zipmap-helper (rest ks) (rest vs) (assoc m (first ks) (first vs)))
+    m))
+
+(defn zipmap
+  "Returns a map with the keys mapped to the corresponding vals."
+  [keys vals]
+  (zipmap-helper keys vals {}))
+
+;; ---- Sequence operations ----
+
+(defn interpose
+  "Returns a lazy seq of the elements of coll separated by sep."
+  [sep coll]
+  (rest (mapcat (fn [x] (list sep x)) coll)))
+
 ;; ---- Macros ----
+
+(defmacro when-not
+  "Evaluates test. If logical false, evaluates body in an implicit do."
+  [test & body]
+  (list 'if test nil (cons 'do body)))
+
+(defmacro when-some
+  "bindings => binding-form test
+
+   When test is not nil, evaluates body with binding-form bound to the
+   value of test."
+  [bindings & body]
+  (let [form (nth bindings 0)
+        tst (nth bindings 1)]
+    (list 'let
+          (list '__temp tst)
+          (list 'if (list 'nil? '__temp)
+                nil
+                (concat (list 'let (list form '__temp)) body)))))
+
+(defmacro if-let
+  "bindings => binding-form test
+
+  If test is true, evaluates then with binding-form bound to the value of
+  test, if not, yields else."
+  [bindings then else]
+  (let [form (nth bindings 0)
+        tst (nth bindings 1)]
+    (list 'let
+          (list '__temp tst)
+          (list 'if '__temp
+                (concat (list 'let (list form '__temp)) (list then))
+                else))))
 
 (defmacro when-let
   "bindings => binding-form test
