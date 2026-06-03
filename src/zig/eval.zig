@@ -78,6 +78,46 @@ fn evalRec(allocator: Allocator, form: Value, env: *Env, depth: usize) anyerror!
     unreachable;
 }
 
+// Result of parsing a parameter list (may include variadic rest parameter)
+const ParsedParams = struct {
+    params: list.List,      // regular parameters (without & symbol)
+    rest_name: ?[]const u8, // name of rest parameter, or null
+};
+
+// Parse a parameter list, extracting regular params and optional rest param.
+// E.g., [a b & rest] => { params: (a b), rest_name: "rest" }
+// E.g., [& args]     => { params: (), rest_name: "args" }
+// E.g., [a b]        => { params: (a b), rest_name: null }
+fn parseParams(allocator: Allocator, params: list.List) anyerror!ParsedParams {
+    var regular_params: list.List = .empty;
+    errdefer regular_params.deinit(allocator);
+    var rest_name: ?[]const u8 = null;
+
+    var i: usize = 0;
+    var found_amp = false;
+    while (i < params.items.len) : (i += 1) {
+        const item = params.items[i];
+        if (!found_amp and item.type == .symbol and std.mem.eql(u8, item.sym_val, "&")) {
+            found_amp = true;
+            continue;
+        }
+        if (found_amp) {
+            // The symbol after & is the rest parameter name
+            if (item.type != .symbol) return error.TypeError;
+            rest_name = try allocator.dupe(u8, item.sym_val);
+            // No more params expected after rest
+            break;
+        } else {
+            try regular_params.append(allocator, try item.clone(allocator));
+        }
+    }
+
+    return ParsedParams{
+        .params = regular_params,
+        .rest_name = rest_name,
+    };
+}
+
 fn evalList(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
     if (l.items.len == 0) return Value.listValue(list.empty());
 
@@ -182,8 +222,16 @@ fn evalList(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerro
                 try body_list.append(allocator, try form_item.clone(allocator));
             }
 
-            const cloned_params = try params_list.clone(allocator);
+            // Parse params for variadic support (& rest)
+            var parsed = try parseParams(allocator, params_list);
+            defer {
+                parsed.params.deinit(allocator);
+                if (parsed.rest_name) |rn| allocator.free(rn);
+            }
+
+            const cloned_params = try parsed.params.clone(allocator);
             const cloned_body = try body_list.clone(allocator);
+            const cloned_rest = if (parsed.rest_name) |rn| try allocator.dupe(u8, rn) else null;
             // Create fn_env with parent = env so it can see all global symbols
             // including the function itself (for recursion)
             const fn_env: Env = .{
@@ -191,7 +239,7 @@ fn evalList(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerro
                 .entries = .empty,
                 .parent = env,
             };
-            const fn_val = Value.fnValue(cloned_params, cloned_body, fn_env);
+            const fn_val = Value.fnValue(cloned_params, cloned_body, fn_env, cloned_rest);
             try env.put(allocator, fname.sym_val, fn_val);
             return try fname.clone(allocator);
         }
@@ -212,10 +260,18 @@ fn evalList(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerro
                 try body_list.append(allocator, try form_item.clone(allocator));
             }
 
-            const cloned_params = try params_list.clone(allocator);
+            // Parse params for variadic support (& rest)
+            var parsed = try parseParams(allocator, params_list);
+            defer {
+                parsed.params.deinit(allocator);
+                if (parsed.rest_name) |rn| allocator.free(rn);
+            }
+
+            const cloned_params = try parsed.params.clone(allocator);
             const cloned_body = try body_list.clone(allocator);
+            const cloned_rest = if (parsed.rest_name) |rn| try allocator.dupe(u8, rn) else null;
             const fn_env = try env.clone(allocator);
-            return Value.fnValue(cloned_params, cloned_body, fn_env);
+            return Value.fnValue(cloned_params, cloned_body, fn_env, cloned_rest);
         }
 
         // do - evaluate a sequence of forms
@@ -251,7 +307,7 @@ fn evalList(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerro
         if (std.mem.eql(u8, name, "loop")) {
             if (l.items.len < 2) return error.ArityError;
             const bindings = l.items[1];
-            if (bindings.type != .list) return error.TypeError;
+            if (bindings.type != .list and bindings.type != .vector) return error.TypeError;
             return try evalLoop(allocator, bindings, l.items[2..], env, depth + 1);
         }
 
@@ -474,14 +530,36 @@ fn call(allocator: Allocator, op: Value, args_list: list.List, env: *Env, depth:
             var new_env = try fn_data.env.clone(allocator);
             defer new_env.deinit(allocator);
 
-            // Bind parameters to arguments (with destructuring support)
-            if (args.items.len != fn_data.params.items.len) {
+            const min_args = fn_data.params.items.len;
+            const has_rest = fn_data.rest_name != null;
+
+            // Check arity: must have at least min_args, or any number if variadic
+            if (!has_rest and args.items.len != min_args) {
                 return error.ArityError;
             }
+            if (has_rest and args.items.len < min_args) {
+                return error.ArityError;
+            }
+
+            // Bind regular parameters to arguments (with destructuring support)
             var i: usize = 0;
             while (i < fn_data.params.items.len) : (i += 1) {
                 const param = fn_data.params.items[i];
                 try bindParam(allocator, param, args.items[i], &new_env);
+            }
+
+            // Bind rest parameter to remaining args as a list
+            if (has_rest and args.items.len > min_args) {
+                var rest_list: list.List = .empty;
+                errdefer rest_list.deinit(allocator);
+                var j: usize = min_args;
+                while (j < args.items.len) : (j += 1) {
+                    try rest_list.append(allocator, try args.items[j].clone(allocator));
+                }
+                try new_env.put(allocator, fn_data.rest_name.?, Value.listValue(rest_list));
+            } else if (has_rest) {
+                // No extra args: bind empty list to rest parameter
+                try new_env.put(allocator, fn_data.rest_name.?, Value.listValue(.empty));
             }
 
             // Evaluate the function body

@@ -142,6 +142,54 @@ echo "=== Function Tests ==="
 run_test "fn call" "((fn [x] (* x x)) 5)" "25"
 run_test "defn" "(defn square [n] (* n n))" "square"
 
+# Variadic function tests
+run_test "variadic fn all rest" '(do (defn var-fn [& args] args) (var-fn 1 2 3))' '(1 2 3)'
+run_test "variadic fn empty rest" '(do (defn var-fn [& args] args) (var-fn))' '()'
+run_test "variadic fn mixed" '(do (defn var-mix [a b & rest] (list a b rest)) (var-mix 1 2 3 4 5))' '(1 2 (3 4 5))'
+run_test "variadic fn no extra" '(do (defn var-mix [a b & rest] (list a b rest)) (var-mix 1 2))' '(1 2 ())'
+run_test "variadic fn inline" '((fn [& args] args) 10 20 30)' '(10 20 30)'
+run_test "variadic fn with defn" '(do (defn my-sum [init & nums] (reduce + init nums)) (my-sum 0 1 2 3 4))' '10'
+run_test_cmd "variadic fn arity error" 'timeout 10 ./main -e "(do (defn var-mix [a b & rest] (list a b rest)) (var-mix 1))" 2>&1 | head -1' 'error: ArityError'
+
+echo ""
+echo "=== New Core Function Tests ==="
+# fn?
+run_test "fn? builtin" "(fn? +)" "true"
+run_test "fn? user fn" "(fn? (fn [] 1))" "true"
+run_test "fn? not fn" "(fn? 42)" "false"
+
+# keyword
+run_test "keyword from string" '(keyword "foo")' ":foo"
+run_test "keyword from symbol" "(keyword 'bar)" ":bar"
+run_test "keyword from keyword" '(keyword :baz)' ":baz"
+run_test "keyword namespaced" '(keyword "ns" "name")' ":ns/name"
+
+# map (as first-class function)
+run_test "map as fn" "(map inc (list 1 2 3))" "(2 3 4)"
+
+# mapcat
+run_test "mapcat" '(mapcat (fn [x] (list x (* x x))) (list 1 2 3))' "(1 1 2 4 3 9)"
+
+# key
+run_test "key from entry" '(key {:key :a :val 1})' ":a"
+
+# val
+run_test "val from entry" '(val {:key :a :val 1})' "1"
+
+# doall
+run_test "doall" "(doall (list 1 2 3))" "(1 2 3)"
+
+# into-array
+run_test "into-array" "(into-array (list 1 2 3))" "[1 2 3]"
+
+# trampoline
+run_test "trampoline simple" "(trampoline (fn [] 42))" "42"
+run_test "trampoline nested" "(trampoline (fn [] (fn [] (fn [] 42))))" "42"
+run_test "trampoline mutual recursion" '(do (defn even? [n] (if (zero? n) true (fn [] (odd? (- n 1))))) (defn odd? [n] (if (zero? n) false (fn [] (even? (- n 1))))) (trampoline even? 10))' "true"
+
+# iterate
+run_test "iterate builtin" "(take 5 (iterate inc 0))" "(0 1 2 3 4)"
+
 echo ""
 echo "=== I/O Tests ==="
 # println prints to stdout and returns nil
@@ -224,6 +272,14 @@ run_test "map as fn" "({:a 1 :b 2} :a)" "1"
 run_test "map as fn not found" "({:a 1} :b)" "nil"
 run_test "map as fn not-found" "({:a 1} :b :default)" ":default"
 run_test "count map" "(count {:a 1 :b 2})" "2"
+
+# hash-map tests
+run_test "hash-map empty" "(hash-map)" "{}"
+run_test "hash-map basic" "(hash-map :a 1 :b 2)" "{:a 1 :b 2}"
+run_test "hash-map string keys" '(hash-map "hello" "world" 42 true)' '{"hello" "world" 42 true}'
+run_test "hash-map duplicate key" "(hash-map :a 1 :a 2)" "{:a 2}"
+run_test "hash-map mixed types" '(hash-map :x "str" :y [1 2] :z #{3 4})' '{:x "str" :y [1 2] :z #{3 4}}'
+run_test_cmd "hash-map odd args" 'timeout 10 ./main -e "(hash-map :a 1 :b)" 2>&1 | head -1' 'error: ArityError'
 
 echo ""
 echo "=== Collection Predicate Tests ==="

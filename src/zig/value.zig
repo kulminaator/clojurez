@@ -63,7 +63,7 @@ vec_val: vec.Vector = vec.Vector.empty,
 map_val: Map = .empty,
 set_val: Set = .empty,
 queue_val: Queue = .empty,
-fn_val: FnData = .{ .params = list.List.empty, .body = list.List.empty, .env = undefined },
+fn_val: FnData = .{ .params = list.List.empty, .body = list.List.empty, .env = undefined, .rest_name = null },
 builtin_fn_val: BuiltinFn = undefined,
 lazy_seq_val: LazySeq = .{},
 atom_val: ?*Self = null,
@@ -72,6 +72,7 @@ pub const FnData = struct {
     params: list.List,
     body: list.List,
     env: Env,
+    rest_name: ?[]const u8 = null, // variadic rest parameter name (e.g., & args)
 };
 
 pub const Env = struct {
@@ -235,8 +236,8 @@ pub fn lazySeqValue(thunk: ?*LazySeqThunk) Self {
     return .{ .type = .lazy_seq, .lazy_seq_val = .{ .thunk = thunk } };
 }
 
-pub fn fnValue(params: list.List, body: list.List, env: Env) Self {
-    return .{ .type = .function, .fn_val = .{ .params = params, .body = body, .env = env } };
+pub fn fnValue(params: list.List, body: list.List, env: Env, rest_name: ?[]const u8) Self {
+    return .{ .type = .function, .fn_val = .{ .params = params, .body = body, .env = env, .rest_name = rest_name } };
 }
 
 pub fn builtinFnValue(fn_ptr: BuiltinFn) Self {
@@ -282,6 +283,9 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
             self.fn_val.params.deinit(allocator);
             self.fn_val.body.deinit(allocator);
             self.fn_val.env.deinit(allocator);
+            if (self.fn_val.rest_name) |rn| {
+                allocator.free(rn);
+            }
         },
         .builtin_fn => {},
         .atom => {
@@ -372,10 +376,15 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
         },
         .function => {
             const fnv = self.fn_val;
+            var cloned_rest: ?[]const u8 = null;
+            if (fnv.rest_name) |rn| {
+                cloned_rest = try allocator.dupe(u8, rn);
+            }
             return fnValue(
                 try fnv.params.clone(allocator),
                 try fnv.body.clone(allocator),
                 try fnv.env.clone(allocator),
+                cloned_rest,
             );
         },
         .builtin_fn => return builtinFnValue(self.builtin_fn_val),

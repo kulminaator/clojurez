@@ -8,6 +8,15 @@ const Allocator = std.mem.Allocator;
 const stdout_file = std.Io.File.stdout();
 const stdin_file = std.Io.File.stdin();
 
+fn listFromVector(allocator: Allocator, v: vec.Vector) anyerror!list.List {
+    var result: list.List = .empty;
+    errdefer result.deinit(allocator);
+    for (v.items) |item| {
+        try result.append(allocator, try item.clone(allocator));
+    }
+    return result;
+}
+
 // Arithmetic functions
 pub fn core_plus(self: *Value, args: list.List, _: *Env) anyerror!Value {
     _ = self;
@@ -250,6 +259,53 @@ pub fn core_false_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
     return Value.boolValue(args.items[0].type == .bool and !args.items[0].bool_val);
 }
 
+pub fn core_fn_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    return Value.boolValue(args.items[0].type == .function or args.items[0].type == .builtin_fn);
+}
+
+pub fn core_keyword(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    const allocator = env_env.allocator;
+    if (args.items.len == 1) {
+        const arg = args.items[0];
+        // If already a keyword, return as-is
+        if (arg.type == .keyword) return try arg.clone(allocator);
+        // If a symbol, convert to keyword (kw_val stores name without ':')
+        if (arg.type == .symbol) {
+            return Value.keywordValue(allocator, arg.sym_val);
+        }
+        // If a string, convert to keyword
+        if (arg.type == .string) {
+            return Value.keywordValue(allocator, arg.str_val);
+        }
+    } else if (args.items.len == 2) {
+        // Two-arg version: (keyword ns name)
+        const ns = args.items[0];
+        const name = args.items[1];
+        var buf: std.ArrayList(u8) = .empty;
+        errdefer buf.deinit(allocator);
+        // Convert ns to string
+        switch (ns.type) {
+            .string => try buf.appendSlice(allocator, ns.str_val),
+            .symbol => try buf.appendSlice(allocator, ns.sym_val),
+            .keyword => try buf.appendSlice(allocator, ns.kw_val),
+            else => return error.TypeError,
+        }
+        try buf.appendSlice(allocator, "/");
+        // Convert name to string
+        switch (name.type) {
+            .string => try buf.appendSlice(allocator, name.str_val),
+            .symbol => try buf.appendSlice(allocator, name.sym_val),
+            .keyword => try buf.appendSlice(allocator, name.kw_val),
+            else => return error.TypeError,
+        }
+        return Value.keywordValue(allocator, buf.items);
+    }
+    return error.ArityError;
+}
+
 // String functions
 pub fn core_str(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
@@ -385,6 +441,75 @@ pub fn core_concat(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
                 }
             },
             else => try result.append(env_env.allocator, try arg.clone(env_env.allocator)),
+        }
+    }
+    return Value.listValue(result);
+}
+
+pub fn core_map(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    const allocator = env_env.allocator;
+    if (args.items.len != 2) return error.ArityError;
+    const f = args.items[0];
+    const coll = args.items[1];
+
+    var items: []const Value = undefined;
+    switch (coll.type) {
+        .list => items = coll.list_val.items,
+        .vector => items = coll.vec_val.items,
+        else => return error.TypeError,
+    }
+
+    var result: list.List = .empty;
+    errdefer result.deinit(allocator);
+
+    for (items) |item| {
+        var arg_list: list.List = .empty;
+        errdefer arg_list.deinit(allocator);
+        try arg_list.append(allocator, try item.clone(allocator));
+        const mapped = try callBuiltin(allocator, f, arg_list, env_env);
+        try result.append(allocator, mapped);
+    }
+    return Value.listValue(result);
+}
+
+pub fn core_mapcat(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    const allocator = env_env.allocator;
+    if (args.items.len < 2) return error.ArityError;
+    const f = args.items[0];
+
+    var result: list.List = .empty;
+    errdefer result.deinit(allocator);
+
+    var i: usize = 1;
+    while (i < args.items.len) : (i += 1) {
+        const coll = args.items[i];
+        var items: []const Value = undefined;
+        switch (coll.type) {
+            .list => items = coll.list_val.items,
+            .vector => items = coll.vec_val.items,
+            else => continue,
+        }
+        for (items) |item| {
+            var arg_list: list.List = .empty;
+            errdefer arg_list.deinit(allocator);
+            try arg_list.append(allocator, try item.clone(allocator));
+            const mapped = try callBuiltin(allocator, f, arg_list, env_env);
+            // Concat the result (should be a collection)
+            switch (mapped.type) {
+                .list => {
+                    for (mapped.list_val.items) |mitem| {
+                        try result.append(allocator, try mitem.clone(allocator));
+                    }
+                },
+                .vector => {
+                    for (mapped.vec_val.items) |mitem| {
+                        try result.append(allocator, try mitem.clone(allocator));
+                    }
+                },
+                else => try result.append(allocator, mapped),
+            }
         }
     }
     return Value.listValue(result);
@@ -989,6 +1114,46 @@ pub fn core_dissoc(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
     return Value.mapValue(new_map);
 }
 
+// hash-map - create a map from key-value pairs
+pub fn core_hash_map(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    // Must have even number of arguments (key-value pairs)
+    if (args.items.len % 2 != 0) return error.ArityError;
+
+    var new_map: Value.Map = .empty;
+    errdefer {
+        for (new_map.items) |*entry| {
+            entry.key.deinit(env_env.allocator);
+            entry.value.deinit(env_env.allocator);
+        }
+        env_env.allocator.free(new_map.items);
+    }
+
+    var i: usize = 0;
+    while (i < args.items.len) : (i += 2) {
+        const key = args.items[i];
+        const value = args.items[i + 1];
+        // Update existing key or append new (last value wins for duplicates)
+        var found = false;
+        var j: usize = 0;
+        while (j < new_map.items.len) : (j += 1) {
+            if (new_map.items[j].key.equals(key)) {
+                new_map.items[j].value.deinit(env_env.allocator);
+                new_map.items[j].value = try value.clone(env_env.allocator);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            try new_map.append(env_env.allocator, .{
+                .key = try key.clone(env_env.allocator),
+                .value = try value.clone(env_env.allocator),
+            });
+        }
+    }
+    return Value.mapValue(new_map);
+}
+
 pub fn core_merge(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len == 0) return Value.mapValue(.empty);
@@ -1435,9 +1600,16 @@ fn callBuiltin(allocator: Allocator, f: Value, args_list: list.List, env: *Env) 
             var new_env = try fn_data.env.clone(allocator);
             defer new_env.deinit(allocator);
 
-            if (args_list.items.len != fn_data.params.items.len) {
+            const min_args = fn_data.params.items.len;
+            const has_rest = fn_data.rest_name != null;
+
+            if (!has_rest and args_list.items.len != min_args) {
                 return error.ArityError;
             }
+            if (has_rest and args_list.items.len < min_args) {
+                return error.ArityError;
+            }
+
             var i: usize = 0;
             while (i < fn_data.params.items.len) : (i += 1) {
                 const param = fn_data.params.items[i];
@@ -1445,6 +1617,20 @@ fn callBuiltin(allocator: Allocator, f: Value, args_list: list.List, env: *Env) 
                     try new_env.put(allocator, param.sym_val, try args_list.items[i].clone(allocator));
                 }
             }
+
+            // Bind rest parameter to remaining args as a list
+            if (has_rest and args_list.items.len > min_args) {
+                var rest_list: list.List = .empty;
+                errdefer rest_list.deinit(allocator);
+                var j: usize = min_args;
+                while (j < args_list.items.len) : (j += 1) {
+                    try rest_list.append(allocator, try args_list.items[j].clone(allocator));
+                }
+                try new_env.put(allocator, fn_data.rest_name.?, Value.listValue(rest_list));
+            } else if (has_rest) {
+                try new_env.put(allocator, fn_data.rest_name.?, Value.listValue(.empty));
+            }
+
             return try evalBody(allocator, fn_data.body, &new_env);
         },
         .builtin_fn => {
@@ -1493,6 +1679,91 @@ fn evalForm(allocator: Allocator, form: Value, env: *Env) anyerror!Value {
                         result = try evalForm(allocator, arg, env);
                     }
                     return result;
+                }
+                // if - conditional
+                if (std.mem.eql(u8, first.sym_val, "if")) {
+                    if (form.list_val.items.len < 3) return error.ArityError;
+                    var test_val = try evalForm(allocator, form.list_val.items[1], env);
+                    defer test_val.deinit(allocator);
+                    if (test_val.isTruthy()) {
+                        return try evalForm(allocator, form.list_val.items[2], env);
+                    } else if (form.list_val.items.len >= 4) {
+                        return try evalForm(allocator, form.list_val.items[3], env);
+                    } else {
+                        return Value.nilValue();
+                    }
+                }
+                // when - shorthand for (if test (do body...))
+                if (std.mem.eql(u8, first.sym_val, "when")) {
+                    if (form.list_val.items.len < 3) return error.ArityError;
+                    var test_val = try evalForm(allocator, form.list_val.items[1], env);
+                    defer test_val.deinit(allocator);
+                    if (test_val.isTruthy()) {
+                        var result: Value = Value.nilValue();
+                        errdefer result.deinit(allocator);
+                        for (form.list_val.items[2..]) |arg| {
+                            result.deinit(allocator);
+                            result = try evalForm(allocator, arg, env);
+                        }
+                        return result;
+                    }
+                    return Value.nilValue();
+                }
+                // cond - multi-way conditional
+                if (std.mem.eql(u8, first.sym_val, "cond")) {
+                    var i: usize = 1;
+                    while (i < form.list_val.items.len) : (i += 2) {
+                        if (i + 1 >= form.list_val.items.len) return error.ArityError;
+                        var test_val = try evalForm(allocator, form.list_val.items[i], env);
+                        defer test_val.deinit(allocator);
+                        if (test_val.isTruthy()) {
+                            return try evalForm(allocator, form.list_val.items[i + 1], env);
+                        }
+                    }
+                    return Value.nilValue();
+                }
+                // let - local bindings
+                if (std.mem.eql(u8, first.sym_val, "let")) {
+                    if (form.list_val.items.len < 3) return error.ArityError;
+                    const bindings = form.list_val.items[1];
+                    if (bindings.type != .list and bindings.type != .vector) return error.TypeError;
+                    const bind_items = if (bindings.type == .list) bindings.list_val.items else bindings.vec_val.items;
+                    // Create a new environment with bindings
+                    var new_env = try env.clone(allocator);
+                    defer new_env.deinit(allocator);
+                    var bi: usize = 0;
+                    while (bi < bind_items.len) : (bi += 2) {
+                        const sym = bind_items[bi];
+                        if (sym.type != .symbol) return error.TypeError;
+                        const val = try evalForm(allocator, bind_items[bi + 1], env);
+                        try new_env.put(allocator, sym.sym_val, val);
+                    }
+                    // Evaluate body forms in new environment
+                    var result: Value = Value.nilValue();
+                    errdefer result.deinit(allocator);
+                    for (form.list_val.items[2..]) |arg| {
+                        result.deinit(allocator);
+                        result = try evalForm(allocator, arg, &new_env);
+                    }
+                    return result;
+                }
+                // fn - anonymous function
+                if (std.mem.eql(u8, first.sym_val, "fn")) {
+                    if (form.list_val.items.len < 2) return error.ArityError;
+                    const params = form.list_val.items[1];
+                    if (params.type != .list and params.type != .vector) return error.TypeError;
+                    const params_list = if (params.type == .vector) try listFromVector(allocator, params.vec_val) else params.list_val;
+                    const body = if (form.list_val.items.len >= 3) form.list_val.items[2..] else &[_]Value{};
+                    var body_list: list.List = .empty;
+                    errdefer body_list.deinit(allocator);
+                    try body_list.append(allocator, try Value.symValue(allocator, "do"));
+                    for (body) |form_item| {
+                        try body_list.append(allocator, try form_item.clone(allocator));
+                    }
+                    const cloned_params = try params_list.clone(allocator);
+                    const cloned_body = try body_list.clone(allocator);
+                    const fn_env = try env.clone(allocator);
+                    return Value.fnValue(cloned_params, cloned_body, fn_env, null);
                 }
             }
             // Evaluate operator
@@ -1623,6 +1894,40 @@ pub fn core_apply(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return try callBuiltin(env_env.allocator, f, call_args, env_env);
 }
 
+// trampoline - calls f, if result is a fn calls it, repeats until non-fn result
+pub fn core_trampoline(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    const allocator = env_env.allocator;
+    if (args.items.len < 1) return error.ArityError;
+
+    var current = args.items[0];
+    // For (trampoline f args...), build the initial call
+    if (args.items.len > 1) {
+        var call_args: list.List = .empty;
+        errdefer call_args.deinit(allocator);
+        var i: usize = 1;
+        while (i < args.items.len) : (i += 1) {
+            try call_args.append(allocator, try args.items[i].clone(allocator));
+        }
+        current = try callBuiltin(allocator, current, call_args, env_env);
+    }
+
+    // Loop: if current is a function, call it with no args
+    var max_iterations: usize = 10000;
+    while (max_iterations > 0) : (max_iterations -= 1) {
+        if (current.type != .function and current.type != .builtin_fn) {
+            return current;
+        }
+        // Call the function with no arguments
+        const empty_args: list.List = .empty;
+        const result = try callBuiltin(allocator, current, empty_args, env_env);
+        current.deinit(allocator);
+        current = result;
+    }
+    current.deinit(allocator);
+    return error.StackOverflow;
+}
+
 // if-not - if test is false, evaluate then, else evaluate else (if provided)
 pub fn core_if_not(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
@@ -1703,7 +2008,7 @@ pub fn core_partial(self: *Value, args: list.List, env_env: *Env) anyerror!Value
     }
     try final_env.put(env_env.allocator, "__partial_args", Value.listValue(stored_args));
 
-    return Value.fnValue(cloned_params, cloned_body, final_env);
+    return Value.fnValue(cloned_params, cloned_body, final_env, null);
 }
 
 // comp - compose functions (right to left)
@@ -1754,7 +2059,7 @@ pub fn core_comp(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     const cloned_body = try body.clone(env_env.allocator);
     const final_env = try fn_env.clone(env_env.allocator);
 
-    return Value.fnValue(cloned_params, cloned_body, final_env);
+    return Value.fnValue(cloned_params, cloned_body, final_env, null);
 }
 
 // fnil - provide default values for nil arguments
@@ -1823,7 +2128,7 @@ pub fn core_fnil(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     const cloned_body = try body.clone(env_env.allocator);
     const final_env = try fn_env.clone(env_env.allocator);
 
-    return Value.fnValue(cloned_params, cloned_body, final_env);
+    return Value.fnValue(cloned_params, cloned_body, final_env, null);
 }
 
 // juxt - juxtaposition of functions
@@ -1869,7 +2174,7 @@ pub fn core_juxt(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     const cloned_body = try body.clone(env_env.allocator);
     const final_env = try fn_env.clone(env_env.allocator);
 
-    return Value.fnValue(cloned_params, cloned_body, final_env);
+    return Value.fnValue(cloned_params, cloned_body, final_env, null);
 }
 
 // atom - create a mutable reference
@@ -1953,6 +2258,10 @@ pub fn registerCoreFunctions(env: *Env) anyerror!void {
     try env.put(allocator, "keyword?", Value.builtinFnValue(core_keyword_q));
     try env.put(allocator, "true?", Value.builtinFnValue(core_true_q));
     try env.put(allocator, "false?", Value.builtinFnValue(core_false_q));
+    try env.put(allocator, "fn?", Value.builtinFnValue(core_fn_q));
+
+    // Type constructors
+    try env.put(allocator, "keyword", Value.builtinFnValue(core_keyword));
 
     // String
     try env.put(allocator, "str", Value.builtinFnValue(core_str));
@@ -1981,6 +2290,7 @@ pub fn registerCoreFunctions(env: *Env) anyerror!void {
     try env.put(allocator, "vals", Value.builtinFnValue(core_vals));
     try env.put(allocator, "dissoc", Value.builtinFnValue(core_dissoc));
     try env.put(allocator, "merge", Value.builtinFnValue(core_merge));
+    try env.put(allocator, "hash-map", Value.builtinFnValue(core_hash_map));
 
     // Set functions
     try env.put(allocator, "set", Value.builtinFnValue(core_set));
@@ -2006,6 +2316,8 @@ pub fn registerCoreFunctions(env: *Env) anyerror!void {
     try env.put(allocator, "nthnext", Value.builtinFnValue(core_nthnext));
 
     // Sequence operations
+    try env.put(allocator, "map", Value.builtinFnValue(core_map));
+    try env.put(allocator, "mapcat", Value.builtinFnValue(core_mapcat));
     try env.put(allocator, "reduce", Value.builtinFnValue(core_reduce));
     try env.put(allocator, "flatten", Value.builtinFnValue(core_flatten));
     try env.put(allocator, "filter", Value.builtinFnValue(core_filter));
@@ -2024,6 +2336,7 @@ pub fn registerCoreFunctions(env: *Env) anyerror!void {
     try env.put(allocator, "apply", Value.builtinFnValue(core_apply));
 
     // Functional tools
+    try env.put(allocator, "trampoline", Value.builtinFnValue(core_trampoline));
     try env.put(allocator, "if-not", Value.builtinFnValue(core_if_not));
     try env.put(allocator, "partial", Value.builtinFnValue(core_partial));
     try env.put(allocator, "comp", Value.builtinFnValue(core_comp));

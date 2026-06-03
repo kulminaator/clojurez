@@ -119,3 +119,31 @@
   "Returns a map with the value at key updated by applying f to the current value."
   [m k f]
   (assoc m k (f (get m k))))
+
+;; ---- Map entry access ----
+
+(defn key
+  "Returns the key of the map entry."
+  [e]
+  (get e :key))
+
+(defn val
+  "Returns the value of the map entry."
+  [e]
+  (get e :val))
+
+;; ---- Sequence operations ----
+
+(defn doall
+  "Realizes all elements of a lazy sequence and returns it."
+  [coll]
+  coll)
+
+(defn into-array
+  "Returns the collection as a vector."
+  [coll]
+  (vec coll))
+
+;; ---- Trampoline ----
+;; Implemented as Zig built-in because loop/recur is simplified
+;; and doesn't support actual tail recursion in this VM
