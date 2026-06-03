@@ -204,6 +204,23 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
                     const fn_env = try env.clone(allocator);
                     return try Value.fnValueSingle(allocator, cloned_params, cloned_body, fn_env, null, false);
                 }
+                if (std.mem.eql(u8, first.sym_val, "lazy-seq")) {
+                    if (form.list_val.items.len < 2) return error.ArityError;
+                    // Build the thunk body as a list of forms to evaluate
+                    var body: list.List = .empty;
+                    errdefer body.deinit(allocator);
+                    try body.append(allocator, try Value.symValue(allocator, "do"));
+                    for (form.list_val.items[1..]) |f_item| {
+                        try body.append(allocator, try f_item.clone(allocator));
+                    }
+                    const thunk = try allocator.create(Value.LazySeqThunk);
+                    thunk.* = .{
+                        .params = list.empty(),
+                        .body = body,
+                        .env = try env.clone(allocator),
+                    };
+                    return Value.lazySeqValue(thunk);
+                }
             }
             const op = try evalForm(allocator, first, env);
             var args: list.List = .empty;

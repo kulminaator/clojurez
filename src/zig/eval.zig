@@ -408,8 +408,10 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
                 });
             }
 
+            // Clone env so the fn captures a stable copy of the environment
             const fn_env = try env.clone(arena_alloc);
-            return Value.fnValue(arities, fn_env, false);
+            const fn_val = Value.fnValue(arities, fn_env, false);
+            return fn_val;
         }
 
         // defmacro - define a macro (like defn but args are passed unevaluated)
@@ -779,12 +781,6 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
             return try evalIterate(allocator, arena_alloc, arg1, arg2, env, depth + 1);
         }
 
-        // take - take first n elements from a (possibly lazy) collection
-        if (std.mem.eql(u8, name, "take")) {
-            if (l.items.len != 3) return error.ArityError;
-            return try evalTake(allocator, arena_alloc, l.items[1], l.items[2], env, depth);
-        }
-
         // doall - realize lazy sequences and return the result
         if (std.mem.eql(u8, name, "doall")) {
             if (l.items.len != 2) return error.ArityError;
@@ -882,13 +878,55 @@ fn evalLet(allocator: Allocator, arena_alloc: Allocator, bindings: Value, body: 
     var i: usize = 0;
     while (i < items.len) : (i += 2) {
         const sym = items[i];
-        if (sym.type != .symbol) return error.TypeError;
         // Evaluate binding value in new_env so later bindings can reference earlier ones
         const val = try evalRec(allocator, arena_alloc, items[i + 1], &new_env, depth);
-        try new_env.put(sym.sym_val, val);
+        // Bind using destructuring if sym is a vector pattern
+        try bindPattern(allocator, arena_alloc, sym, val, &new_env, depth);
     }
 
     return try evalDo(allocator, arena_alloc, body, &new_env, depth);
+}
+
+/// Bind a value to a pattern. Supports simple symbols and vector destructuring with & rest.
+fn bindPattern(allocator: Allocator, arena_alloc: Allocator, pattern: Value, val: Value, env: *Value.Env, depth: usize) anyerror!void {
+    switch (pattern.type) {
+        .symbol => {
+            try env.put(pattern.sym_val, try val.clone(arena_alloc));
+        },
+        .vector => {
+            // Vector destructuring: [a b & rest] matches elements of val
+            const vitems = switch (val.type) {
+                .list => val.list_val.items,
+                .vector => val.vec_val.items,
+                else => return error.TypeError,
+            };
+            var j: usize = 0;
+            while (j < pattern.vec_val.items.len) : (j += 1) {
+                const pat_item = pattern.vec_val.items[j];
+                // Handle & rest (& is parsed as a symbol)
+                if (pat_item.type == .symbol and std.mem.eql(u8, pat_item.sym_val, "&")) {
+                    if (j + 1 < pattern.vec_val.items.len) {
+                        const rest_sym = pattern.vec_val.items[j + 1];
+                        // Collect remaining items into a list (starting from current position j)
+                        var rest_list: list.List = .empty;
+                        errdefer rest_list.deinit(arena_alloc);
+                        var k: usize = j;
+                        while (k < vitems.len) : (k += 1) {
+                            try rest_list.append(arena_alloc, try vitems[k].clone(arena_alloc));
+                        }
+                        if (rest_sym.type == .symbol) {
+                            try env.put(rest_sym.sym_val, Value.listValue(rest_list));
+                        }
+                        j += 1; // Skip the rest symbol
+                    }
+                    break;
+                } else if (j < vitems.len) {
+                    try bindPattern(allocator, arena_alloc, pat_item, vitems[j], env, depth);
+                }
+            }
+        },
+        else => return error.TypeError,
+    }
 }
 
 fn evalCond(allocator: Allocator, arena_alloc: Allocator, clauses: []const Value, env: *Env, depth: usize) anyerror!Value {

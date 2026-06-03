@@ -137,8 +137,8 @@
 (defn doall
   "Realizes all elements of a lazy sequence and returns it."
   [coll]
-  (dorun coll)
-  coll)
+  ;; doall is implemented as a Zig built-in for proper lazy-seq realization
+  (doall* coll))
 
 (defn into-array
   "Returns the collection as a vector."
@@ -217,6 +217,17 @@
   "Returns a lazy seq of the elements of coll separated by sep."
   [sep coll]
   (rest (mapcat (fn [x] (list sep x)) coll)))
+
+(defn partition
+  "Returns a lazy sequence of lists of n elements each, at intervals
+   of step. Returns nil if there are fewer than n elements remaining."
+  [n coll]
+  (when (seq coll)
+    (let [head (take n coll)
+          tail (drop n coll)]
+      (if (= (count head) n)
+        (lazy-seq (cons head (partition n tail)))
+        nil))))
 
 ;; ---- Macros ----
 

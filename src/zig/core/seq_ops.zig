@@ -9,8 +9,9 @@ const helpers = @import("helpers.zig");
 const eval_helpers = @import("eval_helpers.zig");
 const arithmetic = @import("arithmetic.zig");
 
-const toInt = helpers.toInt;
 const Allocator = std.mem.Allocator;
+
+const toInt = helpers.toInt;
 
 pub fn core_map(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
@@ -506,6 +507,99 @@ pub fn core_drop(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     }
 }
 
+// doall* - realizes a lazy sequence and returns the realized list
+pub fn core_doall_star(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const allocator = env_env.allocator;
+    var coll = try args.items[0].clone(allocator);
+    defer coll.deinit(allocator);
+
+    // Recursively force lazy sequences
+    return forceValue(allocator, coll);
+}
+
+fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
+    return switch (val.type) {
+        .lazy_seq => {
+            // Evaluate the thunk
+            if (val.lazy_seq_val.thunk) |thunk| {
+                var arena = std.heap.ArenaAllocator.init(allocator);
+                const arena_alloc = arena.allocator();
+
+                const cloned_params = try thunk.params.clone(arena_alloc);
+                const cloned_body = try thunk.body.clone(arena_alloc);
+                var thunk_env = try thunk.env.clone(arena_alloc);
+
+                const fn_val = try Value.fnValueSingle(allocator, cloned_params, cloned_body, thunk_env, null, false);
+                var result = try eval_helpers.callBuiltin(
+                    allocator,
+                    fn_val,
+                    list.empty(),
+                    &thunk_env,
+                );
+
+                // Force each element of the result
+                switch (result.type) {
+                    .list => {
+                        var forced_list: list.List = .empty;
+                        errdefer forced_list.deinit(allocator);
+                        for (result.list_val.items) |item| {
+                            const forced_item = try forceValue(allocator, item);
+                            try forced_list.append(allocator, forced_item);
+                        }
+                        result.deinit(arena_alloc);
+                        arena.deinit();
+                        return Value.listValue(forced_list);
+                    },
+                    .vector => {
+                        var forced_vec: vec.Vector = .empty;
+                        errdefer forced_vec.deinit(allocator);
+                        for (result.vec_val.items) |item| {
+                            const forced_item = try forceValue(allocator, item);
+                            try forced_vec.append(allocator, forced_item);
+                        }
+                        result.deinit(arena_alloc);
+                        arena.deinit();
+                        return Value.vectorValue(forced_vec);
+                    },
+                    .nil => {
+                        result.deinit(arena_alloc);
+                        arena.deinit();
+                        return Value.nilValue();
+                    },
+                    else => {
+                        const forced = try forceValue(allocator, result);
+                        result.deinit(arena_alloc);
+                        arena.deinit();
+                        return forced;
+                    },
+                }
+            }
+            return Value.listValue(list.empty());
+        },
+        .list => {
+            var forced_list: list.List = .empty;
+            errdefer forced_list.deinit(allocator);
+            for (val.list_val.items) |item| {
+                const forced_item = try forceValue(allocator, item);
+                try forced_list.append(allocator, forced_item);
+            }
+            return Value.listValue(forced_list);
+        },
+        .vector => {
+            var forced_vec: vec.Vector = .empty;
+            errdefer forced_vec.deinit(allocator);
+            for (val.vec_val.items) |item| {
+                const forced_item = try forceValue(allocator, item);
+                try forced_vec.append(allocator, forced_item);
+            }
+            return Value.vectorValue(forced_vec);
+        },
+        else => try val.clone(allocator),
+    };
+}
+
 pub fn registerSequenceOpFunctions(env: *Env) anyerror!void {
     try env.put("map", Value.builtinFnValue(core_map));
     try env.put("mapcat", Value.builtinFnValue(core_mapcat));
@@ -519,5 +613,6 @@ pub fn registerSequenceOpFunctions(env: *Env) anyerror!void {
     try env.put("next", Value.builtinFnValue(core_next));
     try env.put("nthnext", Value.builtinFnValue(core_nthnext));
     try env.put("drop", Value.builtinFnValue(core_drop));
+    try env.put("doall*", Value.builtinFnValue(core_doall_star));
 }
 
