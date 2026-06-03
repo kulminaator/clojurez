@@ -54,11 +54,13 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 - `iterate` — repeatedly apply a function, collecting results
 - `map` — apply a function to each element
 - `take` — take first n elements
+- `partition` — partition a collection into chunks of n
 - `count`, `first`, `rest`, `nth`, `concat`, `list`, `vec`
 
 ### Destructuring
 - Vector destructuring in function parameters: `(fn [[a b]] (+ a b))`
 - Nested destructuring: `(fn [[[a b] c]] (+ a b c))`
+- Destructuring in `let` with `& rest`: `(let [[a b & rest] [1 2 3 4]] (list a b rest))` → `(1 2 (3 4))`
 
 ### Built-in Functions
 - **Arithmetic:** `+`, `-`, `*`, `/`, `rem`
@@ -70,8 +72,9 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 - **Maps:** `get`, `assoc`, `keys`, `vals`, `dissoc`, `merge`, `contains?`
 - **Sets:** `set`, `set?`, `disj`, `contains?`
 - **Collections:** `conj`, `pop`, `last`, `reverse`, `range`, `peek`, `empty?`, `not-empty`, `seq`, `count`
-- **Sequence operations:** `reduce`, `flatten`, `filter`, `remove`, `every?`, `some`, `distinct?`, `next`, `nthnext`, `drop`, `dorun`, `doall`
+- **Sequence operations:** `reduce`, `flatten`, `filter`, `remove`, `every?`, `some`, `distinct?`, `next`, `nthnext`, `drop`, `dorun`, `doall`, `partition`
 - **Functional tools:** `apply`, `if-not`, `partial`, `comp`, `fnil`, `juxt`
+- **Metaprogramming:** `gensym`
 - **Time:** `nano-time`
 - **Atoms:** `atom`, `swap!`, `reset!`
 
@@ -204,6 +207,15 @@ This is useful for verifying that `def` rebindings, `let` scopes, and function c
 
 ;; Destructuring
 ((fn [[a b]] (+ a b)) [3 4])  ;; => 7
+(let [[a b & rest] [1 2 3 4 5]] (list a b rest))  ;; => (1 2 (3 4 5))
+
+;; Sequences
+(partition 2 (list 1 2 3 4 5 6))  ;; => ((1 2) (3 4) (5 6)) (lazy)
+(doall (partition 2 (list 1 2 3 4 5 6)))  ;; => ((1 2) (3 4) (5 6))
+
+;; Metaprogramming
+(gensym)           ;; => G__1
+(gensym "tmp")     ;; => tmpG__2
 
 ;; Maps
 (get {:a 1 :b 2} :a)          ;; => 1
@@ -214,7 +226,7 @@ This is useful for verifying that `def` rebindings, `let` scopes, and function c
 (conj #{1 2} 3)               ;; => #{1 2 3}
 (disj #{1 2 3} 2)             ;; => #{1 3}
 
-;; Sequences
+;; Sequence Operations
 (reduce + 0 (list 1 2 3 4))   ;; => 10
 (filter (fn [x] (> x 2)) (list 1 2 3 4))  ;; => (3 4)
 
@@ -287,8 +299,9 @@ See [GUIDELINES.md](GUIDELINES.md) for testing standards.
 - Special forms (def, defn, fn, if, when, cond, let, do, quote, quasiquote, set!, and, or, loop, recur, binding, var, deref, lazy-seq, ns)
 - Macros (`defmacro` with full macro expansion support)
 - Threading macros (`->`, `->>`)
-- Sequence operations (iterate, map, take, reduce, flatten, filter, remove, every?, some, distinct?, next, nthnext, drop, dorun, doall)
-- Vector destructuring in function parameters
+- Sequence operations (iterate, map, take, partition, reduce, flatten, filter, remove, every?, some, distinct?, next, nthnext, drop, dorun, doall)
+- Vector destructuring in function parameters and `let` (including `& rest`)
+- Metaprogramming (`gensym`)
 - Arithmetic, comparison, boolean, type check, string, I/O functions (including `spit`/`slurp` for file I/O)
 - Map operations (get, assoc, keys, vals, dissoc, merge, contains?)
 - Set operations (set, set?, disj)

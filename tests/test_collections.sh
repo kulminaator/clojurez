@@ -1,0 +1,30 @@
+#!/bin/bash
+# Collections: conj, pop, last, reverse, range, empty?, not-empty, seq, coll?, sequential?, vector?, map?, next, nthnext
+source tests/helpers.sh
+
+echo "=== Collection Tests ==="
+run_test "conj vector" '(conj [1 2] 3)' "[1 2 3]"
+run_test "pop vector" '(pop [1 2 3])' "[1 2]"
+run_test "last vector" '(last [1 2 3])' "3"
+run_test "reverse vector" '(reverse [1 2 3])' "[3 2 1]"
+run_test "range" '(doall (range 1 4))' "(1 2 3)"
+
+echo ""
+echo "=== Collection Predicate Tests ==="
+run_test "empty? list" "(empty? (list))" "true"
+run_test "empty? vec" "(empty? [])" "true"
+run_test "empty? set" "(empty? #{})" "true"
+run_test "empty? map" "(empty? {})" "true"
+run_test "empty? not empty" "(empty? (list 1))" "false"
+run_test "not-empty list" "(not-empty (list 1 2))" "(1 2)"
+run_test "not-empty empty" "(not-empty (list))" "nil"
+run_test "seq list" "(seq (list 1 2))" "(1 2)"
+run_test "seq empty" "(seq (list))" "nil"
+run_test "coll?" "(coll? (list 1))" "true"
+run_test "coll? not coll" "(coll? 42)" "false"
+run_test "sequential?" "(sequential? (list 1))" "true"
+run_test "sequential? map" "(sequential? {:a 1})" "false"
+run_test "vector?" "(vector? [1 2])" "true"
+run_test "map?" "(map? {:a 1})" "true"
+run_test "next" "(next (list 1 2 3))" "(2 3)"
+run_test "next empty" "(next (list 1))" "nil"
