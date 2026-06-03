@@ -5,12 +5,12 @@ source tests/helpers.sh
 echo "=== UTF-8 String Tests ==="
 
 # Estonian strings
-run_test "utf8 estonian string" '"jõääreööbiku ülkskõiksus"' '"jõääreööbiku ülkskõiksus"'
-run_test "utf8 estonian count" "(count \"jõääreööbiku ülkskõiksus\")" "24"
-run_test "utf8 estonian nth 0" "(nth \"jõääreööbiku ülkskõiksus\" 0)" "\"j\""
-run_test "utf8 estonian nth 1" "(nth \"jõääreööbiku ülkskõiksus\" 1)" "\"õ\""
-run_test "utf8 estonian nth 2" "(nth \"jõääreööbiku ülkskõiksus\" 2)" "\"ä\""
-run_test "utf8 estonian str concat" "(str \"jõä\" \"reöö\" \"biku\")" "\"jõäreööbiku\""
+run_test "utf8 estonian string" '"jõeääreööbiku ülkskõiksus"' '"jõeääreööbiku ülkskõiksus"'
+run_test "utf8 estonian count" "(count \"jõeääreööbiku ülkskõiksus\")" "25"
+run_test "utf8 estonian nth 0" "(nth \"jõeääreööbiku ülkskõiksus\" 0)" "\"j\""
+run_test "utf8 estonian nth 1" "(nth \"jõeääreööbiku ülkskõiksus\" 1)" "\"õ\""
+run_test "utf8 estonian nth 2" "(nth \"jõeääreööbiku ülkskõiksus\" 2)" "\"e\""
+run_test "utf8 estonian str concat" "(str \"jõeää\" \"reöö\" \"biku\")" "\"jõeääreööbiku\""
 
 # Emoji / smiley faces
 run_test "utf8 smiley string" '"😀😃😄😁"' '"😀😃😄😁"'
@@ -34,7 +34,7 @@ run_test "unicode escape japanese" '"\u53E4\u6C60"' '"古池"'
 
 # utf8-valid? function
 run_test "utf8-valid valid string" "(utf8-valid? \"hello\")" "true"
-run_test "utf8-valid estonian" "(utf8-valid? \"jõääreööbiku\")" "true"
+run_test "utf8-valid estonian" "(utf8-valid? \"jõeääreööbiku\")" "true"
 run_test "utf8-valid emoji" "(utf8-valid? \"😀\")" "true"
 run_test "utf8-valid japanese" "(utf8-valid? \"古池や\")" "true"
 
