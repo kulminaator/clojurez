@@ -12,6 +12,10 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 - Keywords (`:foo`, `:bar-baz`) — supports Unicode characters
 - Lists (`(1 2 3)`)
 - Vectors (`[1 2 3]`)
+- Maps (`{:a 1 :b 2}`)
+- Sets (`#{1 2 3}`)
+- Queues (`#queue(1 2 3)`)
+- Atoms (`(atom 5)`)
 
 ### UTF-8 Support
 - All strings are validated as UTF-8 on creation
@@ -32,10 +36,15 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 - `let` — local bindings
 - `do` — evaluate a sequence of forms
 - `quote` / `'` — prevent evaluation
+- `quasiquote` / `` ` `` — template with unquote (`unquote` / `~`) and unquote-splicing (`unquote-splicing` / `~@`)
 - `set!` — modify a variable
 - `and` / `or` — short-circuit logic
-- `loop` / `recur` — tail recursion
+- `loop` / `recur` — tail recursion (simplified)
 - `binding` — dynamic variable binding
+- `var` — create a mutable var
+- `deref` / `@` — get the value of a var
+- `lazy-seq` — create a lazy sequence
+- `ns` — namespace declaration (no-op)
 
 ### Threading Macros
 - `->` — thread-first: inserts value as second argument
@@ -55,9 +64,15 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 - **Arithmetic:** `+`, `-`, `*`, `/`, `rem`
 - **Comparison:** `=`, `!=`, `<`, `>`, `<=`, `>=`
 - **Boolean:** `not`
-- **Type checks:** `nil?`, `number?`, `string?`, `list?`, `symbol?`, `keyword?`, `true?`, `false?`
+- **Type checks:** `nil?`, `number?`, `string?`, `list?`, `symbol?`, `keyword?`, `true?`, `false?`, `vector?`, `map?`, `queue?`, `set?`, `coll?`, `sequential?`
 - **Strings:** `str`, `utf8-valid?`
-- **I/O:** `print`, `println`, `read-line`
+- **I/O:** `print`, `println`, `read-line`, `spit`, `slurp`
+- **Maps:** `get`, `assoc`, `keys`, `vals`, `dissoc`, `merge`, `contains?`
+- **Sets:** `set`, `set?`, `disj`, `contains?`
+- **Collections:** `conj`, `pop`, `last`, `reverse`, `range`, `peek`, `empty?`, `not-empty`, `seq`, `count`
+- **Sequence operations:** `reduce`, `flatten`, `filter`, `remove`, `every?`, `some`, `distinct?`, `next`, `nthnext`, `drop`
+- **Functional tools:** `apply`, `if-not`, `partial`, `comp`, `fnil`, `juxt`
+- **Atoms:** `atom`, `swap!`, `reset!`
 
 ### Clojure Core Library
 Many common functions are implemented in `core.clj` itself, keeping the Zig VM lean:
@@ -65,11 +80,16 @@ Many common functions are implemented in `core.clj` itself, keeping the Zig VM l
 - `identity`
 - `inc`, `dec`, `abs`, `max`, `min`
 - `cons`, `second`, `third`
+- `union`, `intersection`, `difference`, `subset?`, `superset?`
+- `select-keys`
+- `into`, `keep`, `update`
 
 ## Build
 
 ```bash
-zig build-exe -fsingle-threaded src/main.zig
+# Copy Clojure core into the Zig package (for @embedFile), then build
+cp src/clj/core.clj src/zig/clj/core.clj
+zig build-exe -fsingle-threaded src/zig/main.zig
 ```
 
 ## Usage
@@ -101,10 +121,14 @@ Type `:quit` or `:exit` to exit.
 ./main my_script.clj
 ```
 
-### Load Core Library + Run
+### Core Functions
+
+Core functions (`inc`, `dec`, `into`, `even?`, `odd?`, `cons`, `update`, etc.) are baked into the binary and always available — no need to load a separate file:
 
 ```bash
-./main core.clj -e '(even? 42)'
+./main -e '(even? 42)'       ;; => true
+./main -e '(inc 5)'          ;; => 6
+./main -e '(into [] (list 1 2 3))'  ;; => [1 2 3]
 ```
 
 ## Examples
@@ -148,6 +172,27 @@ Type `:quit` or `:exit` to exit.
 
 ;; Destructuring
 ((fn [[a b]] (+ a b)) [3 4])  ;; => 7
+
+;; Maps
+(get {:a 1 :b 2} :a)          ;; => 1
+(assoc {:a 1} :b 2)           ;; => {:a 1 :b 2}
+(merge {:a 1} {:b 2})         ;; => {:a 1 :b 2}
+
+;; Sets
+(conj #{1 2} 3)               ;; => #{1 2 3}
+(disj #{1 2 3} 2)             ;; => #{1 3}
+
+;; Sequences
+(reduce + 0 (list 1 2 3 4))   ;; => 10
+(filter (fn [x] (> x 2)) (list 1 2 3 4))  ;; => (3 4)
+
+;; Atoms
+(def a (atom 5))              ;; => #atom(5)
+(swap! a inc)                 ;; => 6
+
+;; File I/O
+(spit "hello.txt" "Hello, World!")  ;; => nil
+(slurp "hello.txt")                  ;; => "Hello, World!"
 ```
 
 ## Samples
@@ -162,57 +207,68 @@ Output: `(0 1 1 2 3 5 8 13 21 34)`
 ```bash
 ./main samples/sample_2_hanoi/hanoi/core.clj
 ```
-_(Requires maps, `ns`, `get`, `assoc`, `conj`, `pop`, `last`, `reverse`, `range` — not yet implemented)_
 
 ## Project Structure
 
 ```
 src/
-├── main.zig       — CLI entry point, argument handling
-├── value.zig      — Core value types and environment
-├── list.zig       — List implementation
-├── vector.zig     — Vector implementation
-├── lexer.zig      — Tokenizer
-├── parser.zig     — S-expression parser
-├── eval.zig       — Evaluator / VM core (special forms, threading, sequences)
-├── core.zig       — Built-in functions (Zig)
-└── repl.zig       — Read-Eval-Print loop
+├── clj/
+│   └── core.clj   — Clojure core library (baked into binary at compile time)
+└── zig/
+    ├── clj/
+    │   └── core.clj   — Copy of core.clj for @embedFile (auto-generated)
+    ├── main.zig       — CLI entry point, argument handling
+    ├── core_clj.zig   — Embeds core.clj source at compile time
+    ├── value.zig      — Core value types and environment
+    ├── list.zig       — List implementation
+    ├── vector.zig     — Vector implementation
+    ├── lexer.zig      — Tokenizer
+    ├── parser.zig     — S-expression parser
+    ├── eval.zig       — Evaluator / VM core (special forms, threading, sequences)
+    ├── core.zig       — Built-in functions (Zig)
+    └── repl.zig       — Read-Eval-Print loop
 
-core.clj           — Clojure core library (bootstrapped)
 run_tests.sh       — Test runner
 GUIDELINES.md      — Development & testing guidelines
 samples/           — Sample programs
 ├── sample_1_fibonacci/    — Fibonacci sequence (✓ working)
-└── sample_2_hanoi/        — Tower of Hanoi (needs more features)
+└── sample_2_hanoi/        — Tower of Hanoi (✓ working)
 ```
 
 ## Testing
 
 ```bash
-# Run CLI/integration tests (47 tests, all must complete within 10s each)
+# Run CLI/integration tests (230 tests, all must complete within 10s each)
+# (automatically copies core.clj and builds)
 ./run_tests.sh
 
 # Run Zig unit tests (10 parser tests)
-zig test -fsingle-threaded src/parser.zig
+zig test -fsingle-threaded src/zig/parser.zig
 ```
 
 See [GUIDELINES.md](GUIDELINES.md) for testing standards.
 
 ## What Works
 
-- Core data types (nil, bool, int, float, string, symbol, keyword, list, vector)
-- Special forms (def, defn, fn, if, when, cond, let, do, quote, set!, and, or, loop, recur)
+- Core data types (nil, bool, int, float, string, symbol, keyword, list, vector, map, set, queue, atom)
+- Special forms (def, defn, fn, if, when, cond, let, do, quote, quasiquote, set!, and, or, loop, recur, binding, var, deref, lazy-seq, ns)
 - Threading macros (`->`, `->>`)
-- Sequence operations (iterate, map, take)
+- Sequence operations (iterate, map, take, reduce, flatten, filter, remove, every?, some, distinct?, next, nthnext, drop)
 - Vector destructuring in function parameters
-- Arithmetic, comparison, boolean, type check, string, I/O functions
+- Arithmetic, comparison, boolean, type check, string, I/O functions (including `spit`/`slurp` for file I/O)
+- Map operations (get, assoc, keys, vals, dissoc, merge, contains?)
+- Set operations (set, set?, disj)
+- Collection operations (conj, pop, last, reverse, range, peek, empty?, not-empty, seq, count)
+- Functional tools (apply, if-not, partial, comp, fnil, juxt)
+- Atoms (atom, swap!, reset!)
 - Clojure core library bootstrapped from `.clj` files
 
 ## What's Missing
 
-- **Namespaces** (`ns` declaration with full support)
+- **Namespaces** (`ns` declaration is a no-op; no true namespace isolation)
 - **Transients** (mutable versions of persistent data structures)
 - **Macros** (code generation at compile time)
+- **Shorthand syntax** (`~` for unquote, `~@` for unquote-splicing, backtick for quasiquote, `@` for deref — use full names instead)
 - **Java interop** (not applicable for a standalone VM)
 
 ## Design Philosophy

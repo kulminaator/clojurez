@@ -5,6 +5,7 @@ const core = @import("core.zig");
 const parser = @import("parser.zig");
 const eval = @import("eval.zig");
 const repl = @import("repl.zig");
+const core_clj = @import("core_clj.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -17,8 +18,11 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     var env: Env = Env.init(allocator);
     defer env.deinit(allocator);
 
-    // Register core functions
+    // Register Zig built-in functions
     try core.registerCoreFunctions(&env);
+
+    // Load embedded Clojure core library (silent — no output)
+    try loadCoreLibrary(allocator, &env);
 
     // Parse arguments
     var args = std.process.Args.Iterator.init(init.args);
@@ -54,6 +58,23 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
             // Treat as a file to execute
             try runFile(allocator, arg, &env);
         }
+    }
+}
+
+/// Load the embedded Clojure core library silently (no output for defn names).
+fn loadCoreLibrary(allocator: Allocator, env: *Env) anyerror!void {
+    const content = core_clj.core_clj_source;
+
+    var p = try parser.Parser.init(allocator, content);
+    defer p.deinit();
+
+    var forms = try p.parseAll();
+    defer forms.deinit(allocator);
+
+    for (forms.items) |form| {
+        var result = try eval.eval(allocator, form, env);
+        result.deinit(allocator);
+        // Silent: don't print results during core library loading
     }
 }
 

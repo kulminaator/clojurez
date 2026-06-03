@@ -106,20 +106,6 @@ pub fn core_mod(self: *Value, args: list.List, _: *Env) anyerror!Value {
     return Value.intValue(@rem(a, b));
 }
 
-pub fn core_inc(self: *Value, args: list.List, _: *Env) anyerror!Value {
-    _ = self;
-    if (args.items.len != 1) return error.ArityError;
-    const n = try toInt(args.items[0]);
-    return Value.intValue(n + 1);
-}
-
-pub fn core_dec(self: *Value, args: list.List, _: *Env) anyerror!Value {
-    _ = self;
-    if (args.items.len != 1) return error.ArityError;
-    const n = try toInt(args.items[0]);
-    return Value.intValue(n - 1);
-}
-
 // Comparison functions
 pub fn core_eq(self: *Value, args: list.List, _: *Env) anyerror!Value {
     _ = self;
@@ -508,6 +494,61 @@ pub fn core_read_line(self: *Value, args: list.List, env_env: *Env) anyerror!Val
         end -= 1;
     }
     return Value.stringValue(env_env.allocator, buf[0..end]);
+}
+
+// slurp - read entire file contents as a string
+pub fn core_slurp(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const filename = args.items[0];
+    if (filename.type != .string) return error.TypeError;
+
+    const cwd = std.Io.Dir.cwd();
+    const file = std.Io.Dir.openFile(cwd, std.Options.debug_io, filename.str_val, .{}) catch {
+        return error.FileError;
+    };
+    defer std.Io.File.close(file, std.Options.debug_io);
+
+    var reader = file.reader(std.Options.debug_io, &[_]u8{});
+    const content = try reader.interface.allocRemaining(env_env.allocator, std.Io.Limit.limited(10 * 1024 * 1024));
+    return Value.stringValue(env_env.allocator, content);
+}
+
+// spit - write content to a file
+pub fn core_spit(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len < 2) return error.ArityError;
+    const filename = args.items[0];
+    if (filename.type != .string) return error.TypeError;
+
+    // Build the content string from all remaining args
+    var content_buf: std.ArrayList(u8) = .empty;
+    errdefer content_buf.deinit(env_env.allocator);
+
+    var i: usize = 1;
+    while (i < args.items.len) : (i += 1) {
+        const arg = args.items[i];
+        // Skip option keywords like :append
+        if (arg.type == .keyword) continue;
+        const s = try arg.fmt(env_env.allocator);
+        defer env_env.allocator.free(s);
+        // Strip quotes from string values
+        if (arg.type == .string and s.len >= 2 and s[0] == '"' and s[s.len - 1] == '"') {
+            try content_buf.appendSlice(env_env.allocator, s[1 .. s.len - 1]);
+        } else {
+            try content_buf.appendSlice(env_env.allocator, s);
+        }
+    }
+
+    const cwd = std.Io.Dir.cwd();
+    const file = try std.Io.Dir.createFile(cwd, std.Options.debug_io, filename.str_val, .{});
+    defer std.Io.File.close(file, std.Options.debug_io);
+
+    var writer = file.writer(std.Options.debug_io, &[_]u8{});
+    try writer.interface.writeAll(content_buf.items);
+    writer.flush() catch {};
+
+    return Value.nilValue();
 }
 
 // Map functions
@@ -1139,31 +1180,6 @@ pub fn core_reduce(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
         acc = new_acc;
     }
     return acc;
-}
-
-pub fn core_into(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
-    if (args.items.len != 2) return error.ArityError;
-    const to = args.items[0];
-    const from = args.items[1];
-
-    // Get items from 'from'
-    var from_items: []const Value = undefined;
-    switch (from.type) {
-        .list => from_items = from.list_val.items,
-        .vector => from_items = from.vec_val.items,
-        .set => from_items = from.set_val.items,
-        .queue => from_items = from.queue_val.items,
-        else => return error.TypeError,
-    }
-
-    // Conj items into 'to' by directly calling core_conj
-    var conj_args: list.List = .empty;
-    defer conj_args.deinit(env_env.allocator);
-    try conj_args.append(env_env.allocator, try to.clone(env_env.allocator));
-    for (from_items) |item| {
-        try conj_args.append(env_env.allocator, try item.clone(env_env.allocator));
-    }
-    return try core_conj(self, conj_args, env_env);
 }
 
 pub fn core_flatten(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
@@ -1916,8 +1932,6 @@ pub fn registerCoreFunctions(env: *Env) anyerror!void {
     try env.put(allocator, "mult", Value.builtinFnValue(core_mult));
     try env.put(allocator, "div", Value.builtinFnValue(core_div));
     try env.put(allocator, "mod", Value.builtinFnValue(core_mod));
-    try env.put(allocator, "inc", Value.builtinFnValue(core_inc));
-    try env.put(allocator, "dec", Value.builtinFnValue(core_dec));
 
     // Comparison
     try env.put(allocator, "eq", Value.builtinFnValue(core_eq));
@@ -1957,6 +1971,8 @@ pub fn registerCoreFunctions(env: *Env) anyerror!void {
     try env.put(allocator, "print", Value.builtinFnValue(core_print));
     try env.put(allocator, "println", Value.builtinFnValue(core_println));
     try env.put(allocator, "read-line", Value.builtinFnValue(core_read_line));
+    try env.put(allocator, "spit", Value.builtinFnValue(core_spit));
+    try env.put(allocator, "slurp", Value.builtinFnValue(core_slurp));
 
     // Maps
     try env.put(allocator, "get", Value.builtinFnValue(core_get));
@@ -1991,7 +2007,6 @@ pub fn registerCoreFunctions(env: *Env) anyerror!void {
 
     // Sequence operations
     try env.put(allocator, "reduce", Value.builtinFnValue(core_reduce));
-    try env.put(allocator, "into", Value.builtinFnValue(core_into));
     try env.put(allocator, "flatten", Value.builtinFnValue(core_flatten));
     try env.put(allocator, "filter", Value.builtinFnValue(core_filter));
     try env.put(allocator, "remove", Value.builtinFnValue(core_remove));

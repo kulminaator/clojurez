@@ -6,6 +6,45 @@ This document defines the development workflow, testing standards, and procedure
 
 ---
 
+## 0. Design Philosophy — Minimal Zig, Maximal Clojure
+
+**Things that are possible to implement purely with Clojure code should be implemented purely with Clojure code, not with Zig code.**
+
+Our design is a **minimal Zig VM** with **Clojure code on top of it**.
+
+### How to decide where to implement a feature
+
+1. **Can it be expressed in Clojure?** If yes, implement it in `core.clj` using only functions and forms already available.
+2. **Does it require OS-level access?** (file I/O, stdin/stdout, process control) If yes, implement it in Zig as a built-in function.
+3. **Does it require new value types or evaluation rules?** If yes, implement it in Zig as part of the VM core.
+4. **When in doubt, prefer Clojure.** A Zig built-in is harder to test, harder to read, and harder to modify than a Clojure function.
+
+### Examples
+
+| Feature | Where | Why |
+| ------- | ----- | --- |
+| `+`, `-`, `*`, `/` | Zig | Fundamental arithmetic, used by everything |
+| `print`, `println`, `read-line`, `spit`, `slurp` | Zig | Requires OS I/O |
+| `atom`, `swap!`, `reset!` | Zig | Requires mutable state management |
+| `inc`, `dec` | Clojure | Expressible as `(+ n 1)`, `(- n 1)` |
+| `even?`, `odd?`, `zero?` | Clojure | Expressible as `(= (rem n 2) 0)` etc. |
+| `cons`, `second`, `third` | Clojure | Built on `concat`, `first`, `rest` |
+| `max`, `min`, `abs` | Clojure | Built on comparison and arithmetic |
+| `into` | Clojure | Built on `reduce`, `conj` |
+| `update`, `keep` | Clojure | Built on `assoc`, `get`, `reduce`, `filter` |
+| `union`, `intersection`, `difference` | Clojure | Built on `conj`, `reduce`, `contains?` |
+
+### Rules
+
+- **Every new Zig built-in must be justified** by explaining why it cannot be implemented in Clojure.
+- **Review existing Clojure functions first** before adding a new Zig function — you might be able to compose existing ones.
+- **Keep `core.zig` lean** — each function should do one thing that Clojure cannot do.
+- **Keep `core.clj` rich** — this is where most library functions live.
+- **`core.clj` is auto-loaded** — it is embedded into the binary at compile time and loaded silently on startup. All functions defined in `core.clj` are always available to the user without any explicit loading.
+- **Build copies `core.clj`** — the build process copies `src/clj/core.clj` to `src/zig/clj/core.clj` so `@embedFile` can find it. Always edit `src/clj/core.clj` (the source of truth), never `src/zig/clj/core.clj`.
+
+---
+
 ## 1. Timeout Policy
 
 **All tests must complete within 10 seconds.** This applies to:
@@ -61,7 +100,7 @@ Use Zig's built-in code coverage tools:
 
 ```bash
 # Build with coverage instrumentation
-zig build-exe -femit-coverage src/main.zig
+cp src/clj/core.clj src/zig/clj/core.clj && zig build-exe -femit-coverage src/zig/main.zig
 
 # Run tests and generate coverage report
 llvm-cov show ...
@@ -201,7 +240,7 @@ This ensures the bug never reappears.
 ./run_tests.sh
 
 # Run Zig unit tests (10 parser tests)
-zig test -fsingle-threaded src/parser.zig
+zig test -fsingle-threaded src/zig/parser.zig
 ```
 
 ### Sample Program Verification
@@ -369,6 +408,7 @@ Before starting a task, ask:
 
 | Rule | Requirement |
 | ---- | ----------- |
+| Design | Minimal Zig VM, Clojure code on top |
 | Task size | Small, verifiable increments |
 | Iteration | Test after every meaningful change |
 | Compile | Fix errors immediately, never accumulate |
@@ -386,11 +426,11 @@ Before starting a task, ask:
 
 | Category | Count | Status |
 |----------|-------|--------|
-| CLI/Integration tests | 47 | All passing |
+| CLI/Integration tests | 230 | All passing |
 | Zig unit tests (parser) | 10 | All passing |
 | Fibonacci sample | 1 | Passing |
-| Hanoi sample | 1 | Needs maps, ns, get, assoc, conj, pop, last, reverse, range |
-| **Total** | **58** | **57/58 passing** |
+| Hanoi sample | 1 | Passing |
+| **Total** | **242** | **242/242 passing** |
 
 ### Test Categories (run_tests.sh)
 
@@ -406,4 +446,16 @@ Before starting a task, ask:
 - Thread macros (2): `->>`, `->`
 - Sequence functions (3): `iterate`, `map`, `take`
 - Destructuring (2): vector, nested vector
+- Maps (5): literal, get, assoc
+- Collections (5): conj, pop, last, reverse, range
+- Namespace (1): `ns` declaration
+- Sets (12): literal, empty, set, set?, conj, disj, set-as-fn, count, equality
+- Queues (7): literal, empty, conj, pop, peek, queue?, count
+- Map enhancements (12): keys, vals, dissoc, merge, contains?, map-as-fn, count
+- Collection predicates (14): empty?, not-empty, seq, coll?, sequential?, vector?, map?, next, nthnext
+- Sequence operations (11): reduce, into, flatten, filter, remove, every?, some, distinct?, nthnext
+- Core library (20): update, if-not, drop, apply, comp, partial, fnil, juxt, atom, identity, even?, odd?, zero?, pos?, neg?, abs, max, min, cons, second, third
+- File I/O (6): spit, slurp, spit integer, slurp integer, slurp with str, slurp nonexistent
+- UTF-8 strings (42): estonian, emoji, japanese, unicode escapes, utf8-valid?, equality, type checks, print, nth, complex expressions, lists/vectors/maps with UTF-8
 - Fibonacci sample (1): full pipeline verification
+- Hanoi sample (1): full pipeline verification

@@ -11,9 +11,10 @@ TOTAL=0
 VM="./main"
 TIMEOUT=10
 
-# Build the VM
+# Build the VM (copies core.clj into zig package for @embedFile)
 echo "Building VM..."
-zig build-exe -fsingle-threaded src/main.zig 2>&1
+cp src/clj/core.clj src/zig/clj/core.clj 2>/dev/null || true
+zig build-exe -fsingle-threaded src/zig/main.zig 2>&1
 echo ""
 
 # Helper function to run a test (expression only)
@@ -248,7 +249,7 @@ echo ""
 echo "=== Sequence Operation Tests ==="
 run_test "reduce" "(reduce + 0 (list 1 2 3 4))" "10"
 run_test "reduce no init" "(reduce + (list 1 2 3 4))" "10"
-run_test "into" "(into [] (list 1 2 3))" "[1 2 3]"
+run_test_cmd "into" "$VM -e '(into [] (list 1 2 3))'" "[1 2 3]"
 run_test "flatten" "(flatten (list 1 (list 2 3) 4))" "(1 2 3 4)"
 run_test "filter" "(filter (fn [x] (> x 2)) (list 1 2 3 4))" "(3 4)"
 run_test "remove" "(remove (fn [x] (> x 2)) (list 1 2 3 4))" "(1 2)"
@@ -261,7 +262,7 @@ run_test "nthnext" "(nthnext 2 (list 1 2 3 4))" "(3 4)"
 echo ""
 echo "=== Core Library Tests ==="
 # Tests that require loading core.clj
-run_test_cmd "update" "$VM core.clj -e '(update {:a 1} :a inc)'" "{:a 2}"
+run_test_cmd "update" "$VM -e '(update {:a 1} :a inc)'" "{:a 2}"
 run_test "if-not false" '(if-not false :yes :no)' ":yes"
 run_test "if-not true" '(if-not true :yes :no)' ":no"
 run_test "if-not nil 2arg" '(if-not nil :yes)' ":yes"
@@ -285,27 +286,27 @@ run_test "fnil" '(do (def f (fnil / 0 1)) (f 10 5))' "2"
 run_test "fnil nil arg" '(do (def f (fnil / 0 1)) (f nil 5))' "0"
 run_test "fnil nil second" '(do (def f (fnil / 0 1)) (f 10 nil))' "10"
 
-run_test "juxt two" '(do (def f (juxt inc dec)) (f 5))' "[6 4]"
-run_test "juxt three" '(do (def f (juxt str inc dec)) (f 5))' "[\"5\" 6 4]"
+run_test_cmd "juxt two" "$VM -e '(do (def f (juxt inc dec)) (f 5))'" "[6 4]"
+run_test_cmd "juxt three" "$VM -e '(do (def f (juxt str inc dec)) (f 5))'" "[\"5\" 6 4]"
 
 run_test "atom create" '(atom 5)' "#atom(5)"
 run_test "atom reset!" '(do (def a (atom 5)) (reset! a 10) a)' "#atom(10)"
-run_test "atom swap!" '(do (def a (atom 5)) (swap! a inc) a)' "#atom(6)"
+run_test_cmd "atom swap!" "$VM -e '(do (def a (atom 5)) (swap! a inc) a)'" "#atom(6)"
 run_test "atom swap! with args" '(do (def a (atom 5)) (swap! a + 3) a)' "#atom(8)"
 
-run_test_cmd "identity" "$VM core.clj -e '(identity 42)'" "42"
+run_test_cmd "identity" "$VM -e '(identity 42)'" "42"
 
-run_test_cmd "even?" "$VM core.clj -e '(even? 4)'" "true"
-run_test_cmd "odd?" "$VM core.clj -e '(odd? 3)'" "true"
-run_test_cmd "zero?" "$VM core.clj -e '(zero? 0)'" "true"
-run_test_cmd "pos?" "$VM core.clj -e '(pos? 5)'" "true"
-run_test_cmd "neg?" "$VM core.clj -e '(neg? (- 0 3))'" "true"
-run_test_cmd "abs" "$VM core.clj -e '(abs (- 0 5))'" "5"
-run_test_cmd "max" "$VM core.clj -e '(max 3 7)'" "7"
-run_test_cmd "min" "$VM core.clj -e '(min 3 7)'" "3"
-run_test_cmd "cons" "$VM core.clj -e '(cons 0 (list 1 2))'" "(0 1 2)"
-run_test_cmd "second" "$VM core.clj -e '(second (list 1 2 3))'" "2"
-run_test_cmd "third" "$VM core.clj -e '(third (list 1 2 3))'" "3"
+run_test_cmd "even?" "$VM -e '(even? 4)'" "true"
+run_test_cmd "odd?" "$VM -e '(odd? 3)'" "true"
+run_test_cmd "zero?" "$VM -e '(zero? 0)'" "true"
+run_test_cmd "pos?" "$VM -e '(pos? 5)'" "true"
+run_test_cmd "neg?" "$VM -e '(neg? (- 0 3))'" "true"
+run_test_cmd "abs" "$VM -e '(abs (- 0 5))'" "5"
+run_test_cmd "max" "$VM -e '(max 3 7)'" "7"
+run_test_cmd "min" "$VM -e '(min 3 7)'" "3"
+run_test_cmd "cons" "$VM -e '(cons 0 (list 1 2))'" "(0 1 2)"
+run_test_cmd "second" "$VM -e '(second (list 1 2 3))'" "2"
+run_test_cmd "third" "$VM -e '(third (list 1 2 3))'" "3"
 
 run_test "map builtin" '(map (fn [x] (* x 2)) (list 1 2 3))' "(2 4 6)"
 run_test "filter" '(filter (fn [x] (> x 2)) (list 1 2 3 4))' "(3 4)"
@@ -324,8 +325,26 @@ run_test "assoc" '(assoc {:a 1} :b 2)' "{:a 1 :b 2}"
 run_test "dissoc" '(dissoc {:a 1 :b 2} :a)' "{:b 2}"
 run_test "get" '(get {:a 1} :a)' "1"
 run_test "conj" '(conj [1 2] 3)' "[1 2 3]"
-run_test "into" '(into [] (list 1 2 3))' "[1 2 3]"
+run_test_cmd "into" "$VM -e '(into [] (list 1 2 3))'" "[1 2 3]"
 run_test "merge" '(merge {:a 1} {:b 2})' "{:a 1 :b 2}"
+
+
+echo ""
+echo "=== File I/O Tests (spit/slurp) ==="
+# spit writes content to a file, returns nil
+run_test "spit basic" '(spit "/tmp/clojure_vm_test_spit.txt" "hello world")' "nil"
+# slurp reads file contents as string
+run_test "slurp basic" '(slurp "/tmp/clojure_vm_test_spit.txt")' '"hello world"'
+# spit with integer (converted to string)
+run_test "spit integer" '(spit "/tmp/clojure_vm_test_spit2.txt" 42)' "nil"
+run_test "slurp integer" '(slurp "/tmp/clojure_vm_test_spit2.txt")' '"42"'
+# slurp and str operations
+run_test "slurp with str" '(str (slurp "/tmp/clojure_vm_test_spit.txt"))' '"hello world"'
+# slurp nonexistent file should error (we test it doesn't crash)
+run_test_cmd "slurp nonexistent" 'timeout 10 ./main -e '"'"'(slurp "/tmp/clojure_vm_nonexistent_xyz.txt")'"'"' 2>&1 | head -1' 'error: FileError'
+
+# Clean up temp files
+rm -f /tmp/clojure_vm_test_spit.txt /tmp/clojure_vm_test_spit2.txt
 
 
 echo ""
@@ -418,7 +437,7 @@ run_test "utf8 empty string nth" "(nth \"\" 0)" "nil"
 
 echo ""
 echo "=== Hanoi Sample ==="
-# Run the hanoi sample and check output
+# Run the hanoi sample and check output (core is auto-loaded now)
 hanoi_result=$(timeout 10 ./main samples/sample_2_hanoi/hanoi/core.clj 2>&1 | tail -n +5)
 expected_hanoi=$(cat samples/sample_2_hanoi/expected_output.txt)
 TOTAL=$((TOTAL + 1))
