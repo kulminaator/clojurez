@@ -52,3 +52,70 @@
 
 (defn third [xs]
   (first (rest (rest xs))))
+
+;; ---- Set operations (built on core set type) ----
+
+(defn union
+  "Return a set that is the union of the input sets"
+  [s1 s2]
+  (if (< (count s1) (count s2))
+    (reduce conj s2 s1)
+    (reduce conj s1 s2)))
+
+(defn intersection
+  "Return a set that is the intersection of the input sets"
+  [s1 s2]
+  (if (< (count s2) (count s1))
+    (recur s2 s1)
+    (reduce (fn [result item]
+              (if (contains? s2 item)
+                result
+                (disj result item)))
+            s1 s1)))
+
+(defn difference
+  "Return a set that is the first set without elements of the remaining sets"
+  [s1 s2]
+  (reduce disj s1 s2))
+
+(defn subset?
+  "Is set1 a subset of set2?"
+  [set1 set2]
+  (and (<= (count set1) (count set2))
+       (every? #(contains? set2 %) set1)))
+
+(defn superset?
+  "Is set1 a superset of set2?"
+  [set1 set2]
+  (and (>= (count set1) (count set2))
+       (every? #(contains? set1 %) set2)))
+
+;; ---- Map operations ----
+
+(defn select-keys
+  "Returns a map containing only those entries in map whose key is in keys"
+  [map keyseq]
+  (reduce (fn [ret k]
+            (if (contains? map k)
+              (assoc ret k (get map k))
+              ret))
+          {} keyseq))
+
+;; ---- Sequence operations ----
+
+(defn into
+  "Returns a new coll consisting of to with all of the items of from conjoined."
+  [to from]
+  (reduce conj to from))
+
+(defn keep
+  "Returns a lazy sequence of the non-nil results of (f item)."
+  [f coll]
+  (filter identity (map f coll)))
+
+;; ---- Map update ----
+
+(defn update
+  "Returns a map with the value at key updated by applying f to the current value."
+  [m k f]
+  (assoc m k (f (get m k))))

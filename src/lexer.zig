@@ -9,12 +9,14 @@ pub const Token = union(enum) {
     close_bracket: void,
     open_brace: void,
     close_brace: void,
+    set_open: void,
     comma: void,
     quote: void,
     string: []const u8,
     number: []const u8,
     symbol: []const u8,
     keyword: []const u8,
+    queue_tag: void,
 
     pub fn deinit(self: Token, allocator: Allocator) void {
         switch (self) {
@@ -32,11 +34,14 @@ pub const Token = union(enum) {
             .close_bracket => .{ .close_bracket = {} },
             .open_brace => .{ .open_brace = {} },
             .close_brace => .{ .close_brace = {} },
+            .set_open => .{ .set_open = {} },
             .comma => .{ .comma = {} },
+            .quote => .{ .quote = {} },
             .string => |s| .{ .string = try allocator.dupe(u8, s) },
             .number => |s| .{ .number = try allocator.dupe(u8, s) },
             .symbol => |s| .{ .symbol = try allocator.dupe(u8, s) },
             .keyword => |s| .{ .keyword = try allocator.dupe(u8, s) },
+            .queue_tag => .{ .queue_tag = {} },
         };
     }
 };
@@ -67,9 +72,10 @@ pub const Lexer = struct {
             '}' => { self.pos += 1; return .{ .close_brace = {} }; },
             ',' => { self.pos += 1; return .{ .comma = {} }; },
             '\'' => { self.pos += 1; return .{ .quote = {} }; },
+            '#' => return self.readDispatch(),
             '"' => return self.readString(),
             else => {
-                if (ch == ':' and self.pos + 1 < self.input.len and std.ascii.isAlphanumeric(self.input[self.pos + 1])) {
+                if (ch == ':' and self.pos + 1 < self.input.len and (std.ascii.isAlphanumeric(self.input[self.pos + 1]) or self.input[self.pos + 1] >= 0x80)) {
                     return self.readKeyword();
                 }
                 return self.readSymbolOrNumber();
@@ -114,6 +120,41 @@ pub const Lexer = struct {
                     'r' => try buf.append(self.allocator, '\r'),
                     '\\' => try buf.append(self.allocator, '\\'),
                     '"' => try buf.append(self.allocator, '"'),
+                    'u' => {
+                        // \uXXXX or \u{XXXXXX} - Unicode escape
+                        self.pos += 1;
+                        var codepoint: u21 = 0;
+                        if (self.pos < self.input.len and self.input[self.pos] == '{') {
+                            // \u{XXXXXX} format - read until '}'
+                            self.pos += 1; // skip '{'
+                            var hex_buf: std.ArrayList(u8) = .empty;
+                            defer hex_buf.deinit(self.allocator);
+                            while (self.pos < self.input.len and self.input[self.pos] != '}') {
+                                if (!std.ascii.isHex(self.input[self.pos])) return error.InvalidUnicodeEscape;
+                                try hex_buf.append(self.allocator, self.input[self.pos]);
+                                self.pos += 1;
+                            }
+                            if (self.pos >= self.input.len) return error.InvalidUnicodeEscape;
+                            self.pos += 1; // skip '}'
+                            codepoint = std.fmt.parseInt(u21, hex_buf.items, 16) catch return error.InvalidUnicodeEscape;
+                        } else {
+                            // \uXXXX format - exactly 4 hex digits
+                            if (self.pos + 4 > self.input.len) return error.InvalidUnicodeEscape;
+                            var hex_str: [4]u8 = undefined;
+                            var j: usize = 0;
+                            while (j < 4) : (j += 1) {
+                                if (!std.ascii.isHex(self.input[self.pos])) return error.InvalidUnicodeEscape;
+                                hex_str[j] = self.input[self.pos];
+                                self.pos += 1;
+                            }
+                            codepoint = std.fmt.parseInt(u21, &hex_str, 16) catch return error.InvalidUnicodeEscape;
+                        }
+                        // Encode as UTF-8
+                        var utf8_buf: [4]u8 = undefined;
+                        const utf8_len = std.unicode.utf8Encode(codepoint, &utf8_buf) catch return error.InvalidUnicodeEscape;
+                        try buf.appendSlice(self.allocator, utf8_buf[0..utf8_len]);
+                        continue; // pos already advanced
+                    },
                     else => |c| try buf.append(self.allocator, c),
                 }
             } else {
@@ -174,6 +215,29 @@ pub const Lexer = struct {
         }
         return i;
     }
+
+    fn readDispatch(self: *Lexer) anyerror!Token {
+        self.pos += 1; // skip '#'
+        if (self.pos >= self.input.len) return error.UnexpectedEof;
+        const ch = self.input[self.pos];
+        switch (ch) {
+            '{' => { self.pos += 1; return .{ .set_open = {} }; },
+            else => {
+                // Check for #queue(...)
+                if (std.mem.startsWith(u8, self.input[self.pos..], "queue(")) {
+                    self.pos += 6; // skip "queue("
+                    return .{ .queue_tag = {} };
+                }
+                // Otherwise treat # as part of a symbol
+                const start = self.pos - 1; // include the '#'
+                while (self.pos < self.input.len and isSymbolChar(self.input[self.pos])) {
+                    self.pos += 1;
+                }
+                const result = try self.allocator.dupe(u8, self.input[start..self.pos]);
+                return .{ .symbol = result };
+            },
+        }
+    }
 };
 
 fn isSymbolChar(ch: u8) bool {
@@ -181,5 +245,8 @@ fn isSymbolChar(ch: u8) bool {
         ch == '-' or ch == '+' or ch == '*' or ch == '/' or
         ch == '<' or ch == '>' or ch == '=' or ch == '!' or
         ch == '?' or ch == '%' or ch == '&' or ch == '^' or
-        ch == '.' or ch == '@';
+        ch == '.' or ch == '@' or
+        // Accept non-ASCII bytes (UTF-8 continuation and start bytes)
+        // This allows Unicode characters in symbol names
+        ch >= 0x80;
 }

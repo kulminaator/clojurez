@@ -14,6 +14,7 @@ pub const EvalError = error{
     TypeError,
     ArityError,
     RecursionLimit,
+    ReplExit,
 };
 
 const MAX_RECURSION = 1000;
@@ -26,7 +27,7 @@ fn evalRec(allocator: Allocator, form: Value, env: *Env, depth: usize) anyerror!
     if (depth > MAX_RECURSION) return error.RecursionLimit;
 
     switch (form.type) {
-        .nil, .bool, .integer, .float, .string, .keyword => {
+        .nil, .bool, .integer, .float, .string, .keyword, .set, .queue, .atom => {
             return try form.clone(allocator);
         },
         .symbol => {
@@ -72,6 +73,7 @@ fn evalRec(allocator: Allocator, form: Value, env: *Env, depth: usize) anyerror!
             return Value.mapValue(new_map);
         },
         .function, .builtin_fn => return try form.clone(allocator),
+        .lazy_seq => return try form.clone(allocator),
     }
     unreachable;
 }
@@ -86,6 +88,11 @@ fn evalList(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerro
         const name = first.sym_val;
 
         // Special forms that don't evaluate their arguments
+        // quit / exit - signal REPL to exit
+        if (std.mem.eql(u8, name, "quit") or std.mem.eql(u8, name, "exit")) {
+            return error.ReplExit;
+        }
+
         // ns - namespace declaration (no-op for our simple VM)
         if (std.mem.eql(u8, name, "ns")) {
             return Value.nilValue();
@@ -159,10 +166,14 @@ fn evalList(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerro
             if (l.items.len < 3) return error.ArityError;
             const fname = l.items[1];
             if (fname.type != .symbol) return error.TypeError;
-            const params = l.items[2];
+            // Handle optional docstring
+            const has_docstring = l.items.len >= 3 and l.items[2].type == .string;
+            const params_idx: usize = if (has_docstring) 3 else 2;
+            if (params_idx >= l.items.len) return error.ArityError;
+            const params = l.items[params_idx];
             if (params.type != .list and params.type != .vector) return error.TypeError;
             const params_list = if (params.type == .vector) try listFromVector(allocator, params.vec_val) else params.list_val;
-            const body = if (l.items.len >= 4) l.items[3..] else &[_]Value{};
+            const body = if (l.items.len >= params_idx + 1) l.items[params_idx + 1..] else &[_]Value{};
 
             var body_list: list.List = .empty;
             errdefer body_list.deinit(allocator);
@@ -310,6 +321,25 @@ fn evalList(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerro
         // (-> x (f 1) (g 2 3)) => (g (f 1 x) 2 3)
         if (std.mem.eql(u8, name, "->")) {
             return evalThreadFirst(allocator, l.items[1..], env, depth + 1);
+        }
+
+        // lazy-seq - create a lazy sequence
+        if (std.mem.eql(u8, name, "lazy-seq")) {
+            if (l.items.len < 2) return error.ArityError;
+            // Build the thunk body as a list of forms to evaluate
+            var body: list.List = .empty;
+            errdefer body.deinit(allocator);
+            try body.append(allocator, try Value.symValue(allocator, "do"));
+            for (l.items[1..]) |form| {
+                try body.append(allocator, try form.clone(allocator));
+            }
+            const thunk = try allocator.create(Value.LazySeqThunk);
+            thunk.* = .{
+                .params = list.empty(),
+                .body = body,
+                .env = try env.clone(allocator),
+            };
+            return Value.lazySeqValue(thunk);
         }
 
         // iterate - repeatedly apply f to init, collecting results
@@ -461,8 +491,78 @@ fn call(allocator: Allocator, op: Value, args_list: list.List, env: *Env, depth:
             var op_mut = op;
             return op_mut.builtin_fn_val(&op_mut, args, env);
         },
+        .set => {
+            // Set as function: returns the element if found, nil otherwise
+            if (args.items.len != 1) return error.ArityError;
+            for (op.set_val.items) |item| {
+                if (item.equals(args.items[0])) {
+                    return try item.clone(allocator);
+                }
+            }
+            return Value.nilValue();
+        },
+        .map => {
+            // Map as function: returns value for key, or not-found if provided
+            if (args.items.len < 1 or args.items.len > 2) return error.ArityError;
+            const key = args.items[0];
+            for (op.map_val.items) |entry| {
+                if (entry.key.equals(key)) {
+                    return try entry.value.clone(allocator);
+                }
+            }
+            // Return not-found value if provided
+            if (args.items.len == 2) {
+                return try args.items[1].clone(allocator);
+            }
+            return Value.nilValue();
+        },
+        .lazy_seq => {
+            // Force evaluation of lazy sequence
+            if (args.items.len != 0) return error.ArityError;
+            return try forceLazySeq(allocator, op, env, depth);
+        },
         else => return error.NotCallable,
     }
+}
+
+// Force evaluation of a lazy sequence, returning the resulting list
+fn forceLazySeq(allocator: Allocator, lazy: Value, env: *Env, depth: usize) anyerror!Value {
+    _ = env;
+    // Evaluate the thunk
+    if (lazy.lazy_seq_val.thunk) |thunk| {
+        var thunk_env = try thunk.env.clone(allocator);
+        defer thunk_env.deinit(allocator);
+
+        // Evaluate the body to get the result
+        var result = try evalRec(allocator, Value.listValue(thunk.body), &thunk_env, depth);
+
+        // The result should be a list/vector (the sequence)
+        // Convert to list if needed
+        var final_list: list.List = .empty;
+        errdefer final_list.deinit(allocator);
+
+        switch (result.type) {
+            .list => {
+                for (result.list_val.items) |item| {
+                    try final_list.append(allocator, try item.clone(allocator));
+                }
+            },
+            .vector => {
+                for (result.vec_val.items) |item| {
+                    try final_list.append(allocator, try item.clone(allocator));
+                }
+            },
+            .nil => {}, // empty sequence
+            else => {
+                try final_list.append(allocator, result);
+            },
+        }
+
+        result.deinit(allocator);
+        return Value.listValue(final_list);
+    }
+
+    return Value.listValue(list.empty());
 }
 
 // Quasiquote processing
@@ -686,9 +786,19 @@ fn evalMap(allocator: Allocator, f_form: Value, coll_form: Value, env: *Env, dep
                 coll = try coll_form.clone(allocator);
             }
         },
+        .lazy_seq => {
+            coll = try forceLazySeq(allocator, coll_form, env, depth);
+        },
         else => coll = try evalRec(allocator, coll_form, env, depth),
     }
     defer coll.deinit(allocator);
+
+    // If we got a lazy_seq back from evaluation, force it
+    if (coll.type == .lazy_seq) {
+        const forced = try forceLazySeq(allocator, coll, env, depth);
+        coll.deinit(allocator);
+        coll = forced;
+    }
 
     var items: []const Value = undefined;
     switch (coll.type) {
@@ -739,9 +849,20 @@ fn evalTake(allocator: Allocator, n_form: Value, coll_form: Value, env: *Env, de
                 coll = try coll_form.clone(allocator);
             }
         },
+        .lazy_seq => {
+            // Force the lazy sequence
+            coll = try forceLazySeq(allocator, coll_form, env, depth);
+        },
         else => coll = try evalRec(allocator, coll_form, env, depth),
     }
     defer coll.deinit(allocator);
+
+    // If we got a lazy_seq back from evaluation, force it
+    if (coll.type == .lazy_seq) {
+        const forced = try forceLazySeq(allocator, coll, env, depth);
+        coll.deinit(allocator);
+        coll = forced;
+    }
 
     const n: i64 = switch (n_val.type) {
         .integer => n_val.int_val,

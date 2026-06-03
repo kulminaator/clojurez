@@ -7,11 +7,20 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 ### Data Types
 - `nil`, `true`, `false`
 - Integers and floats
-- Strings (with escape sequences: `\n`, `\t`, `\\`, `\"`)
-- Symbols (`x`, `foo-bar`, `my-var?`)
-- Keywords (`:foo`, `:bar-baz`)
+- Strings (with escape sequences: `\n`, `\t`, `\\`, `\"`, `\uXXXX`, `\u{XXXXXX}`)
+- Symbols (`x`, `foo-bar`, `my-var?`) — supports Unicode characters
+- Keywords (`:foo`, `:bar-baz`) — supports Unicode characters
 - Lists (`(1 2 3)`)
 - Vectors (`[1 2 3]`)
+
+### UTF-8 Support
+- All strings are validated as UTF-8 on creation
+- `count` on strings returns Unicode code point count (not byte length)
+- `nth` on strings indexes by code point (not byte offset)
+- `utf8-valid?` checks if a string is valid UTF-8
+- Unicode escape sequences: `\uXXXX` (BMP) and `\u{XXXXXX}` (supplementary)
+- Symbols and keywords accept Unicode characters
+- Full support for Estonian (õäö), emoji (😀😃), Japanese (古池や), and all UTF-8 text
 
 ### Special Forms
 - `def` — define a global variable
@@ -47,7 +56,7 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 - **Comparison:** `=`, `!=`, `<`, `>`, `<=`, `>=`
 - **Boolean:** `not`
 - **Type checks:** `nil?`, `number?`, `string?`, `list?`, `symbol?`, `keyword?`, `true?`, `false?`
-- **Strings:** `str`
+- **Strings:** `str`, `utf8-valid?`
 - **I/O:** `print`, `println`, `read-line`
 
 ### Clojure Core Library
@@ -201,10 +210,8 @@ See [GUIDELINES.md](GUIDELINES.md) for testing standards.
 
 ## What's Missing
 
-- **Maps** (`{:key val}`, `get`, `assoc`, `conj`, `pop`)
-- **Namespaces** (`ns` declaration)
-- **Advanced sequences** (`filter`, `reduce`, `reverse`, `range`, `last`)
-- **Lazy sequences** (true lazy evaluation)
+- **Namespaces** (`ns` declaration with full support)
+- **Transients** (mutable versions of persistent data structures)
 - **Macros** (code generation at compile time)
 - **Java interop** (not applicable for a standalone VM)
 

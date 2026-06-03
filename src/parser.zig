@@ -67,6 +67,8 @@ pub const Parser = struct {
             .open_paren => return self.readList(),
             .open_bracket => return self.readVector(),
             .open_brace => return self.readMap(),
+            .set_open => return self.readSet(),
+            .queue_tag => return self.readQueue(),
             .quote => {
                 // 'x is shorthand for (quote x)
                 self.current.deinit(self.allocator);
@@ -179,6 +181,74 @@ pub const Parser = struct {
             const key = try self.readForm();
             const value = try self.readForm();
             try entries.append(self.allocator, .{ .key = key, .value = value });
+        }
+    }
+
+    fn readSet(self: *Parser) anyerror!Value {
+        try self.advance(); // consume 'set_open' (which already consumed '#{')
+        var items: Value.Set = .empty;
+        errdefer {
+            for (items.items) |*item| {
+                item.deinit(self.allocator);
+            }
+            self.allocator.free(items.items);
+        }
+
+        while (true) {
+            switch (self.current) {
+                .close_brace => {
+                    try self.advance();
+                    return Value.setValue(items);
+                },
+                .eof => return error.UnexpectedEof,
+                .comma => {
+                    try self.advance();
+                    continue;
+                },
+                else => {},
+            }
+            var item = try self.readForm();
+            // Check for duplicates (sets don't allow them)
+            var found = false;
+            for (items.items) |existing| {
+                if (existing.equals(item)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                try items.append(self.allocator, item);
+            } else {
+                item.deinit(self.allocator);
+            }
+        }
+    }
+
+    fn readQueue(self: *Parser) anyerror!Value {
+        try self.advance(); // consume 'queue_tag' (which already consumed '#queue(')
+        var items: Value.Queue = .empty;
+        errdefer {
+            for (items.items) |*item| {
+                item.deinit(self.allocator);
+            }
+            self.allocator.free(items.items);
+        }
+
+        while (true) {
+            switch (self.current) {
+                .close_paren => {
+                    try self.advance();
+                    return Value.queueValue(items);
+                },
+                .eof => return error.UnexpectedEof,
+                .comma => {
+                    try self.advance();
+                    continue;
+                },
+                else => {},
+            }
+            const item = try self.readForm();
+            try items.append(self.allocator, item);
         }
     }
 

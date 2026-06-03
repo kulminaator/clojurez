@@ -9,16 +9,31 @@ const Allocator = std.mem.Allocator;
 
 pub fn runRepl(allocator: Allocator, env: *Value.Env) anyerror!void {
     try writeStdout("Clojure VM in Zig\n");
-    try writeStdout("Type :quit or :exit to exit\n\n");
 
     var input_buf: [4096]u8 = undefined;
+    var leftover_buf: [4096]u8 = undefined;
+    var leftover_len: usize = 0;
+
+    // Multi-line buffer for incomplete expressions
+    var multiline_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer multiline_buf.deinit(allocator);
 
     while (true) {
-        // Print prompt
-        try writeStdout("user=> ");
+        // Print prompt (normal or continuation)
+        if (multiline_buf.items.len == 0) {
+            try writeStdout("user=> ");
+        } else {
+            try writeStdout("#_=> ");
+        }
 
-        const len = readLine(&input_buf) catch break;
-        if (len == 0) continue;
+        const len = readLineWithLeftover(&input_buf, &leftover_buf, &leftover_len) catch break;
+        if (len == 0) {
+            // EOF - if we have accumulated input, try to evaluate it
+            if (multiline_buf.items.len > 0) {
+                _ = try evaluateAndPrint(allocator, multiline_buf.items, env);
+            }
+            break;
+        }
 
         // Strip trailing whitespace
         var end = len;
@@ -29,55 +44,99 @@ pub fn runRepl(allocator: Allocator, env: *Value.Env) anyerror!void {
 
         if (trimmed.len == 0) continue;
 
-        // Check for exit commands
-        if (std.mem.eql(u8, trimmed, ":quit") or std.mem.eql(u8, trimmed, ":exit")) {
-            break;
-        }
+        // Append to multiline buffer with newline
+        try multiline_buf.appendSlice(allocator, trimmed);
+        try multiline_buf.append(allocator, '\n');
 
-        // Parse and evaluate
-        const result = (blk: {
-            var p = try parser.Parser.init(allocator, trimmed);
-            defer p.deinit();
-            const form = try p.parse();
-            break :blk eval.eval(allocator, form, env);
-        }) catch |err| {
-            try writeStdout("Error: ");
-            try writeStdout(@errorName(err));
-            try writeStdout("\n");
+        // Try to parse a complete form from the accumulated buffer
+        const full_input = multiline_buf.items;
+        var p = try parser.Parser.init(allocator, full_input);
+        defer p.deinit();
+
+        const parse_result = p.parse();
+        if (parse_result == error.UnexpectedEof) {
+            // Incomplete expression, wait for more input
             continue;
-        };
+        } else {
+            // We have a complete form - evaluate it
+            const should_exit = try evaluateAndPrint(allocator, full_input, env);
+            if (should_exit) break;
 
-        // Print result
-        const formatted = try result.fmt(allocator);
-        defer allocator.free(formatted);
-        try writeStdout(formatted);
-        try writeStdout("\n");
-
-        var mutable_result = result;
-        mutable_result.deinit(allocator);
+            // Clear the multiline buffer for the next expression
+            multiline_buf.clearRetainingCapacity();
+        }
     }
 }
 
-fn readLine(buf: []u8) anyerror!usize {
-    var reader = std.Io.File.stdin().reader(std.Options.debug_io, buf);
-    var len: usize = 0;
-    while (len < buf.len) {
-        var slices = [_][]u8{buf[len..]};
-        const bytes = reader.interface.readVec(&slices) catch break;
-        if (bytes == 0) break;
-        len += bytes;
-        // Check if we got a newline
-        var found_nl = false;
-        var i: usize = 0;
-        while (i < bytes) : (i += 1) {
-            if (buf[len - bytes + i] == '\n') {
-                len = len - bytes + i;
-                found_nl = true;
-                break;
-            }
+/// Returns true if the REPL should exit (e.g., quit/exit called)
+fn evaluateAndPrint(allocator: Allocator, input: []const u8, env: *Value.Env) anyerror!bool {
+    var p = try parser.Parser.init(allocator, input);
+    defer p.deinit();
+    var form = try p.parse();
+    var result = eval.eval(allocator, form, env) catch |err| {
+        switch (err) {
+            eval.EvalError.ReplExit => {
+                form.deinit(allocator);
+                return true; // signal exit
+            },
+            else => {
+                form.deinit(allocator);
+                try writeStdout("Error: ");
+                try writeStdout(@errorName(err));
+                try writeStdout("\n");
+                return false;
+            },
         }
-        if (found_nl) break;
+    };
+    const formatted = try result.fmt(allocator);
+    defer allocator.free(formatted);
+    result.deinit(allocator);
+    try writeStdout(formatted);
+    try writeStdout("\n");
+    return false;
+}
+
+fn readLineWithLeftover(buf: []u8, leftover_buf: []u8, leftover_len: *usize) anyerror!usize {
+    var len: usize = 0;
+
+    // First, check if there's leftover data from a previous read
+    if (leftover_len.* > 0) {
+        const lo = leftover_buf[0..leftover_len.*];
+        // Find newline in leftover
+        if (std.mem.indexOfScalar(u8, lo, '\n')) |nl_pos| {
+            const line_len = nl_pos;
+            @memcpy(buf[0..line_len], lo[0..line_len]);
+            // Update leftover to skip past the newline
+            const remaining = lo[nl_pos + 1..];
+            const store_len = if (remaining.len < leftover_buf.len) remaining.len else leftover_buf.len;
+            std.mem.copyForwards(u8, leftover_buf[0..store_len], remaining[0..store_len]);
+            leftover_len.* = remaining.len;
+            return line_len;
+        }
+        // No newline in leftover, need more data
+        const copy_len = if (lo.len < buf.len) lo.len else buf.len;
+        @memcpy(buf[0..copy_len], lo[0..copy_len]);
+        len = copy_len;
+        leftover_len.* = 0;
     }
+
+    // Read more data from stdin
+    while (len < buf.len) {
+        const n = std.posix.read(std.posix.STDIN_FILENO, buf[len..]) catch break;
+        if (n == 0) break; // EOF
+        len += @as(usize, n);
+        // Find the FIRST newline in the buffer
+        if (std.mem.indexOfScalar(u8, buf[0..len], '\n')) |nl_pos| {
+            const line_len = nl_pos;
+            // Store remaining data (after the newline) as leftover
+            const remaining = buf[nl_pos + 1 .. len];
+            const store_len = if (remaining.len < leftover_buf.len) remaining.len else leftover_buf.len;
+            std.mem.copyForwards(u8, leftover_buf[0..store_len], remaining[0..store_len]);
+            leftover_len.* = remaining.len;
+            return line_len;
+        }
+    }
+    leftover_len.* = 0;
     return len;
 }
 

@@ -16,8 +16,12 @@ pub const Type = enum {
     list,
     vector,
     map,
+    set,
+    queue,
     function,
     builtin_fn,
+    lazy_seq,
+    atom,
 };
 
 pub const MapEntry = struct {
@@ -26,6 +30,22 @@ pub const MapEntry = struct {
 };
 
 pub const Map = std.ArrayListUnmanaged(MapEntry);
+
+pub const Set = std.ArrayListUnmanaged(Self);
+
+pub const Queue = std.ArrayListUnmanaged(Self);
+
+pub const LazySeq = struct {
+    thunk: ?*LazySeqThunk = null,
+    // Note: no cache field to avoid circular dependency with Self
+    // Once forced, the result is returned as a list and the lazy_seq is consumed
+};
+
+pub const LazySeqThunk = struct {
+    params: list.List,
+    body: list.List,
+    env: Env,
+};
 
 pub const BuiltinFn = *const fn (self: *Self, args: list.List, env: *Env) anyerror!Self;
 
@@ -41,8 +61,12 @@ kw_val: []const u8 = "",
 list_val: list.List = list.List.empty,
 vec_val: vec.Vector = vec.Vector.empty,
 map_val: Map = .empty,
+set_val: Set = .empty,
+queue_val: Queue = .empty,
 fn_val: FnData = .{ .params = list.List.empty, .body = list.List.empty, .env = undefined },
 builtin_fn_val: BuiltinFn = undefined,
+lazy_seq_val: LazySeq = .{},
+atom_val: ?*Self = null,
 
 pub const FnData = struct {
     params: list.List,
@@ -127,8 +151,44 @@ pub fn floatValue(f: f64) Self {
 }
 
 pub fn stringValue(allocator: Allocator, s: []const u8) anyerror!Self {
+    // Validate UTF-8 encoding
+    if (!std.unicode.utf8ValidateSlice(s)) return error.InvalidUTF8;
     const duped = try allocator.dupe(u8, s);
     return .{ .type = .string, .str_val = duped };
+}
+
+/// Count the number of Unicode code points in a UTF-8 string.
+pub fn utf8CodepointCount(s: []const u8) usize {
+    var count: usize = 0;
+    var i: usize = 0;
+    while (i < s.len) : (i += 1) {
+        const len = std.unicode.utf8ByteSequenceLength(s[i]) catch break;
+        count += 1;
+        i += len - 1;
+    }
+    return count;
+}
+
+/// Get the byte offset of the nth Unicode code point in a UTF-8 string.
+/// Returns null if n is out of range.
+pub fn utf8CodepointByteOffset(s: []const u8, n: usize) ?usize {
+    var idx: usize = 0;
+    var i: usize = 0;
+    while (i < s.len) : (i += 1) {
+        if (idx == n) return i;
+        const len = std.unicode.utf8ByteSequenceLength(s[i]) catch break;
+        idx += 1;
+        i += len - 1;
+    }
+    return null;
+}
+
+/// Extract a single code point as a string starting at byte index `start`.
+pub fn utf8CodepointAt(s: []const u8, n: usize) ?[]const u8 {
+    const start = utf8CodepointByteOffset(s, n) orelse return null;
+    const seq_len = std.unicode.utf8ByteSequenceLength(s[start]) catch return null;
+    if (start + seq_len > s.len) return null;
+    return s[start .. start + seq_len];
 }
 
 pub fn symValue(allocator: Allocator, s: []const u8) anyerror!Self {
@@ -151,6 +211,28 @@ pub fn vectorValue(v: vec.Vector) Self {
 
 pub fn mapValue(m: Map) Self {
     return .{ .type = .map, .map_val = m };
+}
+
+pub fn setValue(s: Set) Self {
+    return .{ .type = .set, .set_val = s };
+}
+
+pub fn queueValue(q: Queue) Self {
+    return .{ .type = .queue, .queue_val = q };
+}
+
+pub fn atomValue(allocator: Allocator, initial: Self) anyerror!Self {
+    const val = try allocator.create(Self);
+    val.* = try initial.clone(allocator);
+    return .{ .type = .atom, .atom_val = val };
+}
+
+pub fn atomValueShared(ptr: *Self) Self {
+    return .{ .type = .atom, .atom_val = ptr };
+}
+
+pub fn lazySeqValue(thunk: ?*LazySeqThunk) Self {
+    return .{ .type = .lazy_seq, .lazy_seq_val = .{ .thunk = thunk } };
 }
 
 pub fn fnValue(params: list.List, body: list.List, env: Env) Self {
@@ -176,12 +258,38 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
             }
             allocator.free(self.map_val.items);
         },
+        .set => {
+            for (self.set_val.items) |*item| {
+                item.deinit(allocator);
+            }
+            allocator.free(self.set_val.items);
+        },
+        .queue => {
+            for (self.queue_val.items) |*item| {
+                item.deinit(allocator);
+            }
+            allocator.free(self.queue_val.items);
+        },
+        .lazy_seq => {
+            if (self.lazy_seq_val.thunk) |thunk| {
+                thunk.params.deinit(allocator);
+                thunk.body.deinit(allocator);
+                thunk.env.deinit(allocator);
+                allocator.destroy(thunk);
+            }
+        },
         .function => {
             self.fn_val.params.deinit(allocator);
             self.fn_val.body.deinit(allocator);
             self.fn_val.env.deinit(allocator);
         },
         .builtin_fn => {},
+        .atom => {
+            // Don't deinit inner value — atoms share pointers via clone.
+            // The arena allocator in main will clean up everything.
+            // Only destroy the pointer itself if this is the owner.
+            _ = self.atom_val;
+        },
     }
 }
 
@@ -214,6 +322,54 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
             }
             return mapValue(new_map);
         },
+        .set => {
+            var new_set: Set = .empty;
+            errdefer {
+                for (new_set.items) |*item| {
+                    item.deinit(allocator);
+                }
+                allocator.free(new_set.items);
+            }
+            try new_set.ensureTotalCapacity(allocator, self.set_val.items.len);
+            for (self.set_val.items) |item| {
+                try new_set.append(allocator, try item.clone(allocator));
+            }
+            return setValue(new_set);
+        },
+        .queue => {
+            var new_queue: Queue = .empty;
+            errdefer {
+                for (new_queue.items) |*item| {
+                    item.deinit(allocator);
+                }
+                allocator.free(new_queue.items);
+            }
+            try new_queue.ensureTotalCapacity(allocator, self.queue_val.items.len);
+            for (self.queue_val.items) |item| {
+                try new_queue.append(allocator, try item.clone(allocator));
+            }
+            return queueValue(new_queue);
+        },
+        .lazy_seq => {
+            var new_lazy: LazySeq = .{};
+            if (self.lazy_seq_val.thunk) |thunk| {
+                const new_thunk = try allocator.create(LazySeqThunk);
+                new_thunk.* = .{
+                    .params = try thunk.params.clone(allocator),
+                    .body = try thunk.body.clone(allocator),
+                    .env = try thunk.env.clone(allocator),
+                };
+                new_lazy.thunk = new_thunk;
+            }
+            return lazySeqValue(new_lazy.thunk);
+        },
+        .atom => {
+            // Clone atom by sharing the same pointer (atoms are identity-based)
+            if (self.atom_val) |val| {
+                return atomValueShared(val);
+            }
+            return nilValue();
+        },
         .function => {
             const fnv = self.fn_val;
             return fnValue(
@@ -230,6 +386,10 @@ pub fn isTruthy(self: Self) bool {
     return switch (self.type) {
         .nil => false,
         .bool => self.bool_val,
+        .atom => {
+            if (self.atom_val) |val| return val.isTruthy();
+            return false;
+        },
         else => true,
     };
 }
@@ -252,6 +412,31 @@ pub fn equals(self: Self, other: Self) bool {
             }
             return true;
         },
+        .set => {
+            if (self.set_val.items.len != other.set_val.items.len) return false;
+            for (self.set_val.items) |item| {
+                var found = false;
+                for (other.set_val.items) |other_item| {
+                    if (item.equals(other_item)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) return false;
+            }
+            return true;
+        },
+        .queue => {
+            if (self.queue_val.items.len != other.queue_val.items.len) return false;
+            for (self.queue_val.items, 0..) |item, i| {
+                if (!item.equals(other.queue_val.items[i])) return false;
+            }
+            return true;
+        },
+        .atom => {
+            // Atoms are never equal by identity
+            return false;
+        },
         else => return false,
     }
 }
@@ -268,9 +453,55 @@ pub fn fmt(self: Self, allocator: Allocator) anyerror![]const u8 {
         .list => try list.fmt(self.list_val, allocator),
         .vector => try vec.fmt(self.vec_val, allocator),
         .map => try mapFmt(self.map_val, allocator),
+        .set => try setFmt(self.set_val, allocator),
+        .queue => try queueFmt(self.queue_val, allocator),
         .function => allocator.dupe(u8, "#function"),
         .builtin_fn => allocator.dupe(u8, "#builtin"),
+        .lazy_seq => allocator.dupe(u8, "#lazy-seq"),
+        .atom => {
+            if (self.atom_val) |val| {
+                const inner_str = try val.fmt(allocator);
+                defer allocator.free(inner_str);
+                return try std.fmt.allocPrint(allocator, "#atom({s})", .{inner_str});
+            }
+            return allocator.dupe(u8, "#atom(nil)");
+        },
     };
+}
+
+pub fn setFmt(s: Set, allocator: Allocator) anyerror![]const u8 {
+    if (s.items.len == 0) return allocator.dupe(u8, "#{}");
+
+    var buf: std.ArrayList(u8) = .empty;
+    errdefer buf.deinit(allocator);
+
+    try buf.append(allocator, '#');
+    try buf.append(allocator, '{');
+    for (s.items, 0..) |item, i| {
+        if (i > 0) try buf.append(allocator, ' ');
+        const s_str = try item.fmt(allocator);
+        defer allocator.free(s_str);
+        try buf.appendSlice(allocator, s_str);
+    }
+    try buf.append(allocator, '}');
+    return buf.toOwnedSlice(allocator);
+}
+
+pub fn queueFmt(q: Queue, allocator: Allocator) anyerror![]const u8 {
+    if (q.items.len == 0) return allocator.dupe(u8, "#queue()");
+
+    var buf: std.ArrayList(u8) = .empty;
+    errdefer buf.deinit(allocator);
+
+    try buf.appendSlice(allocator, "#queue(");
+    for (q.items, 0..) |item, i| {
+        if (i > 0) try buf.append(allocator, ' ');
+        const s_str = try item.fmt(allocator);
+        defer allocator.free(s_str);
+        try buf.appendSlice(allocator, s_str);
+    }
+    try buf.append(allocator, ')');
+    return buf.toOwnedSlice(allocator);
 }
 
 pub fn mapFmt(m: Map, allocator: Allocator) anyerror![]const u8 {
