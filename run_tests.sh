@@ -11,7 +11,13 @@ set -e
 source tests/helpers.sh
 
 # Build the VM once (copies core.clj into zig package for @embedFile)
-build_vm
+# Skip with NOBUILD=1 to just run tests against existing build
+if [ "$NOBUILD" != "1" ]; then
+    build_vm
+else
+    echo "Skipping build (NOBUILD=1)."
+    echo ""
+fi
 
 # Run all domain-based test suites
 # We source each file so counters accumulate in the same shell

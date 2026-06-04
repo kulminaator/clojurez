@@ -594,19 +594,20 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
             return Value.boolValue(true);
         }
 
-        // binding - for let bindings (simplified)
+        // binding - dynamic variable binding (simplified)
+        // Matches Clojure syntax: (binding [var1 val1 var2 val2] body...)
         if (std.mem.eql(u8, name, "binding")) {
             if (l.items.len < 3) return error.ArityError;
             const bindings = l.items[1];
-            if (bindings.type != .list) return error.TypeError;
+            if (bindings.type != .vector) return error.TypeError;
             var new_env = try env.clone(arena_alloc);
             defer new_env.deinit(arena_alloc);
 
             var i: usize = 0;
-            while (i < bindings.list_val.items.len) : (i += 2) {
-                const sym = bindings.list_val.items[i];
+            while (i < bindings.vec_val.items.len) : (i += 2) {
+                const sym = bindings.vec_val.items[i];
                 if (sym.type != .symbol) return error.TypeError;
-                const val = try evalRec(allocator, arena_alloc, bindings.list_val.items[i + 1], env, depth + 1);
+                const val = try evalRec(allocator, arena_alloc, bindings.vec_val.items[i + 1], env, depth + 1);
                 try new_env.put(sym.sym_val, val);
             }
             return try evalDo(allocator, arena_alloc, l.items[2..], &new_env, depth + 1);
