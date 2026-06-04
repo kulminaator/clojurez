@@ -2,7 +2,7 @@
 # Shared test helpers for Clojure VM test suite
 # Source this file from test scripts: source tests/helpers.sh
 
-VM="./main"
+VM="./zig-out/bin/clojurez"
 TIMEOUT=10
 
 # Counters (accumulated across all test files)
@@ -16,7 +16,7 @@ fi
 build_vm() {
     echo "Building VM..."
     cp src/clj/core.clj src/zig/clj/core.clj 2>/dev/null || true
-    zig build-exe -fsingle-threaded src/zig/main.zig 2>&1
+    zig build 2>&1
     echo ""
 }
 

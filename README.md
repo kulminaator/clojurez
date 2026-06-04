@@ -100,9 +100,13 @@ Many common functions are implemented in `core.clj` itself, keeping the Zig VM l
 ## Build
 
 ```bash
-# Copy Clojure core into the Zig package (for @embedFile), then build
-cp src/clj/core.clj src/zig/clj/core.clj
-zig build-exe -fsingle-threaded src/zig/main.zig
+# Build all 3 variants (copies core.clj automatically)
+zig build
+
+# Binaries are placed in zig-out/bin/:
+#   clojurez          — Debug build (full, ~14MB)
+#   clojurez-medium   — ReleaseSmall (~400KB)
+#   clojurez-mini     — ReleaseSmall + stripped (~400KB)
 ```
 
 ## Usage
@@ -110,13 +114,13 @@ zig build-exe -fsingle-threaded src/zig/main.zig
 ### REPL
 
 ```bash
-./main
+./zig-out/bin/clojurez
 ```
 
 or explicitly:
 
 ```bash
-./main --repl
+./zig-out/bin/clojurez --repl
 ```
 
 Type `:quit` or `:exit` to exit.
@@ -124,14 +128,14 @@ Type `:quit` or `:exit` to exit.
 ### Evaluate an Expression
 
 ```bash
-./main -e '(+ 1 2 3 4)'
-./main -e '(defn square [n] (* n n))'
+./zig-out/bin/clojurez -e '(+ 1 2 3 4)'
+./zig-out/bin/clojurez -e '(defn square [n] (* n n))'
 ```
 
 ### Run a File
 
 ```bash
-./main my_script.clj
+./zig-out/bin/clojurez my_script.clj
 ```
 
 ### Core Functions
@@ -139,9 +143,9 @@ Type `:quit` or `:exit` to exit.
 Core functions (`inc`, `dec`, `into`, `even?`, `odd?`, `cons`, `update`, etc.) are baked into the binary and always available — no need to load a separate file:
 
 ```bash
-./main -e '(even? 42)'       ;; => true
-./main -e '(inc 5)'          ;; => 6
-./main -e '(into [] (list 1 2 3))'  ;; => [1 2 3]
+./zig-out/bin/clojurez -e '(even? 42)'       ;; => true
+./zig-out/bin/clojurez -e '(inc 5)'          ;; => 6
+./zig-out/bin/clojurez -e '(into [] (list 1 2 3))'  ;; => [1 2 3]
 ```
 
 ### Memory Tracing
@@ -150,12 +154,12 @@ The VM includes a built-in memory trace allocator for debugging memory issues. T
 
 **Trace to stderr:**
 ```bash
-CLJVM_MEM_TRACE=1 ./main -e '(+ 1 2 3)'
+CLJVM_MEM_TRACE=1 ./zig-out/bin/clojurez -e '(+ 1 2 3)'
 ```
 
 **Trace to a file:**
 ```bash
-CLJVM_MEM_TRACE=/tmp/mem.log ./main -e '(+ 1 2 3)'
+CLJVM_MEM_TRACE=/tmp/mem.log ./zig-out/bin/clojurez -e '(+ 1 2 3)'
 ```
 
 Each allocation, free, resize, and remap is logged with size, pointer address, and running live memory count. At program exit a summary is printed:
@@ -175,6 +179,10 @@ Each allocation, free, resize, and remap is logged with size, pointer address, a
 This is useful for verifying that `def` rebindings, `let` scopes, and function calls properly free unreachable values.
 
 ## Examples
+
+```bash
+./zig-out/bin/clojurez
+```
 
 ```clojure
 ;; Arithmetic
@@ -251,13 +259,13 @@ This is useful for verifying that `def` rebindings, `let` scopes, and function c
 
 ### Fibonacci
 ```bash
-./main samples/sample_1_fibonacci/core.clj
+./zig-out/bin/clojurez samples/sample_1_fibonacci/core.clj
 ```
 Output: `(0 1 1 2 3 5 8 13 21 34)`
 
 ### Tower of Hanoi
 ```bash
-./main samples/sample_2_hanoi/hanoi/core.clj
+./zig-out/bin/clojurez samples/sample_2_hanoi/hanoi/core.clj
 ```
 
 ## Project Structure
@@ -297,6 +305,9 @@ samples/           — Sample programs
 
 # Run Zig unit tests (10 parser tests)
 zig test -fsingle-threaded src/zig/parser.zig
+
+# Build all 3 variants
+zig build
 ```
 
 See [GUIDELINES.md](GUIDELINES.md) for testing standards.

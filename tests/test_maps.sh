@@ -30,7 +30,7 @@ run_test "hash-map basic" "(hash-map :a 1 :b 2)" "{:a 1 :b 2}"
 run_test "hash-map string keys" '(hash-map "hello" "world" 42 true)' '{"hello" "world" 42 true}'
 run_test "hash-map duplicate key" "(hash-map :a 1 :a 2)" "{:a 2}"
 run_test "hash-map mixed types" '(hash-map :x "str" :y [1 2] :z #{3 4})' '{:x "str" :y [1 2] :z #{3 4}}'
-run_test_cmd "hash-map odd args" 'timeout 10 ./main -e "(hash-map :a 1 :b)" 2>&1 | head -1' 'error: ArityError'
+run_test_cmd "hash-map odd args" 'timeout 10 ./zig-out/bin/clojurez -e "(hash-map :a 1 :b)" 2>&1 | head -1' 'error: ArityError'
 
 # assoc on nil
 echo ""

@@ -20,7 +20,7 @@ run_test "slurp integer" '(slurp "/tmp/clojure_vm_test_spit2.txt")' '"42"'
 # slurp and str operations
 run_test "slurp with str" '(str (slurp "/tmp/clojure_vm_test_spit.txt"))' '"hello world"'
 # slurp nonexistent file should error (we test it doesn't crash)
-run_test_cmd "slurp nonexistent" 'timeout 10 ./main -e '"'"'(slurp "/tmp/clojure_vm_nonexistent_xyz.txt")'"'"' 2>&1 | head -1' 'error: FileError'
+run_test_cmd "slurp nonexistent" 'timeout 10 ./zig-out/bin/clojurez -e '"'"'(slurp "/tmp/clojure_vm_nonexistent_xyz.txt")'"'"' 2>&1 | head -1' 'error: FileError'
 
 # Clean up temp files
 rm -f /tmp/clojure_vm_test_spit.txt /tmp/clojure_vm_test_spit2.txt

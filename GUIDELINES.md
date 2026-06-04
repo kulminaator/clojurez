@@ -96,11 +96,11 @@ These are hard limits. When a file or function approaches its limit, it must be 
 
 - **CLI tests**: Use a 10-second timeout when spawning the VM process.
   ```bash
-  timeout 10s ./main -e '(+ 1 2)'
+  timeout 10s ./zig-out/bin/clojurez -e '(+ 1 2)'
   ```
 - **REPL tests**: Never pipe unbounded input into the REPL. Always provide a finite input with an explicit exit command (`:quit` or `:exit`) and use a timeout.
   ```bash
-  timeout 10s ./main --repl < input.clj
+  timeout 10s ./zig-out/bin/clojurez --repl < input.clj
   ```
 - **Unit tests**: Use Zig's built-in test timeout or wrap long-running tests with explicit guards.
 
@@ -194,7 +194,7 @@ Test the interaction between multiple modules (e.g., lexer → parser → evalua
 
 ```bash
 # Example: test a full expression through the CLI
-timeout 10s ./main -e '(defn add [a b] (+ a b)) (add 3 4)'
+timeout 10s ./zig-out/bin/clojurez -e '(defn add [a b] (+ a b)) (add 3 4)'
 ```
 
 ### 3.3 CLI / End-to-End Tests
@@ -220,7 +220,7 @@ cat > /tmp/repl_test.clj << 'EOF'
 EOF
 
 # Run with timeout
-timeout 10s ./main --repl < /tmp/repl_test.clj
+timeout 10s ./zig-out/bin/clojurez --repl < /tmp/repl_test.clj
 ```
 
 ---
@@ -304,7 +304,7 @@ Verify samples match expected output:
 
 ```bash
 # Run a sample and compare output
-diff <(./main samples/sample_1_fibonacci/core.clj 2>&1 | tail -1) \
+diff <(./zig-out/bin/clojurez samples/sample_1_fibonacci/core.clj 2>&1 | tail -1) \
      <(cat samples/sample_1_fibonacci/expected_output.txt)
 ```
 

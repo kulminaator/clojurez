@@ -13,7 +13,7 @@ run_test "variadic fn mixed" '(do (defn var-mix [a b & rest] (list a b rest)) (v
 run_test "variadic fn no extra" '(do (defn var-mix [a b & rest] (list a b rest)) (var-mix 1 2))' '(1 2 ())'
 run_test "variadic fn inline" '((fn [& args] args) 10 20 30)' '(10 20 30)'
 run_test "variadic fn with defn" '(do (defn my-sum [init & nums] (reduce + init nums)) (my-sum 0 1 2 3 4))' '10'
-run_test_cmd "variadic fn arity error" 'timeout 10 ./main -e "(do (defn var-mix [a b & rest] (list a b rest)) (var-mix 1))" 2>&1 | head -1' 'error: ArityError'
+run_test_cmd "variadic fn arity error" 'timeout 10 ./zig-out/bin/clojurez -e "(do (defn var-mix [a b & rest] (list a b rest)) (var-mix 1))" 2>&1 | head -1' 'error: ArityError'
 
 echo ""
 echo "=== Multi-arity Functions ==="
