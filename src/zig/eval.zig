@@ -34,23 +34,6 @@ pub fn forceLazyMap(allocator: Allocator, arena_alloc: Allocator, lazy: Value, e
     var result: list.List = .empty;
     errdefer result.deinit(arena_alloc);
 
-    // Handle range_val as inner collection
-    if (lm.coll.type == .range_val) {
-        const rd: *Value.RangeData = lm.coll.range_val.?;
-        const coll_len: usize = if (rd.step > 0 and rd.end > rd.start) @as(usize, @intCast(@divTrunc(rd.end - rd.start + rd.step - 1, rd.step))) else 0;
-        var v: i64 = rd.start + (@as(i64, @intCast(lm.idx)) * rd.step);
-        var idx: usize = lm.idx;
-        while (idx < coll_len) : (idx += 1) {
-            var arg_list: list.List = .empty;
-            errdefer arg_list.deinit(arena_alloc);
-            try arg_list.append(arena_alloc, Value.intValue(v));
-            const mapped = try eval_helpers.callBuiltin(allocator, lm.fn_val, arg_list, env);
-            try result.append(arena_alloc, mapped);
-            v += rd.step;
-        }
-        return Value.listValue(result);
-    }
-
     // Handle list/vector
     var coll_items: []const Value = undefined;
     const coll_len: usize = switch (lm.coll.type) {
@@ -78,7 +61,7 @@ fn evalRec(allocator: Allocator, arena_alloc: Allocator, form: Value, env: *Env,
     if (depth > MAX_RECURSION) return error.RecursionLimit;
 
     switch (form.type) {
-        .nil, .bool, .integer, .float, .string, .keyword, .set, .queue, .atom, .lazy_map, .range_val => {
+        .nil, .bool, .integer, .float, .string, .keyword, .set, .queue, .atom, .lazy_map => {
             return try form.clone(arena_alloc);
         },
         .symbol => {
@@ -681,32 +664,6 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
                 var lm: *Value.LazyMapData = coll.lazy_map_val.?;
                 var count: usize = 0;
 
-                // Handle range_val as inner collection
-                if (lm.coll.type == .range_val) {
-                    const rd: *Value.RangeData = lm.coll.range_val.?;
-                    const coll_len: usize = if (rd.step > 0 and rd.end > rd.start) @as(usize, @intCast(@divTrunc(rd.end - rd.start + rd.step - 1, rd.step))) else 0;
-                    var v: i64 = rd.start + (@as(i64, @intCast(lm.idx)) * rd.step);
-                    var idx: usize = lm.idx;
-                    while (idx < coll_len) {
-                        if (n) |limit| { if (count >= limit) break; }
-                        var arg_list: list.List = .empty;
-                        errdefer arg_list.deinit(arena_alloc);
-                        try arg_list.append(arena_alloc, Value.intValue(v));
-                        var mapped = try eval_helpers.callBuiltin(allocator, lm.fn_val, arg_list, env);
-                        if (mapped.type == .lazy_seq) {
-                            const forced = try forceLazySeq(allocator, arena_alloc, mapped, env, depth + 1);
-                            mapped.deinit(arena_alloc);
-                            mapped = forced;
-                        }
-                        mapped.deinit(arena_alloc);
-                        v += rd.step;
-                        idx += 1;
-                        count += 1;
-                    }
-                    lm.idx = idx;
-                    return Value.nilValue();
-                }
-
                 // Handle list/vector as inner collection
                 var coll_items: []const Value = undefined;
                 const coll_len: usize = switch (lm.coll.type) {
@@ -732,21 +689,6 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
                     }
                     mapped.deinit(arena_alloc);
                     lm.idx += 1;
-                    count += 1;
-                }
-                return Value.nilValue();
-            }
-
-            // Handle range_val: iterate without materializing
-            if (coll.type == .range_val) {
-                const rd: *Value.RangeData = coll.range_val.?;
-                const len: usize = if (rd.step > 0 and rd.end > rd.start) @as(usize, @intCast(@divTrunc(rd.end - rd.start + rd.step - 1, rd.step))) else 0;
-                var count: usize = 0;
-                var v: i64 = rd.start;
-                var idx: usize = 0;
-                while (idx < len) : (idx += 1) {
-                    if (n) |limit| { if (count >= limit) break; }
-                    v += rd.step;
                     count += 1;
                 }
                 return Value.nilValue();
@@ -805,21 +747,6 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
             // Handle lazy_map: force into a list and return it
             if (coll.type == .lazy_map) {
                 return try forceLazyMap(allocator, arena_alloc, coll, env);
-            }
-            // Handle range_val: realize into a list
-            if (coll.type == .range_val) {
-                const rd: *Value.RangeData = coll.range_val.?;
-                const len: usize = if (rd.step > 0 and rd.end > rd.start) @as(usize, @intCast(@divTrunc(rd.end - rd.start + rd.step - 1, rd.step))) else 0;
-                var result: list.List = .empty;
-                errdefer result.deinit(arena_alloc);
-                var v: i64 = rd.start;
-                var i: usize = 0;
-                while (i < len) : (i += 1) {
-                    try result.append(arena_alloc, Value.intValue(v));
-                    v += rd.step;
-                }
-                coll.deinit(arena_alloc);
-                return Value.listValue(result);
             }
             // Handle lazy_seq: force and return
             if (coll.type == .lazy_seq) {
@@ -1622,9 +1549,6 @@ fn evalTake(allocator: Allocator, arena_alloc: Allocator, n_form: Value, coll_fo
         .lazy_map => {
             coll = coll_form;
         },
-        .range_val => {
-            coll = coll_form;
-        },
         else => coll = try evalRec(allocator, arena_alloc, coll_form, env, depth),
     }
 
@@ -1639,23 +1563,6 @@ fn evalTake(allocator: Allocator, arena_alloc: Allocator, n_form: Value, coll_fo
         const forced = try forceLazySeq(allocator, arena_alloc, coll, env, depth);
         coll.deinit(arena_alloc);
         coll = forced;
-    }
-
-    // Handle range_val: take n elements from range
-    if (coll.type == .range_val) {
-        defer coll.deinit(arena_alloc);
-        const rd: *Value.RangeData = coll.range_val.?;
-        const total_len: usize = if (rd.step > 0 and rd.end > rd.start) @as(usize, @intCast(@divTrunc(rd.end - rd.start + rd.step - 1, rd.step))) else 0;
-        const count: usize = if (@as(usize, @intCast(n)) < total_len) @as(usize, @intCast(n)) else total_len;
-        var result: list.List = .empty;
-        errdefer result.deinit(arena_alloc);
-        var v: i64 = rd.start;
-        var i: usize = 0;
-        while (i < count) : (i += 1) {
-            try result.append(arena_alloc, Value.intValue(v));
-            v += rd.step;
-        }
-        return Value.listValue(result);
     }
 
     // Handle lazy_map: iterate element-by-element, taking only n elements

@@ -22,7 +22,6 @@ pub const Type = enum {
     builtin_fn,
     lazy_seq,
     lazy_map,
-    range_val,
     atom,
 };
 
@@ -63,13 +62,6 @@ pub const LazyMapData = struct {
     idx: usize = 0,
 };
 
-// Lazy range: generates integers on demand without allocating a list.
-pub const RangeData = struct {
-    start: i64,
-    end: i64,
-    step: i64 = 1,
-};
-
 pub const BuiltinFn = *const fn (self: *Self, args: list.List, env: *Env) anyerror!Self;
 
 type: Type,
@@ -90,7 +82,6 @@ fn_val: FnData = .{ .arities = .empty, .env = undefined },
 builtin_fn_val: BuiltinFn = undefined,
 lazy_seq_val: LazySeq = .{},
 lazy_map_val: ?*LazyMapData = null,
-range_val: ?*RangeData = null,
 atom_val: ?*AtomData = null,
 
 // Single arity: one [params] + body forms + optional rest param
@@ -304,12 +295,6 @@ pub fn lazyMapValue(allocator: Allocator, f: Self, coll: Self) anyerror!Self {
     return .{ .type = .lazy_map, .lazy_map_val = data };
 }
 
-pub fn rangeValue(allocator: Allocator, start: i64, end: i64, step: i64) anyerror!Self {
-    const data = try allocator.create(RangeData);
-    data.* = .{ .start = start, .end = end, .step = step };
-    return .{ .type = .range_val, .range_val = data };
-}
-
 pub fn fnValue(arities: std.ArrayListUnmanaged(Arity), env: Env, is_macro: bool) Self {
     return .{ .type = .function, .fn_val = .{ .arities = arities, .env = env, .is_macro = is_macro } };
 }
@@ -365,11 +350,6 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
             if (self.lazy_map_val) |data| {
                 data.fn_val.deinit(allocator);
                 data.coll.deinit(allocator);
-                allocator.destroy(data);
-            }
-        },
-        .range_val => {
-            if (self.range_val) |data| {
                 allocator.destroy(data);
             }
         },
@@ -477,12 +457,6 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
                     .idx = data.idx,
                 };
                 return .{ .type = .lazy_map, .lazy_map_val = new_data };
-            }
-            return nilValue();
-        },
-        .range_val => {
-            if (self.range_val) |data| {
-                return rangeValue(allocator, data.start, data.end, data.step);
             }
             return nilValue();
         },
@@ -599,12 +573,6 @@ pub fn fmt(self: Self, allocator: Allocator) anyerror![]const u8 {
         .builtin_fn => allocator.dupe(u8, "#builtin"),
         .lazy_seq => allocator.dupe(u8, "#lazy-seq"),
         .lazy_map => allocator.dupe(u8, "#lazy-map"),
-        .range_val => {
-            if (self.range_val) |data| {
-                return try std.fmt.allocPrint(allocator, "#range({d} {d} {d})", .{ data.start, data.end, data.step });
-            }
-            return allocator.dupe(u8, "#range()");
-        },
         .atom => {
             if (self.atom_val) |data| {
                 const inner_str = try data.value.fmt(allocator);

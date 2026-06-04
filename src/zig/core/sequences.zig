@@ -55,11 +55,6 @@ pub fn core_count(self: *Value, args: list.List, _: *Env) anyerror!Value {
         .set => return Value.intValue(@as(i64, @intCast(args.items[0].set_val.items.len))),
         .queue => return Value.intValue(@as(i64, @intCast(args.items[0].queue_val.items.len))),
         .string => return Value.intValue(@as(i64, @intCast(Value.utf8CodepointCount(args.items[0].str_val)))),
-        .range_val => {
-            const rd: *Value.RangeData = args.items[0].range_val.?;
-            const len: usize = if (rd.step > 0 and rd.end > rd.start) @as(usize, @intCast(@divTrunc(rd.end - rd.start + rd.step - 1, rd.step))) else 0;
-            return Value.intValue(@as(i64, @intCast(len)));
-        },
         else => return error.TypeError,
     }
 }
@@ -211,17 +206,6 @@ pub fn core_take(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
                 try result.append(allocator, mapped);
             }
         },
-        .range_val => {
-            const rd = coll.range_val.?;
-            const total_len: usize = if (rd.step > 0 and rd.end > rd.start) @as(usize, @intCast(@divTrunc(rd.end - rd.start + rd.step - 1, rd.step))) else 0;
-            const count = if (n < total_len) n else total_len;
-            var v: i64 = rd.start;
-            var i: usize = 0;
-            while (i < count) : (i += 1) {
-                try result.append(allocator, Value.intValue(v));
-                v += rd.step;
-            }
-        },
         else => {},
     }
     return Value.listValue(result);
@@ -291,16 +275,6 @@ pub fn core_vec(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
                 defer forced.deinit(env_env.allocator);
                 for (forced.list_val.items) |item| {
                     try new_vec.append(env_env.allocator, try item.clone(env_env.allocator));
-                }
-            },
-            .range_val => {
-                const rd: *Value.RangeData = arg.range_val.?;
-                const len: usize = if (rd.step > 0 and rd.end > rd.start) @as(usize, @intCast(@divTrunc(rd.end - rd.start + rd.step - 1, rd.step))) else 0;
-                var v: i64 = rd.start;
-                var i: usize = 0;
-                while (i < len) : (i += 1) {
-                    try new_vec.append(env_env.allocator, Value.intValue(v));
-                    v += rd.step;
                 }
             },
             else => try new_vec.append(env_env.allocator, try arg.clone(env_env.allocator)),

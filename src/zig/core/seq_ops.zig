@@ -22,7 +22,7 @@ pub fn core_map(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 
     // Validate that coll is a supported collection type
     switch (coll.type) {
-        .list, .vector, .range_val => {},
+        .list, .vector => {},
         else => return error.TypeError,
     }
 
@@ -86,64 +86,6 @@ pub fn core_reduce(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
         init_val = args.items[1];
     } else {
         coll = args.items[1];
-    }
-
-    // Handle range_val directly (no list allocation needed)
-    if (coll.type == .range_val) {
-        const rd: *Value.RangeData = coll.range_val.?;
-        const len: usize = if (rd.step > 0 and rd.end > rd.start) @as(usize, @intCast(@divTrunc(rd.end - rd.start + rd.step - 1, rd.step))) else 0;
-
-        // Fast path: reduce + on range (all integers)
-        if (f.type == .builtin_fn and f.builtin_fn_val == arithmetic.core_plus) {
-            if (len == 0) {
-                if (init_val) |iv| return try iv.clone(env_env.allocator);
-                return Value.nilValue();
-            }
-            if (init_val) |iv| {
-                var acc: i64 = if (iv.type == .integer) iv.int_val else @as(i64, @intFromFloat(iv.float_val));
-                var v: i64 = rd.start;
-                var count: usize = 0;
-                while (count < len) : (count += 1) {
-                    acc += v;
-                    v += rd.step;
-                }
-                return Value.intValue(acc);
-            }
-            // No init: use first element as initial
-            var acc: i64 = rd.start;
-            var v: i64 = rd.start + rd.step;
-            var count: usize = 1;
-            while (count < len) : (count += 1) {
-                acc += v;
-                v += rd.step;
-            }
-            return Value.intValue(acc);
-        }
-
-        // General path for range: iterate with function calls
-        if (len == 0) {
-            if (init_val) |iv| return try iv.clone(env_env.allocator);
-            return Value.nilValue();
-        }
-        var acc: Value = undefined;
-        if (init_val) |iv| {
-            acc = try iv.clone(env_env.allocator);
-        } else {
-            acc = Value.intValue(rd.start);
-        }
-        var v: i64 = if (init_val != null) rd.start else rd.start + rd.step;
-        var count: usize = if (init_val != null) 0 else 1;
-        while (count < len) : (count += 1) {
-            var arg_list: list.List = .empty;
-            defer arg_list.deinit(env_env.allocator);
-            try arg_list.append(env_env.allocator, try acc.clone(env_env.allocator));
-            try arg_list.append(env_env.allocator, Value.intValue(v));
-            const new_acc = try eval_helpers.callBuiltin(env_env.allocator, f, arg_list, env_env);
-            acc.deinit(env_env.allocator);
-            acc = new_acc;
-            v += rd.step;
-        }
-        return acc;
     }
 
     var items: []const Value = undefined;
