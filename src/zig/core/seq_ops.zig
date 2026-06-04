@@ -144,6 +144,13 @@ pub fn core_mapcat(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
                         try result.append(allocator, try mitem.clone(allocator));
                     }
                 },
+                .lazy_map, .lazy_seq => {
+                    var concrete = try forceToConcreteList(allocator, mapped, env_env);
+                    for (concrete.items) |mitem| {
+                        try result.append(allocator, try mitem.clone(allocator));
+                    }
+                    concrete.deinit(allocator);
+                },
                 else => try result.append(allocator, mapped),
             }
         }

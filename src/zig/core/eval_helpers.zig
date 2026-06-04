@@ -153,6 +153,31 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
                     }
                     return Value.nilValue();
                 }
+                if (std.mem.eql(u8, first.sym_val, "and")) {
+                    if (form.list_val.items.len == 1) return Value.boolValue(true);
+                    var i: usize = 1;
+                    while (i < form.list_val.items.len) : (i += 1) {
+                        var val = try evalForm(allocator, form.list_val.items[i], env);
+                        if (!val.isTruthy()) {
+                            return val;
+                        }
+                        if (i == form.list_val.items.len - 1) {
+                            return val;
+                        }
+                        val.deinit(allocator);
+                    }
+                    return Value.nilValue();
+                }
+                if (std.mem.eql(u8, first.sym_val, "or")) {
+                    if (form.list_val.items.len == 0) return Value.nilValue();
+                    var i: usize = 1;
+                    while (i < form.list_val.items.len) : (i += 1) {
+                        var val = try evalForm(allocator, form.list_val.items[i], env);
+                        if (val.isTruthy()) return val;
+                        val.deinit(allocator);
+                    }
+                    return Value.nilValue();
+                }
                 if (std.mem.eql(u8, first.sym_val, "cond")) {
                     var i: usize = 1;
                     while (i < form.list_val.items.len) : (i += 2) {
@@ -176,7 +201,7 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
                     while (bi < bind_items.len) : (bi += 2) {
                         const sym = bind_items[bi];
                         if (sym.type != .symbol) return error.TypeError;
-                        const val = try evalForm(allocator, bind_items[bi + 1], env);
+                        const val = try evalForm(allocator, bind_items[bi + 1], &new_env);
                         try new_env.put(sym.sym_val, val);
                     }
                     var result: Value = Value.nilValue();
@@ -222,7 +247,25 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
                     return Value.lazySeqValue(thunk);
                 }
             }
-            const op = try evalForm(allocator, first, env);
+            var op = try evalForm(allocator, first, env);
+            defer op.deinit(allocator);
+
+            // Check if operator is a macro
+            if (op.type == .function and op.fn_val.is_macro) {
+                // Macro: pass unevaluated arguments
+                var macro_args: list.List = .empty;
+                errdefer macro_args.deinit(allocator);
+                for (form.list_val.items[1..]) |arg| {
+                    try macro_args.append(allocator, try arg.clone(allocator));
+                }
+                // Call the macro with unevaluated args
+                var expanded = try callBuiltin(allocator, op, macro_args, env);
+                // Evaluate the expanded form
+                const result = try evalForm(allocator, expanded, env);
+                expanded.deinit(allocator);
+                return result;
+            }
+
             var args: list.List = .empty;
             errdefer args.deinit(allocator);
             for (form.list_val.items[1..]) |arg| {
