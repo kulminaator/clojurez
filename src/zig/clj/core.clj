@@ -230,6 +230,15 @@
   [sep coll]
   (rest (mapcat (fn [x] (list sep x)) coll)))
 
+(defn take-while
+  "Returns a lazy sequence of successive items from coll for which (pred item) returns logical true."
+  [pred coll]
+  (lazy-seq
+    (when-let [s (seq coll)]
+      (if (pred (first s))
+        (cons (first s) (take-while pred (rest s)))
+        nil))))
+
 (defn partition
   "Returns a lazy sequence of lists of n elements each, at intervals
    of step. Returns nil if there are fewer than n elements remaining."
@@ -319,6 +328,43 @@
                                   (list 'seq
                                         (list 'rest s))))))))]
     (step (seq seq-exprs))))
+
+(defmacro when-first
+  "bindings => x xs
+
+  Roughly the same as (when (seq xs) (let [x (first xs)] body)) but xs is evaluated only once."
+  [bindings & body]
+  (let [x (nth bindings 0)
+        xs (nth bindings 1)
+        s-gensym (gensym "s")]
+    `(when-let [~s-gensym (seq ~xs)]
+       (let [~x (first ~s-gensym)]
+         ~@body))))
+
+(defmacro for
+  "List comprehension. Supports :when and :while modifiers."
+  [seq-exprs body-expr]
+  (let [exprs (seq seq-exprs)
+        bind (first exprs)
+        coll (second exprs)
+        rest-exprs (drop 2 exprs)
+        first-key (first rest-exprs)
+        has-when (and first-key (= first-key :when))
+        has-while (and first-key (= first-key :while))
+        test-expr (when (or has-when has-while) (second rest-exprs))
+        effective-coll (cond
+                         has-when (list 'filter (list 'fn (list bind) test-expr) coll)
+                         has-while (list 'take-while (list 'fn (list bind) test-expr) coll)
+                         :else coll)
+        next-binds (if (or has-when has-while)
+                     (drop 2 rest-exprs)
+                     rest-exprs)]
+    (if (empty? next-binds)
+      (list 'map (list 'fn (list bind) body-expr) effective-coll)
+      (let [nb (first next-binds)
+            nc (second next-binds)
+            rest-for (list 'for (concat (list nb nc) (drop 2 next-binds)) body-expr)]
+        (list 'mapcat (list 'fn (list bind) rest-for) effective-coll)))))
 
 ;; ---- Condition/predicate helpers ----
 
