@@ -13,15 +13,93 @@ const Allocator = std.mem.Allocator;
 
 const toInt = helpers.toInt;
 
+// Force a lazy_map into a concrete list
+fn forceLazyMap(allocator: Allocator, lm: *Value.LazyMapData, env: *Env) anyerror!list.List {
+    var result: list.List = .empty;
+    errdefer result.deinit(allocator);
+
+    var coll_items: []const Value = undefined;
+    const coll_len: usize = switch (lm.coll.type) {
+        .list => lm.coll.list_val.items.len,
+        .vector => lm.coll.vec_val.items.len,
+        else => return result,
+    };
+    switch (lm.coll.type) {
+        .list => coll_items = lm.coll.list_val.items,
+        .vector => coll_items = lm.coll.vec_val.items,
+        else => return result,
+    }
+    var i: usize = lm.idx;
+    while (i < coll_len) : (i += 1) {
+        var arg_list: list.List = .empty;
+        errdefer arg_list.deinit(allocator);
+        try arg_list.append(allocator, try coll_items[i].clone(allocator));
+        const mapped = try eval_helpers.callBuiltin(allocator, lm.fn_val, arg_list, env);
+        try result.append(allocator, mapped);
+    }
+    return result;
+}
+
+// Force any lazy value (lazy_seq or lazy_map) into a concrete list
+fn forceToConcreteList(allocator: Allocator, val: Value, env: *Env) anyerror!list.List {
+    return switch (val.type) {
+        .lazy_map => {
+            const lm = val.lazy_map_val.?;
+            return forceLazyMap(allocator, lm, env);
+        },
+        .lazy_seq => {
+            // Use forceValue which handles lazy_seq thunks
+            var forced = try forceValue(allocator, val);
+            defer forced.deinit(allocator);
+            switch (forced.type) {
+                .list => return try forced.list_val.clone(allocator),
+                .vector => {
+                    var result: list.List = .empty;
+                    errdefer result.deinit(allocator);
+                    for (forced.vec_val.items) |item| {
+                        try result.append(allocator, try item.clone(allocator));
+                    }
+                    return result;
+                },
+                .nil => return list.empty(),
+                else => {
+                    var result: list.List = .empty;
+                    errdefer result.deinit(allocator);
+                    try result.append(allocator, try forced.clone(allocator));
+                    return result;
+                },
+            }
+        },
+        else => {
+            var result: list.List = .empty;
+            errdefer result.deinit(allocator);
+            switch (val.type) {
+                .list => return try val.list_val.clone(allocator),
+                .vector => {
+                    for (val.vec_val.items) |item| {
+                        try result.append(allocator, try item.clone(allocator));
+                    }
+                    return result;
+                },
+                else => return result,
+            }
+        },
+    };
+}
+
 pub fn core_map(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 2) return error.ArityError;
     const f = args.items[0];
-    const coll = args.items[1];
+    var coll = args.items[1];
 
-    // Validate that coll is a supported collection type
+    // Force lazy sequences to concrete lists before mapping
     switch (coll.type) {
+        .lazy_seq, .lazy_map => {
+            const concrete_list = try forceToConcreteList(allocator, coll, env_env);
+            coll = Value.listValue(concrete_list);
+        },
         .list, .vector => {},
         else => return error.TypeError,
     }
@@ -86,6 +164,33 @@ pub fn core_reduce(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
         init_val = args.items[1];
     } else {
         coll = args.items[1];
+    }
+
+    // Force lazy sequences to concrete lists before reducing
+    var owned_coll: bool = false;
+    defer {
+        if (owned_coll) {
+            coll.deinit(env_env.allocator);
+        }
+    }
+    switch (coll.type) {
+        .lazy_map => {
+            const concrete_list = try forceToConcreteList(env_env.allocator, coll, env_env);
+            // Null out the pointer before deinit so we don't free caller-owned data
+            coll.lazy_map_val = null;
+            coll.deinit(env_env.allocator);
+            coll = Value.listValue(concrete_list);
+            owned_coll = true;
+        },
+        .lazy_seq => {
+            const concrete_list = try forceToConcreteList(env_env.allocator, coll, env_env);
+            // Null out the thunk before deinit so we don't free caller-owned data
+            coll.lazy_seq_val.thunk = null;
+            coll.deinit(env_env.allocator);
+            coll = Value.listValue(concrete_list);
+            owned_coll = true;
+        },
+        else => {},
     }
 
     var items: []const Value = undefined;
