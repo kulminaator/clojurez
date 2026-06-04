@@ -286,6 +286,28 @@
                               " msecs"))
         '__ret))
 
+(defmacro doseq
+  "Repeatedly executes body for side-effects. Returns nil."
+  [seq-exprs & body]
+  (letfn [(step [exprs]
+            (if (empty? exprs)
+              (concat (list 'do) body)
+              (let [k (first exprs)
+                    v (second exprs)
+                    s (gensym "s")
+                    sf (step (rest (rest exprs)))]
+                (list 'loop
+                      (list s (list 'seq v))
+                      (list 'when
+                            s
+                            (list 'let
+                                  (list k (list 'first s))
+                                  sf)
+                            (list 'recur
+                                  (list 'seq
+                                        (list 'rest s))))))))]
+    (step (seq seq-exprs))))
+
 ;; ---- Condition/predicate helpers ----
 
 (defn some?

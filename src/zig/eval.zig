@@ -227,6 +227,15 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
             return try evalLet(allocator, arena_alloc, bindings, l.items[2..], env, depth + 1);
         }
 
+        // letfn - define mutually recursive functions
+        // (letfn [(name [params] body...)+] body...)
+        if (std.mem.eql(u8, name, "letfn")) {
+            if (l.items.len < 2) return error.ArityError;
+            const bindings = l.items[1];
+            if (bindings.type != .list and bindings.type != .vector) return error.TypeError;
+            return try evalLetFn(allocator, arena_alloc, bindings, l.items[2..], env, depth + 1);
+        }
+
         // if - conditional
         if (std.mem.eql(u8, name, "if")) {
             if (l.items.len < 2 or l.items.len > 4) return error.ArityError;
@@ -908,6 +917,90 @@ fn evalLet(allocator: Allocator, arena_alloc: Allocator, bindings: Value, body: 
         const val = try evalRec(allocator, arena_alloc, items[i + 1], &new_env, depth);
         // Bind using destructuring if sym is a vector pattern
         try bindPattern(allocator, arena_alloc, sym, val, &new_env, depth);
+    }
+
+    return try evalDo(allocator, arena_alloc, body, &new_env, depth);
+}
+
+fn evalLetFn(allocator: Allocator, arena_alloc: Allocator, bindings: Value, body: []const Value, env: *Env, depth: usize) anyerror!Value {
+    const bind_items = switch (bindings.type) {
+        .list => bindings.list_val.items,
+        .vector => bindings.vec_val.items,
+        else => return error.TypeError,
+    };
+
+    // Create new env first so all functions can reference each other
+    var new_env: Env = .{
+        .allocator = allocator,
+        .entries = .empty,
+        .parent = env,
+    };
+    defer new_env.deinit(arena_alloc);
+
+    // Parse each function definition: (name [params] body...)
+    for (bind_items) |binding| {
+        if (binding.type != .list or binding.list_val.items.len < 3) return error.TypeError;
+        const b = binding.list_val;
+
+        // First element is the function name
+        const fname = b.items[0];
+        if (fname.type != .symbol) return error.TypeError;
+
+        // Second element is the parameter list
+        const params_form = b.items[1];
+        if (params_form.type != .list and params_form.type != .vector) return error.TypeError;
+        const params_list = if (params_form.type == .vector)
+            try listFromVector(arena_alloc, params_form.vec_val)
+        else
+            params_form.list_val;
+
+        // Remaining elements are the body
+        var body_list: list.List = .empty;
+        errdefer body_list.deinit(arena_alloc);
+        try body_list.append(arena_alloc, try Value.symValue(allocator, "do"));
+        for (b.items[2..]) |form_item| {
+            try body_list.append(arena_alloc, try form_item.clone(arena_alloc));
+        }
+
+        // Parse params for variadic support
+        var parsed = try parseParams(arena_alloc, params_list);
+        defer {
+            parsed.params.deinit(arena_alloc);
+            if (parsed.rest_name) |rn| arena_alloc.free(rn);
+        }
+
+        // Build arity
+        var arities: std.ArrayListUnmanaged(Value.Arity) = .empty;
+        errdefer {
+            for (arities.items) |*a| {
+                a.params.deinit(arena_alloc);
+                a.body.deinit(arena_alloc);
+                if (a.rest_name) |rn| arena_alloc.free(rn);
+            }
+            arena_alloc.free(arities.items);
+        }
+
+        const cloned_params = try parsed.params.clone(arena_alloc);
+        const cloned_body = try body_list.clone(arena_alloc);
+        const cloned_rest = if (parsed.rest_name) |rn| try arena_alloc.dupe(u8, rn) else null;
+        try arities.append(arena_alloc, Value.Arity{
+            .params = cloned_params,
+            .body = cloned_body,
+            .rest_name = cloned_rest,
+        });
+
+        // Create fn with new_env as closure (for mutual recursion)
+        const fn_env: Env = .{
+            .allocator = allocator,
+            .entries = .empty,
+            .parent = &new_env,
+        };
+        var fn_val = Value.fnValue(arities, fn_env, false);
+        const persistent_fn = try fn_val.clone(allocator);
+        fn_val.deinit(arena_alloc);
+
+        // Bind in new_env
+        try new_env.put(fname.sym_val, persistent_fn);
     }
 
     return try evalDo(allocator, arena_alloc, body, &new_env, depth);
