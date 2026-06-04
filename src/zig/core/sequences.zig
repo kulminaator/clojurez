@@ -8,7 +8,7 @@ const eval_helpers = @import("eval_helpers.zig");
 const Allocator = std.mem.Allocator;
 
 /// Force a lazy-seq to a realized list
-fn forceLazySeqHelper(allocator: Allocator, lazy: Value) anyerror!Value {
+pub fn forceLazySeqHelper(allocator: Allocator, lazy: Value) anyerror!Value {
     if (lazy.lazy_seq_val.thunk) |thunk| {
         var arena = std.heap.ArenaAllocator.init(allocator);
         const arena_alloc = arena.allocator();
@@ -283,6 +283,13 @@ pub fn core_vec(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
             },
             .vector => {
                 for (arg.vec_val.items) |item| {
+                    try new_vec.append(env_env.allocator, try item.clone(env_env.allocator));
+                }
+            },
+            .lazy_seq => {
+                var forced = try forceLazySeqHelper(env_env.allocator, arg);
+                defer forced.deinit(env_env.allocator);
+                for (forced.list_val.items) |item| {
                     try new_vec.append(env_env.allocator, try item.clone(env_env.allocator));
                 }
             },

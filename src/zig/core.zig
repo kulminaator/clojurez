@@ -60,6 +60,15 @@ pub fn core_seq(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const coll = args.items[0];
+
+    // Handle lazy_seq: force it to a list first
+    if (coll.type == .lazy_seq) {
+        var forced = try sequences.forceLazySeqHelper(env_env.allocator, coll);
+        defer forced.deinit(env_env.allocator);
+        if (forced.list_val.items.len == 0) return Value.nilValue();
+        return try forced.clone(env_env.allocator);
+    }
+
     const len: usize = switch (coll.type) {
         .list => coll.list_val.items.len,
         .vector => coll.vec_val.items.len,

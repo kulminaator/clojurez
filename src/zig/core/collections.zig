@@ -1,9 +1,10 @@
-// General collection operations: conj, pop, last, reverse, range, peek, contains?
+// General collection operations: conj, pop, last, reverse, peek, contains?
 const std = @import("std");
 const Value = @import("../value.zig");
 const list = @import("../list.zig");
 const vec = @import("../vector.zig");
 const Env = Value.Env;
+const sequences = @import("sequences.zig");
 
 pub fn core_conj(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
@@ -210,6 +211,18 @@ pub fn core_reverse(self: *Value, args: list.List, env_env: *Env) anyerror!Value
             }
             return Value.listValue(new_list);
         },
+        .lazy_seq => {
+            var forced = try sequences.forceLazySeqHelper(env_env.allocator, coll);
+            defer forced.deinit(env_env.allocator);
+            var new_list: list.List = .empty;
+            errdefer new_list.deinit(env_env.allocator);
+            var i: usize = forced.list_val.items.len;
+            while (i > 0) {
+                i -= 1;
+                try new_list.append(env_env.allocator, try forced.list_val.items[i].clone(env_env.allocator));
+            }
+            return Value.listValue(new_list);
+        },
         .range_val => {
             const rd: *Value.RangeData = coll.range_val.?;
             const len: usize = if (rd.step > 0 and rd.end > rd.start) @as(usize, @intCast(@divTrunc(rd.end - rd.start + rd.step - 1, rd.step))) else 0;
@@ -225,18 +238,6 @@ pub fn core_reverse(self: *Value, args: list.List, env_env: *Env) anyerror!Value
         },
         else => return error.TypeError,
     }
-}
-
-pub fn core_range(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
-    _ = self;
-    if (args.items.len < 1 or args.items.len > 3) return error.ArityError;
-    const end = try toInt(args.items[args.items.len - 1]);
-    const start: i64 = if (args.items.len >= 2) try toInt(args.items[args.items.len - 2]) else 0;
-    const step: i64 = if (args.items.len == 3) try toInt(args.items[0]) else 1;
-    if (step == 0) return error.TypeError; // avoid infinite range
-
-    // Return a lazy range — integers are generated on demand
-    return Value.rangeValue(env_env.allocator, start, end, step);
 }
 
 pub fn core_peek(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
@@ -307,7 +308,7 @@ pub fn registerCollectionFunctions(env: *Env) anyerror!void {
     try env.put("pop", Value.builtinFnValue(core_pop));
     try env.put("last", Value.builtinFnValue(core_last));
     try env.put("reverse", Value.builtinFnValue(core_reverse));
-    try env.put("range", Value.builtinFnValue(core_range));
+
     try env.put("peek", Value.builtinFnValue(core_peek));
     try env.put("contains?", Value.builtinFnValue(core_contains_q));
 }
