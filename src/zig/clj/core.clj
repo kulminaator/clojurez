@@ -285,3 +285,18 @@
                               (list '/ (list '- (list 'nano-time) '__start) 1000000.0)
                               " msecs"))
         '__ret))
+
+;; ---- Condition/predicate helpers ----
+
+(defn some?
+  "Returns true if x is not nil, false otherwise."
+  [x] (not (nil? x)))
+
+(defn boolean
+  "Coerce to boolean."
+  [x] (if x true false))
+
+(defn not-any?
+  "Returns true if (some f coll) is logical false."
+  [f coll] (not (some f coll)))
+

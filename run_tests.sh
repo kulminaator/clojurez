@@ -76,6 +76,9 @@ source tests/test_samples.sh
 echo ""
 
 source tests/test_misc.sh
+echo ""
+
+source tests/test_condition_forms.sh
 
 echo ""
 echo "========================================"

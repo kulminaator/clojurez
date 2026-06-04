@@ -86,6 +86,25 @@ pub fn core_not(self: *Value, args: list.List, _: *Env) anyerror!Value {
     return Value.boolValue(!args.items[0].isTruthy());
 }
 
+// identical? - tests if 2 arguments are the same object (identity comparison)
+// For atoms: compare atom_val pointers
+// For other types: compare by value (our VM uses value semantics for immutable data)
+pub fn core_identical_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 2) return error.ArityError;
+    const a = args.items[0];
+    const b = args.items[1];
+
+    // For atoms, compare by pointer identity
+    if (a.type == .atom and b.type == .atom) {
+        return Value.boolValue(a.atom_val == b.atom_val);
+    }
+
+    // For all other types, use value equality
+    // (our VM uses value semantics for immutable data)
+    return Value.boolValue(a.equals(b));
+}
+
 pub fn registerComparisonFunctions(env: *Env) anyerror!void {
     try env.put("eq", Value.builtinFnValue(core_eq));
     try env.put("not-eq", Value.builtinFnValue(core_not_eq));
@@ -95,8 +114,11 @@ pub fn registerComparisonFunctions(env: *Env) anyerror!void {
     try env.put(">=", Value.builtinFnValue(core_greater_eq));
     // Boolean
     try env.put("not", Value.builtinFnValue(core_not));
+    // Identity comparison
+    try env.put("identical?", Value.builtinFnValue(core_identical_q));
     // Clojure-style aliases
     try env.put("=", Value.builtinFnValue(core_eq));
     try env.put("!=", Value.builtinFnValue(core_not_eq));
+    try env.put("not=", Value.builtinFnValue(core_not_eq));
 }
 

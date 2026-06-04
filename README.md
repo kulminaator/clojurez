@@ -32,8 +32,13 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 - `fn` — create an anonymous function
 - `if` — conditional (`(if test then else)`)
 - `when` — shorthand for `(if test (do body...))`
+- `when-not` — shorthand for `(if (not test) (do body...))`
+- `if-not` — if test is false, evaluate then
 - `cond` — multi-way conditional
+- `case` — multi-way constant dispatch
 - `let` — local bindings
+- `if-let` — conditional with binding
+- `when-let` — when test is truthy, bind and evaluate body
 - `do` — evaluate a sequence of forms
 - `quote` / `'` — prevent evaluation
 - `quasiquote` / `` ` `` — template with unquote (`unquote` / `~`) and unquote-splicing (`unquote-splicing` / `~@`)
@@ -49,6 +54,8 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 ### Threading Macros
 - `->` — thread-first: inserts value as second argument
 - `->>` — thread-last: inserts value as last argument
+- `cond->` — conditional thread-first
+- `cond->>` — conditional thread-last
 
 ### Sequence Functions
 - `iterate` — repeatedly apply a function, collecting results
@@ -64,9 +71,10 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 
 ### Built-in Functions
 - **Arithmetic:** `+`, `-`, `*`, `/`, `rem`
-- **Comparison:** `=`, `!=`, `<`, `>`, `<=`, `>=`
-- **Boolean:** `not`
-- **Type checks:** `nil?`, `number?`, `string?`, `list?`, `symbol?`, `keyword?`, `true?`, `false?`, `vector?`, `map?`, `queue?`, `set?`, `coll?`, `sequential?`
+- **Comparison:** `=`, `!=`, `not=`, `<`, `>`, `<=`, `>=`, `identical?`
+- **Boolean:** `not`, `boolean`
+- **Predicates:** `nil?`, `some?`, `zero?`, `pos?`, `neg?`, `even?`, `odd?`, `number?`, `string?`, `list?`, `symbol?`, `keyword?`, `true?`, `false?`, `vector?`, `map?`, `queue?`, `set?`, `coll?`, `sequential?`
+- **Sequence predicates:** `some`, `every?`, `not-any?`
 - **Strings:** `str`, `utf8-valid?`
 - **I/O:** `print`, `println`, `read-line`, `spit`, `slurp`
 - **Maps:** `get`, `assoc`, `keys`, `vals`, `dissoc`, `merge`, `contains?`

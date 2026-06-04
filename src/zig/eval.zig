@@ -571,11 +571,18 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
 
         // or - short-circuit or
         if (std.mem.eql(u8, name, "or")) {
+            var last_val: Value = Value.nilValue();
+            errdefer last_val.deinit(arena_alloc);
             for (l.items[1..]) |form_item| {
                 const val = try evalRec(allocator, arena_alloc, form_item, env, depth + 1);
-                if (val.isTruthy()) return val;
+                if (val.isTruthy()) {
+                    last_val.deinit(arena_alloc);
+                    return val;
+                }
+                last_val.deinit(arena_alloc);
+                last_val = val;
             }
-            return Value.nilValue();
+            return last_val;
         }
 
         // and - short-circuit and
@@ -812,6 +819,24 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
             }
             // For concrete collections, just return a clone
             return try coll.clone(arena_alloc);
+        }
+
+        // cond-> - thread-first with conditions
+        // (cond-> expr test1 step1 test2 step2 ...)
+        if (std.mem.eql(u8, name, "cond->")) {
+            return try evalCondThreadFirst(allocator, arena_alloc, l.items[1..], env, depth + 1);
+        }
+
+        // cond->> - thread-last with conditions
+        // (cond->> expr test1 step1 test2 step2 ...)
+        if (std.mem.eql(u8, name, "cond->>")) {
+            return try evalCondThreadLast(allocator, arena_alloc, l.items[1..], env, depth + 1);
+        }
+
+        // case - multi-way constant dispatch
+        // (case expr test1 result1 test2 result2 ... default)
+        if (std.mem.eql(u8, name, "case")) {
+            return try evalCase(allocator, arena_alloc, l.items[1..], env, depth + 1);
         }
     }
 
@@ -1301,10 +1326,19 @@ fn evalThreadLast(allocator: Allocator, arena_alloc: Allocator, forms: []const V
     var i: usize = 1;
     while (i < forms.len) : (i += 1) {
         const form = forms[i];
+
+        // Handle non-list forms: (->> x inc) => (inc x)
         if (form.type != .list) {
+            var new_call: list.List = .empty;
+            errdefer new_call.deinit(arena_alloc);
+            try new_call.append(arena_alloc, try form.clone(arena_alloc));
+            try new_call.append(arena_alloc, try current.clone(arena_alloc));
+            const next_val = try evalRec(allocator, arena_alloc, Value.listValue(new_call), env, depth);
             current.deinit(arena_alloc);
-            return error.TypeError;
+            current = next_val;
+            continue;
         }
+
         if (form.list_val.items.len == 0) {
             current.deinit(arena_alloc);
             return error.ArityError;
@@ -1336,16 +1370,25 @@ fn evalThreadFirst(allocator: Allocator, arena_alloc: Allocator, forms: []const 
     var i: usize = 1;
     while (i < forms.len) : (i += 1) {
         const form = forms[i];
+
+        // Handle non-list forms: (-> x inc) => (inc x)
         if (form.type != .list) {
+            var new_call: list.List = .empty;
+            errdefer new_call.deinit(arena_alloc);
+            try new_call.append(arena_alloc, try form.clone(arena_alloc));
+            try new_call.append(arena_alloc, try current.clone(arena_alloc));
+            const next_val = try evalRec(allocator, arena_alloc, Value.listValue(new_call), env, depth);
             current.deinit(arena_alloc);
-            return error.TypeError;
+            current = next_val;
+            continue;
         }
+
         if (form.list_val.items.len == 0) {
             current.deinit(arena_alloc);
             return error.ArityError;
         }
 
-        // Build a new list: (op arg1 current arg3 ...)
+        // Build a new list: (op current arg3 ...)
         var new_call: list.List = .empty;
         errdefer new_call.deinit(arena_alloc);
 
@@ -1623,4 +1666,114 @@ fn callValue(allocator: Allocator, arena_alloc: Allocator, f: Value, args: list.
         },
         else => return error.NotCallable,
     }
+}
+
+// cond-> - thread-first with conditions
+// (cond-> expr test1 step1 test2 step2 ...)
+fn evalCondThreadFirst(allocator: Allocator, arena_alloc: Allocator, forms: []const Value, env: *Env, depth: usize) anyerror!Value {
+    if (forms.len == 0) return Value.nilValue();
+
+    var current = try evalRec(allocator, arena_alloc, forms[0], env, depth);
+
+    var i: usize = 1;
+    while (i + 1 < forms.len) : (i += 2) {
+        var test_val_form = try evalRec(allocator, arena_alloc, forms[i], env, depth);
+        if (test_val_form.isTruthy()) {
+            const step = forms[i + 1];
+            if (step.type == .list and step.list_val.items.len > 0) {
+                // Evaluate operator and args, inserting current as second arg
+                var op = try evalRec(allocator, arena_alloc, step.list_val.items[0], env, depth);
+                defer op.deinit(arena_alloc);
+                var args: list.List = .empty;
+                errdefer args.deinit(arena_alloc);
+                try args.append(arena_alloc, try current.clone(arena_alloc));
+                var j: usize = 1;
+                while (j < step.list_val.items.len) : (j += 1) {
+                    try args.append(arena_alloc, try evalRec(allocator, arena_alloc, step.list_val.items[j], env, depth));
+                }
+                const next_val = try call(allocator, arena_alloc, op, args, env, depth);
+                current.deinit(arena_alloc);
+                current = next_val;
+            } else {
+                var new_call: list.List = .empty;
+                errdefer new_call.deinit(arena_alloc);
+                try new_call.append(arena_alloc, try step.clone(arena_alloc));
+                try new_call.append(arena_alloc, try current.clone(arena_alloc));
+                const next_val = try evalRec(allocator, arena_alloc, Value.listValue(new_call), env, depth);
+                current.deinit(arena_alloc);
+                current = next_val;
+            }
+        }
+        test_val_form.deinit(arena_alloc);
+    }
+    return current;
+}
+
+// cond->> - thread-last with conditions
+// (cond->> expr test1 step1 test2 step2 ...)
+fn evalCondThreadLast(allocator: Allocator, arena_alloc: Allocator, forms: []const Value, env: *Env, depth: usize) anyerror!Value {
+    if (forms.len == 0) return Value.nilValue();
+
+    var current = try evalRec(allocator, arena_alloc, forms[0], env, depth);
+
+    var i: usize = 1;
+    while (i + 1 < forms.len) : (i += 2) {
+        var test_val_form = try evalRec(allocator, arena_alloc, forms[i], env, depth);
+        if (test_val_form.isTruthy()) {
+            const step = forms[i + 1];
+            if (step.type == .list and step.list_val.items.len > 0) {
+                // Evaluate operator and args, then call with current as last arg
+                var op = try evalRec(allocator, arena_alloc, step.list_val.items[0], env, depth);
+                defer op.deinit(arena_alloc);
+                var args: list.List = .empty;
+                errdefer args.deinit(arena_alloc);
+                var j: usize = 1;
+                while (j < step.list_val.items.len) : (j += 1) {
+                    try args.append(arena_alloc, try evalRec(allocator, arena_alloc, step.list_val.items[j], env, depth));
+                }
+                try args.append(arena_alloc, try current.clone(arena_alloc));
+                const next_val = try call(allocator, arena_alloc, op, args, env, depth);
+                current.deinit(arena_alloc);
+                current = next_val;
+            } else {
+                var new_call: list.List = .empty;
+                errdefer new_call.deinit(arena_alloc);
+                try new_call.append(arena_alloc, try step.clone(arena_alloc));
+                try new_call.append(arena_alloc, try current.clone(arena_alloc));
+                const next_val = try evalRec(allocator, arena_alloc, Value.listValue(new_call), env, depth);
+                current.deinit(arena_alloc);
+                current = next_val;
+            }
+        }
+        test_val_form.deinit(arena_alloc);
+    }
+    return current;
+}
+
+// case - multi-way constant dispatch
+// (case expr test1 result1 test2 result2 ... :else default)
+fn evalCase(allocator: Allocator, arena_alloc: Allocator, forms: []const Value, env: *Env, depth: usize) anyerror!Value {
+    if (forms.len < 1) return error.ArityError;
+
+    var expr_val = try evalRec(allocator, arena_alloc, forms[0], env, depth);
+    defer expr_val.deinit(arena_alloc);
+
+    var i: usize = 1;
+    while (i < forms.len) : (i += 2) {
+        const test_form = forms[i];
+        if (test_form.type == .keyword and std.mem.eql(u8, test_form.kw_val, "else")) {
+            if (i + 1 >= forms.len) return error.ArityError;
+            return try evalRec(allocator, arena_alloc, forms[i + 1], env, depth);
+        }
+
+        var test_val = try evalRec(allocator, arena_alloc, test_form, env, depth);
+        defer test_val.deinit(arena_alloc);
+
+        if (expr_val.equals(test_val)) {
+            if (i + 1 >= forms.len) return error.ArityError;
+            return try evalRec(allocator, arena_alloc, forms[i + 1], env, depth);
+        }
+    }
+
+    return Value.nilValue();
 }
