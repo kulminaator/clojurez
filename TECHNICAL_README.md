@@ -123,7 +123,7 @@ or explicitly:
 ./zig-out/bin/clojurez --repl
 ```
 
-Type `:quit` or `:exit` to exit.
+Type `(quit)` or `(exit)` or `CTRL+D` to exit.
 
 ### Evaluate an Expression
 

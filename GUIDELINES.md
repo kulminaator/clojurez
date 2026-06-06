@@ -98,7 +98,7 @@ These are hard limits. When a file or function approaches its limit, it must be 
   ```bash
   timeout 10s ./zig-out/bin/clojurez -e '(+ 1 2)'
   ```
-- **REPL tests**: Never pipe unbounded input into the REPL. Always provide a finite input with an explicit exit command (`:quit` or `:exit`) and use a timeout.
+- **REPL tests**: Never pipe unbounded input into the REPL. Always provide a finite input with an explicit exit command (`(quit)` or `(exit)`) and use a timeout.
   ```bash
   timeout 10s ./zig-out/bin/clojurez --repl < input.clj
   ```
