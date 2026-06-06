@@ -43,3 +43,35 @@ run_test_cmd "-m without -cp gives error" \
 run_test_cmd "-cp with multiple dirs" \
     "./zig-out/bin/clojurez -cp tests/complex-samples/sample_3_namespaces/src:tests/complex-samples/sample_3_namespaces/src -m main" \
     "Hello Clojure World"
+
+# === REPL Namespace Tests ===
+
+# REPL starts in user namespace (prompt shows user=>)
+run_test_cmd "repl starts in user namespace" \
+    "echo '(exit)' | ./zig-out/bin/clojurez --repl 2>&1 | grep 'user=>' | head -1 | tr -d '[:space:]'" \
+    "user=>"
+
+# REPL defn + function call (regression: used to crash)
+run_test_cmd "repl defn and call" \
+    "echo '(defn hello [] (println \"hello world\")) (hello) (exit)' | ./zig-out/bin/clojurez --repl 2>&1 | grep 'hello world' | head -1 | tr -d '[:space:]'" \
+    "helloworld"
+
+# REPL namespace switching with ns form
+run_test_cmd "repl ns switching changes prompt" \
+    "printf '(ns city)\n(exit)\n' | ./zig-out/bin/clojurez --repl 2>&1 | grep 'city=>' | head -1 | tr -d '[:space:]'" \
+    "city=>"
+
+# REPL def in user ns, access from another ns via qualified symbol
+run_test_cmd "repl qualified symbol cross-namespace" \
+    "printf '(def carrot 7)\n(ns city)\nuser/carrot\n(exit)\n' | ./zig-out/bin/clojurez --repl 2>&1 | grep 'city=> 7' | head -1 | tr -d '[:space:]'" \
+    "city=>7"
+
+# REPL defn in user ns, call from another ns via qualified symbol
+run_test_cmd "repl qualified fn call cross-namespace" \
+    "printf '(defn greet [n] (str \"Hello \" n))\n(ns other)\n(user/greet \"Bob\")\n(exit)\n' | ./zig-out/bin/clojurez --repl 2>&1 | grep 'Hello' | head -1 | tr -d '[:space:]'" \
+    "other=>\"HelloBob\""
+
+# REPL namespace isolation: def in one ns doesn't leak to another
+run_test_cmd "repl namespace isolation" \
+    "printf '(def x 100)\n(ns other)\n(def x 200)\n(ns user)\nx\n(exit)\n' | ./zig-out/bin/clojurez --repl 2>&1 | grep 'user=> 100' | head -1 | tr -d '[:space:]'" \
+    "user=>100"
