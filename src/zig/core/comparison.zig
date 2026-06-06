@@ -122,3 +122,162 @@ pub fn registerComparisonFunctions(env: *Env) anyerror!void {
     try env.put("not=", Value.builtinFnValue(core_not_eq));
 }
 
+// ===== Unit Tests =====
+
+fn testEnv() Value.Env {
+    return Value.Env.init(std.heap.page_allocator);
+}
+
+var _testSelf: Value = Value.nilValue();
+fn testSelf() *Value {
+    return &_testSelf;
+}
+
+fn makeArgs(args: []const Value) list.List {
+    var result: list.List = .empty;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        _ = result.append(std.heap.page_allocator, args[i]) catch unreachable;
+    }
+    return result;
+}
+
+test "comparison::eq: equal integers" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(5), Value.intValue(5) });
+    var result = core_eq(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.bool_val == true);
+}
+
+test "comparison::eq: not equal integers" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(5), Value.intValue(6) });
+    var result = core_eq(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.bool_val == false);
+}
+
+test "comparison::eq: multiple args all equal" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(3), Value.intValue(3), Value.intValue(3) });
+    var result = core_eq(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.bool_val == true);
+}
+
+test "comparison::eq: less than 2 args returns error" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(1) });
+    try std.testing.expectError(error.ArityError, core_eq(testSelf(), args, &a));
+}
+
+test "comparison::not_eq: different values" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(1), Value.intValue(2) });
+    var result = core_not_eq(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.bool_val == true);
+}
+
+test "comparison::less: ascending chain" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(1), Value.intValue(2), Value.intValue(3) });
+    var result = core_less(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.bool_val == true);
+}
+
+test "comparison::less: not ascending" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(3), Value.intValue(2) });
+    var result = core_less(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.bool_val == false);
+}
+
+test "comparison::greater: descending chain" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(3), Value.intValue(2), Value.intValue(1) });
+    var result = core_greater(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.bool_val == true);
+}
+
+test "comparison::less_eq: equal values" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(5), Value.intValue(5) });
+    var result = core_less_eq(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.bool_val == true);
+}
+
+test "comparison::greater_eq: equal values" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(5), Value.intValue(5) });
+    var result = core_greater_eq(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.bool_val == true);
+}
+
+test "comparison::not: truthy becomes false" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(42) });
+    var result = core_not(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.bool_val == false);
+}
+
+test "comparison::not: nil becomes true" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.nilValue() });
+    var result = core_not(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.bool_val == true);
+}
+
+test "comparison::identical_q: same atoms" {
+    const alloc = std.heap.page_allocator;
+    var a = testEnv();
+    defer a.deinit(alloc);
+    const init = Value.intValue(42);
+    var atom = try Value.atomValue(alloc, init);
+    defer atom.deinit(alloc);
+    const data = atom.atom_val.?;
+    var atom2 = Value.atomValueShared(data);
+    defer atom2.deinit(alloc);
+
+    const args = makeArgs(&[_]Value{ atom, atom2 });
+    var result = core_identical_q(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(alloc);
+    try std.testing.expect(result.bool_val == true);
+}
+
+test "comparison::identical_q: equal integers" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(5), Value.intValue(5) });
+    var result = core_identical_q(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.bool_val == true);
+}
+
+test "comparison::identical_q: wrong arity" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(1) });
+    try std.testing.expectError(error.ArityError, core_identical_q(testSelf(), args, &a));
+}
+

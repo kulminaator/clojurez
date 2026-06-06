@@ -74,3 +74,72 @@ pub fn registerAtomFunctions(env: *Env) anyerror!void {
     try env.put("reset!", Value.builtinFnValue(core_reset_bang));
 }
 
+// ===== Unit Tests =====
+
+fn testEnv() Value.Env {
+    return Value.Env.init(std.heap.page_allocator);
+}
+
+fn makeArgs(args: []const Value) list.List {
+    var result: list.List = .empty;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        _ = result.append(std.heap.page_allocator, args[i]) catch unreachable;
+    }
+    return result;
+}
+
+var _testSelf: Value = Value.nilValue();
+fn testSelf() *Value {
+    return &_testSelf;
+}
+
+test "atoms::atom: creates atom" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(42) });
+    var result = core_atom(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .atom);
+    try std.testing.expect(result.atom_val.?.value.int_val == 42);
+}
+
+test "atoms::deref: gets atom value" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var atom = try Value.atomValue(std.heap.page_allocator, Value.intValue(42));
+    defer atom.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ atom });
+    var result = core_deref(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .integer);
+    try std.testing.expect(result.int_val == 42);
+}
+
+test "atoms::reset_bang: resets atom value" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var atom = try Value.atomValue(std.heap.page_allocator, Value.intValue(42));
+    defer atom.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ atom, Value.intValue(99) });
+    var result = core_reset_bang(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.int_val == 99);
+    // Atom should now hold 99
+    try std.testing.expect(atom.atom_val.?.value.int_val == 99);
+}
+
+test "atoms::reset_bang: wrong type returns error" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(1), Value.intValue(2) });
+    try std.testing.expectError(error.TypeError, core_reset_bang(testSelf(), args, &a));
+}
+
+test "atoms::atom: wrong arity returns error" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{});
+    try std.testing.expectError(error.ArityError, core_atom(testSelf(), args, &a));
+}
+

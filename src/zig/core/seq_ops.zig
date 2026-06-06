@@ -657,3 +657,161 @@ pub fn registerSequenceOpFunctions(env: *Env) anyerror!void {
     try env.put("iterate", Value.builtinFnValue(core_iterate));
 }
 
+// ===== Unit Tests =====
+
+fn testEnv() Value.Env {
+    return Value.Env.init(std.heap.page_allocator);
+}
+
+fn makeArgs(args: []const Value) list.List {
+    var result: list.List = .empty;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        _ = result.append(std.heap.page_allocator, args[i]) catch unreachable;
+    }
+    return result;
+}
+
+var _testSelf: Value = Value.nilValue();
+fn testSelf() *Value {
+    return &_testSelf;
+}
+
+test "seq_ops::flatten: nested list" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    // Build: (1 (2 3) 4)
+    var inner: list.List = .empty;
+    _ = inner.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
+    _ = inner.append(std.heap.page_allocator, Value.intValue(3)) catch unreachable;
+    var outer: list.List = .empty;
+    _ = outer.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    _ = outer.append(std.heap.page_allocator, Value.listValue(inner)) catch unreachable;
+    _ = outer.append(std.heap.page_allocator, Value.intValue(4)) catch unreachable;
+    const lv = Value.listValue(outer);
+    const args = makeArgs(&[_]Value{ lv });
+    var result = core_flatten(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .list);
+    try std.testing.expect(result.list_val.items.len == 4);
+    try std.testing.expect(result.list_val.items[0].int_val == 1);
+    try std.testing.expect(result.list_val.items[1].int_val == 2);
+    try std.testing.expect(result.list_val.items[2].int_val == 3);
+    try std.testing.expect(result.list_val.items[3].int_val == 4);
+}
+
+test "seq_ops::distinct_q: all distinct" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var l: list.List = .empty;
+    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(3)) catch unreachable;
+    const lv = Value.listValue(l);
+    const args = makeArgs(&[_]Value{ lv });
+    var result = core_distinct_q(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.bool_val == true);
+}
+
+test "seq_ops::distinct_q: has duplicates" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var l: list.List = .empty;
+    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    const lv = Value.listValue(l);
+    const args = makeArgs(&[_]Value{ lv });
+    var result = core_distinct_q(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.bool_val == false);
+}
+
+test "seq_ops::drop: list" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var l: list.List = .empty;
+    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(3)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(4)) catch unreachable;
+    const lv = Value.listValue(l);
+    const args = makeArgs(&[_]Value{ Value.intValue(2), lv });
+    var result = core_drop(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .list);
+    try std.testing.expect(result.list_val.items.len == 2);
+    try std.testing.expect(result.list_val.items[0].int_val == 3);
+}
+
+test "seq_ops::drop: more than length returns empty" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var l: list.List = .empty;
+    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    const lv = Value.listValue(l);
+    const args = makeArgs(&[_]Value{ Value.intValue(5), lv });
+    var result = core_drop(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .list);
+    try std.testing.expect(result.list_val.items.len == 0);
+}
+
+test "seq_ops::next: list" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var l: list.List = .empty;
+    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(3)) catch unreachable;
+    const lv = Value.listValue(l);
+    const args = makeArgs(&[_]Value{ lv });
+    var result = core_next(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .list);
+    try std.testing.expect(result.list_val.items.len == 2);
+    try std.testing.expect(result.list_val.items[0].int_val == 2);
+}
+
+test "seq_ops::next: single element returns nil" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var l: list.List = .empty;
+    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    const lv = Value.listValue(l);
+    const args = makeArgs(&[_]Value{ lv });
+    var result = core_next(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .nil);
+}
+
+test "seq_ops::nthnext: list" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var l: list.List = .empty;
+    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(3)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(4)) catch unreachable;
+    const lv = Value.listValue(l);
+    const args = makeArgs(&[_]Value{ Value.intValue(2), lv });
+    var result = core_nthnext(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .list);
+    try std.testing.expect(result.list_val.items.len == 2);
+    try std.testing.expect(result.list_val.items[0].int_val == 3);
+}
+
+test "seq_ops::nthnext: out of range returns nil" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var l: list.List = .empty;
+    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    const lv = Value.listValue(l);
+    const args = makeArgs(&[_]Value{ Value.intValue(5), lv });
+    var result = core_nthnext(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .nil);
+}
+

@@ -339,3 +339,184 @@ pub fn registerSequenceFunctions(env: *Env) anyerror!void {
     try env.put("seq", Value.builtinFnValue(core_seq));
 }
 
+// ===== Unit Tests =====
+
+fn testEnv() Value.Env {
+    return Value.Env.init(std.heap.page_allocator);
+}
+
+fn makeArgs(args: []const Value) list.List {
+    var result: list.List = .empty;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        _ = result.append(std.heap.page_allocator, args[i]) catch unreachable;
+    }
+    return result;
+}
+
+var _testSelf: Value = Value.nilValue();
+fn testSelf() *Value {
+    return &_testSelf;
+}
+
+test "sequences::count: list" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var l: list.List = .empty;
+    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(3)) catch unreachable;
+    const lv = Value.listValue(l);
+    const args = makeArgs(&[_]Value{ lv });
+    var result = core_count(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.int_val == 3);
+}
+
+test "sequences::count: vector" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var v: vec.Vector = .empty;
+    _ = v.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    _ = v.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
+    const vv = Value.vectorValue(v);
+    const args = makeArgs(&[_]Value{ vv });
+    var result = core_count(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.int_val == 2);
+}
+
+test "sequences::count: string (code points)" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var s = try Value.stringValue(std.heap.page_allocator, "hello");
+    defer s.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ s });
+    var result = core_count(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.int_val == 5);
+}
+
+test "sequences::first: list" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var l: list.List = .empty;
+    _ = l.append(std.heap.page_allocator, Value.intValue(42)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(99)) catch unreachable;
+    const lv = Value.listValue(l);
+    const args = makeArgs(&[_]Value{ lv });
+    var result = core_first(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.int_val == 42);
+}
+
+test "sequences::first: empty list returns nil" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.listValue(list.empty()) });
+    var result = core_first(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .nil);
+}
+
+test "sequences::rest: list" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var l: list.List = .empty;
+    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(3)) catch unreachable;
+    const lv = Value.listValue(l);
+    const args = makeArgs(&[_]Value{ lv });
+    var result = core_rest(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .list);
+    try std.testing.expect(result.list_val.items.len == 2);
+    try std.testing.expect(result.list_val.items[0].int_val == 2);
+}
+
+test "sequences::nth: list" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var l: list.List = .empty;
+    _ = l.append(std.heap.page_allocator, Value.intValue(10)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(20)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(30)) catch unreachable;
+    const lv = Value.listValue(l);
+    const args = makeArgs(&[_]Value{ lv, Value.intValue(1) });
+    var result = core_nth(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.int_val == 20);
+}
+
+test "sequences::nth: out of range returns nil" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var l: list.List = .empty;
+    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    const lv = Value.listValue(l);
+    const args = makeArgs(&[_]Value{ lv, Value.intValue(5) });
+    var result = core_nth(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .nil);
+}
+
+test "sequences::list: creates list from args" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(1), Value.intValue(2), Value.intValue(3) });
+    var result = core_list(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .list);
+    try std.testing.expect(result.list_val.items.len == 3);
+}
+
+test "sequences::seq: non-empty list returns list" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var l: list.List = .empty;
+    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    const lv = Value.listValue(l);
+    const args = makeArgs(&[_]Value{ lv });
+    var result = core_seq(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .list);
+}
+
+test "sequences::seq: empty list returns nil" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.listValue(list.empty()) });
+    var result = core_seq(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .nil);
+}
+
+test "sequences::concat: two lists" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var l1: list.List = .empty;
+    _ = l1.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    var l2: list.List = .empty;
+    _ = l2.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
+    const lv1 = Value.listValue(l1);
+    const lv2 = Value.listValue(l2);
+    const args = makeArgs(&[_]Value{ lv1, lv2 });
+    var result = core_concat(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .list);
+    try std.testing.expect(result.list_val.items.len == 2);
+}
+
+test "sequences::concat: nil treated as empty" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var l: list.List = .empty;
+    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    const lv = Value.listValue(l);
+    const args = makeArgs(&[_]Value{ lv, Value.nilValue() });
+    var result = core_concat(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.list_val.items.len == 1);
+}
+

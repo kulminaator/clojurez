@@ -48,3 +48,59 @@ pub fn toNum(v: Value) f64 {
         else => 0,
     };
 }
+
+// ===== Unit Tests =====
+
+test "helpers::isIntF64: exact integers return true" {
+    try std.testing.expect(isIntF64(0.0));
+    try std.testing.expect(isIntF64(1.0));
+    try std.testing.expect(isIntF64(-5.0));
+    try std.testing.expect(isIntF64(1000000.0));
+}
+
+test "helpers::isIntF64: non-integers return false" {
+    try std.testing.expect(!isIntF64(1.5));
+    try std.testing.expect(!isIntF64(-3.14));
+    try std.testing.expect(!isIntF64(0.001));
+}
+
+test "helpers::isIntF64: nan and inf return false" {
+    try std.testing.expect(!isIntF64(std.math.nan(f64)));
+    try std.testing.expect(!isIntF64(std.math.inf(f64)));
+    try std.testing.expect(!isIntF64(-std.math.inf(f64)));
+}
+
+test "helpers::isIntF64: out of i64 range returns false" {
+    const huge: f64 = 1e20;
+    try std.testing.expect(!isIntF64(huge));
+}
+
+test "helpers::toInt: integer value" {
+    const v = Value.intValue(42);
+    try std.testing.expect(try toInt(v) == 42);
+}
+
+test "helpers::toInt: float value" {
+    const v = Value.floatValue(3.0);
+    try std.testing.expect(try toInt(v) == 3);
+}
+
+test "helpers::toInt: non-numeric returns error" {
+    const v = Value.nilValue();
+    try std.testing.expectError(error.TypeError, toInt(v));
+}
+
+test "helpers::toNum: integer value" {
+    const v = Value.intValue(42);
+    try std.testing.expect(toNum(v) == 42.0);
+}
+
+test "helpers::toNum: float value" {
+    const v = Value.floatValue(3.14);
+    try std.testing.expect(toNum(v) == 3.14);
+}
+
+test "helpers::toNum: non-numeric returns 0" {
+    const v = Value.nilValue();
+    try std.testing.expect(toNum(v) == 0);
+}

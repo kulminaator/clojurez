@@ -295,3 +295,165 @@ pub fn registerCollectionFunctions(env: *Env) anyerror!void {
     try env.put("contains?", Value.builtinFnValue(core_contains_q));
 }
 
+// ===== Unit Tests =====
+
+fn testEnv() Value.Env {
+    return Value.Env.init(std.heap.page_allocator);
+}
+
+fn makeArgs(args: []const Value) list.List {
+    var result: list.List = .empty;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        _ = result.append(std.heap.page_allocator, args[i]) catch unreachable;
+    }
+    return result;
+}
+
+var _testSelf: Value = Value.nilValue();
+fn testSelf() *Value {
+    return &_testSelf;
+}
+
+test "collections::conj: vector" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var v: vec.Vector = .empty;
+    _ = v.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    _ = v.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
+    var vv = Value.vectorValue(v);
+    defer vv.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ vv, Value.intValue(3) });
+    var result = core_conj(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .vector);
+    try std.testing.expect(result.vec_val.items.len == 3);
+}
+
+test "collections::conj: list" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var l: list.List = .empty;
+    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
+    var lv = Value.listValue(l);
+    defer lv.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ lv, Value.intValue(3) });
+    var result = core_conj(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .list);
+    // conj on list adds to front: (3 1 2)
+    try std.testing.expect(result.list_val.items.len == 3);
+    try std.testing.expect(result.list_val.items[0].int_val == 3);
+}
+
+test "collections::pop: vector" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var v: vec.Vector = .empty;
+    _ = v.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    _ = v.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
+    _ = v.append(std.heap.page_allocator, Value.intValue(3)) catch unreachable;
+    var vv = Value.vectorValue(v);
+    defer vv.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ vv });
+    var result = core_pop(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .vector);
+    try std.testing.expect(result.vec_val.items.len == 2);
+}
+
+test "collections::last: list" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var l: list.List = .empty;
+    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(3)) catch unreachable;
+    var lv = Value.listValue(l);
+    defer lv.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ lv });
+    var result = core_last(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.int_val == 3);
+}
+
+test "collections::last: empty list returns nil" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.listValue(list.empty()) });
+    var result = core_last(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .nil);
+}
+
+test "collections::reverse: list" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var l: list.List = .empty;
+    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(3)) catch unreachable;
+    var lv = Value.listValue(l);
+    defer lv.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ lv });
+    var result = core_reverse(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .list);
+    try std.testing.expect(result.list_val.items[0].int_val == 3);
+    try std.testing.expect(result.list_val.items[2].int_val == 1);
+}
+
+test "collections::contains_q: map has key" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var m: Value.Map = .empty;
+    _ = m.append(std.heap.page_allocator, .{ .key = Value.intValue(1), .value = Value.intValue(10) }) catch unreachable;
+    var mv = Value.mapValue(m);
+    defer mv.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ mv, Value.intValue(1) });
+    var result = core_contains_q(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.bool_val == true);
+}
+
+test "collections::contains_q: map missing key" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var m: Value.Map = .empty;
+    _ = m.append(std.heap.page_allocator, .{ .key = Value.intValue(1), .value = Value.intValue(10) }) catch unreachable;
+    var mv = Value.mapValue(m);
+    defer mv.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ mv, Value.intValue(99) });
+    var result = core_contains_q(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.bool_val == false);
+}
+
+test "collections::contains_q: vector index in range" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var v: vec.Vector = .empty;
+    _ = v.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    _ = v.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
+    var vv = Value.vectorValue(v);
+    defer vv.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ vv, Value.intValue(0) });
+    var result = core_contains_q(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.bool_val == true);
+}
+
+test "collections::contains_q: vector index out of range" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var v: vec.Vector = .empty;
+    _ = v.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    var vv = Value.vectorValue(v);
+    defer vv.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ vv, Value.intValue(5) });
+    var result = core_contains_q(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.bool_val == false);
+}
+

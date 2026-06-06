@@ -41,3 +41,42 @@ pub fn fmt(self: List, allocator: Allocator) anyerror![]const u8 {
     try buf.append(allocator, ')');
     return buf.toOwnedSlice(allocator);
 }
+
+// ===== Unit Tests =====
+
+test "list::empty: creates empty list" {
+    const l = empty();
+    try std.testing.expect(l.items.len == 0);
+}
+
+test "list::fmt: empty list" {
+    const a = std.heap.page_allocator;
+    const s = try fmt(empty(), a);
+    defer a.free(s);
+    try std.testing.expect(std.mem.eql(u8, s, "()"));
+}
+
+test "list::fmt: list with integers" {
+    const a = std.heap.page_allocator;
+    var l: List = .empty;
+    _ = l.append(a, Value.intValue(1)) catch unreachable;
+    _ = l.append(a, Value.intValue(2)) catch unreachable;
+    _ = l.append(a, Value.intValue(3)) catch unreachable;
+    const s = try fmt(l, a);
+    defer l.deinit(a);
+    defer a.free(s);
+    try std.testing.expect(std.mem.eql(u8, s, "(1 2 3)"));
+}
+
+test "list::clone: round-trip" {
+    const a = std.heap.page_allocator;
+    var l: List = .empty;
+    _ = l.append(a, Value.intValue(1)) catch unreachable;
+    _ = l.append(a, Value.intValue(2)) catch unreachable;
+    var cloned = try l.clone(a);
+    defer l.deinit(a);
+    defer cloned.deinit(a);
+    try std.testing.expect(cloned.items.len == 2);
+    try std.testing.expect(cloned.items[0].int_val == 1);
+    try std.testing.expect(cloned.items[1].int_val == 2);
+}

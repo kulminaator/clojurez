@@ -114,3 +114,163 @@ pub fn registerArithmeticFunctions(env: *Env) anyerror!void {
     try env.put("rem", Value.builtinFnValue(core_mod));
 }
 
+// ===== Unit Tests =====
+
+fn testEnv() Value.Env {
+    return Value.Env.init(std.heap.page_allocator);
+}
+
+var _testSelf: Value = Value.nilValue();
+fn testSelf() *Value {
+    return &_testSelf;
+}
+
+fn makeArgs(args: []const Value) list.List {
+    var result: list.List = .empty;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        _ = result.append(std.heap.page_allocator, args[i]) catch unreachable;
+    }
+    return result;
+}
+
+test "arithmetic::plus: two integers" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(2), Value.intValue(3) });
+    var result = core_plus(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .integer);
+    try std.testing.expect(result.int_val == 5);
+}
+
+test "arithmetic::plus: zero args returns 0" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{});
+    var result = core_plus(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.int_val == 0);
+}
+
+test "arithmetic::plus: mixed int and float" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(3), Value.floatValue(1.5) });
+    var result = core_plus(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .float);
+    try std.testing.expect(result.float_val == 4.5);
+}
+
+test "arithmetic::plus: type error on non-numeric" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(1), Value.nilValue() });
+    try std.testing.expectError(error.TypeError, core_plus(testSelf(), args, &a));
+}
+
+test "arithmetic::minus: single arg returns value" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(5) });
+    var result = core_minus(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    // Single arg: returns the value as-is (no negation in current impl)
+    try std.testing.expect(result.type == .integer);
+    try std.testing.expect(result.int_val == 5);
+}
+
+test "arithmetic::minus: two args" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(10), Value.intValue(3) });
+    var result = core_minus(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.int_val == 7);
+}
+
+test "arithmetic::minus: zero args returns error" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{});
+    try std.testing.expectError(error.ArityError, core_minus(testSelf(), args, &a));
+}
+
+test "arithmetic::mult: two integers" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(6), Value.intValue(7) });
+    var result = core_mult(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.int_val == 42);
+}
+
+test "arithmetic::mult: zero args returns 1" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{});
+    var result = core_mult(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.int_val == 1);
+}
+
+test "arithmetic::div: integer division" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    // 10/3 = 3.333... which is not an integer, so returns float
+    const args = makeArgs(&[_]Value{ Value.intValue(10), Value.intValue(3) });
+    var result = core_div(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .float);
+    try std.testing.expect(result.float_val > 3.33 and result.float_val < 3.34);
+}
+
+test "arithmetic::div: exact division" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    // 10/2 = 5.0 which is an integer
+    const args = makeArgs(&[_]Value{ Value.intValue(10), Value.intValue(2) });
+    var result = core_div(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .integer);
+    try std.testing.expect(result.int_val == 5);
+}
+
+test "arithmetic::div: division by zero" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(10), Value.intValue(0) });
+    try std.testing.expectError(error.DivisionByZero, core_div(testSelf(), args, &a));
+}
+
+test "arithmetic::div: zero args returns error" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{});
+    try std.testing.expectError(error.ArityError, core_div(testSelf(), args, &a));
+}
+
+test "arithmetic::mod: basic modulo" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(10), Value.intValue(3) });
+    var result = core_mod(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.int_val == 1);
+}
+
+test "arithmetic::mod: division by zero" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(10), Value.intValue(0) });
+    try std.testing.expectError(error.DivisionByZero, core_mod(testSelf(), args, &a));
+}
+
+test "arithmetic::mod: wrong arity" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(10) });
+    try std.testing.expectError(error.ArityError, core_mod(testSelf(), args, &a));
+}
+

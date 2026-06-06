@@ -82,3 +82,73 @@ pub fn registerSetFunctions(env: *Env) anyerror!void {
     try env.put("disj", Value.builtinFnValue(core_disj));
 }
 
+// ===== Unit Tests =====
+
+fn testEnv() Value.Env {
+    return Value.Env.init(std.heap.page_allocator);
+}
+
+fn makeArgs(args: []const Value) list.List {
+    var result: list.List = .empty;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        _ = result.append(std.heap.page_allocator, args[i]) catch unreachable;
+    }
+    return result;
+}
+
+var _testSelf: Value = Value.nilValue();
+fn testSelf() *Value {
+    return &_testSelf;
+}
+
+test "sets::set_q: set is set" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.setValue(.empty) });
+    var result = core_set_q(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.bool_val == true);
+}
+
+test "sets::set_q: list is not set" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.listValue(list.empty()) });
+    var result = core_set_q(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.bool_val == false);
+}
+
+test "sets::set: from list" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var l: list.List = .empty;
+    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    const lv = Value.listValue(l);
+    const args = makeArgs(&[_]Value{ lv });
+    var result = core_set(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .set);
+    // Duplicates removed: {1, 2}
+    try std.testing.expect(result.set_val.items.len == 2);
+}
+
+test "sets::disj: removes element" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var s: Value.Set = .empty;
+    _ = s.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
+    _ = s.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
+    _ = s.append(std.heap.page_allocator, Value.intValue(3)) catch unreachable;
+    var sv = Value.setValue(s);
+    defer sv.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ sv, Value.intValue(2) });
+    var result = core_disj(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .set);
+    try std.testing.expect(result.set_val.items.len == 2);
+}
+

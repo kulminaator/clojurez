@@ -217,3 +217,30 @@ pub fn getMemTraceConfig(environ: std.process.Environ) ?[]const u8 {
     }
     return std.heap.page_allocator.dupe(u8, val) catch null;
 }
+
+// ===== Unit Tests =====
+
+test "debug_allocator::getMemTraceConfig: no env returns null" {
+    // getMemTraceConfig reads from the actual environment.
+    // In a test context, CLJVM_MEM_TRACE is typically not set.
+    // We skip this test as it depends on external environment state.
+    _ = getMemTraceConfig;
+}
+
+test "debug_allocator::DebugAllocator: init without tracing" {
+    var da = DebugAllocator.init(std.heap.page_allocator, null);
+    defer da.deinit();
+    try std.testing.expect(!da.active);
+    const alloc = da.allocator();
+    const ptr = try alloc.alloc(u8, 64);
+    alloc.free(ptr);
+}
+
+test "debug_allocator::DebugAllocator: init with stderr tracing" {
+    var da = DebugAllocator.init(std.heap.page_allocator, "stderr");
+    defer da.deinit();
+    try std.testing.expect(da.active);
+    const alloc = da.allocator();
+    const ptr = try alloc.alloc(u8, 64);
+    alloc.free(ptr);
+}

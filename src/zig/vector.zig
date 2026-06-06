@@ -41,3 +41,41 @@ pub fn fmt(self: Vector, allocator: Allocator) anyerror![]const u8 {
     try buf.append(allocator, ']');
     return buf.toOwnedSlice(allocator);
 }
+
+// ===== Unit Tests =====
+
+test "vector::empty: creates empty vector" {
+    const v = empty();
+    try std.testing.expect(v.items.len == 0);
+}
+
+test "vector::fmt: empty vector" {
+    const a = std.heap.page_allocator;
+    const s = try fmt(empty(), a);
+    defer a.free(s);
+    try std.testing.expect(std.mem.eql(u8, s, "[]"));
+}
+
+test "vector::fmt: vector with integers" {
+    const a = std.heap.page_allocator;
+    var v: Vector = .empty;
+    _ = v.append(a, Value.intValue(1)) catch unreachable;
+    _ = v.append(a, Value.intValue(2)) catch unreachable;
+    const s = try fmt(v, a);
+    defer v.deinit(a);
+    defer a.free(s);
+    try std.testing.expect(std.mem.eql(u8, s, "[1 2]"));
+}
+
+test "vector::clone: round-trip" {
+    const a = std.heap.page_allocator;
+    var v: Vector = .empty;
+    _ = v.append(a, Value.intValue(10)) catch unreachable;
+    _ = v.append(a, Value.intValue(20)) catch unreachable;
+    var cloned = try v.clone(a);
+    defer v.deinit(a);
+    defer cloned.deinit(a);
+    try std.testing.expect(cloned.items.len == 2);
+    try std.testing.expect(cloned.items[0].int_val == 10);
+    try std.testing.expect(cloned.items[1].int_val == 20);
+}

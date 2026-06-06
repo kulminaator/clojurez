@@ -268,3 +268,103 @@ pub fn registerMapFunctions(env: *Env) anyerror!void {
     try env.put("hash-map", Value.builtinFnValue(core_hash_map));
 }
 
+// ===== Unit Tests =====
+
+fn testEnv() Value.Env {
+    return Value.Env.init(std.heap.page_allocator);
+}
+
+fn makeArgs(args: []const Value) list.List {
+    var result: list.List = .empty;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        _ = result.append(std.heap.page_allocator, args[i]) catch unreachable;
+    }
+    return result;
+}
+
+var _testSelf: Value = Value.nilValue();
+fn testSelf() *Value {
+    return &_testSelf;
+}
+
+fn makeMap(kvs: []const Value) Value {
+    const a = std.heap.page_allocator;
+    var m: Value.Map = .empty;
+    var i: usize = 0;
+    while (i + 1 < kvs.len) : (i += 2) {
+        _ = m.append(a, .{ .key = kvs[i], .value = kvs[i + 1] }) catch unreachable;
+    }
+    return Value.mapValue(m);
+}
+
+test "maps::get: finds key" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var m = makeMap(&[_]Value{ Value.intValue(1), Value.intValue(10), Value.intValue(2), Value.intValue(20) });
+    defer m.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ m, Value.intValue(1) });
+    var result = core_get(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.int_val == 10);
+}
+
+test "maps::get: missing key returns nil" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var m = makeMap(&[_]Value{ Value.intValue(1), Value.intValue(10) });
+    defer m.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ m, Value.intValue(99) });
+    var result = core_get(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .nil);
+}
+
+test "maps::keys: returns all keys" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var m = makeMap(&[_]Value{ Value.intValue(1), Value.intValue(10), Value.intValue(2), Value.intValue(20) });
+    defer m.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ m });
+    var result = core_keys(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .list);
+    try std.testing.expect(result.list_val.items.len == 2);
+}
+
+test "maps::vals: returns all values" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var m = makeMap(&[_]Value{ Value.intValue(1), Value.intValue(10), Value.intValue(2), Value.intValue(20) });
+    defer m.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ m });
+    var result = core_vals(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .list);
+    try std.testing.expect(result.list_val.items.len == 2);
+}
+
+test "maps::merge: merges two maps" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var m1 = makeMap(&[_]Value{ Value.intValue(1), Value.intValue(10) });
+    defer m1.deinit(std.heap.page_allocator);
+    var m2 = makeMap(&[_]Value{ Value.intValue(2), Value.intValue(20) });
+    defer m2.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ m1, m2 });
+    var result = core_merge(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .map);
+    try std.testing.expect(result.map_val.items.len == 2);
+}
+
+test "maps::merge: no args returns empty map" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{});
+    var result = core_merge(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .map);
+    try std.testing.expect(result.map_val.items.len == 0);
+}
+
