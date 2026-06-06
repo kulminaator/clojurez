@@ -1,5 +1,6 @@
 main
 test_lexer
 original_clojure/
-.zig-cache
-zig-out
+.zig-cache/
+zig-out/
+*.o
