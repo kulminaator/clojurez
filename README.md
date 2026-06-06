@@ -44,6 +44,16 @@ Type `(quit)` or `(exit)` or `CTRL+D` to exit.
 
 For full details — features, API, testing, and project structure — see [TECHNICAL_README.md](TECHNICAL_README.md).
 
+## Compatibility
+While the project strives for good compatibility, we are definitely not there yet and we will never be fully there, as we lack JVM.
+
+So here are the known differences:
+ - no java support, not today, not ever
+ - hence also no jit. we are pretty much a parsing machine most of the time
+ - our strings are utf8, not utf16
+ - our collections have a simpler design and don't have chunking etc.
+ - our runtime is minuscule, less than a megabyte in the minimized form
+
 ## License:
  Eclipse 1.0 license to be in harmony with original clojure project
 
