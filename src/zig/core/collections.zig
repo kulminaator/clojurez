@@ -5,6 +5,9 @@ const list = @import("../list.zig");
 const vec = @import("../vector.zig");
 const Env = Value.Env;
 const sequences = @import("sequences.zig");
+const helpers = @import("helpers.zig");
+
+const toInt = helpers.toInt;
 
 pub fn core_conj(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
@@ -280,14 +283,6 @@ pub fn core_contains_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
         },
         else => return error.TypeError,
     }
-}
-
-fn toInt(v: Value) anyerror!i64 {
-    return switch (v.type) {
-        .integer => v.int_val,
-        .float => @as(i64, @intFromFloat(v.float_val)),
-        else => return error.TypeError,
-    };
 }
 
 pub fn registerCollectionFunctions(env: *Env) anyerror!void {

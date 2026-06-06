@@ -3,16 +3,38 @@ const std = @import("std");
 const Value = @import("../value.zig");
 const list = @import("../list.zig");
 const vec = @import("../vector.zig");
+const helpers = @import("helpers.zig");
 
 const Allocator = std.mem.Allocator;
 
-pub fn listFromVector(allocator: Allocator, v: vec.Vector) anyerror!list.List {
-    var result: list.List = .empty;
-    errdefer result.deinit(allocator);
-    for (v.items) |item| {
-        try result.append(allocator, try item.clone(allocator));
+// Bind a parameter to an argument, supporting destructuring
+fn bindParam(allocator: Allocator, param: Value, arg: Value, env: *Value.Env) anyerror!void {
+    switch (param.type) {
+        .symbol => {
+            try env.put(param.sym_val, try arg.clone(allocator));
+        },
+        .vector => {
+            var arg_items: []const Value = undefined;
+            switch (arg.type) {
+                .list => arg_items = arg.list_val.items,
+                .vector => arg_items = arg.vec_val.items,
+                else => return error.TypeError,
+            }
+            if (param.vec_val.items.len != arg_items.len) return error.ArityError;
+            var i: usize = 0;
+            while (i < param.vec_val.items.len) : (i += 1) {
+                try bindParam(allocator, param.vec_val.items[i], arg_items[i], env);
+            }
+        },
+        .list => {
+            if (param.list_val.items.len != arg.list_val.items.len) return error.ArityError;
+            var i: usize = 0;
+            while (i < param.list_val.items.len) : (i += 1) {
+                try bindParam(allocator, param.list_val.items[i], arg.list_val.items[i], env);
+            }
+        },
+        else => {},
     }
-    return result;
 }
 
 pub fn callBuiltin(allocator: Allocator, f: Value, args_list: list.List, env: *Value.Env) anyerror!Value {
@@ -65,9 +87,7 @@ pub fn callBuiltin(allocator: Allocator, f: Value, args_list: list.List, env: *V
             var i: usize = 0;
             while (i < arity.params.items.len) : (i += 1) {
                 const param = arity.params.items[i];
-                if (param.type == .symbol) {
-                    try new_env.put(param.sym_val, try args_list.items[i].clone(allocator));
-                }
+                try bindParam(allocator, param, args_list.items[i], &new_env);
             }
 
             if (has_rest and args_list.items.len > min_args) {
@@ -217,7 +237,7 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
                     if (form.list_val.items.len < 2) return error.ArityError;
                     const params = form.list_val.items[1];
                     if (params.type != .list and params.type != .vector) return error.TypeError;
-                    const params_list = if (params.type == .vector) try listFromVector(allocator, params.vec_val) else params.list_val;
+                    const params_list = if (params.type == .vector) try helpers.listFromVector(allocator, params.vec_val) else params.list_val;
                     const body = if (form.list_val.items.len >= 3) form.list_val.items[2..] else &[_]Value{};
                     var body_list: list.List = .empty;
                     errdefer body_list.deinit(allocator);

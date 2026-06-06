@@ -5,6 +5,7 @@ const list = @import("../list.zig");
 const vec = @import("../vector.zig");
 const Env = Value.Env;
 const eval_helpers = @import("eval_helpers.zig");
+const helpers = @import("helpers.zig");
 const Allocator = std.mem.Allocator;
 
 /// Force a lazy-seq to a realized list
@@ -120,7 +121,7 @@ pub fn core_rest(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 pub fn core_nth(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 2) return error.ArityError;
-    const idx = try toInt(args.items[1]);
+    const idx = try helpers.toInt(args.items[1]);
     switch (args.items[0].type) {
         .list => {
             if (idx < 0 or @as(usize, @intCast(idx)) >= args.items[0].list_val.items.len) return Value.nilValue();
@@ -139,14 +140,6 @@ pub fn core_nth(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
         },
         else => return error.TypeError,
     }
-}
-
-fn toInt(v: Value) anyerror!i64 {
-    return switch (v.type) {
-        .integer => v.int_val,
-        .float => @as(i64, @intFromFloat(v.float_val)),
-        else => return error.TypeError,
-    };
 }
 
 pub fn core_take(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
@@ -308,6 +301,31 @@ pub fn core_gensym(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
     return try Value.symValue(allocator, name);
 }
 
+pub fn core_seq(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const coll = args.items[0];
+
+    // Handle lazy_seq: force it to a list first
+    if (coll.type == .lazy_seq) {
+        var forced = try forceLazySeqHelper(env_env.allocator, coll);
+        defer forced.deinit(env_env.allocator);
+        if (forced.list_val.items.len == 0) return Value.nilValue();
+        return try forced.clone(env_env.allocator);
+    }
+
+    const len: usize = switch (coll.type) {
+        .list => coll.list_val.items.len,
+        .vector => coll.vec_val.items.len,
+        .map => coll.map_val.items.len,
+        .set => coll.set_val.items.len,
+        .queue => coll.queue_val.items.len,
+        else => return Value.nilValue(),
+    };
+    if (len == 0) return Value.nilValue();
+    return try coll.clone(env_env.allocator);
+}
+
 pub fn registerSequenceFunctions(env: *Env) anyerror!void {
     try env.put("count", Value.builtinFnValue(core_count));
     try env.put("first", Value.builtinFnValue(core_first));
@@ -318,5 +336,6 @@ pub fn registerSequenceFunctions(env: *Env) anyerror!void {
     try env.put("vec", Value.builtinFnValue(core_vec));
     try env.put("gensym", Value.builtinFnValue(core_gensym));
     try env.put("take", Value.builtinFnValue(core_take));
+    try env.put("seq", Value.builtinFnValue(core_seq));
 }
 

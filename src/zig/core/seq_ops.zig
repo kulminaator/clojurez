@@ -8,13 +8,14 @@ const Env = Value.Env;
 const helpers = @import("helpers.zig");
 const eval_helpers = @import("eval_helpers.zig");
 const arithmetic = @import("arithmetic.zig");
+const sequences = @import("sequences.zig");
 
 const Allocator = std.mem.Allocator;
 
 const toInt = helpers.toInt;
 
 // Force a lazy_map into a concrete list
-fn forceLazyMap(allocator: Allocator, lm: *Value.LazyMapData, env: *Env) anyerror!list.List {
+pub fn forceLazyMap(allocator: Allocator, lm: *Value.LazyMapData, env: *Env) anyerror!list.List {
     var result: list.List = .empty;
     errdefer result.deinit(allocator);
 
@@ -316,7 +317,7 @@ fn doFlatten(allocator: Allocator, val: Value, env: *Env) anyerror!Value {
 
 pub fn core_next(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     if (args.items.len != 1) return error.ArityError;
-    var rest = try core_rest(self, args, env_env);
+    var rest = try sequences.core_rest(self, args, env_env);
     if (rest.type == .list and rest.list_val.items.len == 0) {
         rest.deinit(env_env.allocator);
         return Value.nilValue();
@@ -324,38 +325,10 @@ pub fn core_next(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return rest;
 }
 
-fn core_rest(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
-    _ = self;
-    if (args.items.len != 1) return error.ArityError;
-    switch (args.items[0].type) {
-        .list => {
-            if (args.items[0].list_val.items.len <= 1) return Value.listValue(list.empty());
-            const rest = args.items[0].list_val.items[1..];
-            var new_list: list.List = .empty;
-            errdefer new_list.deinit(env_env.allocator);
-            for (rest) |item| {
-                try new_list.append(env_env.allocator, try item.clone(env_env.allocator));
-            }
-            return Value.listValue(new_list);
-        },
-        .vector => {
-            if (args.items[0].vec_val.items.len <= 1) return Value.listValue(list.empty());
-            const rest = args.items[0].vec_val.items[1..];
-            var new_list: list.List = .empty;
-            errdefer new_list.deinit(env_env.allocator);
-            for (rest) |item| {
-                try new_list.append(env_env.allocator, try item.clone(env_env.allocator));
-            }
-            return Value.listValue(new_list);
-        },
-        else => return Value.listValue(list.empty()),
-    }
-}
-
 pub fn core_nthnext(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     if (args.items.len != 2) return error.ArityError;
     const n = try toInt(args.items[0]);
-    if (n <= 0) return try core_seq(self, args, env_env);
+    if (n <= 0) return try sequences.core_seq(self, args, env_env);
 
     const coll = args.items[1];
     var items: []const Value = undefined;
@@ -375,22 +348,6 @@ pub fn core_nthnext(self: *Value, args: list.List, env_env: *Env) anyerror!Value
         try result.append(env_env.allocator, try items[i].clone(env_env.allocator));
     }
     return Value.listValue(result);
-}
-
-fn core_seq(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
-    _ = self;
-    if (args.items.len != 1) return error.ArityError;
-    const coll = args.items[0];
-    const len: usize = switch (coll.type) {
-        .list => coll.list_val.items.len,
-        .vector => coll.vec_val.items.len,
-        .map => coll.map_val.items.len,
-        .set => coll.set_val.items.len,
-        .queue => coll.queue_val.items.len,
-        else => return Value.nilValue(),
-    };
-    if (len == 0) return Value.nilValue();
-    return try coll.clone(env_env.allocator);
 }
 
 pub fn core_filter(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
@@ -654,6 +611,35 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
     };
 }
 
+// iterate: repeatedly apply f to init, collecting results in a vector
+pub fn core_iterate(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 2) return error.ArityError;
+    const allocator = env_env.allocator;
+    const f = args.items[0];
+    var current = try args.items[1].clone(allocator);
+    defer current.deinit(allocator);
+
+    var result: vec.Vector = .empty;
+    errdefer result.deinit(allocator);
+
+    const max_iter: usize = 1000;
+    var i: usize = 0;
+    while (i < max_iter) : (i += 1) {
+        try result.append(allocator, try current.clone(allocator));
+
+        // Call f with current as argument
+        var arg_list: list.List = .empty;
+        errdefer arg_list.deinit(allocator);
+        try arg_list.append(allocator, try current.clone(allocator));
+
+        const next_val = try eval_helpers.callBuiltin(allocator, f, arg_list, env_env);
+        current.deinit(allocator);
+        current = next_val;
+    }
+    return Value.vectorValue(result);
+}
+
 pub fn registerSequenceOpFunctions(env: *Env) anyerror!void {
     try env.put("map", Value.builtinFnValue(core_map));
     try env.put("mapcat", Value.builtinFnValue(core_mapcat));
@@ -668,5 +654,6 @@ pub fn registerSequenceOpFunctions(env: *Env) anyerror!void {
     try env.put("nthnext", Value.builtinFnValue(core_nthnext));
     try env.put("drop", Value.builtinFnValue(core_drop));
     try env.put("doall*", Value.builtinFnValue(core_doall_star));
+    try env.put("iterate", Value.builtinFnValue(core_iterate));
 }
 

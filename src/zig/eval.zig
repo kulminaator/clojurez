@@ -5,17 +5,32 @@ const vec = @import("vector.zig");
 const Env = Value.Env;
 const parser = @import("parser.zig");
 const eval_helpers = @import("core/eval_helpers.zig");
+const helpers = @import("core/helpers.zig");
+const seq_ops = @import("core/seq_ops.zig");
+const eval_thread = @import("eval_thread.zig");
+const eval_macro = @import("eval_macro.zig");
+const eval_ns = @import("eval_ns.zig");
 
 const Allocator = std.mem.Allocator;
 
-/// Walk up the env parent chain to find the namespace manager.
-pub fn findNsManager(env: *const Env) ?*Value.NamespaceManager {
-    var current: ?*const Env = env;
-    while (current) |e| {
-        if (e.ns_manager) |mgr| return mgr;
-        current = e.parent;
+// Re-export findNsManager for use by main.zig and other modules
+pub const findNsManager = eval_ns.findNsManager;
+
+// Bind a symbol in the current namespace's env.
+// If the env is the root env (has ns_manager), bind directly.
+// Otherwise, bind in the current namespace's env.
+pub fn bindInCurrentNamespace(env: *Env, name: []const u8, value: Value) anyerror!void {
+    if (findNsManager(env)) |ns_mgr| {
+        if (env.ns_manager != null) {
+            try env.put(name, value);
+        } else {
+            const current_ns = ns_mgr.getCurrentNamespace();
+            const ns_env = ns_mgr.getNamespace(current_ns) orelse env;
+            try ns_env.put(name, value);
+        }
+    } else {
+        try env.put(name, value);
     }
-    return null;
 }
 
 pub const EvalError = error{
@@ -44,30 +59,16 @@ pub fn forceLazyMap(allocator: Allocator, arena_alloc: Allocator, lazy: Value, e
     var result: list.List = .empty;
     errdefer result.deinit(arena_alloc);
 
-    // Handle list/vector
-    var coll_items: []const Value = undefined;
-    const coll_len: usize = switch (lm.coll.type) {
-        .list => lm.coll.list_val.items.len,
-        .vector => lm.coll.vec_val.items.len,
-        else => return Value.listValue(list.empty()),
-    };
-    switch (lm.coll.type) {
-        .list => coll_items = lm.coll.list_val.items,
-        .vector => coll_items = lm.coll.vec_val.items,
-        else => return Value.listValue(list.empty()),
-    }
-    var i: usize = lm.idx;
-    while (i < coll_len) : (i += 1) {
-        var arg_list: list.List = .empty;
-        errdefer arg_list.deinit(arena_alloc);
-        try arg_list.append(arena_alloc, try coll_items[i].clone(arena_alloc));
-        const mapped = try eval_helpers.callBuiltin(allocator, lm.fn_val, arg_list, env);
-        try result.append(arena_alloc, mapped);
+    // Use seq_ops.forceLazyMap to do the actual iteration
+    var concrete = try seq_ops.forceLazyMap(allocator, lm, env);
+    defer concrete.deinit(allocator);
+    for (concrete.items) |item| {
+        try result.append(arena_alloc, try item.clone(arena_alloc));
     }
     return Value.listValue(result);
 }
 
-fn evalRec(allocator: Allocator, arena_alloc: Allocator, form: Value, env: *Env, depth: usize) anyerror!Value {
+pub fn evalRec(allocator: Allocator, arena_alloc: Allocator, form: Value, env: *Env, depth: usize) anyerror!Value {
     if (depth > MAX_RECURSION) return error.RecursionLimit;
 
     switch (form.type) {
@@ -148,6 +149,64 @@ fn evalRec(allocator: Allocator, arena_alloc: Allocator, form: Value, env: *Env,
     unreachable;
 }
 
+// Parse ([params] body...)+ pairs from a list slice.
+// Returns an ArrayListUnmanaged(Value.Arity) and updates *idx to point past the last consumed item.
+fn parseArityForms(allocator: Allocator, arena_alloc: Allocator, items: []const Value, end: usize, idx: *usize) anyerror!std.ArrayListUnmanaged(Value.Arity) {
+    var arities: std.ArrayListUnmanaged(Value.Arity) = .empty;
+    errdefer {
+        for (arities.items) |*a| {
+            a.params.deinit(arena_alloc);
+            a.body.deinit(arena_alloc);
+            if (a.rest_name) |rn| arena_alloc.free(rn);
+        }
+        arena_alloc.free(arities.items);
+    }
+
+    while (idx.* < end) {
+        const params_form = items[idx.*];
+        if (params_form.type != .list and params_form.type != .vector) return error.TypeError;
+        const params_list = if (params_form.type == .vector) try helpers.listFromVector(arena_alloc, params_form.vec_val) else params_form.list_val;
+        idx.* += 1;
+
+        // Collect body forms until next [params] or end
+        const body_start = idx.*;
+        while (idx.* < end) {
+            const next = items[idx.*];
+            if (looksLikeParamList(next) and idx.* + 1 < end) {
+                break;
+            }
+            idx.* += 1;
+        }
+        const body_forms = items[body_start..idx.*];
+
+        // Wrap body in a do block
+        var body_list: list.List = .empty;
+        errdefer body_list.deinit(arena_alloc);
+        try body_list.append(arena_alloc, try Value.symValue(allocator, "do"));
+        for (body_forms) |form_item| {
+            try body_list.append(arena_alloc, try form_item.clone(arena_alloc));
+        }
+
+        // Parse params for variadic support (& rest)
+        var parsed = try parseParams(arena_alloc, params_list);
+        defer {
+            parsed.params.deinit(arena_alloc);
+            if (parsed.rest_name) |rn| arena_alloc.free(rn);
+        }
+
+        const cloned_params = try parsed.params.clone(arena_alloc);
+        const cloned_body = try body_list.clone(arena_alloc);
+        const cloned_rest = if (parsed.rest_name) |rn| try arena_alloc.dupe(u8, rn) else null;
+        try arities.append(arena_alloc, Value.Arity{
+            .params = cloned_params,
+            .body = cloned_body,
+            .rest_name = cloned_rest,
+        });
+    }
+
+    return arities;
+}
+
 // Result of parsing a parameter list (may include variadic rest parameter)
 const ParsedParams = struct {
     params: list.List,      // regular parameters (without & symbol)
@@ -206,7 +265,7 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
         // ns - namespace declaration
         // (ns namespace-name (:require [other.ns :as alias] ...))
         if (std.mem.eql(u8, name, "ns")) {
-            return try evalNs(allocator, arena_alloc, l, env, depth);
+            return try eval_ns.evalNs(allocator, arena_alloc, l, env, depth);
         }
 
         if (std.mem.eql(u8, name, "quote")) {
@@ -216,7 +275,7 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
 
         if (std.mem.eql(u8, name, "quasiquote")) {
             if (l.items.len != 2) return error.ArityError;
-            return try unquoteProcess(allocator, arena_alloc, l.items[1], env, depth + 1);
+            return try eval_macro.unquoteProcess(allocator, arena_alloc, l.items[1], env, depth + 1);
         }
 
         // def - define in current namespace
@@ -233,18 +292,7 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
             const persistent_val = try val.clone(allocator);
             val.deinit(arena_alloc);
             // Bind in current namespace's env if namespace manager is available
-            // Exception: if env IS the root env (has ns_manager), bind there directly
-            if (findNsManager(env)) |ns_mgr| {
-                if (env.ns_manager != null) {
-                    try env.put(sym.sym_val, persistent_val);
-                } else {
-                    const current_ns = ns_mgr.getCurrentNamespace();
-                    const ns_env = ns_mgr.getNamespace(current_ns) orelse env;
-                    try ns_env.put(sym.sym_val, persistent_val);
-                }
-            } else {
-                try env.put(sym.sym_val, persistent_val);
-            }
+            try bindInCurrentNamespace(env, sym.sym_val, persistent_val);
             if (docstring) |ds| {
                 _ = try ds.clone(arena_alloc); // keep docstring alive (simplified)
             }
@@ -319,52 +367,7 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
                 arena_alloc.free(arities.items);
             }
 
-            // Parse ([params] body...)+ pairs
-            while (idx < l.items.len) {
-                const params_form = l.items[idx];
-                if (params_form.type != .list and params_form.type != .vector) return error.TypeError;
-                const params_list = if (params_form.type == .vector) try listFromVector(arena_alloc, params_form.vec_val) else params_form.list_val;
-                idx += 1;
-
-                // Collect body forms until next [params] or end
-                const body_start = idx;
-                while (idx < l.items.len) {
-                    const next = l.items[idx];
-                    // Check if this looks like a new parameter list (to support multi-arity)
-                    // A vector is a new param list only if:
-                    // 1. It looks like params (symbols only)
-                    // 2. There's at least one item after it (body)
-                    if (looksLikeParamList(next) and idx + 1 < l.items.len) {
-                        break;
-                    }
-                    idx += 1;
-                }
-                const body_forms = l.items[body_start..idx];
-
-                // Wrap body in a do block
-                var body_list: list.List = .empty;
-                errdefer body_list.deinit(arena_alloc);
-                try body_list.append(arena_alloc, try Value.symValue(allocator, "do"));
-                for (body_forms) |form_item| {
-                    try body_list.append(arena_alloc, try form_item.clone(arena_alloc));
-                }
-
-                // Parse params for variadic support (& rest)
-                var parsed = try parseParams(arena_alloc, params_list);
-                defer {
-                    parsed.params.deinit(arena_alloc);
-                    if (parsed.rest_name) |rn| arena_alloc.free(rn);
-                }
-
-                const cloned_params = try parsed.params.clone(arena_alloc);
-                const cloned_body = try body_list.clone(arena_alloc);
-                const cloned_rest = if (parsed.rest_name) |rn| try arena_alloc.dupe(u8, rn) else null;
-                try arities.append(arena_alloc, Value.Arity{
-                    .params = cloned_params,
-                    .body = cloned_body,
-                    .rest_name = cloned_rest,
-                });
-            }
+            arities = try parseArityForms(allocator, arena_alloc, l.items, l.items.len, &idx);
 
             // Create fn_env with parent = env so it can see all global symbols
             // including the function itself (for recursion)
@@ -379,20 +382,7 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
             const persistent_fn = try fn_val.clone(allocator);
             fn_val.deinit(arena_alloc);
             // Bind in current namespace's env if namespace manager is available
-            // Exception: if env IS the root env (has ns_manager), bind there directly
-            // This handles core library loading where functions should be global
-            if (findNsManager(env)) |ns_mgr| {
-                if (env.ns_manager != null) {
-                    // Root env: bind directly (for core library loading)
-                    try env.put(fname.sym_val, persistent_fn);
-                } else {
-                    const current_ns = ns_mgr.getCurrentNamespace();
-                    const ns_env = ns_mgr.getNamespace(current_ns) orelse env;
-                    try ns_env.put(fname.sym_val, persistent_fn);
-                }
-            } else {
-                try env.put(fname.sym_val, persistent_fn);
-            }
+            try bindInCurrentNamespace(env, fname.sym_val, persistent_fn);
             return try fname.clone(arena_alloc);
         }
 
@@ -417,52 +407,7 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
                 arena_alloc.free(arities.items);
             }
 
-            // Parse ([params] body...)+ pairs
-            while (idx < l.items.len) {
-                const params_form = l.items[idx];
-                if (params_form.type != .list and params_form.type != .vector) return error.TypeError;
-                const params_list = if (params_form.type == .vector) try listFromVector(arena_alloc, params_form.vec_val) else params_form.list_val;
-                idx += 1;
-
-                // Collect body forms until next [params] or end
-                const body_start = idx;
-                while (idx < l.items.len) {
-                    const next = l.items[idx];
-                    // Check if this looks like a new parameter list (to support multi-arity)
-                    // A vector is a new param list only if:
-                    // 1. It looks like params (symbols only)
-                    // 2. There's at least one item after it (body)
-                    if (looksLikeParamList(next) and idx + 1 < l.items.len) {
-                        break;
-                    }
-                    idx += 1;
-                }
-                const body_forms = l.items[body_start..idx];
-
-                // Wrap body in a do block
-                var body_list: list.List = .empty;
-                errdefer body_list.deinit(arena_alloc);
-                try body_list.append(arena_alloc, try Value.symValue(allocator, "do"));
-                for (body_forms) |form_item| {
-                    try body_list.append(arena_alloc, try form_item.clone(arena_alloc));
-                }
-
-                // Parse params for variadic support (& rest)
-                var parsed = try parseParams(arena_alloc, params_list);
-                defer {
-                    parsed.params.deinit(arena_alloc);
-                    if (parsed.rest_name) |rn| arena_alloc.free(rn);
-                }
-
-                const cloned_params = try parsed.params.clone(arena_alloc);
-                const cloned_body = try body_list.clone(arena_alloc);
-                const cloned_rest = if (parsed.rest_name) |rn| try arena_alloc.dupe(u8, rn) else null;
-                try arities.append(arena_alloc, Value.Arity{
-                    .params = cloned_params,
-                    .body = cloned_body,
-                    .rest_name = cloned_rest,
-                });
-            }
+            arities = try parseArityForms(allocator, arena_alloc, l.items, l.items.len, &idx);
 
             // Clone env so the fn captures a stable copy of the environment
             const fn_env = try env.clone(arena_alloc);
@@ -493,52 +438,7 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
                 arena_alloc.free(arities.items);
             }
 
-            // Parse ([params] body...)+ pairs
-            while (idx < l.items.len) {
-                const params_form = l.items[idx];
-                if (params_form.type != .list and params_form.type != .vector) return error.TypeError;
-                const params_list = if (params_form.type == .vector) try listFromVector(arena_alloc, params_form.vec_val) else params_form.list_val;
-                idx += 1;
-
-                // Collect body forms until next [params] or end
-                const body_start = idx;
-                while (idx < l.items.len) {
-                    const next = l.items[idx];
-                    // Check if this looks like a new parameter list (to support multi-arity)
-                    // A vector is a new param list only if:
-                    // 1. It looks like params (symbols only)
-                    // 2. There's at least one item after it (body)
-                    if (looksLikeParamList(next) and idx + 1 < l.items.len) {
-                        break;
-                    }
-                    idx += 1;
-                }
-                const body_forms = l.items[body_start..idx];
-
-                // Wrap body in a do block
-                var body_list: list.List = .empty;
-                errdefer body_list.deinit(arena_alloc);
-                try body_list.append(arena_alloc, try Value.symValue(allocator, "do"));
-                for (body_forms) |form_item| {
-                    try body_list.append(arena_alloc, try form_item.clone(arena_alloc));
-                }
-
-                // Parse params for variadic support (& rest)
-                var parsed = try parseParams(arena_alloc, params_list);
-                defer {
-                    parsed.params.deinit(arena_alloc);
-                    if (parsed.rest_name) |rn| arena_alloc.free(rn);
-                }
-
-                const cloned_params = try parsed.params.clone(arena_alloc);
-                const cloned_body = try body_list.clone(arena_alloc);
-                const cloned_rest = if (parsed.rest_name) |rn| try arena_alloc.dupe(u8, rn) else null;
-                try arities.append(arena_alloc, Value.Arity{
-                    .params = cloned_params,
-                    .body = cloned_body,
-                    .rest_name = cloned_rest,
-                });
-            }
+            arities = try parseArityForms(allocator, arena_alloc, l.items, l.items.len, &idx);
 
             const fn_env: Env = .{
                 .allocator = allocator,
@@ -551,18 +451,7 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
             const persistent_macro = try macro_fn.clone(allocator);
             macro_fn.deinit(arena_alloc);
             // Bind in current namespace's env if namespace manager is available
-            // Exception: if env IS the root env (has ns_manager), bind there directly
-            if (findNsManager(env)) |ns_mgr| {
-                if (env.ns_manager != null) {
-                    try env.put(macro_name.sym_val, persistent_macro);
-                } else {
-                    const current_ns = ns_mgr.getCurrentNamespace();
-                    const ns_env = ns_mgr.getNamespace(current_ns) orelse env;
-                    try ns_env.put(macro_name.sym_val, persistent_macro);
-                }
-            } else {
-                try env.put(macro_name.sym_val, persistent_macro);
-            }
+            try bindInCurrentNamespace(env, macro_name.sym_val, persistent_macro);
             return try macro_name.clone(arena_alloc);
         }
 
@@ -685,13 +574,13 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
         // ->> thread-last macro
         // (->> x (f 1) (g 2 3)) => (g (f x 1) 2 3)
         if (std.mem.eql(u8, name, "->>")) {
-            return try evalThreadLast(allocator, arena_alloc, l.items[1..], env, depth + 1);
+            return try eval_thread.evalThreadLast(allocator, arena_alloc, l.items[1..], env, depth + 1);
         }
 
         // -> thread-first macro
         // (-> x (f 1) (g 2 3)) => (g (f 1 x) 2 3)
         if (std.mem.eql(u8, name, "->")) {
-            return evalThreadFirst(allocator, arena_alloc, l.items[1..], env, depth + 1);
+            return eval_thread.evalThreadFirst(allocator, arena_alloc, l.items[1..], env, depth + 1);
         }
 
         // lazy-seq - create a lazy sequence
@@ -802,21 +691,6 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
             return Value.nilValue();
         }
 
-        // iterate - repeatedly apply f to init, collecting results
-        // Handle both (iterate f init) and (iterate init f) for thread-last compatibility
-        if (std.mem.eql(u8, name, "iterate")) {
-            if (l.items.len != 3) return error.ArityError;
-            const arg1 = l.items[1];
-            const arg2 = l.items[2];
-            // Detect which is the function and which is the initial value
-            if (arg1.type == .function or arg1.type == .builtin_fn) {
-                return try evalIterate(allocator, arena_alloc, arg1, arg2, env, depth + 1);
-            } else if (arg2.type == .function or arg2.type == .builtin_fn) {
-                return try evalIterate(allocator, arena_alloc, arg2, arg1, env, depth + 1);
-            }
-            return try evalIterate(allocator, arena_alloc, arg1, arg2, env, depth + 1);
-        }
-
         // doall - realize lazy sequences and return the result
         if (std.mem.eql(u8, name, "doall")) {
             if (l.items.len != 2) return error.ArityError;
@@ -838,13 +712,13 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
         // cond-> - thread-first with conditions
         // (cond-> expr test1 step1 test2 step2 ...)
         if (std.mem.eql(u8, name, "cond->")) {
-            return try evalCondThreadFirst(allocator, arena_alloc, l.items[1..], env, depth + 1);
+            return try eval_thread.evalCondThreadFirst(allocator, arena_alloc, l.items[1..], env, depth + 1);
         }
 
         // cond->> - thread-last with conditions
         // (cond->> expr test1 step1 test2 step2 ...)
         if (std.mem.eql(u8, name, "cond->>")) {
-            return try evalCondThreadLast(allocator, arena_alloc, l.items[1..], env, depth + 1);
+            return try eval_thread.evalCondThreadLast(allocator, arena_alloc, l.items[1..], env, depth + 1);
         }
 
         // case - multi-way constant dispatch
@@ -955,7 +829,7 @@ fn evalLetFn(allocator: Allocator, arena_alloc: Allocator, bindings: Value, body
         const params_form = b.items[1];
         if (params_form.type != .list and params_form.type != .vector) return error.TypeError;
         const params_list = if (params_form.type == .vector)
-            try listFromVector(arena_alloc, params_form.vec_val)
+            try helpers.listFromVector(arena_alloc, params_form.vec_val)
         else
             params_form.list_val;
 
@@ -1138,7 +1012,7 @@ fn evalLoop(allocator: Allocator, arena_alloc: Allocator, bindings: Value, body:
     }
 }
 
-fn call(allocator: Allocator, arena_alloc: Allocator, op: Value, args_list: list.List, env: *Env, depth: usize) anyerror!Value {
+pub fn call(allocator: Allocator, arena_alloc: Allocator, op: Value, args_list: list.List, env: *Env, depth: usize) anyerror!Value {
     var args = args_list;
     defer args.deinit(arena_alloc);
 
@@ -1297,59 +1171,6 @@ fn forceLazySeq(allocator: Allocator, arena_alloc: Allocator, lazy: Value, env: 
     return Value.listValue(list.empty());
 }
 
-// Quasiquote processing
-fn unquoteProcess(allocator: Allocator, arena_alloc: Allocator, form: Value, env: *Env, depth: usize) anyerror!Value {
-    switch (form.type) {
-        .list => {
-            if (form.list_val.items.len == 0) return Value.listValue(list.empty());
-            const first = form.list_val.items[0];
-            if (first.type == .symbol) {
-                if (std.mem.eql(u8, first.sym_val, "unquote")) {
-                    if (form.list_val.items.len != 2) return error.ArityError;
-                    return try evalRec(allocator, arena_alloc, form.list_val.items[1], env, depth);
-                }
-                if (std.mem.eql(u8, first.sym_val, "unquote-splicing")) {
-                    if (form.list_val.items.len != 2) return error.ArityError;
-                    const result = try evalRec(allocator, arena_alloc, form.list_val.items[1], env, depth);
-                    if (result.type == .list) return result;
-                    return error.TypeError;
-                }
-            }
-            // Process each element
-            var result: list.List = .empty;
-            errdefer result.deinit(arena_alloc);
-            for (form.list_val.items) |item| {
-                // Check for unquote-splicing: splice elements directly into result
-                if (item.type == .list and item.list_val.items.len == 2) {
-                    const uq_first = item.list_val.items[0];
-                    if (uq_first.type == .symbol and std.mem.eql(u8, uq_first.sym_val, "unquote-splicing")) {
-                        var splice_result = try evalRec(allocator, arena_alloc, item.list_val.items[1], env, depth);
-                        if (splice_result.type == .list) {
-                            for (splice_result.list_val.items) |elem| {
-                                try result.append(arena_alloc, try elem.clone(arena_alloc));
-                            }
-                        }
-                        splice_result.deinit(arena_alloc);
-                        continue;
-                    }
-                }
-                const processed = try unquoteProcess(allocator, arena_alloc, item, env, depth);
-                try result.append(arena_alloc, processed);
-            }
-            return Value.listValue(result);
-        },
-        .vector => {
-            var result: vec.Vector = .empty;
-            errdefer result.deinit(arena_alloc);
-            for (form.vec_val.items) |item| {
-                try result.append(arena_alloc, try unquoteProcess(allocator, arena_alloc, item, env, depth));
-            }
-            return Value.vectorValue(result);
-        },
-        else => return try form.clone(arena_alloc),
-    }
-}
-
 // Bind a parameter to an argument, supporting destructuring
 // e.g., param=[a b], arg=[1 2] => binds a=1, b=2
 fn bindParam(allocator: Allocator, arena_alloc: Allocator, param: Value, arg: Value, env: *Env) anyerror!void {
@@ -1387,15 +1208,6 @@ fn bindParam(allocator: Allocator, arena_alloc: Allocator, param: Value, arg: Va
     }
 }
 
-fn listFromVector(arena_alloc: Allocator, v: vec.Vector) anyerror!list.List {
-    var result: list.List = .empty;
-    errdefer result.deinit(arena_alloc);
-    for (v.items) |item| {
-        try result.append(arena_alloc, try item.clone(arena_alloc));
-    }
-    return result;
-}
-
 // Check if a form looks like a parameter list (vector/list of symbols, possibly with & rest)
 fn looksLikeParamList(form: Value) bool {
     const items = switch (form.type) {
@@ -1415,421 +1227,6 @@ fn looksLikeParamList(form: Value) bool {
         if (found_amp and item.type != .symbol) return false;
     }
     return true;
-}
-
-// Thread-last macro: (->> x (f 1) (g 2 3)) => (g 2 3 (f 1 x))
-// Inserts value as the LAST argument
-fn evalThreadLast(allocator: Allocator, arena_alloc: Allocator, forms: []const Value, env: *Env, depth: usize) anyerror!Value {
-    if (forms.len == 0) return Value.nilValue();
-
-    var current = try evalRec(allocator, arena_alloc, forms[0], env, depth);
-
-    var i: usize = 1;
-    while (i < forms.len) : (i += 1) {
-        const form = forms[i];
-
-        // Handle non-list forms: (->> x inc) => (inc x)
-        if (form.type != .list) {
-            var new_call: list.List = .empty;
-            errdefer new_call.deinit(arena_alloc);
-            try new_call.append(arena_alloc, try form.clone(arena_alloc));
-            try new_call.append(arena_alloc, try current.clone(arena_alloc));
-            const next_val = try evalRec(allocator, arena_alloc, Value.listValue(new_call), env, depth);
-            current.deinit(arena_alloc);
-            current = next_val;
-            continue;
-        }
-
-        if (form.list_val.items.len == 0) {
-            current.deinit(arena_alloc);
-            return error.ArityError;
-        }
-
-        // Build a new list: (op arg1 arg2 ... current)
-        var new_call: list.List = .empty;
-        errdefer new_call.deinit(arena_alloc);
-
-        var j: usize = 0;
-        while (j < form.list_val.items.len) : (j += 1) {
-            try new_call.append(arena_alloc, try form.list_val.items[j].clone(arena_alloc));
-        }
-        try new_call.append(arena_alloc, try current.clone(arena_alloc));
-
-        const next_val = try evalRec(allocator, arena_alloc, Value.listValue(new_call), env, depth);
-        current.deinit(arena_alloc);
-        current = next_val;
-    }
-    return current;
-}
-
-// Thread-first macro: (-> x (f 1) (g 2 3)) => (g (f 1 x) 2 3)
-fn evalThreadFirst(allocator: Allocator, arena_alloc: Allocator, forms: []const Value, env: *Env, depth: usize) anyerror!Value {
-    if (forms.len == 0) return Value.nilValue();
-
-    var current = try evalRec(allocator, arena_alloc, forms[0], env, depth);
-
-    var i: usize = 1;
-    while (i < forms.len) : (i += 1) {
-        const form = forms[i];
-
-        // Handle non-list forms: (-> x inc) => (inc x)
-        if (form.type != .list) {
-            var new_call: list.List = .empty;
-            errdefer new_call.deinit(arena_alloc);
-            try new_call.append(arena_alloc, try form.clone(arena_alloc));
-            try new_call.append(arena_alloc, try current.clone(arena_alloc));
-            const next_val = try evalRec(allocator, arena_alloc, Value.listValue(new_call), env, depth);
-            current.deinit(arena_alloc);
-            current = next_val;
-            continue;
-        }
-
-        if (form.list_val.items.len == 0) {
-            current.deinit(arena_alloc);
-            return error.ArityError;
-        }
-
-        // Build a new list: (op current arg3 ...)
-        var new_call: list.List = .empty;
-        errdefer new_call.deinit(arena_alloc);
-
-        try new_call.append(arena_alloc, try form.list_val.items[0].clone(arena_alloc));
-        var j: usize = 1;
-        while (j < form.list_val.items.len) : (j += 1) {
-            if (j == 1) {
-                try new_call.append(arena_alloc, try current.clone(arena_alloc));
-            }
-            try new_call.append(arena_alloc, try form.list_val.items[j].clone(arena_alloc));
-        }
-
-        const next_val = try evalRec(allocator, arena_alloc, Value.listValue(new_call), env, depth);
-        current.deinit(arena_alloc);
-        current = next_val;
-    }
-    return current;
-}
-
-// iterate: repeatedly apply f to init, collecting results in a vector
-fn evalIterate(allocator: Allocator, arena_alloc: Allocator, f_form: Value, init_form: Value, env: *Env, depth: usize) anyerror!Value {
-    var f = try evalRec(allocator, arena_alloc, f_form, env, depth);
-    defer f.deinit(arena_alloc);
-    var current = try evalRec(allocator, arena_alloc, init_form, env, depth);
-
-    var result: vec.Vector = .empty;
-    errdefer result.deinit(arena_alloc);
-
-    const max_iter: usize = 1000;
-    var i: usize = 0;
-    while (i < max_iter) : (i += 1) {
-        try result.append(arena_alloc, try current.clone(arena_alloc));
-
-        // Call f with current as argument
-        var arg_list: list.List = .empty;
-        errdefer arg_list.deinit(arena_alloc);
-        try arg_list.append(arena_alloc, try current.clone(arena_alloc));
-
-        const next_val = try callValue(allocator, arena_alloc, f, arg_list, env, depth + 1);
-        current.deinit(arena_alloc);
-        current = next_val;
-    }
-    current.deinit(arena_alloc);
-    return Value.vectorValue(result);
-}
-
-// map: apply f to each element of collection
-fn evalMap(allocator: Allocator, arena_alloc: Allocator, f_form: Value, coll_form: Value, env: *Env, depth: usize) anyerror!Value {
-    var f = try evalRec(allocator, arena_alloc, f_form, env, depth);
-    defer f.deinit(arena_alloc);
-    // Determine if coll_form is data or a function call to evaluate
-    var coll: Value = undefined;
-    switch (coll_form.type) {
-        .vector => coll = try coll_form.clone(arena_alloc),
-        .list => {
-            if (coll_form.list_val.items.len > 0 and
-                coll_form.list_val.items[0].type == .symbol and
-                !std.mem.eql(u8, coll_form.list_val.items[0].sym_val, "quote"))
-            {
-                coll = try evalRec(allocator, arena_alloc, coll_form, env, depth);
-            } else if (coll_form.list_val.items.len >= 2 and
-                       coll_form.list_val.items[0].type == .symbol and
-                       std.mem.eql(u8, coll_form.list_val.items[0].sym_val, "quote"))
-            {
-                coll = try coll_form.list_val.items[1].clone(arena_alloc);
-            } else {
-                coll = try coll_form.clone(arena_alloc);
-            }
-        },
-        .lazy_seq => {
-            coll = try forceLazySeq(allocator, arena_alloc, coll_form, env, depth);
-        },
-        else => coll = try evalRec(allocator, arena_alloc, coll_form, env, depth),
-    }
-    defer coll.deinit(arena_alloc);
-
-    // If we got a lazy_seq back from evaluation, force it
-    if (coll.type == .lazy_seq) {
-        const forced = try forceLazySeq(allocator, arena_alloc, coll, env, depth);
-        coll.deinit(arena_alloc);
-        coll = forced;
-    }
-
-    var items: []const Value = undefined;
-    switch (coll.type) {
-        .list => items = coll.list_val.items,
-        .vector => items = coll.vec_val.items,
-        else => return error.TypeError,
-    }
-
-    var result: list.List = .empty;
-    errdefer result.deinit(arena_alloc);
-
-    for (items) |item| {
-        var arg_list: list.List = .empty;
-        errdefer arg_list.deinit(arena_alloc);
-        try arg_list.append(arena_alloc, try item.clone(arena_alloc));
-
-        const mapped = try callValue(allocator, arena_alloc, f, arg_list, env, depth + 1);
-        try result.append(arena_alloc, mapped);
-    }
-    return Value.listValue(result);
-}
-
-// take: take first n elements from a collection
-fn evalTake(allocator: Allocator, arena_alloc: Allocator, n_form: Value, coll_form: Value, env: *Env, depth: usize) anyerror!Value {
-    var n_val = try evalRec(allocator, arena_alloc, n_form, env, depth);
-    defer n_val.deinit(arena_alloc);
-    // Determine if coll_form is data or a function call to evaluate
-    var coll: Value = undefined;
-    switch (coll_form.type) {
-        .vector => coll = try coll_form.clone(arena_alloc),
-        .list => {
-            // A list is a function call if its first element is a symbol
-            // (except for quote which is data)
-            if (coll_form.list_val.items.len > 0 and
-                coll_form.list_val.items[0].type == .symbol and
-                !std.mem.eql(u8, coll_form.list_val.items[0].sym_val, "quote"))
-            {
-                // It's a function call, evaluate it
-                coll = try evalRec(allocator, arena_alloc, coll_form, env, depth);
-            } else if (coll_form.list_val.items.len >= 2 and
-                       coll_form.list_val.items[0].type == .symbol and
-                       std.mem.eql(u8, coll_form.list_val.items[0].sym_val, "quote"))
-            {
-                // Quoted list, use the data directly
-                coll = try coll_form.list_val.items[1].clone(arena_alloc);
-            } else {
-                // Empty list or list starting with non-symbol: it's data
-                coll = try coll_form.clone(arena_alloc);
-            }
-        },
-        .lazy_seq => {
-            // Force the lazy sequence
-            coll = try forceLazySeq(allocator, arena_alloc, coll_form, env, depth);
-        },
-        .lazy_map => {
-            coll = coll_form;
-        },
-        else => coll = try evalRec(allocator, arena_alloc, coll_form, env, depth),
-    }
-
-    const n: i64 = switch (n_val.type) {
-        .integer => n_val.int_val,
-        .float => @as(i64, @intFromFloat(n_val.float_val)),
-        else => return error.TypeError,
-    };
-
-    // Handle lazy_seq: force and then take
-    if (coll.type == .lazy_seq) {
-        const forced = try forceLazySeq(allocator, arena_alloc, coll, env, depth);
-        coll.deinit(arena_alloc);
-        coll = forced;
-    }
-
-    // Handle lazy_map: iterate element-by-element, taking only n elements
-    if (coll.type == .lazy_map) {
-        defer coll.deinit(arena_alloc);
-        const lm: *Value.LazyMapData = coll.lazy_map_val.?;
-        var coll_items: []const Value = undefined;
-        const coll_len: usize = switch (lm.coll.type) {
-            .list => lm.coll.list_val.items.len,
-            .vector => lm.coll.vec_val.items.len,
-            else => return Value.listValue(list.empty()),
-        };
-        switch (lm.coll.type) {
-            .list => coll_items = lm.coll.list_val.items,
-            .vector => coll_items = lm.coll.vec_val.items,
-            else => return Value.listValue(list.empty()),
-        }
-        var result: list.List = .empty;
-        errdefer result.deinit(arena_alloc);
-        const count: usize = if (@as(usize, @intCast(n)) < coll_len) @as(usize, @intCast(n)) else coll_len;
-        var i: usize = 0;
-        while (i < count) : (i += 1) {
-            var arg_list: list.List = .empty;
-            errdefer arg_list.deinit(arena_alloc);
-            try arg_list.append(arena_alloc, try coll_items[i].clone(arena_alloc));
-            const mapped = try eval_helpers.callBuiltin(allocator, lm.fn_val, arg_list, env);
-            try result.append(arena_alloc, mapped);
-        }
-        return Value.listValue(result);
-    }
-    defer coll.deinit(arena_alloc);
-
-    var items: []const Value = undefined;
-    switch (coll.type) {
-        .list => items = coll.list_val.items,
-        .vector => items = coll.vec_val.items,
-        else => return error.TypeError,
-    }
-
-    var result: list.List = .empty;
-    errdefer result.deinit(arena_alloc);
-
-    const count: usize = if (@as(usize, @intCast(n)) < items.len) @as(usize, @intCast(n)) else items.len;
-    var i: usize = 0;
-    while (i < count) : (i += 1) {
-        try result.append(arena_alloc, try items[i].clone(arena_alloc));
-    }
-    return Value.listValue(result);
-}
-
-// Call a value (function or builtin) with arguments
-fn callValue(allocator: Allocator, arena_alloc: Allocator, f: Value, args: list.List, env: *Env, depth: usize) anyerror!Value {
-    switch (f.type) {
-        .function => {
-            const fn_data = f.fn_val;
-            const arg_count = args.items.len;
-
-            // Find matching arity
-            var matched_arity: ?*const Value.Arity = null;
-            var i: usize = 0;
-            while (i < fn_data.arities.items.len) : (i += 1) {
-                const arity = &fn_data.arities.items[i];
-                const min_args = arity.params.items.len;
-                const has_rest = arity.rest_name != null;
-                if (has_rest) {
-                    if (arg_count >= min_args) {
-                        matched_arity = arity;
-                        break;
-                    }
-                } else {
-                    if (arg_count == min_args) {
-                        matched_arity = arity;
-                        break;
-                    }
-                }
-            }
-            if (matched_arity == null) return error.ArityError;
-            const arity = matched_arity.?;
-
-            // Optimization: skip env clone if no local entries
-            var new_env: Env = undefined;
-            if (fn_data.env.entries.entries.len > 0) {
-                new_env = try fn_data.env.clone(arena_alloc);
-            } else {
-                new_env = .{
-                    .allocator = allocator,
-                    .entries = .empty,
-                    .parent = fn_data.env.parent,
-                    .ns_manager = null,
-                };
-            }
-            defer new_env.deinit(arena_alloc);
-
-            var j: usize = 0;
-            while (j < arity.params.items.len) : (j += 1) {
-                try bindParam(allocator, arena_alloc, arity.params.items[j], args.items[j], &new_env);
-            }
-            return try evalRec(allocator, arena_alloc, Value.listValue(arity.body), &new_env, depth);
-        },
-        .builtin_fn => {
-            var f_mut = f;
-            return f_mut.builtin_fn_val(&f_mut, args, env);
-        },
-        else => return error.NotCallable,
-    }
-}
-
-// cond-> - thread-first with conditions
-// (cond-> expr test1 step1 test2 step2 ...)
-fn evalCondThreadFirst(allocator: Allocator, arena_alloc: Allocator, forms: []const Value, env: *Env, depth: usize) anyerror!Value {
-    if (forms.len == 0) return Value.nilValue();
-
-    var current = try evalRec(allocator, arena_alloc, forms[0], env, depth);
-
-    var i: usize = 1;
-    while (i + 1 < forms.len) : (i += 2) {
-        var test_val_form = try evalRec(allocator, arena_alloc, forms[i], env, depth);
-        if (test_val_form.isTruthy()) {
-            const step = forms[i + 1];
-            if (step.type == .list and step.list_val.items.len > 0) {
-                // Evaluate operator and args, inserting current as second arg
-                var op = try evalRec(allocator, arena_alloc, step.list_val.items[0], env, depth);
-                defer op.deinit(arena_alloc);
-                var args: list.List = .empty;
-                errdefer args.deinit(arena_alloc);
-                try args.append(arena_alloc, try current.clone(arena_alloc));
-                var j: usize = 1;
-                while (j < step.list_val.items.len) : (j += 1) {
-                    try args.append(arena_alloc, try evalRec(allocator, arena_alloc, step.list_val.items[j], env, depth));
-                }
-                const next_val = try call(allocator, arena_alloc, op, args, env, depth);
-                current.deinit(arena_alloc);
-                current = next_val;
-            } else {
-                var new_call: list.List = .empty;
-                errdefer new_call.deinit(arena_alloc);
-                try new_call.append(arena_alloc, try step.clone(arena_alloc));
-                try new_call.append(arena_alloc, try current.clone(arena_alloc));
-                const next_val = try evalRec(allocator, arena_alloc, Value.listValue(new_call), env, depth);
-                current.deinit(arena_alloc);
-                current = next_val;
-            }
-        }
-        test_val_form.deinit(arena_alloc);
-    }
-    return current;
-}
-
-// cond->> - thread-last with conditions
-// (cond->> expr test1 step1 test2 step2 ...)
-fn evalCondThreadLast(allocator: Allocator, arena_alloc: Allocator, forms: []const Value, env: *Env, depth: usize) anyerror!Value {
-    if (forms.len == 0) return Value.nilValue();
-
-    var current = try evalRec(allocator, arena_alloc, forms[0], env, depth);
-
-    var i: usize = 1;
-    while (i + 1 < forms.len) : (i += 2) {
-        var test_val_form = try evalRec(allocator, arena_alloc, forms[i], env, depth);
-        if (test_val_form.isTruthy()) {
-            const step = forms[i + 1];
-            if (step.type == .list and step.list_val.items.len > 0) {
-                // Evaluate operator and args, then call with current as last arg
-                var op = try evalRec(allocator, arena_alloc, step.list_val.items[0], env, depth);
-                defer op.deinit(arena_alloc);
-                var args: list.List = .empty;
-                errdefer args.deinit(arena_alloc);
-                var j: usize = 1;
-                while (j < step.list_val.items.len) : (j += 1) {
-                    try args.append(arena_alloc, try evalRec(allocator, arena_alloc, step.list_val.items[j], env, depth));
-                }
-                try args.append(arena_alloc, try current.clone(arena_alloc));
-                const next_val = try call(allocator, arena_alloc, op, args, env, depth);
-                current.deinit(arena_alloc);
-                current = next_val;
-            } else {
-                var new_call: list.List = .empty;
-                errdefer new_call.deinit(arena_alloc);
-                try new_call.append(arena_alloc, try step.clone(arena_alloc));
-                try new_call.append(arena_alloc, try current.clone(arena_alloc));
-                const next_val = try evalRec(allocator, arena_alloc, Value.listValue(new_call), env, depth);
-                current.deinit(arena_alloc);
-                current = next_val;
-            }
-        }
-        test_val_form.deinit(arena_alloc);
-    }
-    return current;
 }
 
 // case - multi-way constant dispatch
@@ -1858,141 +1255,4 @@ fn evalCase(allocator: Allocator, arena_alloc: Allocator, forms: []const Value, 
     }
 
     return Value.nilValue();
-}
-
-// ns special form: (ns namespace-name (:require [other.ns :as alias] ...))
-fn evalNs(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
-    _ = depth;
-    if (l.items.len < 2) return error.ArityError;
-
-    const ns_name_sym = l.items[1];
-    if (ns_name_sym.type != .symbol) return error.TypeError;
-    const ns_name = ns_name_sym.sym_val;
-
-    // Find the namespace manager
-    const ns_mgr = findNsManager(env) orelse return Value.nilValue();
-
-    // Create or get the namespace
-    const ns_env = try ns_mgr.createNamespace(ns_name);
-    // Set parent to root env so builtins are visible
-    if (ns_env.parent == null) {
-        // Find the root env (the one with ns_manager)
-        var root_env: ?*Env = env;
-        while (root_env) |e| {
-            if (e.ns_manager != null) break;
-            root_env = e.parent;
-        }
-        if (root_env) |re| {
-            ns_env.parent = re;
-        }
-    }
-
-    // Process clauses starting from index 2
-    var i: usize = 2;
-    while (i < l.items.len) : (i += 1) {
-        const clause = l.items[i];
-        if (clause.type != .list or clause.list_val.items.len == 0) continue;
-
-        const clause_keyword = clause.list_val.items[0];
-        if (clause_keyword.type != .keyword) continue;
-
-        if (std.mem.eql(u8, clause_keyword.kw_val, "require")) {
-            // Process :require clause
-            // Each item is a vector: [ns.name :as alias] or [ns.name :refer [fn1 fn2]]
-            var j: usize = 1;
-            while (j < clause.list_val.items.len) : (j += 1) {
-                const req_item = clause.list_val.items[j];
-                if (req_item.type != .vector) continue;
-                const req_items = req_item.vec_val.items;
-                if (req_items.len < 1) continue;
-
-                const req_ns_sym = req_items[0];
-                if (req_ns_sym.type != .symbol) continue;
-                const req_ns_name = req_ns_sym.sym_val;
-
-                // Parse :as and :refer from the require vector
-                var alias: ?[]const u8 = null;
-                var k: usize = 1;
-                while (k < req_items.len) : (k += 1) {
-                    if (req_items[k].type == .keyword) {
-                        if (std.mem.eql(u8, req_items[k].kw_val, "as") and k + 1 < req_items.len) {
-                            k += 1;
-                            if (req_items[k].type == .symbol) {
-                                alias = req_items[k].sym_val;
-                            }
-                        }
-                        // Skip :refer for now (handled by alias resolution)
-                    }
-                }
-
-                // Use alias if provided, otherwise use the last part of the namespace name as alias
-                const effective_alias = alias orelse blk: {
-                    // Default alias: last part of namespace name (e.g., "hello" from "hello.hello")
-                    const ns_name_str = req_ns_name;
-                    var last_dot: usize = 0;
-                    var d: usize = 0;
-                    while (d < ns_name_str.len) : (d += 1) {
-                        if (ns_name_str[d] == '.') last_dot = d + 1;
-                    }
-                    break :blk if (last_dot > 0 and last_dot < ns_name_str.len) ns_name_str[last_dot..] else ns_name_str;
-                };
-
-                // Register alias
-                try ns_mgr.addAlias(ns_name, effective_alias, req_ns_name);
-
-                // Load the required namespace file from classpath
-                try loadNamespaceFile(allocator, arena_alloc, ns_mgr, req_ns_name, env);
-            }
-        }
-    }
-
-    // Set current namespace
-    try ns_mgr.setCurrentNamespace(ns_name);
-
-    return Value.nilValue();
-}
-
-// Load a namespace file from the classpath and evaluate it.
-fn loadNamespaceFile(allocator: Allocator, arena_alloc: Allocator, ns_mgr: *Value.NamespaceManager, ns_name: []const u8, root_env: *Env) anyerror!void {
-    // Check if already loaded
-    if (ns_mgr.getNamespace(ns_name) != null) return;
-
-    // Resolve namespace name to file path
-    const file_path = try ns_mgr.resolveNamespaceToPath(allocator, ns_name) orelse {
-        // File not found on classpath — create namespace without loading
-        _ = try ns_mgr.createNamespace(ns_name);
-        return;
-    };
-    defer allocator.free(file_path);
-
-    // Read the file
-    const cwd = std.Io.Dir.cwd();
-    var file = try std.Io.Dir.openFile(cwd, std.Options.debug_io, file_path, .{});
-    defer std.Io.File.close(file, std.Options.debug_io);
-
-    var reader = file.reader(std.Options.debug_io, &[_]u8{});
-    const content = try reader.interface.allocRemaining(allocator, std.Io.Limit.limited(1024 * 1024));
-    defer allocator.free(content);
-
-    // Parse and evaluate
-    var p = try parser.Parser.init(arena_alloc, content);
-    defer p.deinit();
-
-    var forms = try p.parseAll();
-    defer forms.deinit(arena_alloc);
-
-    for (forms.items) |form| {
-        // Use current namespace's env for evaluation (ns form may change it)
-        const eval_env = getCurrentNsEnvForLoad(root_env, ns_mgr) orelse root_env;
-        var result = try evalRec(allocator, arena_alloc, form, eval_env, 0);
-        result.deinit(arena_alloc);
-    }
-}
-
-// Get the current namespace's env for file loading.
-// Returns an env without ns_manager set, so defn binds in the namespace's env.
-fn getCurrentNsEnvForLoad(_root_env: *Env, ns_mgr: *Value.NamespaceManager) ?*Env {
-    _ = _root_env;
-    const current_ns = ns_mgr.getCurrentNamespace();
-    return ns_mgr.getNamespace(current_ns);
 }
