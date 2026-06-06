@@ -32,3 +32,19 @@ else
     echo "  Got:      $fib_result"
     TEST_FAIL=$((TEST_FAIL + 1))
 fi
+
+echo ""
+echo "=== Namespace Sample ==="
+# Run the namespace sample with -cp and -m
+ns_result=$(timeout 10 ./zig-out/bin/clojurez -cp tests/complex-samples/sample_3_namespaces/src -m main 2>&1)
+expected_ns=$(cat tests/complex-samples/sample_3_namespaces/expected_output.txt)
+TEST_TOTAL=$((TEST_TOTAL + 1))
+if [ "$ns_result" = "$expected_ns" ]; then
+    echo "PASS: namespace sample"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: namespace sample"
+    echo "  Expected: $expected_ns"
+    echo "  Got:      $ns_result"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi

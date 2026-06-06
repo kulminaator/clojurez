@@ -54,6 +54,7 @@ pub fn callBuiltin(allocator: Allocator, f: Value, args_list: list.List, env: *V
                     .allocator = allocator,
                     .entries = .empty,
                     .parent = fn_data.env.parent,
+                    .ns_manager = null,
                 };
             }
             defer new_env.deinit(allocator);

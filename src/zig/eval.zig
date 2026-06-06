@@ -8,6 +8,16 @@ const eval_helpers = @import("core/eval_helpers.zig");
 
 const Allocator = std.mem.Allocator;
 
+/// Walk up the env parent chain to find the namespace manager.
+pub fn findNsManager(env: *const Env) ?*Value.NamespaceManager {
+    var current: ?*const Env = env;
+    while (current) |e| {
+        if (e.ns_manager) |mgr| return mgr;
+        current = e.parent;
+    }
+    return null;
+}
+
 pub const EvalError = error{
     UndefinedSymbol,
     NotCallable,
@@ -71,6 +81,32 @@ fn evalRec(allocator: Allocator, arena_alloc: Allocator, form: Value, env: *Env,
                 std.mem.eql(u8, form.sym_val, "unquote-splicing"))
             {
                 return try form.clone(arena_alloc);
+            }
+            // Handle qualified symbols: alias/name or namespace/name
+            if (std.mem.indexOfScalar(u8, form.sym_val, '/')) |slash_idx| {
+                const alias = form.sym_val[0..slash_idx];
+                const name = form.sym_val[slash_idx + 1 ..];
+                // Resolve through namespace manager
+                const ns_mgr = findNsManager(env) orelse {
+                    const val2 = env.get(form.sym_val);
+                    if (val2) |v| return try v.clone(arena_alloc);
+                    return error.UndefinedSymbol;
+                };
+                // Look up alias in current namespace
+                const current_ns = ns_mgr.getCurrentNamespace();
+                const target_ns = ns_mgr.resolveAlias(current_ns, alias) orelse {
+                    // Alias not found, try direct lookup
+                    const val3 = env.get(form.sym_val);
+                    if (val3) |v| return try v.clone(arena_alloc);
+                    return error.UndefinedSymbol;
+                };
+                // Get target namespace's env and look up the name
+                const target_env = ns_mgr.getNamespace(target_ns) orelse {
+                    return error.UndefinedSymbol;
+                };
+                const val4 = target_env.get(name);
+                if (val4) |v| return try v.clone(arena_alloc);
+                return error.UndefinedSymbol;
             }
             const val = env.get(form.sym_val);
             if (val) |v| return try v.clone(arena_alloc);
@@ -167,9 +203,10 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
             return error.ReplExit;
         }
 
-        // ns - namespace declaration (no-op for our simple VM)
+        // ns - namespace declaration
+        // (ns namespace-name (:require [other.ns :as alias] ...))
         if (std.mem.eql(u8, name, "ns")) {
-            return Value.nilValue();
+            return try evalNs(allocator, arena_alloc, l, env, depth);
         }
 
         if (std.mem.eql(u8, name, "quote")) {
@@ -182,7 +219,7 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
             return try unquoteProcess(allocator, arena_alloc, l.items[1], env, depth + 1);
         }
 
-        // def - define a global variable
+        // def - define in current namespace
         if (std.mem.eql(u8, name, "def")) {
             if (l.items.len < 2 or l.items.len > 3) return error.ArityError;
             const sym = l.items[1];
@@ -195,7 +232,19 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
             // Clone to main allocator before storing in persistent env
             const persistent_val = try val.clone(allocator);
             val.deinit(arena_alloc);
-            try env.put(sym.sym_val, persistent_val);
+            // Bind in current namespace's env if namespace manager is available
+            // Exception: if env IS the root env (has ns_manager), bind there directly
+            if (findNsManager(env)) |ns_mgr| {
+                if (env.ns_manager != null) {
+                    try env.put(sym.sym_val, persistent_val);
+                } else {
+                    const current_ns = ns_mgr.getCurrentNamespace();
+                    const ns_env = ns_mgr.getNamespace(current_ns) orelse env;
+                    try ns_env.put(sym.sym_val, persistent_val);
+                }
+            } else {
+                try env.put(sym.sym_val, persistent_val);
+            }
             if (docstring) |ds| {
                 _ = try ds.clone(arena_alloc); // keep docstring alive (simplified)
             }
@@ -323,12 +372,27 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
                 .allocator = allocator,
                 .entries = .empty,
                 .parent = env,
+                .ns_manager = null,
             };
             var fn_val = Value.fnValue(arities, fn_env, false);
             // Clone to main allocator before storing in persistent env
             const persistent_fn = try fn_val.clone(allocator);
             fn_val.deinit(arena_alloc);
-            try env.put(fname.sym_val, persistent_fn);
+            // Bind in current namespace's env if namespace manager is available
+            // Exception: if env IS the root env (has ns_manager), bind there directly
+            // This handles core library loading where functions should be global
+            if (findNsManager(env)) |ns_mgr| {
+                if (env.ns_manager != null) {
+                    // Root env: bind directly (for core library loading)
+                    try env.put(fname.sym_val, persistent_fn);
+                } else {
+                    const current_ns = ns_mgr.getCurrentNamespace();
+                    const ns_env = ns_mgr.getNamespace(current_ns) orelse env;
+                    try ns_env.put(fname.sym_val, persistent_fn);
+                }
+            } else {
+                try env.put(fname.sym_val, persistent_fn);
+            }
             return try fname.clone(arena_alloc);
         }
 
@@ -480,12 +544,25 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
                 .allocator = allocator,
                 .entries = .empty,
                 .parent = env,
+                .ns_manager = null,
             };
             var macro_fn = Value.fnValue(arities, fn_env, true);
             // Clone to main allocator before storing in persistent env
             const persistent_macro = try macro_fn.clone(allocator);
             macro_fn.deinit(arena_alloc);
-            try env.put(macro_name.sym_val, persistent_macro);
+            // Bind in current namespace's env if namespace manager is available
+            // Exception: if env IS the root env (has ns_manager), bind there directly
+            if (findNsManager(env)) |ns_mgr| {
+                if (env.ns_manager != null) {
+                    try env.put(macro_name.sym_val, persistent_macro);
+                } else {
+                    const current_ns = ns_mgr.getCurrentNamespace();
+                    const ns_env = ns_mgr.getNamespace(current_ns) orelse env;
+                    try ns_env.put(macro_name.sym_val, persistent_macro);
+                }
+            } else {
+                try env.put(macro_name.sym_val, persistent_macro);
+            }
             return try macro_name.clone(arena_alloc);
         }
 
@@ -861,6 +938,7 @@ fn evalLetFn(allocator: Allocator, arena_alloc: Allocator, bindings: Value, body
         .allocator = allocator,
         .entries = .empty,
         .parent = env,
+        .ns_manager = null,
     };
     defer new_env.deinit(arena_alloc);
 
@@ -921,6 +999,7 @@ fn evalLetFn(allocator: Allocator, arena_alloc: Allocator, bindings: Value, body
             .allocator = allocator,
             .entries = .empty,
             .parent = &new_env,
+            .ns_manager = null,
         };
         var fn_val = Value.fnValue(arities, fn_env, false);
         const persistent_fn = try fn_val.clone(allocator);
@@ -1099,6 +1178,7 @@ fn call(allocator: Allocator, arena_alloc: Allocator, op: Value, args_list: list
                     .allocator = allocator,
                     .entries = .empty,
                     .parent = fn_data.env.parent,
+                    .ns_manager = null,
                 };
             }
             defer new_env.deinit(arena_alloc);
@@ -1651,6 +1731,7 @@ fn callValue(allocator: Allocator, arena_alloc: Allocator, f: Value, args: list.
                     .allocator = allocator,
                     .entries = .empty,
                     .parent = fn_data.env.parent,
+                    .ns_manager = null,
                 };
             }
             defer new_env.deinit(arena_alloc);
@@ -1777,4 +1858,141 @@ fn evalCase(allocator: Allocator, arena_alloc: Allocator, forms: []const Value, 
     }
 
     return Value.nilValue();
+}
+
+// ns special form: (ns namespace-name (:require [other.ns :as alias] ...))
+fn evalNs(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+    _ = depth;
+    if (l.items.len < 2) return error.ArityError;
+
+    const ns_name_sym = l.items[1];
+    if (ns_name_sym.type != .symbol) return error.TypeError;
+    const ns_name = ns_name_sym.sym_val;
+
+    // Find the namespace manager
+    const ns_mgr = findNsManager(env) orelse return Value.nilValue();
+
+    // Create or get the namespace
+    const ns_env = try ns_mgr.createNamespace(ns_name);
+    // Set parent to root env so builtins are visible
+    if (ns_env.parent == null) {
+        // Find the root env (the one with ns_manager)
+        var root_env: ?*Env = env;
+        while (root_env) |e| {
+            if (e.ns_manager != null) break;
+            root_env = e.parent;
+        }
+        if (root_env) |re| {
+            ns_env.parent = re;
+        }
+    }
+
+    // Process clauses starting from index 2
+    var i: usize = 2;
+    while (i < l.items.len) : (i += 1) {
+        const clause = l.items[i];
+        if (clause.type != .list or clause.list_val.items.len == 0) continue;
+
+        const clause_keyword = clause.list_val.items[0];
+        if (clause_keyword.type != .keyword) continue;
+
+        if (std.mem.eql(u8, clause_keyword.kw_val, "require")) {
+            // Process :require clause
+            // Each item is a vector: [ns.name :as alias] or [ns.name :refer [fn1 fn2]]
+            var j: usize = 1;
+            while (j < clause.list_val.items.len) : (j += 1) {
+                const req_item = clause.list_val.items[j];
+                if (req_item.type != .vector) continue;
+                const req_items = req_item.vec_val.items;
+                if (req_items.len < 1) continue;
+
+                const req_ns_sym = req_items[0];
+                if (req_ns_sym.type != .symbol) continue;
+                const req_ns_name = req_ns_sym.sym_val;
+
+                // Parse :as and :refer from the require vector
+                var alias: ?[]const u8 = null;
+                var k: usize = 1;
+                while (k < req_items.len) : (k += 1) {
+                    if (req_items[k].type == .keyword) {
+                        if (std.mem.eql(u8, req_items[k].kw_val, "as") and k + 1 < req_items.len) {
+                            k += 1;
+                            if (req_items[k].type == .symbol) {
+                                alias = req_items[k].sym_val;
+                            }
+                        }
+                        // Skip :refer for now (handled by alias resolution)
+                    }
+                }
+
+                // Use alias if provided, otherwise use the last part of the namespace name as alias
+                const effective_alias = alias orelse blk: {
+                    // Default alias: last part of namespace name (e.g., "hello" from "hello.hello")
+                    const ns_name_str = req_ns_name;
+                    var last_dot: usize = 0;
+                    var d: usize = 0;
+                    while (d < ns_name_str.len) : (d += 1) {
+                        if (ns_name_str[d] == '.') last_dot = d + 1;
+                    }
+                    break :blk if (last_dot > 0 and last_dot < ns_name_str.len) ns_name_str[last_dot..] else ns_name_str;
+                };
+
+                // Register alias
+                try ns_mgr.addAlias(ns_name, effective_alias, req_ns_name);
+
+                // Load the required namespace file from classpath
+                try loadNamespaceFile(allocator, arena_alloc, ns_mgr, req_ns_name, env);
+            }
+        }
+    }
+
+    // Set current namespace
+    try ns_mgr.setCurrentNamespace(ns_name);
+
+    return Value.nilValue();
+}
+
+// Load a namespace file from the classpath and evaluate it.
+fn loadNamespaceFile(allocator: Allocator, arena_alloc: Allocator, ns_mgr: *Value.NamespaceManager, ns_name: []const u8, root_env: *Env) anyerror!void {
+    // Check if already loaded
+    if (ns_mgr.getNamespace(ns_name) != null) return;
+
+    // Resolve namespace name to file path
+    const file_path = try ns_mgr.resolveNamespaceToPath(allocator, ns_name) orelse {
+        // File not found on classpath — create namespace without loading
+        _ = try ns_mgr.createNamespace(ns_name);
+        return;
+    };
+    defer allocator.free(file_path);
+
+    // Read the file
+    const cwd = std.Io.Dir.cwd();
+    var file = try std.Io.Dir.openFile(cwd, std.Options.debug_io, file_path, .{});
+    defer std.Io.File.close(file, std.Options.debug_io);
+
+    var reader = file.reader(std.Options.debug_io, &[_]u8{});
+    const content = try reader.interface.allocRemaining(allocator, std.Io.Limit.limited(1024 * 1024));
+    defer allocator.free(content);
+
+    // Parse and evaluate
+    var p = try parser.Parser.init(arena_alloc, content);
+    defer p.deinit();
+
+    var forms = try p.parseAll();
+    defer forms.deinit(arena_alloc);
+
+    for (forms.items) |form| {
+        // Use current namespace's env for evaluation (ns form may change it)
+        const eval_env = getCurrentNsEnvForLoad(root_env, ns_mgr) orelse root_env;
+        var result = try evalRec(allocator, arena_alloc, form, eval_env, 0);
+        result.deinit(arena_alloc);
+    }
+}
+
+// Get the current namespace's env for file loading.
+// Returns an env without ns_manager set, so defn binds in the namespace's env.
+fn getCurrentNsEnvForLoad(_root_env: *Env, ns_mgr: *Value.NamespaceManager) ?*Env {
+    _ = _root_env;
+    const current_ns = ns_mgr.getCurrentNamespace();
+    return ns_mgr.getNamespace(current_ns);
 }

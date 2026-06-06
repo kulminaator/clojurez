@@ -97,16 +97,161 @@ pub const FnData = struct {
     is_macro: bool = false, // true if this is a macro (args passed unevaluated)
 };
 
+/// Namespace manager: tracks all namespaces, current namespace, and aliases.
+/// Only the root env holds a non-null pointer to this.
+pub const NamespaceManager = struct {
+    allocator: Allocator,
+    /// Maps namespace name → Env pointer for that namespace
+    namespaces: std.StringArrayHashMapUnmanaged(*Env) = .empty,
+    /// Current namespace name (owned string)
+    current_ns: []const u8 = "user",
+    /// Maps namespace name → (alias name → target namespace name)
+    aliases: std.StringArrayHashMapUnmanaged(NamespaceAliases) = .empty,
+    /// Classpath directories for loading .clj files
+    classpath: std.ArrayListUnmanaged([]const u8) = .empty,
+
+    const NamespaceAliases = std.StringArrayHashMapUnmanaged([]const u8);
+
+    pub fn init(allocator: Allocator) anyerror!*NamespaceManager {
+        const mgr = try allocator.create(NamespaceManager);
+        mgr.* = .{ .allocator = allocator };
+        // Create default "user" namespace
+        _ = try mgr.createNamespace("user");
+        return mgr;
+    }
+
+    pub fn deinit(self: *NamespaceManager) void {
+        const allocator = self.allocator;
+        // Free namespace envs (but don't deinit their entries — they're managed by caller)
+        self.namespaces.deinit(allocator);
+        // Free alias maps
+        var ait = self.aliases.iterator();
+        while (ait.next()) |entry| {
+            var nit = entry.value_ptr.iterator();
+            while (nit.next()) |nentry| {
+                allocator.free(nentry.key_ptr.*);
+            }
+            entry.value_ptr.deinit(allocator);
+        }
+        self.aliases.deinit(allocator);
+        // Free classpath entries
+        for (self.classpath.items) |dir| {
+            allocator.free(dir);
+        }
+        allocator.free(self.classpath.items);
+        allocator.free(self.current_ns);
+        allocator.destroy(self);
+    }
+
+    /// Create a namespace (or return existing). Returns the namespace's Env.
+    pub fn createNamespace(self: *NamespaceManager, name: []const u8) anyerror!*Env {
+        // Check if already exists
+        if (self.namespaces.get(name)) |existing| return existing;
+
+        // Create new env with parent = null (will be set by caller to root env)
+        const ns_env = try self.allocator.create(Env);
+        ns_env.* = Env.init(self.allocator);
+        // ns_env.parent is set by caller
+        try self.namespaces.put(self.allocator, try self.allocator.dupe(u8, name), ns_env);
+        return ns_env;
+    }
+
+    /// Get the Env for a namespace (must already exist).
+    pub fn getNamespace(self: *NamespaceManager, name: []const u8) ?*Env {
+        return self.namespaces.get(name);
+    }
+
+    /// Set the current namespace.
+    pub fn setCurrentNamespace(self: *NamespaceManager, name: []const u8) anyerror!void {
+        const new_ns = try self.allocator.dupe(u8, name);
+        self.allocator.free(self.current_ns);
+        self.current_ns = new_ns;
+    }
+
+    /// Get the current namespace name.
+    pub fn getCurrentNamespace(self: *const NamespaceManager) []const u8 {
+        return self.current_ns;
+    }
+
+    /// Register an alias in a namespace: alias_name → target_ns_name
+    pub fn addAlias(self: *NamespaceManager, ns_name: []const u8, alias: []const u8, target: []const u8) anyerror!void {
+        var alias_map = self.aliases.getPtr(ns_name);
+        if (alias_map == null) {
+            // Create a new alias map and store it
+            var new_map: NamespaceAliases = .empty;
+            try new_map.put(self.allocator, try self.allocator.dupe(u8, alias), try self.allocator.dupe(u8, target));
+            try self.aliases.put(self.allocator, try self.allocator.dupe(u8, ns_name), new_map);
+            return;
+        }
+        const owned_target = try self.allocator.dupe(u8, target);
+        try alias_map.?.put(self.allocator, try self.allocator.dupe(u8, alias), owned_target);
+    }
+
+    /// Resolve an alias in a namespace. Returns the target namespace name, or null.
+    pub fn resolveAlias(self: *const NamespaceManager, ns_name: []const u8, alias: []const u8) ?[]const u8 {
+        const alias_map = self.aliases.get(ns_name) orelse return null;
+        return alias_map.get(alias);
+    }
+
+    /// Add a directory to the classpath.
+    pub fn addClasspath(self: *NamespaceManager, dir: []const u8) anyerror!void {
+        const owned = try self.allocator.dupe(u8, dir);
+        try self.classpath.append(self.allocator, owned);
+    }
+
+    /// Resolve a namespace name to a file path on the classpath.
+    /// E.g., "hello.hello" → "hello/hello.clj"
+    /// Searches each classpath directory and returns the first match.
+    pub fn resolveNamespaceToPath(self: *const NamespaceManager, allocator: Allocator, ns_name: []const u8) anyerror!?[]const u8 {
+        // Convert namespace name to file path: dots → slashes + ".clj"
+        var path_buf: std.ArrayList(u8) = .empty;
+        defer path_buf.deinit(allocator);
+        for (ns_name) |c| {
+            if (c == '.') {
+                try path_buf.append(allocator, '/');
+            } else {
+                try path_buf.append(allocator, c);
+            }
+        }
+        try path_buf.appendSlice(allocator, ".clj");
+        const file_path = path_buf.items;
+
+        // Search each classpath directory
+        for (self.classpath.items) |cp_dir| {
+            var full_path: std.ArrayList(u8) = .empty;
+            errdefer full_path.deinit(allocator);
+            try full_path.appendSlice(allocator, cp_dir);
+            // Ensure trailing slash
+            if (cp_dir.len > 0 and cp_dir[cp_dir.len - 1] != '/') {
+                try full_path.append(allocator, '/');
+            }
+            try full_path.appendSlice(allocator, file_path);
+
+            // Check if file exists
+            const cwd = std.Io.Dir.cwd();
+            const test_file = std.Io.Dir.openFile(cwd, std.Options.debug_io, full_path.items, .{}) catch continue;
+            std.Io.File.close(test_file, std.Options.debug_io);
+            const result: []const u8 = try full_path.toOwnedSlice(allocator);
+            return result;
+        }
+
+        return null;
+    }
+};
+
 pub const Env = struct {
     allocator: Allocator,
     entries: std.StringArrayHashMapUnmanaged(Self) = .empty,
     parent: ?*Env = null,
+    /// Pointer to namespace manager (only set on root env, inherited via parent chain)
+    ns_manager: ?*NamespaceManager = null,
 
     pub fn init(allocator: Allocator) Env {
         return .{
             .allocator = allocator,
             .entries = .empty,
             .parent = null,
+            .ns_manager = null,
         };
     }
 
@@ -117,6 +262,7 @@ pub const Env = struct {
         }
         self.entries.deinit(allocator);
         _ = self.parent; // Don't deinit parent here; it's managed separately
+        _ = self.ns_manager; // Don't deinit ns_manager here
     }
 
     pub fn clone(self: *const Env, allocator: Allocator) anyerror!Env {
@@ -124,6 +270,7 @@ pub const Env = struct {
             .allocator = allocator,
             .entries = .empty,
             .parent = self.parent,
+            .ns_manager = self.ns_manager,
         };
         var it = self.entries.iterator();
         while (it.next()) |entry| {

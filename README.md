@@ -138,6 +138,34 @@ Type `:quit` or `:exit` to exit.
 ./zig-out/bin/clojurez my_script.clj
 ```
 
+### Namespaces and Classpath
+
+Support for Clojure-style namespaces with classpath-based file loading:
+
+```bash
+# Run with classpath and main function
+./zig-out/bin/clojurez -cp src -m main
+```
+
+This is equivalent to Clojure's:
+```bash
+java -cp src clojure.main -m main
+```
+
+The `-cp` flag accepts colon-separated directories (Unix) or semicolon-separated (Windows).
+Namespaces are resolved to files: `hello.hello` → `hello/hello.clj`.
+
+Example with `:require`:
+```clojure
+;; main.clj
+(ns main
+  (:require [hello.hello :as h]
+            [hello.world :as w]))
+
+(defn -main []
+  (println (str (h/get-hello) " " (w/get-world))))
+```
+
 ### Core Functions
 
 Core functions (`inc`, `dec`, `into`, `even?`, `odd?`, `cons`, `update`, etc.) are baked into the binary and always available — no need to load a separate file:
@@ -313,6 +341,7 @@ See [GUIDELINES.md](GUIDELINES.md) for testing standards.
 
 - Core data types (nil, bool, int, float, string, symbol, keyword, list, vector, map, set, queue, atom)
 - Special forms (def, defn, fn, if, when, cond, let, do, quote, quasiquote, set!, and, or, loop, recur, binding, var, deref, lazy-seq, ns)
+- **Namespaces** (`ns` with `:require` and `:as` aliases, classpath via `-cp`, main function via `-m`)
 - Macros (`defmacro` with full macro expansion support)
 - Threading macros (`->`, `->>`)
 - Sequence operations (iterate, map, take, partition, reduce, flatten, filter, remove, every?, some, distinct?, next, nthnext, drop, dorun, doall)
@@ -329,7 +358,6 @@ See [GUIDELINES.md](GUIDELINES.md) for testing standards.
 
 ## What's Missing
 
-- **Namespaces** (`ns` declaration is a no-op; no true namespace isolation)
 - **Transients** (mutable versions of persistent data structures)
 - **Shorthand syntax** (`~` for unquote, `~@` for unquote-splicing, backtick for quasiquote, `@` for deref — use full names instead)
 - **Java interop** (not applicable for a standalone VM)

@@ -85,6 +85,9 @@ source tests/test_misc.sh
 echo ""
 
 source tests/test_condition_forms.sh
+echo ""
+
+source tests/test_namespaces.sh
 
 echo ""
 echo "========================================"

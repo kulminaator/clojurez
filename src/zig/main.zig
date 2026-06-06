@@ -1,6 +1,7 @@
 const std = @import("std");
 const Value = @import("value.zig");
 const Env = Value.Env;
+const list = @import("list.zig");
 const core = @import("core.zig");
 const parser = @import("parser.zig");
 const eval = @import("eval.zig");
@@ -31,9 +32,19 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     defer debug_alloc.deinit();
     const allocator = debug_alloc.allocator();
 
+    // Create namespace manager
+    var ns_mgr = try Value.NamespaceManager.init(allocator);
+    defer ns_mgr.deinit();
+
     // Create global environment
     var env: Env = Env.init(allocator);
     defer env.deinit(allocator);
+    env.ns_manager = ns_mgr;
+
+    // Set "user" namespace's parent to root env so builtins are visible
+    if (ns_mgr.getNamespace("user")) |user_env| {
+        user_env.parent = &env;
+    }
 
     // Register Zig built-in functions
     try core.registerCoreFunctions(&env);
@@ -56,6 +67,8 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     args = std.process.Args.Iterator.init(init.args);
     _ = args.next();
 
+    var classpath_set = false;
+    var main_ns: ?[]const u8 = null;
     var i: usize = 0;
     while (i < arg_count) : (i += 1) {
         const arg = args.next() orelse break;
@@ -66,6 +79,22 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
                 std.process.exit(1);
             };
             try runExpression(allocator, expr, &env);
+        } else if (std.mem.eql(u8, arg, "-cp") or std.mem.eql(u8, arg, "--classpath")) {
+            const cp = args.next() orelse {
+                try writeStderr("Error: missing classpath after -cp\n");
+                std.process.exit(1);
+            };
+            // Split classpath on ':' (Unix) or ';' (Windows)
+            var cp_iter = std.mem.splitScalar(u8, cp, ':');
+            while (cp_iter.next()) |dir| {
+                if (dir.len > 0) try ns_mgr.addClasspath(dir);
+            }
+            classpath_set = true;
+        } else if (std.mem.eql(u8, arg, "-m") or std.mem.eql(u8, arg, "--main")) {
+            main_ns = args.next() orelse {
+                try writeStderr("Error: missing namespace after -m\n");
+                std.process.exit(1);
+            };
         } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
             printUsage() catch {};
             std.process.exit(0);
@@ -75,6 +104,15 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
             // Treat as a file to execute
             try runFile(allocator, arg, &env);
         }
+    }
+
+    // If -m was specified, execute the main function
+    if (main_ns) |ns_name| {
+        if (!classpath_set) {
+            try writeStderr("Error: -m requires -cp to be set\n");
+            std.process.exit(1);
+        }
+        try runMain(allocator, &env, ns_name);
     }
 }
 
@@ -103,6 +141,13 @@ fn countArgs(args: std.process.Args) usize {
     return count - 1; // subtract program name
 }
 
+/// Get the current namespace's env for evaluation.
+fn getCurrentNsEnv(env: *Env) ?*Env {
+    const ns_mgr = eval.findNsManager(env) orelse return null;
+    const current_ns = ns_mgr.getCurrentNamespace();
+    return ns_mgr.getNamespace(current_ns);
+}
+
 fn runExpression(allocator: Allocator, expr: []const u8, env: *Env) anyerror!void {
     var arena = std.heap.ArenaAllocator.init(allocator);
     defer arena.deinit();
@@ -114,7 +159,9 @@ fn runExpression(allocator: Allocator, expr: []const u8, env: *Env) anyerror!voi
     var form = Value.nilValue();
     errdefer form.deinit(arena_alloc);
     form = try p.parse();
-    var result = try eval.eval(allocator, arena_alloc, form, env);
+    // Use current namespace's env for evaluation
+    const eval_env = getCurrentNsEnv(env) orelse env;
+    var result = try eval.eval(allocator, arena_alloc, form, eval_env);
     defer result.deinit(arena_alloc);
 
     const formatted = try result.fmt(allocator);
@@ -143,7 +190,9 @@ fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void 
     defer forms.deinit(arena_alloc);
 
     for (forms.items) |form| {
-        var result = try eval.eval(allocator, arena_alloc, form, env);
+        // Get current namespace's env for each form (ns form may change it)
+        const eval_env = getCurrentNsEnv(env) orelse env;
+        var result = try eval.eval(allocator, arena_alloc, form, eval_env);
 
         // Print non-nil results (like Clojure REPL)
         if (!result.equals(Value.nilValue())) {
@@ -155,6 +204,72 @@ fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void 
 
         result.deinit(arena_alloc);
     }
+}
+
+/// Run the -main function from a namespace.
+/// This is called when -m flag is used.
+fn runMain(allocator: Allocator, env: *Env, ns_name: []const u8) anyerror!void {
+    // Find the namespace manager
+    const ns_mgr = eval.findNsManager(env) orelse {
+        try writeStderr("Error: no namespace manager available\n");
+        std.process.exit(1);
+    };
+
+    // Resolve namespace to file path and load it
+    const file_path = try ns_mgr.resolveNamespaceToPath(allocator, ns_name) orelse {
+        const msg = try std.fmt.allocPrint(allocator, "Error: namespace '{s}' not found on classpath\n", .{ns_name});
+        defer allocator.free(msg);
+        try writeStderr(msg);
+        std.process.exit(1);
+    };
+    defer allocator.free(file_path);
+
+    // Read and evaluate the file
+    const cwd = std.Io.Dir.cwd();
+    var file = try std.Io.Dir.openFile(cwd, std.Options.debug_io, file_path, .{});
+    defer std.Io.File.close(file, std.Options.debug_io);
+
+    var reader = file.reader(std.Options.debug_io, &[_]u8{});
+    const content = try reader.interface.allocRemaining(allocator, std.Io.Limit.limited(1024 * 1024));
+    defer allocator.free(content);
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+    const arena_alloc = arena.allocator();
+
+    var p = try parser.Parser.init(arena_alloc, content);
+    defer p.deinit();
+
+    var forms = try p.parseAll();
+    defer forms.deinit(arena_alloc);
+
+    for (forms.items) |form| {
+        var result = try eval.eval(allocator, arena_alloc, form, env);
+        result.deinit(arena_alloc);
+    }
+
+    // Look up -main function in the namespace
+    const ns_env = ns_mgr.getNamespace(ns_name) orelse {
+        const msg = try std.fmt.allocPrint(allocator, "Error: namespace '{s}' not loaded\n", .{ns_name});
+        defer allocator.free(msg);
+        try writeStderr(msg);
+        std.process.exit(1);
+    };
+
+    // Look for -main in the namespace env
+    const main_fn = ns_env.get("-main") orelse {
+        const msg = try std.fmt.allocPrint(allocator, "Error: no -main function in namespace '{s}'\n", .{ns_name});
+        defer allocator.free(msg);
+        try writeStderr(msg);
+        std.process.exit(1);
+    };
+
+    // Call (-main) with no arguments
+    var call_list: list.List = .empty;
+    defer call_list.deinit(arena_alloc);
+    try call_list.append(arena_alloc, try main_fn.clone(arena_alloc));
+    var call_result = try eval.eval(allocator, arena_alloc, Value.listValue(call_list), ns_env);
+    call_result.deinit(arena_alloc);
 }
 
 fn printUsage() anyerror!void {
