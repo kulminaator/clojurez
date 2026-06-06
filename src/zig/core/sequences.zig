@@ -8,7 +8,23 @@ const eval_helpers = @import("eval_helpers.zig");
 const helpers = @import("helpers.zig");
 const Allocator = std.mem.Allocator;
 
-/// Force a lazy-seq to a realized list
+/// Force a value and append to target list.
+/// If val is a lazy_seq, its forced elements are appended (flattened).
+/// Otherwise, val is cloned and appended as a single element.
+fn forceAndAppend(allocator: Allocator, val: Value, target: *list.List) anyerror!void {
+    if (val.type == .lazy_seq) {
+        var forced = try forceLazySeqHelper(allocator, val);
+        defer forced.deinit(allocator);
+        // Flatten: append each element of the forced list
+        for (forced.list_val.items) |item| {
+            try target.append(allocator, try item.clone(allocator));
+        }
+    } else {
+        try target.append(allocator, try val.clone(allocator));
+    }
+}
+
+/// Force a lazy-seq to a realized list (recursively forces nested lazy_seqs)
 pub fn forceLazySeqHelper(allocator: Allocator, lazy: Value) anyerror!Value {
     if (lazy.lazy_seq_val.thunk) |thunk| {
         var arena = std.heap.ArenaAllocator.init(allocator);
@@ -21,21 +37,29 @@ pub fn forceLazySeqHelper(allocator: Allocator, lazy: Value) anyerror!Value {
         const body_val = Value.listValue(cloned_body);
         const result = try eval_helpers.evalForm(allocator, body_val, &thunk_env);
 
-        // Convert to list
+        // Convert to list, recursively forcing any nested lazy_seq elements
         var final_list: list.List = .empty;
         errdefer final_list.deinit(allocator);
         switch (result.type) {
             .list => {
                 for (result.list_val.items) |item| {
-                    try final_list.append(allocator, try item.clone(allocator));
+                    try forceAndAppend(allocator, item, &final_list);
                 }
             },
             .vector => {
                 for (result.vec_val.items) |item| {
-                    try final_list.append(allocator, try item.clone(allocator));
+                    try forceAndAppend(allocator, item, &final_list);
                 }
             },
             .nil => {},
+            .lazy_seq => {
+                // Force the lazy_seq and append its contents
+                var forced = try forceLazySeqHelper(allocator, result);
+                defer forced.deinit(allocator);
+                for (forced.list_val.items) |item| {
+                    try final_list.append(allocator, try item.clone(allocator));
+                }
+            },
             else => {
                 try final_list.append(allocator, result);
             },
@@ -166,7 +190,7 @@ pub fn core_take(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
             const count = if (n < items.len) n else items.len;
             var i: usize = 0;
             while (i < count) : (i += 1) {
-                try result.append(allocator, try items[i].clone(allocator));
+                try forceAndAppend(allocator, items[i], &result);
             }
         },
         .vector => {
@@ -174,29 +198,7 @@ pub fn core_take(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
             const count = if (n < items.len) n else items.len;
             var i: usize = 0;
             while (i < count) : (i += 1) {
-                try result.append(allocator, try items[i].clone(allocator));
-            }
-        },
-        .lazy_map => {
-            const lm = coll.lazy_map_val.?;
-            const coll_len: usize = switch (lm.coll.type) {
-                .list => lm.coll.list_val.items.len,
-                .vector => lm.coll.vec_val.items.len,
-                else => 0,
-            };
-            const count = if (n < coll_len) n else coll_len;
-            var i: usize = 0;
-            while (i < count) : (i += 1) {
-                var arg_list: list.List = .empty;
-                errdefer arg_list.deinit(allocator);
-                const item = switch (lm.coll.type) {
-                    .list => lm.coll.list_val.items[i],
-                    .vector => lm.coll.vec_val.items[i],
-                    else => continue,
-                };
-                try arg_list.append(allocator, try item.clone(allocator));
-                const mapped = try eval_helpers.callBuiltin(allocator, lm.fn_val, arg_list, env_env);
-                try result.append(allocator, mapped);
+                try forceAndAppend(allocator, items[i], &result);
             }
         },
         else => {},
@@ -215,9 +217,13 @@ pub fn core_concat(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
         if (arg.type == .nil) continue;
         var val = try arg.clone(allocator);
         defer val.deinit(allocator);
-        // Force lazy_seq
+        // Don't force lazy_seq here — keep it lazy for cons/map recursion
+        // The lazy_seq will be forced when the containing list is realized
         if (val.type == .lazy_seq) {
-            val = try forceLazySeqHelper(allocator, val);
+            try result.append(allocator, val);
+            // Transfer ownership: reset val so defer deinit is harmless
+            val = Value.nilValue();
+            continue;
         }
         switch (val.type) {
             .list => {

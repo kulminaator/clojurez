@@ -6,7 +6,7 @@ const Env = Value.Env;
 const parser = @import("parser.zig");
 const eval_helpers = @import("core/eval_helpers.zig");
 const helpers = @import("core/helpers.zig");
-const seq_ops = @import("core/seq_ops.zig");
+const sequences = @import("core/sequences.zig");
 const eval_thread = @import("eval_thread.zig");
 const eval_macro = @import("eval_macro.zig");
 const eval_ns = @import("eval_ns.zig");
@@ -53,26 +53,11 @@ pub fn eval(allocator: Allocator, arena_alloc: Allocator, form: Value, env: *Env
     return evalRec(allocator, arena_alloc, form, env, 0);
 }
 
-// Force a lazy_map into a concrete list (for printing/display)
-pub fn forceLazyMap(allocator: Allocator, arena_alloc: Allocator, lazy: Value, env: *Env) anyerror!Value {
-    const lm: *Value.LazyMapData = lazy.lazy_map_val.?;
-    var result: list.List = .empty;
-    errdefer result.deinit(arena_alloc);
-
-    // Use seq_ops.forceLazyMap to do the actual iteration
-    var concrete = try seq_ops.forceLazyMap(allocator, lm, env);
-    defer concrete.deinit(allocator);
-    for (concrete.items) |item| {
-        try result.append(arena_alloc, try item.clone(arena_alloc));
-    }
-    return Value.listValue(result);
-}
-
 pub fn evalRec(allocator: Allocator, arena_alloc: Allocator, form: Value, env: *Env, depth: usize) anyerror!Value {
     if (depth > MAX_RECURSION) return error.RecursionLimit;
 
     switch (form.type) {
-        .nil, .bool, .integer, .float, .string, .keyword, .set, .queue, .atom, .lazy_map => {
+        .nil, .bool, .integer, .float, .string, .keyword, .set, .queue, .atom => {
             return try form.clone(arena_alloc);
         },
         .symbol => {
@@ -623,41 +608,6 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
             var coll = try evalRec(allocator, arena_alloc, coll_form, env, depth + 1);
             defer coll.deinit(arena_alloc);
 
-            // Handle lazy_map: iterate element-by-element without materializing full result
-            if (coll.type == .lazy_map) {
-                var lm: *Value.LazyMapData = coll.lazy_map_val.?;
-                var count: usize = 0;
-
-                // Handle list/vector as inner collection
-                var coll_items: []const Value = undefined;
-                const coll_len: usize = switch (lm.coll.type) {
-                    .list => lm.coll.list_val.items.len,
-                    .vector => lm.coll.vec_val.items.len,
-                    else => return Value.nilValue(),
-                };
-                switch (lm.coll.type) {
-                    .list => coll_items = lm.coll.list_val.items,
-                    .vector => coll_items = lm.coll.vec_val.items,
-                    else => return Value.nilValue(),
-                }
-                while (lm.idx < coll_len) {
-                    if (n) |limit| { if (count >= limit) break; }
-                    var arg_list: list.List = .empty;
-                    errdefer arg_list.deinit(arena_alloc);
-                    try arg_list.append(arena_alloc, try coll_items[lm.idx].clone(arena_alloc));
-                    var mapped = try eval_helpers.callBuiltin(allocator, lm.fn_val, arg_list, env);
-                    if (mapped.type == .lazy_seq) {
-                        const forced = try forceLazySeq(allocator, arena_alloc, mapped, env, depth + 1);
-                        mapped.deinit(arena_alloc);
-                        mapped = forced;
-                    }
-                    mapped.deinit(arena_alloc);
-                    lm.idx += 1;
-                    count += 1;
-                }
-                return Value.nilValue();
-            }
-
             // Force lazy_seq if needed
             if (coll.type == .lazy_seq) {
                 const forced = try forceLazySeq(allocator, arena_alloc, coll, env, depth + 1);
@@ -693,10 +643,6 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
         if (std.mem.eql(u8, name, "doall")) {
             if (l.items.len != 2) return error.ArityError;
             var coll = try evalRec(allocator, arena_alloc, l.items[1], env, depth + 1);
-            // Handle lazy_map: force into a list and return it
-            if (coll.type == .lazy_map) {
-                return try forceLazyMap(allocator, arena_alloc, coll, env);
-            }
             // Handle lazy_seq: force and return
             if (coll.type == .lazy_seq) {
                 const forced = try forceLazySeq(allocator, arena_alloc, coll, env, depth + 1);
@@ -1148,15 +1094,39 @@ fn forceLazySeq(allocator: Allocator, arena_alloc: Allocator, lazy: Value, env: 
         switch (result.type) {
             .list => {
                 for (result.list_val.items) |item| {
-                    try final_list.append(arena_alloc, try item.clone(arena_alloc));
+                    // Force nested lazy_seqs
+                    if (item.type == .lazy_seq) {
+                        var forced = try sequences.forceLazySeqHelper(allocator, item);
+                        defer forced.deinit(allocator);
+                        for (forced.list_val.items) |fi| {
+                            try final_list.append(arena_alloc, try fi.clone(arena_alloc));
+                        }
+                    } else {
+                        try final_list.append(arena_alloc, try item.clone(arena_alloc));
+                    }
                 }
             },
             .vector => {
                 for (result.vec_val.items) |item| {
-                    try final_list.append(arena_alloc, try item.clone(arena_alloc));
+                    if (item.type == .lazy_seq) {
+                        var forced = try sequences.forceLazySeqHelper(allocator, item);
+                        defer forced.deinit(allocator);
+                        for (forced.list_val.items) |fi| {
+                            try final_list.append(arena_alloc, try fi.clone(arena_alloc));
+                        }
+                    } else {
+                        try final_list.append(arena_alloc, try item.clone(arena_alloc));
+                    }
                 }
             },
             .nil => {}, // empty sequence
+            .lazy_seq => {
+                var forced = try sequences.forceLazySeqHelper(allocator, result);
+                defer forced.deinit(allocator);
+                for (forced.list_val.items) |fi| {
+                    try final_list.append(arena_alloc, try fi.clone(arena_alloc));
+                }
+            },
             else => {
                 try final_list.append(arena_alloc, result);
             },

@@ -21,7 +21,6 @@ pub const Type = enum {
     function,
     builtin_fn,
     lazy_seq,
-    lazy_map,
     atom,
 };
 
@@ -54,14 +53,6 @@ pub const AtomData = struct {
     ref_count: usize = 1,
 };
 
-// Lazy map: holds a function, a collection, and a current index.
-// Iterated element-by-element by dorun without materializing the full result.
-pub const LazyMapData = struct {
-    fn_val: Self,
-    coll: Self,
-    idx: usize = 0,
-};
-
 pub const BuiltinFn = *const fn (self: *Self, args: list.List, env: *Env) anyerror!Self;
 
 type: Type,
@@ -81,7 +72,6 @@ queue_val: Queue = .empty,
 fn_val: FnData = .{ .arities = .empty, .env = undefined },
 builtin_fn_val: BuiltinFn = undefined,
 lazy_seq_val: LazySeq = .{},
-lazy_map_val: ?*LazyMapData = null,
 atom_val: ?*AtomData = null,
 
 // Single arity: one [params] + body forms + optional rest param
@@ -436,12 +426,6 @@ pub fn lazySeqValue(thunk: ?*LazySeqThunk) Self {
     return .{ .type = .lazy_seq, .lazy_seq_val = .{ .thunk = thunk } };
 }
 
-pub fn lazyMapValue(allocator: Allocator, f: Self, coll: Self) anyerror!Self {
-    const data = try allocator.create(LazyMapData);
-    data.* = .{ .fn_val = f, .coll = coll, .idx = 0 };
-    return .{ .type = .lazy_map, .lazy_map_val = data };
-}
-
 pub fn fnValue(arities: std.ArrayListUnmanaged(Arity), env: Env, is_macro: bool) Self {
     return .{ .type = .function, .fn_val = .{ .arities = arities, .env = env, .is_macro = is_macro } };
 }
@@ -491,13 +475,6 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
                 thunk.body.deinit(allocator);
                 thunk.env.deinit(allocator);
                 allocator.destroy(thunk);
-            }
-        },
-        .lazy_map => {
-            if (self.lazy_map_val) |data| {
-                data.fn_val.deinit(allocator);
-                data.coll.deinit(allocator);
-                allocator.destroy(data);
             }
         },
         .function => {
@@ -594,18 +571,6 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
                 new_lazy.thunk = new_thunk;
             }
             return lazySeqValue(new_lazy.thunk);
-        },
-        .lazy_map => {
-            if (self.lazy_map_val) |data| {
-                const new_data = try allocator.create(LazyMapData);
-                new_data.* = .{
-                    .fn_val = try data.fn_val.clone(allocator),
-                    .coll = try data.coll.clone(allocator),
-                    .idx = data.idx,
-                };
-                return .{ .type = .lazy_map, .lazy_map_val = new_data };
-            }
-            return nilValue();
         },
         .atom => {
             // Clone atom by sharing the same AtomData (atoms are identity-based)
@@ -719,7 +684,6 @@ pub fn fmt(self: Self, allocator: Allocator) anyerror![]const u8 {
         .function => allocator.dupe(u8, "#function"),
         .builtin_fn => allocator.dupe(u8, "#builtin"),
         .lazy_seq => allocator.dupe(u8, "#lazy-seq"),
-        .lazy_map => allocator.dupe(u8, "#lazy-map"),
         .atom => {
             if (self.atom_val) |data| {
                 const inner_str = try data.value.fmt(allocator);

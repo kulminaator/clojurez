@@ -175,15 +175,23 @@ pub fn core_pop(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 pub fn core_last(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
-    const coll = args.items[0];
+    const allocator = env_env.allocator;
+    var coll = try args.items[0].clone(allocator);
+    defer coll.deinit(allocator);
+
+    // Force lazy_seq
+    if (coll.type == .lazy_seq) {
+        coll = try sequences.forceLazySeqHelper(allocator, coll);
+    }
+
     switch (coll.type) {
         .vector => {
             if (coll.vec_val.items.len == 0) return Value.nilValue();
-            return try coll.vec_val.items[coll.vec_val.items.len - 1].clone(env_env.allocator);
+            return try coll.vec_val.items[coll.vec_val.items.len - 1].clone(allocator);
         },
         .list => {
             if (coll.list_val.items.len == 0) return Value.nilValue();
-            return try coll.list_val.items[coll.list_val.items.len - 1].clone(env_env.allocator);
+            return try coll.list_val.items[coll.list_val.items.len - 1].clone(allocator);
         },
         else => return error.TypeError,
     }

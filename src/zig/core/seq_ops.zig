@@ -8,69 +8,40 @@ const Env = Value.Env;
 const helpers = @import("helpers.zig");
 const eval_helpers = @import("eval_helpers.zig");
 const arithmetic = @import("arithmetic.zig");
-const sequences = @import("sequences.zig");
+const sequences_mod = @import("sequences.zig");
 
 const Allocator = std.mem.Allocator;
 
 const toInt = helpers.toInt;
 
-// Force a lazy_map into a concrete list
-pub fn forceLazyMap(allocator: Allocator, lm: *Value.LazyMapData, env: *Env) anyerror!list.List {
-    var result: list.List = .empty;
-    errdefer result.deinit(allocator);
-
-    var coll_items: []const Value = undefined;
-    const coll_len: usize = switch (lm.coll.type) {
-        .list => lm.coll.list_val.items.len,
-        .vector => lm.coll.vec_val.items.len,
-        else => return result,
-    };
-    switch (lm.coll.type) {
-        .list => coll_items = lm.coll.list_val.items,
-        .vector => coll_items = lm.coll.vec_val.items,
-        else => return result,
+// Force a lazy_seq into a concrete list
+pub fn forceLazySeqToConcreteList(allocator: Allocator, val: Value) anyerror!list.List {
+    var forced = try forceValue(allocator, val);
+    defer forced.deinit(allocator);
+    switch (forced.type) {
+        .list => return try list.clone(&forced.list_val, allocator),
+        .vector => {
+            var result: list.List = .empty;
+            errdefer result.deinit(allocator);
+            for (forced.vec_val.items) |item| {
+                try result.append(allocator, try item.clone(allocator));
+            }
+            return result;
+        },
+        .nil => return list.empty(),
+        else => {
+            var result: list.List = .empty;
+            errdefer result.deinit(allocator);
+            try result.append(allocator, try forced.clone(allocator));
+            return result;
+        },
     }
-    var i: usize = lm.idx;
-    while (i < coll_len) : (i += 1) {
-        var arg_list: list.List = .empty;
-        errdefer arg_list.deinit(allocator);
-        try arg_list.append(allocator, try coll_items[i].clone(allocator));
-        const mapped = try eval_helpers.callBuiltin(allocator, lm.fn_val, arg_list, env);
-        try result.append(allocator, mapped);
-    }
-    return result;
 }
 
-// Force any lazy value (lazy_seq or lazy_map) into a concrete list
-fn forceToConcreteList(allocator: Allocator, val: Value, env: *Env) anyerror!list.List {
+// Force any lazy value (lazy_seq) into a concrete list
+fn forceToConcreteList(allocator: Allocator, val: Value) anyerror!list.List {
     return switch (val.type) {
-        .lazy_map => {
-            const lm = val.lazy_map_val.?;
-            return forceLazyMap(allocator, lm, env);
-        },
-        .lazy_seq => {
-            // Use forceValue which handles lazy_seq thunks
-            var forced = try forceValue(allocator, val);
-            defer forced.deinit(allocator);
-            switch (forced.type) {
-                .list => return try list.clone(&forced.list_val, allocator),
-                .vector => {
-                    var result: list.List = .empty;
-                    errdefer result.deinit(allocator);
-                    for (forced.vec_val.items) |item| {
-                        try result.append(allocator, try item.clone(allocator));
-                    }
-                    return result;
-                },
-                .nil => return list.empty(),
-                else => {
-                    var result: list.List = .empty;
-                    errdefer result.deinit(allocator);
-                    try result.append(allocator, try forced.clone(allocator));
-                    return result;
-                },
-            }
-        },
+        .lazy_seq => return forceLazySeqToConcreteList(allocator, val),
         else => {
             var result: list.List = .empty;
             errdefer result.deinit(allocator);
@@ -93,22 +64,89 @@ pub fn core_map(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     const allocator = env_env.allocator;
     if (args.items.len != 2) return error.ArityError;
     const f = args.items[0];
-    var coll = args.items[1];
+    const coll = args.items[1];
 
-    // Force lazy sequences to concrete lists before mapping
+    // Validate collection type
     switch (coll.type) {
-        .lazy_seq, .lazy_map => {
-            const concrete_list = try forceToConcreteList(allocator, coll, env_env);
-            coll = Value.listValue(concrete_list);
-        },
-        .list, .vector => {},
+        .list, .vector, .lazy_seq => {},
         else => return error.TypeError,
     }
 
-    // Return a lazy_map — elements are computed on demand by dorun
-    const cloned_f = try f.clone(allocator);
-    const cloned_coll = try coll.clone(allocator);
-    return Value.lazyMapValue(allocator, cloned_f, cloned_coll);
+    // Build thunk body: (let [s (seq coll)] (if s (cons (f (first s)) (map f (rest s)))))
+    // All symbols and the body are allocated from the persistent allocator
+    const a = allocator;
+
+    // Symbols needed in the thunk body
+    const sym_let = try Value.symValue(a, "let");
+    const sym_s = try Value.symValue(a, "s");
+    const sym_seq = try Value.symValue(a, "seq");
+    const sym_coll = try Value.symValue(a, "coll");
+    const sym_if = try Value.symValue(a, "if");
+    const sym_cons = try Value.symValue(a, "cons");
+    const sym_f = try Value.symValue(a, "f");
+    const sym_first = try Value.symValue(a, "first");
+    const sym_map = try Value.symValue(a, "map");
+    const sym_rest = try Value.symValue(a, "rest");
+
+    // Build: (seq coll)
+    var seq_call: list.List = .empty;
+    try seq_call.append(a, sym_seq);
+    try seq_call.append(a, sym_coll);
+
+    // Build: [s (seq coll)]
+    var bindings: list.List = .empty;
+    try bindings.append(a, sym_s);
+    try bindings.append(a, Value.listValue(seq_call));
+
+    // Build: (f (first s))
+    var first_s_call: list.List = .empty;
+    try first_s_call.append(a, sym_first);
+    try first_s_call.append(a, sym_s);
+    var f_call: list.List = .empty;
+    try f_call.append(a, sym_f);
+    try f_call.append(a, Value.listValue(first_s_call));
+
+    // Build: (rest s)
+    var rest_call: list.List = .empty;
+    try rest_call.append(a, sym_rest);
+    try rest_call.append(a, sym_s);
+
+    // Build: (map f (rest s))
+    var map_call: list.List = .empty;
+    try map_call.append(a, sym_map);
+    try map_call.append(a, sym_f);
+    try map_call.append(a, Value.listValue(rest_call));
+
+    // Build: (cons (f (first s)) (map f (rest s)))
+    var cons_call: list.List = .empty;
+    try cons_call.append(a, sym_cons);
+    try cons_call.append(a, Value.listValue(f_call));
+    try cons_call.append(a, Value.listValue(map_call));
+
+    // Build: (if s (cons ...))
+    var if_form: list.List = .empty;
+    try if_form.append(a, sym_if);
+    try if_form.append(a, sym_s);
+    try if_form.append(a, Value.listValue(cons_call));
+
+    // Build: (let [s (seq coll)] (if s (cons ...)))
+    var body: list.List = .empty;
+    try body.append(a, sym_let);
+    try body.append(a, Value.listValue(bindings));
+    try body.append(a, Value.listValue(if_form));
+
+    // Create thunk with persistent allocator for body and cloned env
+    const thunk = try allocator.create(Value.LazySeqThunk);
+    thunk.* = .{
+        .params = list.empty(),
+        .body = body,
+        .env = try env_env.clone(allocator),
+    };
+    // Bind f and coll in the thunk's environment
+    try thunk.env.put("f", try f.clone(allocator));
+    try thunk.env.put("coll", try coll.clone(allocator));
+
+    return Value.lazySeqValue(thunk);
 }
 
 pub fn core_mapcat(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
@@ -145,8 +183,8 @@ pub fn core_mapcat(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
                         try result.append(allocator, try mitem.clone(allocator));
                     }
                 },
-                .lazy_map, .lazy_seq => {
-                    var concrete = try forceToConcreteList(allocator, mapped, env_env);
+                .lazy_seq => {
+                    var concrete = try forceToConcreteList(allocator, mapped);
                     for (concrete.items) |mitem| {
                         try result.append(allocator, try mitem.clone(allocator));
                     }
@@ -182,16 +220,8 @@ pub fn core_reduce(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
         }
     }
     switch (coll.type) {
-        .lazy_map => {
-            const concrete_list = try forceToConcreteList(env_env.allocator, coll, env_env);
-            // Null out the pointer before deinit so we don't free caller-owned data
-            coll.lazy_map_val = null;
-            coll.deinit(env_env.allocator);
-            coll = Value.listValue(concrete_list);
-            owned_coll = true;
-        },
         .lazy_seq => {
-            const concrete_list = try forceToConcreteList(env_env.allocator, coll, env_env);
+            const concrete_list = try forceToConcreteList(env_env.allocator, coll);
             // Null out the thunk before deinit so we don't free caller-owned data
             coll.lazy_seq_val.thunk = null;
             coll.deinit(env_env.allocator);
@@ -317,7 +347,7 @@ fn doFlatten(allocator: Allocator, val: Value, env: *Env) anyerror!Value {
 
 pub fn core_next(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     if (args.items.len != 1) return error.ArityError;
-    var rest = try sequences.core_rest(self, args, env_env);
+    var rest = try sequences_mod.core_rest(self, args, env_env);
     if (rest.type == .list and rest.list_val.items.len == 0) {
         rest.deinit(env_env.allocator);
         return Value.nilValue();
@@ -328,7 +358,7 @@ pub fn core_next(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 pub fn core_nthnext(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     if (args.items.len != 2) return error.ArityError;
     const n = try toInt(args.items[0]);
-    if (n <= 0) return try sequences.core_seq(self, args, env_env);
+    if (n <= 0) return try sequences_mod.core_seq(self, args, env_env);
 
     const coll = args.items[1];
     var items: []const Value = undefined;
@@ -556,8 +586,17 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
                         var forced_list: list.List = .empty;
                         errdefer forced_list.deinit(allocator);
                         for (result.list_val.items) |item| {
-                            const forced_item = try forceValue(allocator, item);
-                            try forced_list.append(allocator, forced_item);
+                            // Flatten lazy_seq elements
+                            if (item.type == .lazy_seq) {
+                                var forced = try sequences_mod.forceLazySeqHelper(allocator, item);
+                                defer forced.deinit(allocator);
+                                for (forced.list_val.items) |fi| {
+                                    try forced_list.append(allocator, try fi.clone(allocator));
+                                }
+                            } else {
+                                const forced_item = try forceValue(allocator, item);
+                                try forced_list.append(allocator, forced_item);
+                            }
                         }
                         result.deinit(arena_alloc);
                         arena.deinit();
@@ -567,8 +606,17 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
                         var forced_vec: vec.Vector = .empty;
                         errdefer forced_vec.deinit(allocator);
                         for (result.vec_val.items) |item| {
-                            const forced_item = try forceValue(allocator, item);
-                            try forced_vec.append(allocator, forced_item);
+                            // Flatten lazy_seq elements
+                            if (item.type == .lazy_seq) {
+                                var forced = try sequences_mod.forceLazySeqHelper(allocator, item);
+                                defer forced.deinit(allocator);
+                                for (forced.list_val.items) |fi| {
+                                    try forced_vec.append(allocator, try fi.clone(allocator));
+                                }
+                            } else {
+                                const forced_item = try forceValue(allocator, item);
+                                try forced_vec.append(allocator, forced_item);
+                            }
                         }
                         result.deinit(arena_alloc);
                         arena.deinit();
@@ -593,8 +641,17 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
             var forced_list: list.List = .empty;
             errdefer forced_list.deinit(allocator);
             for (val.list_val.items) |item| {
-                const forced_item = try forceValue(allocator, item);
-                try forced_list.append(allocator, forced_item);
+                // Flatten lazy_seq elements
+                if (item.type == .lazy_seq) {
+                    var forced = try sequences_mod.forceLazySeqHelper(allocator, item);
+                    defer forced.deinit(allocator);
+                    for (forced.list_val.items) |fi| {
+                        try forced_list.append(allocator, try fi.clone(allocator));
+                    }
+                } else {
+                    const forced_item = try forceValue(allocator, item);
+                    try forced_list.append(allocator, forced_item);
+                }
             }
             return Value.listValue(forced_list);
         },
@@ -602,8 +659,17 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
             var forced_vec: vec.Vector = .empty;
             errdefer forced_vec.deinit(allocator);
             for (val.vec_val.items) |item| {
-                const forced_item = try forceValue(allocator, item);
-                try forced_vec.append(allocator, forced_item);
+                // Flatten lazy_seq elements
+                if (item.type == .lazy_seq) {
+                    var forced = try sequences_mod.forceLazySeqHelper(allocator, item);
+                    defer forced.deinit(allocator);
+                    for (forced.list_val.items) |fi| {
+                        try forced_vec.append(allocator, try fi.clone(allocator));
+                    }
+                } else {
+                    const forced_item = try forceValue(allocator, item);
+                    try forced_vec.append(allocator, forced_item);
+                }
             }
             return Value.vectorValue(forced_vec);
         },
@@ -611,6 +677,7 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
     };
 }
 
+// iterate: repeatedly apply f to init, collecting results in a vector
 // iterate: repeatedly apply f to init, collecting results in a vector
 pub fn core_iterate(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
