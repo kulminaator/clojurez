@@ -326,6 +326,58 @@ pub fn core_seq(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return try coll.clone(env_env.allocator);
 }
 
+// range - generate a sequence of integers (eager, iterative)
+// Implemented as a built-in to avoid the lazy-seq recursion that causes
+// stack overflow with large ranges (range's Clojure impl uses cons->concat
+// which forces lazy-seqs, creating deep recursion).
+pub fn core_range(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    const allocator = env_env.allocator;
+
+    var start: i64 = 0;
+    var end: i64 = 0;
+    var step: i64 = 1;
+
+    switch (args.items.len) {
+        1 => end = try helpers.toInt(args.items[0]),
+        2 => {
+            start = try helpers.toInt(args.items[0]);
+            end = try helpers.toInt(args.items[1]);
+        },
+        3 => {
+            start = try helpers.toInt(args.items[0]);
+            end = try helpers.toInt(args.items[1]);
+            step = try helpers.toInt(args.items[2]);
+        },
+        else => return error.ArityError,
+    }
+
+    if (step == 0) return error.ArityError;
+
+    // Calculate the number of elements to pre-allocate
+    var count: usize = 0;
+    if (step > 0) {
+        if (start < end) {
+            count = @as(usize, @intCast(@divFloor(end - start + step - 1, step)));
+        }
+    } else {
+        if (start > end) {
+            count = @as(usize, @intCast(@divFloor(start - end - step - 1, -step)));
+        }
+    }
+
+    var result: list.List = .empty;
+    errdefer result.deinit(allocator);
+    try result.ensureTotalCapacity(allocator, count);
+
+    var i = start;
+    while ((step > 0 and i < end) or (step < 0 and i > end)) : (i += step) {
+        try result.append(allocator, Value.intValue(i));
+    }
+
+    return Value.listValue(result);
+}
+
 pub fn registerSequenceFunctions(env: *Env) anyerror!void {
     try env.put("count", Value.builtinFnValue(core_count));
     try env.put("first", Value.builtinFnValue(core_first));
@@ -337,6 +389,7 @@ pub fn registerSequenceFunctions(env: *Env) anyerror!void {
     try env.put("gensym", Value.builtinFnValue(core_gensym));
     try env.put("take", Value.builtinFnValue(core_take));
     try env.put("seq", Value.builtinFnValue(core_seq));
+    try env.put("range", Value.builtinFnValue(core_range));
 }
 
 // ===== Unit Tests =====

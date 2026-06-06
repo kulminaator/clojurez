@@ -47,17 +47,8 @@
 (defn cons [x xs]
   (concat (list x) xs))
 
-;; ---- Range (lazy sequence of integers) ----
-
-(defn range
-  [& args]
-  (let [start (if (>= (count args) 2) (nth args 0) 0)
-        end (nth args (if (>= (count args) 2) 1 0))
-        step (if (>= (count args) 3) (nth args 2) 1)]
-    (if (if (neg? step) (> start end) (< start end))
-      (lazy-seq
-        (cons start (apply range (list (+ start step) end step))))
-      nil)))
+;; range is implemented as a Zig built-in to avoid lazy-seq recursion
+;; that causes stack overflow with large ranges.
 
 (defn second [xs]
   (first (rest xs)))
