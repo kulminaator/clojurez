@@ -53,7 +53,7 @@ fn forceToConcreteList(allocator: Allocator, val: Value, env: *Env) anyerror!lis
             var forced = try forceValue(allocator, val);
             defer forced.deinit(allocator);
             switch (forced.type) {
-                .list => return try forced.list_val.clone(allocator),
+                .list => return try list.clone(&forced.list_val, allocator),
                 .vector => {
                     var result: list.List = .empty;
                     errdefer result.deinit(allocator);
@@ -75,7 +75,7 @@ fn forceToConcreteList(allocator: Allocator, val: Value, env: *Env) anyerror!lis
             var result: list.List = .empty;
             errdefer result.deinit(allocator);
             switch (val.type) {
-                .list => return try val.list_val.clone(allocator),
+                .list => return try list.clone(&val.list_val, allocator),
                 .vector => {
                     for (val.vec_val.items) |item| {
                         try result.append(allocator, try item.clone(allocator));
@@ -538,8 +538,8 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
                 var arena = std.heap.ArenaAllocator.init(allocator);
                 const arena_alloc = arena.allocator();
 
-                const cloned_params = try thunk.params.clone(arena_alloc);
-                const cloned_body = try thunk.body.clone(arena_alloc);
+                const cloned_params = try list.clone(&thunk.params, arena_alloc);
+                const cloned_body = try list.clone(&thunk.body, arena_alloc);
                 var thunk_env = try thunk.env.clone(arena_alloc);
 
                 const fn_val = try Value.fnValueSingle(allocator, cloned_params, cloned_body, thunk_env, null, false);

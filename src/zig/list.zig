@@ -9,7 +9,7 @@ pub fn empty() List {
 }
 
 pub fn clone(self: *const List, allocator: Allocator) anyerror!List {
-    var result: List = .{};
+    var result: List = .empty;
     try result.ensureTotalCapacity(allocator, self.items.len);
     for (self.items) |item| {
         try result.append(allocator, try item.clone(allocator));

@@ -534,7 +534,7 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
         .string => return stringValue(allocator, self.str_val),
         .symbol => return symValue(allocator, self.sym_val),
         .keyword => return keywordValue(allocator, self.kw_val),
-        .list => return listValue(try self.list_val.clone(allocator)),
+        .list => return listValue(try list.clone(&self.list_val, allocator)),
         .vector => return vectorValue(try self.vec_val.clone(allocator)),
         .map => {
             var new_map: Map = .empty;
@@ -587,8 +587,8 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
             if (self.lazy_seq_val.thunk) |thunk| {
                 const new_thunk = try allocator.create(LazySeqThunk);
                 new_thunk.* = .{
-                    .params = try thunk.params.clone(allocator),
-                    .body = try thunk.body.clone(allocator),
+                    .params = try list.clone(&thunk.params, allocator),
+                    .body = try list.clone(&thunk.body, allocator),
                     .env = try thunk.env.clone(allocator),
                 };
                 new_lazy.thunk = new_thunk;
@@ -632,8 +632,8 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
                     cloned_rest = try allocator.dupe(u8, rn);
                 }
                 try cloned_arities.append(allocator, Arity{
-                    .params = try arity.params.clone(allocator),
-                    .body = try arity.body.clone(allocator),
+                    .params = try list.clone(&arity.params, allocator),
+                    .body = try list.clone(&arity.body, allocator),
                     .rest_name = cloned_rest,
                 });
             }

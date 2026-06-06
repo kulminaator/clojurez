@@ -14,7 +14,7 @@ pub fn forceLazySeqHelper(allocator: Allocator, lazy: Value) anyerror!Value {
         var arena = std.heap.ArenaAllocator.init(allocator);
         const arena_alloc = arena.allocator();
 
-        const cloned_body = try thunk.body.clone(arena_alloc);
+        const cloned_body = try list.clone(&thunk.body, arena_alloc);
         var thunk_env = try thunk.env.clone(arena_alloc);
 
         // Evaluate the thunk body (already wrapped in 'do') as a list

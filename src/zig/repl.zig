@@ -3,7 +3,7 @@ const Value = @import("value.zig");
 const list = @import("list.zig");
 const parser = @import("parser.zig");
 const eval = @import("eval.zig");
-const core = @import("core.zig");
+const eval_ns = @import("eval_ns.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -19,9 +19,15 @@ pub fn runRepl(allocator: Allocator, env: *Value.Env) anyerror!void {
     defer multiline_buf.deinit(allocator);
 
     while (true) {
-        // Print prompt (normal or continuation)
+        // Print prompt (normal or continuation) - show current namespace
         if (multiline_buf.items.len == 0) {
-            try writeStdout("user=> ");
+            if (eval_ns.findNsManager(env)) |ns_mgr| {
+                const current_ns = ns_mgr.getCurrentNamespace();
+                try writeStdout(current_ns);
+                try writeStdout("=> ");
+            } else {
+                try writeStdout("user=> ");
+            }
         } else {
             try writeStdout("#_=> ");
         }
@@ -29,7 +35,8 @@ pub fn runRepl(allocator: Allocator, env: *Value.Env) anyerror!void {
         const len = readLineWithLeftover(&input_buf, &leftover_buf, &leftover_len) catch |err| {
             // EOF - if we have accumulated input, try to evaluate it
             if (multiline_buf.items.len > 0) {
-                _ = try evaluateAndPrint(allocator, multiline_buf.items, env);
+                const eval_env = getCurrentNsEnv(env) orelse env;
+                _ = try evaluateAndPrint(allocator, multiline_buf.items, eval_env);
             }
             if (err == error.Eof) break;
             return err;
@@ -59,13 +66,22 @@ pub fn runRepl(allocator: Allocator, env: *Value.Env) anyerror!void {
             continue;
         } else {
             // We have a complete form - evaluate it (and any remaining forms)
-            const should_exit = try evaluateAndPrint(allocator, full_input, env);
+            // Use current namespace's env for evaluation
+            const eval_env = getCurrentNsEnv(env) orelse env;
+            const should_exit = try evaluateAndPrint(allocator, full_input, eval_env);
             if (should_exit) break;
 
             // Clear the multiline buffer for the next expression
             multiline_buf.clearRetainingCapacity();
         }
     }
+}
+
+/// Get the current namespace's env for evaluation.
+fn getCurrentNsEnv(env: *Value.Env) ?*Value.Env {
+    const ns_mgr = eval_ns.findNsManager(env) orelse return null;
+    const current_ns = ns_mgr.getCurrentNamespace();
+    return ns_mgr.getNamespace(current_ns);
 }
 
 /// Returns true if the REPL should exit (e.g., quit/exit called)

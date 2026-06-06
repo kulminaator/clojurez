@@ -93,16 +93,14 @@ pub fn evalRec(allocator: Allocator, arena_alloc: Allocator, form: Value, env: *
                     if (val2) |v| return try v.clone(arena_alloc);
                     return error.UndefinedSymbol;
                 };
-                // Look up alias in current namespace
+                // Look up alias in current namespace, or use the part before '/' as a direct namespace name
                 const current_ns = ns_mgr.getCurrentNamespace();
-                const target_ns = ns_mgr.resolveAlias(current_ns, alias) orelse {
-                    // Alias not found, try direct lookup
-                    const val3 = env.get(form.sym_val);
-                    if (val3) |v| return try v.clone(arena_alloc);
-                    return error.UndefinedSymbol;
-                };
+                const target_ns = ns_mgr.resolveAlias(current_ns, alias) orelse alias;
                 // Get target namespace's env and look up the name
                 const target_env = ns_mgr.getNamespace(target_ns) orelse {
+                    // Target namespace doesn't exist, try direct lookup
+                    const val3 = env.get(form.sym_val);
+                    if (val3) |v| return try v.clone(arena_alloc);
                     return error.UndefinedSymbol;
                 };
                 const val4 = target_env.get(name);
@@ -194,8 +192,8 @@ fn parseArityForms(allocator: Allocator, arena_alloc: Allocator, items: []const 
             if (parsed.rest_name) |rn| arena_alloc.free(rn);
         }
 
-        const cloned_params = try parsed.params.clone(arena_alloc);
-        const cloned_body = try body_list.clone(arena_alloc);
+        const cloned_params = try list.clone(&parsed.params, arena_alloc);
+        const cloned_body = try list.clone(&body_list, arena_alloc);
         const cloned_rest = if (parsed.rest_name) |rn| try arena_alloc.dupe(u8, rn) else null;
         try arities.append(arena_alloc, Value.Arity{
             .params = cloned_params,
@@ -859,8 +857,8 @@ fn evalLetFn(allocator: Allocator, arena_alloc: Allocator, bindings: Value, body
             arena_alloc.free(arities.items);
         }
 
-        const cloned_params = try parsed.params.clone(arena_alloc);
-        const cloned_body = try body_list.clone(arena_alloc);
+        const cloned_params = try list.clone(&parsed.params, arena_alloc);
+        const cloned_body = try list.clone(&body_list, arena_alloc);
         const cloned_rest = if (parsed.rest_name) |rn| try arena_alloc.dupe(u8, rn) else null;
         try arities.append(arena_alloc, Value.Arity{
             .params = cloned_params,
@@ -1130,8 +1128,8 @@ fn forceLazySeq(allocator: Allocator, arena_alloc: Allocator, lazy: Value, env: 
         // Clone thunk data for evaluation — don't free the thunk itself
         // since the original Value (e.g. stored in env) still holds the pointer.
         // The thunk will be properly freed when the original Value is deinited.
-        var cloned_params = try thunk.params.clone(arena_alloc);
-        var cloned_body = try thunk.body.clone(arena_alloc);
+        var cloned_params = try list.clone(&thunk.params, arena_alloc);
+        var cloned_body = try list.clone(&thunk.body, arena_alloc);
         var thunk_env = try thunk.env.clone(arena_alloc);
         defer {
             cloned_params.deinit(arena_alloc);
