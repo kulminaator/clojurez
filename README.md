@@ -259,13 +259,13 @@ This is useful for verifying that `def` rebindings, `let` scopes, and function c
 
 ### Fibonacci
 ```bash
-./zig-out/bin/clojurez samples/sample_1_fibonacci/core.clj
+./zig-out/bin/clojurez tests/complex-samples/sample_1_fibonacci/core.clj
 ```
 Output: `(0 1 1 2 3 5 8 13 21 34)`
 
 ### Tower of Hanoi
 ```bash
-./zig-out/bin/clojurez samples/sample_2_hanoi/hanoi/core.clj
+./zig-out/bin/clojurez tests/complex-samples/sample_2_hanoi/hanoi/core.clj
 ```
 
 ## Project Structure
@@ -291,9 +291,6 @@ src/
 
 run_tests.sh       — Test runner
 GUIDELINES.md      — Development & testing guidelines
-samples/           — Sample programs
-├── sample_1_fibonacci/    — Fibonacci sequence (✓ working)
-└── sample_2_hanoi/        — Tower of Hanoi (✓ working)
 ```
 
 ## Testing

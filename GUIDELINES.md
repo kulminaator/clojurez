@@ -296,7 +296,7 @@ zig test -fsingle-threaded src/zig/parser.zig
 
 ### Sample Program Verification
 
-Sample programs in `samples/` serve as integration tests. Each sample has:
+Sample programs in `tests/complex-samples/` serve as integration tests. Each sample has:
 - Source code (`.clj` files)
 - Expected output (`expected_output.txt`)
 
@@ -323,7 +323,7 @@ Every pull request must:
 
 ## 9. Anti-Patterns
 
-### ❌ Never Do This
+### Never Do This
 
 - **Infinite loops in tests**: Always use timeouts for REPL or file-based tests
 - **Shared mutable state**: Each test must be independent
@@ -331,7 +331,7 @@ Every pull request must:
 - **Commented-out tests**: Either fix the test or remove it
 - **Ignoring errors**: Always assert or handle errors in tests
 
-### ✅ Do This Instead
+### Do This Instead
 
 - Use timeouts for all external process tests
 - Set up and tear down test fixtures explicitly
@@ -397,13 +397,13 @@ The coverage report should be part of the CI/CD pipeline and posted as a comment
 
 Instead of writing the entire `let` implementation at once:
 
-1. ✅ Add the `let` keyword recognition in the evaluator (no logic yet)
-2. ✅ Parse the bindings list structure
-3. ✅ Implement single-variable binding
-4. ✅ Implement multi-variable binding
-5. ✅ Implement the body evaluation
-6. ✅ Add error handling for malformed input
-7. ✅ Add tests for each case
+1. Add the `let` keyword recognition in the evaluator (no logic yet)
+2. Parse the bindings list structure
+3. Implement single-variable binding
+4. Implement multi-variable binding
+5. Implement the body evaluation
+6. Add error handling for malformed input
+7. Add tests for each case
 
 #### Task Checklist
 
