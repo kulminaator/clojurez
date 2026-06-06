@@ -4,3 +4,4 @@ original_clojure/
 .zig-cache/
 zig-out/
 *.o
+codereview.md
