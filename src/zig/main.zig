@@ -9,8 +9,57 @@ const repl = @import("repl.zig");
 const core_clj = @import("core_clj.zig");
 const debug_allocator = @import("debug_allocator.zig");
 const slab_allocator = @import("slab_allocator.zig");
+const sequences = @import("core/sequences.zig");
 
 const Allocator = std.mem.Allocator;
+
+/// Fully realize a lazy-seq into a concrete list for printing.
+fn fullyRealizeLazySeq(allocator: Allocator, val: Value) anyerror!Value {
+    if (val.type != .lazy_seq) return try val.clone(allocator);
+
+    var result: list.List = .empty;
+    errdefer result.deinit(allocator);
+
+    var current: Value = val;
+    var max_iter: usize = 100000;
+    while (max_iter > 0) : (max_iter -= 1) {
+        if (current.type != .lazy_seq) break;
+
+        var forced = try sequences.forceLazySeqHelper(allocator, current);
+        current.deinit(allocator);
+
+        if (forced.type != .list) {
+            forced.deinit(allocator);
+            break;
+        }
+
+        for (forced.list_val.items) |item| {
+            if (item.type == .lazy_seq) {
+                const realized = try fullyRealizeLazySeq(allocator, item);
+                if (realized.type == .list) {
+                    for (realized.list_val.items) |ri| {
+                        try result.append(allocator, try ri.clone(allocator));
+                    }
+                } else {
+                    try result.append(allocator, realized);
+                }
+            } else {
+                try result.append(allocator, try item.clone(allocator));
+            }
+        }
+        forced.deinit(allocator);
+
+        if (result.items.len > 0 and result.items[result.items.len - 1].type == .lazy_seq) {
+            current = result.pop() orelse break;
+        } else {
+            break;
+        }
+    }
+    if (current.type != .lazy_seq) {
+        current.deinit(allocator);
+    }
+    return Value.listValue(result);
+}
 
 pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // Memory trace: toggle with CLJVM_MEM_TRACE=1 (stderr) or CLJVM_MEM_TRACE=file:path
@@ -164,6 +213,19 @@ fn runExpression(allocator: Allocator, expr: []const u8, env: *Env) anyerror!voi
     var result = try eval.eval(allocator, arena_alloc, form, eval_env);
     defer result.deinit(arena_alloc);
 
+    // Force lazy-seqs before printing
+    if (result.type == .lazy_seq) {
+        var realized = try fullyRealizeLazySeq(allocator, result);
+        // Null out the thunk to prevent double-free from the defer
+        result.lazy_seq_val.thunk = null;
+        const formatted = try realized.fmt(allocator);
+        defer allocator.free(formatted);
+        realized.deinit(allocator);
+        try writeStdout(formatted);
+        try writeStdout("\n");
+        return;
+    }
+
     const formatted = try result.fmt(allocator);
     defer allocator.free(formatted);
     try writeStdout(formatted);
@@ -196,8 +258,17 @@ fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void 
 
         // Print non-nil results (like Clojure REPL)
         if (!result.equals(Value.nilValue())) {
-            const formatted = try result.fmt(allocator);
+            var print_val: Value = undefined;
+            if (result.type == .lazy_seq) {
+                print_val = try fullyRealizeLazySeq(allocator, result);
+                // Null out the thunk to prevent double-free
+                result.lazy_seq_val.thunk = null;
+            } else {
+                print_val = result;
+            }
+            const formatted = try print_val.fmt(allocator);
             defer allocator.free(formatted);
+            print_val.deinit(allocator);
             try writeStdout(formatted);
             try writeStdout("\n");
         }

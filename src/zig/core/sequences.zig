@@ -9,19 +9,12 @@ const helpers = @import("helpers.zig");
 const Allocator = std.mem.Allocator;
 
 /// Force a value and append to target list.
-/// If val is a lazy_seq, its forced elements are appended (flattened).
-/// Otherwise, val is cloned and appended as a single element.
+/// If val is a lazy_seq, append it as-is (don't force recursively).
+/// Otherwise, clone and append as a single element.
 fn forceAndAppend(allocator: Allocator, val: Value, target: *list.List) anyerror!void {
-    if (val.type == .lazy_seq) {
-        var forced = try forceLazySeqHelper(allocator, val);
-        defer forced.deinit(allocator);
-        // Flatten: append each element of the forced list
-        for (forced.list_val.items) |item| {
-            try target.append(allocator, try item.clone(allocator));
-        }
-    } else {
-        try target.append(allocator, try val.clone(allocator));
-    }
+    // Don't recursively force nested lazy-seqs - keep them lazy
+    // They will be forced on demand by first/rest/seq
+    try target.append(allocator, try val.clone(allocator));
 }
 
 /// Force a lazy-seq to a realized list (recursively forces nested lazy_seqs)
@@ -32,6 +25,10 @@ pub fn forceLazySeqHelper(allocator: Allocator, lazy: Value) anyerror!Value {
 
         const cloned_body = try list.clone(&thunk.body, arena_alloc);
         var thunk_env = try thunk.env.clone(arena_alloc);
+        // CRITICAL: Set thunk_env.allocator to persistent allocator so that
+        // any lazy-seq thunks created during evaluation are allocated persistently.
+        // Without this, thunks created on the arena would be freed when arena.deinit() is called.
+        thunk_env.allocator = allocator;
 
         // Evaluate the thunk body (already wrapped in 'do') as a list
         const body_val = Value.listValue(cloned_body);
@@ -53,10 +50,12 @@ pub fn forceLazySeqHelper(allocator: Allocator, lazy: Value) anyerror!Value {
             },
             .nil => {},
             .lazy_seq => {
-                // Force the lazy_seq and append its contents
-                var forced = try forceLazySeqHelper(allocator, result);
-                defer forced.deinit(allocator);
-                for (forced.list_val.items) |item| {
+                // Force the lazy_seq and flatten its contents.
+                // This is safe now because seq no longer forces lazy-seqs,
+                // breaking the recursion chain.
+                var forced_inner = try forceLazySeqHelper(allocator, result);
+                defer forced_inner.deinit(allocator);
+                for (forced_inner.list_val.items) |item| {
                     try final_list.append(allocator, try item.clone(allocator));
                 }
             },
@@ -70,12 +69,20 @@ pub fn forceLazySeqHelper(allocator: Allocator, lazy: Value) anyerror!Value {
     return Value.listValue(list.empty());
 }
 
-pub fn core_count(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_count(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
-    switch (args.items[0].type) {
-        .list => return Value.intValue(@as(i64, @intCast(args.items[0].list_val.items.len))),
-        .vector => return Value.intValue(@as(i64, @intCast(args.items[0].vec_val.items.len))),
+    const allocator = env_env.allocator;
+    var val = args.items[0];
+    // Force lazy_seq to count its elements
+    if (val.type == .lazy_seq) {
+        var forced = try forceLazySeqHelper(allocator, val);
+        defer forced.deinit(allocator);
+        val = forced;
+    }
+    switch (val.type) {
+        .list => return Value.intValue(@as(i64, @intCast(val.list_val.items.len))),
+        .vector => return Value.intValue(@as(i64, @intCast(val.vec_val.items.len))),
         .map => return Value.intValue(@as(i64, @intCast(args.items[0].map_val.items.len))),
         .set => return Value.intValue(@as(i64, @intCast(args.items[0].set_val.items.len))),
         .queue => return Value.intValue(@as(i64, @intCast(args.items[0].queue_val.items.len))),
@@ -121,6 +128,11 @@ pub fn core_rest(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
         .list => {
             if (val.list_val.items.len <= 1) return Value.listValue(list.empty());
             const rest = val.list_val.items[1..];
+            // Cons pattern: if rest is a single lazy-seq, return it directly
+            // This matches Clojure's (rest (cons x coll)) => coll behavior
+            if (rest.len == 1 and rest[0].type == .lazy_seq) {
+                return try rest[0].clone(allocator);
+            }
             var new_list: list.List = .empty;
             errdefer new_list.deinit(allocator);
             for (rest) |item| {
@@ -171,39 +183,102 @@ pub fn core_take(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     if (args.items.len != 2) return error.ArityError;
     const allocator = env_env.allocator;
     const n_val = args.items[0];
-    const n: usize = switch (n_val.type) {
-        .integer => @as(usize, @intCast(n_val.int_val)),
-        .float => @as(usize, @intFromFloat(n_val.float_val)),
+    _ = switch (n_val.type) {
+        .integer, .float => {},
         else => return error.TypeError,
     };
-    var coll = try args.items[1].clone(allocator);
-    defer coll.deinit(allocator);
-    // Force lazy_seq
-    if (coll.type == .lazy_seq) {
-        coll = try forceLazySeqHelper(allocator, coll);
-    }
-    var result: list.List = .empty;
-    errdefer result.deinit(allocator);
-    switch (coll.type) {
-        .list => {
-            const items = coll.list_val.items;
-            const count = if (n < items.len) n else items.len;
-            var i: usize = 0;
-            while (i < count) : (i += 1) {
-                try forceAndAppend(allocator, items[i], &result);
-            }
-        },
-        .vector => {
-            const items = coll.vec_val.items;
-            const count = if (n < items.len) n else items.len;
-            var i: usize = 0;
-            while (i < count) : (i += 1) {
-                try forceAndAppend(allocator, items[i], &result);
-            }
-        },
-        else => {},
-    }
-    return Value.listValue(result);
+
+    // Return a lazy-seq that yields at most n elements
+    // Mirrors Clojure: (lazy-seq (when (pos? n) (when-let [s (seq coll)] (cons (first s) (take (dec n) (rest s))))))
+    const thunk = try allocator.create(Value.LazySeqThunk);
+    thunk.* = .{
+        .params = list.empty(),
+        .body = list.empty(),
+        .env = try env_env.clone(allocator),
+    };
+    try thunk.env.put("n", try n_val.clone(allocator));
+    try thunk.env.put("coll", try args.items[1].clone(allocator));
+
+    // Build thunk body: (let [s (seq coll)] (if (and (pos? n) s) (cons (first s) (take (dec n) (rest s))) nil))
+    const a = allocator;
+    const sym_let = try Value.symValue(a, "let");
+    const sym_s = try Value.symValue(a, "s");
+    const sym_seq = try Value.symValue(a, "seq");
+    const sym_coll = try Value.symValue(a, "coll");
+    const sym_if = try Value.symValue(a, "if");
+    const sym_and = try Value.symValue(a, "and");
+    const sym_pos_q = try Value.symValue(a, "pos?");
+    const sym_n = try Value.symValue(a, "n");
+    const sym_cons = try Value.symValue(a, "cons");
+    const sym_first = try Value.symValue(a, "first");
+    const sym_take = try Value.symValue(a, "take");
+    const sym_dec = try Value.symValue(a, "dec");
+    const sym_rest = try Value.symValue(a, "rest");
+    const sym_nil = Value.nilValue();
+
+    // (seq coll)
+    var seq_call: list.List = .empty;
+    try seq_call.append(a, sym_seq);
+    try seq_call.append(a, sym_coll);
+
+    // [s (seq coll)]
+    var bindings: list.List = .empty;
+    try bindings.append(a, sym_s);
+    try bindings.append(a, Value.listValue(seq_call));
+
+    // (pos? n)
+    var pos_call: list.List = .empty;
+    try pos_call.append(a, sym_pos_q);
+    try pos_call.append(a, sym_n);
+
+    // (and (pos? n) s)
+    var and_call: list.List = .empty;
+    try and_call.append(a, sym_and);
+    try and_call.append(a, Value.listValue(pos_call));
+    try and_call.append(a, sym_s);
+
+    // (first s)
+    var first_call: list.List = .empty;
+    try first_call.append(a, sym_first);
+    try first_call.append(a, sym_s);
+
+    // (rest s)
+    var rest_call: list.List = .empty;
+    try rest_call.append(a, sym_rest);
+    try rest_call.append(a, sym_s);
+
+    // (dec n)
+    var dec_call: list.List = .empty;
+    try dec_call.append(a, sym_dec);
+    try dec_call.append(a, sym_n);
+
+    // (take (dec n) (rest s))
+    var take_call: list.List = .empty;
+    try take_call.append(a, sym_take);
+    try take_call.append(a, Value.listValue(dec_call));
+    try take_call.append(a, Value.listValue(rest_call));
+
+    // (cons (first s) (take (dec n) (rest s)))
+    var cons_call: list.List = .empty;
+    try cons_call.append(a, sym_cons);
+    try cons_call.append(a, Value.listValue(first_call));
+    try cons_call.append(a, Value.listValue(take_call));
+
+    // (if (and (pos? n) s) (cons ...) nil)
+    var if_form: list.List = .empty;
+    try if_form.append(a, sym_if);
+    try if_form.append(a, Value.listValue(and_call));
+    try if_form.append(a, Value.listValue(cons_call));
+    try if_form.append(a, sym_nil);
+
+    // (let [s (seq coll)] (if ...))
+    var body: list.List = .empty;
+    try body.append(a, sym_let);
+    try body.append(a, Value.listValue(bindings));
+    try body.append(a, Value.listValue(if_form));
+
+    thunk.body = body;
+    return Value.lazySeqValue(thunk);
 }
 
 pub fn core_concat(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
@@ -312,12 +387,11 @@ pub fn core_seq(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     if (args.items.len != 1) return error.ArityError;
     const coll = args.items[0];
 
-    // Handle lazy_seq: force it to a list first
+    // Handle lazy_seq: return it directly (it's already a seq)
+    // Don't force it - that causes infinite recursion when lazy-seqs
+    // reference each other (e.g., map -> cons -> seq -> map)
     if (coll.type == .lazy_seq) {
-        var forced = try forceLazySeqHelper(env_env.allocator, coll);
-        defer forced.deinit(env_env.allocator);
-        if (forced.list_val.items.len == 0) return Value.nilValue();
-        return try forced.clone(env_env.allocator);
+        return try coll.clone(env_env.allocator);
     }
 
     const len: usize = switch (coll.type) {
@@ -384,6 +458,85 @@ pub fn core_range(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return Value.listValue(result);
 }
 
+// cons - returns a lazy-seq where x is the first element and xs is the rest.
+// This is a built-in because the Clojure (concat (list x) xs) version
+// creates a concrete list (x <lazy-seq>) which breaks rest/seq semantics.
+// In Clojure, (rest (cons x lazy-seq)) returns the lazy-seq directly.
+pub fn core_cons(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 2) return error.ArityError;
+    const allocator = env_env.allocator;
+    const x = args.items[0];
+    const xs = args.items[1];
+
+    // Return a lazy-seq that, when forced, produces (x ...forced_xs...)
+    const thunk = try allocator.create(Value.LazySeqThunk);
+    thunk.* = .{
+        .params = list.empty(),
+        .body = list.empty(),
+        .env = try env_env.clone(allocator),
+    };
+    try thunk.env.put("__cons_x", try x.clone(allocator));
+    try thunk.env.put("__cons_xs", try xs.clone(allocator));
+
+    // Build thunk body: (concat (list __cons_x) __cons_xs)
+    // But we need to handle the case where __cons_xs is a lazy-seq
+    // properly. The concat function already handles lazy_seq by
+    // appending it as an element, so we need a different approach.
+    // Instead, we build: (let [rest-seq (seq __cons_xs)]
+    //                      (cons __cons_x (if rest-seq (lazy-seq (concat (list __cons_x) __cons_xs)) ...)))
+    // Actually, the simplest correct approach is to use a special form that
+    // builds the result list properly.
+    //
+    // The key insight: when this lazy-seq is forced, we want to return
+    // a list where the first element is x and remaining elements come
+    // from forcing xs. But we DON'T want to force xs eagerly here -
+    // we want to keep it lazy.
+    //
+    // So the result should be a list: (x <lazy-seq-for-x>), where
+    // the lazy-seq for xs will be forced when needed.
+    // But our concat already does this for lazy_seq args!
+    // The problem is that concat puts the lazy_seq as an element,
+    // and forceLazySeqHelper then flattens it.
+    //
+    // Solution: make the thunk body return a special structure.
+    // We'll use a list with x and xs directly (not via concat):
+    // (list __cons_x) concatenated with __cons_xs
+    //
+    // Actually the simplest fix: build the body as:
+    // (let [xs-seq (seq __cons_xs)]
+    //   (if xs-seq
+    //     (list* __cons_x xs-seq)  ; but we don't have list*
+    //     (list __cons_x)))
+    //
+    // Since we don't have list*, let's use concat but with the fix
+    // that concat properly handles lazy_seq:
+    // (concat (list __cons_x) __cons_xs)
+    // This returns (x <lazy-seq>) as a list, which when forced
+    // by forceLazySeqHelper will flatten the lazy-seq into the list.
+    // That's the correct behavior!
+
+    const a = allocator;
+    const sym_concat = try Value.symValue(a, "concat");
+    const sym_list = try Value.symValue(a, "list");
+    const sym_x = try Value.symValue(a, "__cons_x");
+    const sym_xs = try Value.symValue(a, "__cons_xs");
+
+    // (list __cons_x)
+    var list_call: list.List = .empty;
+    try list_call.append(a, sym_list);
+    try list_call.append(a, sym_x);
+
+    // (concat (list __cons_x) __cons_xs)
+    var concat_call: list.List = .empty;
+    try concat_call.append(a, sym_concat);
+    try concat_call.append(a, Value.listValue(list_call));
+    try concat_call.append(a, sym_xs);
+
+    thunk.body = concat_call;
+    return Value.lazySeqValue(thunk);
+}
+
 pub fn registerSequenceFunctions(env: *Env) anyerror!void {
     try env.put("count", Value.builtinFnValue(core_count));
     try env.put("first", Value.builtinFnValue(core_first));
@@ -396,6 +549,7 @@ pub fn registerSequenceFunctions(env: *Env) anyerror!void {
     try env.put("take", Value.builtinFnValue(core_take));
     try env.put("seq", Value.builtinFnValue(core_seq));
     try env.put("range", Value.builtinFnValue(core_range));
+    try env.put("cons", Value.builtinFnValue(core_cons));
 }
 
 // ===== Unit Tests =====

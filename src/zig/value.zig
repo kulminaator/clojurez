@@ -471,10 +471,13 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
         },
         .lazy_seq => {
             if (self.lazy_seq_val.thunk) |thunk| {
-                thunk.params.deinit(allocator);
-                thunk.body.deinit(allocator);
-                thunk.env.deinit(allocator);
-                allocator.destroy(thunk);
+                // Use the allocator from the thunk's environment to properly free
+                // the thunk (which may have been allocated with a different allocator)
+                const thunk_allocator = thunk.env.allocator;
+                thunk.params.deinit(thunk_allocator);
+                thunk.body.deinit(thunk_allocator);
+                thunk.env.deinit(thunk_allocator);
+                thunk_allocator.destroy(thunk);
             }
         },
         .function => {

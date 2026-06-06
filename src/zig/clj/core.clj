@@ -44,11 +44,9 @@
 
 ;; ---- List helpers ----
 
-(defn cons [x xs]
-  (concat (list x) xs))
-
-;; range is implemented as a Zig built-in to avoid lazy-seq recursion
-;; that causes stack overflow with large ranges.
+;; cons is implemented as a Zig built-in for proper lazy-seq support
+;; The Clojure version (concat (list x) xs) creates a concrete list
+;; which breaks rest/seq semantics for lazy sequences.
 
 (defn second [xs]
   (first (rest xs)))

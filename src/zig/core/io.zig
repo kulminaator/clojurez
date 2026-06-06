@@ -2,17 +2,77 @@
 const std = @import("std");
 const Value = @import("../value.zig");
 const list = @import("../list.zig");
+const vec = @import("../vector.zig");
 const Env = Value.Env;
+const sequences = @import("sequences.zig");
 
 const stdout_file = std.Io.File.stdout();
 const stdin_file = std.Io.File.stdin();
+
+/// Fully realize a lazy-seq into a concrete list for printing.
+fn fullyRealizeLazySeq(allocator: std.mem.Allocator, val: Value) anyerror!Value {
+    if (val.type != .lazy_seq) return try val.clone(allocator);
+
+    var result: list.List = .empty;
+    errdefer result.deinit(allocator);
+
+    var current: Value = val;
+    var max_iter: usize = 100000;
+    while (max_iter > 0) : (max_iter -= 1) {
+        if (current.type != .lazy_seq) break;
+
+        var forced = try sequences.forceLazySeqHelper(allocator, current);
+        current.deinit(allocator);
+
+        if (forced.type != .list) {
+            forced.deinit(allocator);
+            break;
+        }
+
+        for (forced.list_val.items) |item| {
+            if (item.type == .lazy_seq) {
+                const realized = try fullyRealizeLazySeq(allocator, item);
+                if (realized.type == .list) {
+                    for (realized.list_val.items) |ri| {
+                        try result.append(allocator, try ri.clone(allocator));
+                    }
+                } else {
+                    try result.append(allocator, realized);
+                }
+            } else {
+                try result.append(allocator, try item.clone(allocator));
+            }
+        }
+        forced.deinit(allocator);
+
+        if (result.items.len > 0 and result.items[result.items.len - 1].type == .lazy_seq) {
+            current = result.pop() orelse break;
+        } else {
+            break;
+        }
+    }
+    if (current.type != .lazy_seq) {
+        current.deinit(allocator);
+    }
+    return Value.listValue(result);
+}
+
+/// Format a value, forcing lazy-seqs first.
+fn fmtValue(allocator: std.mem.Allocator, val: Value) anyerror![]const u8 {
+    if (val.type == .lazy_seq) {
+        var realized = try fullyRealizeLazySeq(allocator, val);
+        defer realized.deinit(allocator);
+        return try realized.fmt(allocator);
+    }
+    return try val.fmt(allocator);
+}
 
 pub fn core_print(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
     var buf: [256]u8 = undefined;
     var writer = stdout_file.writer(std.Options.debug_io, &buf);
     for (args.items) |arg| {
-        const s = try arg.fmt(env_env.allocator);
+        const s = try fmtValue(env_env.allocator, arg);
         defer env_env.allocator.free(s);
         if (arg.type == .string and s.len >= 2 and s[0] == '"' and s[s.len - 1] == '"') {
             try writer.interface.writeAll(s[1 .. s.len - 1]);
@@ -30,7 +90,7 @@ pub fn core_println(self: *Value, args: list.List, env_env: *Env) anyerror!Value
     var writer = stdout_file.writer(std.Options.debug_io, &buf);
     for (args.items, 0..) |arg, i| {
         if (i > 0) try writer.interface.writeAll(" ");
-        const s = try arg.fmt(env_env.allocator);
+        const s = try fmtValue(env_env.allocator, arg);
         defer env_env.allocator.free(s);
         if (arg.type == .string and s.len >= 2 and s[0] == '"' and s[s.len - 1] == '"') {
             try writer.interface.writeAll(s[1 .. s.len - 1]);

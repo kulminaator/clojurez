@@ -1077,6 +1077,8 @@ fn forceLazySeq(allocator: Allocator, arena_alloc: Allocator, lazy: Value, env: 
         var cloned_params = try list.clone(&thunk.params, arena_alloc);
         var cloned_body = try list.clone(&thunk.body, arena_alloc);
         var thunk_env = try thunk.env.clone(arena_alloc);
+        // CRITICAL: Set thunk_env.allocator to persistent allocator
+        thunk_env.allocator = allocator;
         defer {
             cloned_params.deinit(arena_alloc);
             cloned_body.deinit(arena_alloc);
@@ -1094,7 +1096,7 @@ fn forceLazySeq(allocator: Allocator, arena_alloc: Allocator, lazy: Value, env: 
         switch (result.type) {
             .list => {
                 for (result.list_val.items) |item| {
-                    // Force nested lazy_seqs
+                    // Recursively force nested lazy_seqs for doall/dorun
                     if (item.type == .lazy_seq) {
                         var forced = try sequences.forceLazySeqHelper(allocator, item);
                         defer forced.deinit(allocator);
@@ -1121,6 +1123,7 @@ fn forceLazySeq(allocator: Allocator, arena_alloc: Allocator, lazy: Value, env: 
             },
             .nil => {}, // empty sequence
             .lazy_seq => {
+                // Recursively force for doall/dorun
                 var forced = try sequences.forceLazySeqHelper(allocator, result);
                 defer forced.deinit(allocator);
                 for (forced.list_val.items) |fi| {

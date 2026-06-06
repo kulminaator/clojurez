@@ -677,34 +677,51 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
     };
 }
 
-// iterate: repeatedly apply f to init, collecting results in a vector
-// iterate: repeatedly apply f to init, collecting results in a vector
+// iterate: repeatedly apply f to init, lazily
+// Mirrors Clojure: returns a lazy (infinite!) sequence of x, (f x), (f (f x)) etc.
 pub fn core_iterate(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const allocator = env_env.allocator;
     const f = args.items[0];
-    var current = try args.items[1].clone(allocator);
-    defer current.deinit(allocator);
+    const x = args.items[1];
 
-    var result: vec.Vector = .empty;
-    errdefer result.deinit(allocator);
+    // Return a lazy-seq: (lazy-seq (cons x (iterate f (f x))))
+    const thunk = try allocator.create(Value.LazySeqThunk);
+    thunk.* = .{
+        .params = list.empty(),
+        .body = list.empty(),
+        .env = try env_env.clone(allocator),
+    };
+    try thunk.env.put("f", try f.clone(allocator));
+    try thunk.env.put("x", try x.clone(allocator));
 
-    const max_iter: usize = 1000;
-    var i: usize = 0;
-    while (i < max_iter) : (i += 1) {
-        try result.append(allocator, try current.clone(allocator));
+    // Build thunk body: (cons x (iterate f (f x)))
+    const a = allocator;
+    const sym_cons = try Value.symValue(a, "cons");
+    const sym_x = try Value.symValue(a, "x");
+    const sym_f = try Value.symValue(a, "f");
+    const sym_iterate = try Value.symValue(a, "iterate");
 
-        // Call f with current as argument
-        var arg_list: list.List = .empty;
-        errdefer arg_list.deinit(allocator);
-        try arg_list.append(allocator, try current.clone(allocator));
+    // (f x)
+    var f_call: list.List = .empty;
+    try f_call.append(a, sym_f);
+    try f_call.append(a, sym_x);
 
-        const next_val = try eval_helpers.callBuiltin(allocator, f, arg_list, env_env);
-        current.deinit(allocator);
-        current = next_val;
-    }
-    return Value.vectorValue(result);
+    // (iterate f (f x))
+    var iterate_call: list.List = .empty;
+    try iterate_call.append(a, sym_iterate);
+    try iterate_call.append(a, sym_f);
+    try iterate_call.append(a, Value.listValue(f_call));
+
+    // (cons x (iterate f (f x)))
+    var cons_call: list.List = .empty;
+    try cons_call.append(a, sym_cons);
+    try cons_call.append(a, sym_x);
+    try cons_call.append(a, Value.listValue(iterate_call));
+
+    thunk.body = cons_call;
+    return Value.lazySeqValue(thunk);
 }
 
 pub fn registerSequenceOpFunctions(env: *Env) anyerror!void {
