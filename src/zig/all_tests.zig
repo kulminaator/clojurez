@@ -22,6 +22,7 @@ const test_atoms = @import("core/atoms.zig");
 const test_eval_helpers = @import("core/eval_helpers.zig");
 const test_slab = @import("slab_allocator.zig");
 const test_debug_alloc = @import("debug_allocator.zig");
+const test_gc = @import("gc.zig");
 const test_eval = @import("eval.zig");
 const test_eval_macro = @import("eval_macro.zig");
 const test_eval_ns = @import("eval_ns.zig");
@@ -51,6 +52,7 @@ comptime {
     _ = test_eval_helpers;
     _ = test_slab;
     _ = test_debug_alloc;
+    _ = test_gc;
     _ = test_eval;
     _ = test_eval_macro;
     _ = test_eval_ns;
