@@ -49,7 +49,7 @@ pub fn forceLazySeqHelper(allocator: Allocator, lazy: Value) anyerror!Value {
                 var forced_inner = try forceLazySeqHelper(allocator, result);
                 defer forced_inner.deinit(allocator);
                 for (forced_inner.list_val.items) |item| {
-                    try final_list.append(allocator, try item.clone(allocator));
+                    try forceAndAppend(allocator, item, &final_list);
                 }
             },
             else => {

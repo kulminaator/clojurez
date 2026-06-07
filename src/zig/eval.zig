@@ -1068,7 +1068,6 @@ pub fn call(allocator: Allocator, arena_alloc: Allocator, op: Value, args_list: 
 
 // Force evaluation of a lazy sequence, returning the resulting list
 fn forceLazySeq(allocator: Allocator, arena_alloc: Allocator, lazy: Value, env: *Env, depth: usize) anyerror!Value {
-    _ = env;
     // Evaluate the thunk
     if (lazy.lazy_seq_val.thunk) |thunk| {
         // Clone thunk data for evaluation — don't free the thunk itself
@@ -1095,27 +1094,49 @@ fn forceLazySeq(allocator: Allocator, arena_alloc: Allocator, lazy: Value, env: 
 
         switch (result.type) {
             .list => {
-                for (result.list_val.items) |item| {
-                    // Recursively force nested lazy_seqs for doall/dorun
-                    if (item.type == .lazy_seq) {
-                        var forced = try sequences.forceLazySeqHelper(allocator, item);
-                        defer forced.deinit(allocator);
-                        for (forced.list_val.items) |fi| {
+                // Handle cons cell pattern: [head, lazy_seq_tail]
+                if (result.list_val.items.len == 2 and result.list_val.items[1].type == .lazy_seq) {
+                    const head_item = result.list_val.items[0];
+                    if (head_item.type == .lazy_seq) {
+                        const head_forced = try forceLazySeq(allocator, arena_alloc, head_item, env, depth + 1);
+                        try final_list.append(arena_alloc, head_forced);
+                    } else {
+                        try final_list.append(arena_alloc, try head_item.clone(arena_alloc));
+                    }
+                    var tail_forced = try forceLazySeq(allocator, arena_alloc, result.list_val.items[1], env, depth + 1);
+                    if (tail_forced.type == .list) {
+                        for (tail_forced.list_val.items) |fi| {
                             try final_list.append(arena_alloc, try fi.clone(arena_alloc));
                         }
-                    } else {
-                        try final_list.append(arena_alloc, try item.clone(arena_alloc));
+                    }
+                    tail_forced.deinit(arena_alloc);
+                } else {
+                    for (result.list_val.items) |item| {
+                        // Recursively force nested lazy_seqs for doall/dorun
+                        if (item.type == .lazy_seq) {
+                            var forced = try forceLazySeq(allocator, arena_alloc, item, env, depth + 1);
+                            if (forced.type == .list) {
+                                for (forced.list_val.items) |fi| {
+                                    try final_list.append(arena_alloc, try fi.clone(arena_alloc));
+                                }
+                            }
+                            forced.deinit(arena_alloc);
+                        } else {
+                            try final_list.append(arena_alloc, try item.clone(arena_alloc));
+                        }
                     }
                 }
             },
             .vector => {
                 for (result.vec_val.items) |item| {
                     if (item.type == .lazy_seq) {
-                        var forced = try sequences.forceLazySeqHelper(allocator, item);
-                        defer forced.deinit(allocator);
-                        for (forced.list_val.items) |fi| {
-                            try final_list.append(arena_alloc, try fi.clone(arena_alloc));
+                        var forced = try forceLazySeq(allocator, arena_alloc, item, env, depth + 1);
+                        if (forced.type == .list) {
+                            for (forced.list_val.items) |fi| {
+                                try final_list.append(arena_alloc, try fi.clone(arena_alloc));
+                            }
                         }
+                        forced.deinit(arena_alloc);
                     } else {
                         try final_list.append(arena_alloc, try item.clone(arena_alloc));
                     }
@@ -1124,11 +1145,13 @@ fn forceLazySeq(allocator: Allocator, arena_alloc: Allocator, lazy: Value, env: 
             .nil => {}, // empty sequence
             .lazy_seq => {
                 // Recursively force for doall/dorun
-                var forced = try sequences.forceLazySeqHelper(allocator, result);
-                defer forced.deinit(allocator);
-                for (forced.list_val.items) |fi| {
-                    try final_list.append(arena_alloc, try fi.clone(arena_alloc));
+                var forced = try forceLazySeq(allocator, arena_alloc, result, env, depth + 1);
+                if (forced.type == .list) {
+                    for (forced.list_val.items) |fi| {
+                        try final_list.append(arena_alloc, try fi.clone(arena_alloc));
+                    }
                 }
+                forced.deinit(arena_alloc);
             },
             else => {
                 try final_list.append(arena_alloc, result);

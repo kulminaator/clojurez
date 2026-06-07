@@ -561,7 +561,7 @@ pub fn core_doall_star(self: *Value, args: list.List, env_env: *Env) anyerror!Va
 }
 
 fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
-    return switch (val.type) {
+    const result = switch (val.type) {
         .lazy_seq => {
             // Evaluate the thunk
             if (val.lazy_seq_val.thunk) |thunk| {
@@ -582,17 +582,42 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
                     .list => {
                         var forced_list: list.List = .empty;
                         errdefer forced_list.deinit(allocator);
-                        for (result.list_val.items) |item| {
-                            // Flatten lazy_seq elements
-                            if (item.type == .lazy_seq) {
-                                var forced = try sequences_mod.forceLazySeqHelper(allocator, item);
-                                defer forced.deinit(allocator);
-                                for (forced.list_val.items) |fi| {
+                        // Handle cons cell pattern: [head, lazy_seq_tail]
+                        // forceLazySeqHelper returns at most 2 items from a cons
+                        if (result.list_val.items.len == 2 and result.list_val.items[1].type == .lazy_seq) {
+                            // Force the head if it's a lazy_seq, otherwise clone
+                            const head_item = result.list_val.items[0];
+                            if (head_item.type == .lazy_seq) {
+                                const head_forced = try forceValue(allocator, head_item);
+                                // Append the forced head as a single element (don't flatten)
+                                try forced_list.append(allocator, head_forced);
+                            } else {
+                                try forced_list.append(allocator, try head_item.clone(allocator));
+                            }
+                            // Force the tail lazy_seq recursively
+                            var tail_forced = try forceValue(allocator, result.list_val.items[1]);
+                            if (tail_forced.type == .list) {
+                                for (tail_forced.list_val.items) |fi| {
                                     try forced_list.append(allocator, try fi.clone(allocator));
                                 }
-                            } else {
-                                const forced_item = try forceValue(allocator, item);
-                                try forced_list.append(allocator, forced_item);
+                            }
+                            tail_forced.deinit(allocator);
+                        } else {
+                            for (result.list_val.items) |item| {
+                                // Only force lazy_seq items; clone everything else
+                                if (item.type == .lazy_seq) {
+                                    var forced = try forceValue(allocator, item);
+                                    if (forced.type == .list) {
+                                        for (forced.list_val.items) |fi| {
+                                            try forced_list.append(allocator, try fi.clone(allocator));
+                                        }
+                                    } else {
+                                        try forced_list.append(allocator, forced);
+                                    }
+                                    forced.deinit(allocator);
+                                } else {
+                                    try forced_list.append(allocator, try item.clone(allocator));
+                                }
                             }
                         }
                         result.deinit(allocator);
@@ -602,24 +627,34 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
                         var forced_vec: vec.Vector = .empty;
                         errdefer forced_vec.deinit(allocator);
                         for (result.vec_val.items) |item| {
-                            // Flatten lazy_seq elements
+                            // Only force lazy_seq items; clone everything else
                             if (item.type == .lazy_seq) {
-                                var forced = try sequences_mod.forceLazySeqHelper(allocator, item);
-                                defer forced.deinit(allocator);
-                                for (forced.list_val.items) |fi| {
-                                    try forced_vec.append(allocator, try fi.clone(allocator));
+                                var forced = try forceValue(allocator, item);
+                                if (forced.type == .list) {
+                                    for (forced.list_val.items) |fi| {
+                                        try forced_vec.append(allocator, try fi.clone(allocator));
+                                    }
+                                } else {
+                                    try forced_vec.append(allocator, forced);
                                 }
+                                forced.deinit(allocator);
                             } else {
-                                const forced_item = try forceValue(allocator, item);
-                                try forced_vec.append(allocator, forced_item);
+                                try forced_vec.append(allocator, try item.clone(allocator));
                             }
                         }
                         result.deinit(allocator);
                         return Value.vectorValue(forced_vec);
                     },
                     .nil => {
+                        // Thunk returned nil (empty sequence)
                         result.deinit(allocator);
-                        return Value.nilValue();
+                        return Value.listValue(list.empty());
+                    },
+                    .lazy_seq => {
+                        // Thunk returned a lazy_seq (e.g., from cons). Recursively force it.
+                        const forced = try forceValue(allocator, result);
+                        result.deinit(allocator);
+                        return forced;
                     },
                     else => {
                         const forced = try forceValue(allocator, result);
@@ -631,22 +666,8 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
             return Value.listValue(list.empty());
         },
         .list => {
-            var forced_list: list.List = .empty;
-            errdefer forced_list.deinit(allocator);
-            for (val.list_val.items) |item| {
-                // Flatten lazy_seq elements
-                if (item.type == .lazy_seq) {
-                    var forced = try sequences_mod.forceLazySeqHelper(allocator, item);
-                    defer forced.deinit(allocator);
-                    for (forced.list_val.items) |fi| {
-                        try forced_list.append(allocator, try fi.clone(allocator));
-                    }
-                } else {
-                    const forced_item = try forceValue(allocator, item);
-                    try forced_list.append(allocator, forced_item);
-                }
-            }
-            return Value.listValue(forced_list);
+            // For standalone lists, just clone them (they're data, not thunk results)
+            return try val.clone(allocator);
         },
         .vector => {
             var forced_vec: vec.Vector = .empty;
@@ -657,7 +678,8 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
                     var forced = try sequences_mod.forceLazySeqHelper(allocator, item);
                     defer forced.deinit(allocator);
                     for (forced.list_val.items) |fi| {
-                        try forced_vec.append(allocator, try fi.clone(allocator));
+                        const recursively_forced = try forceValue(allocator, fi);
+                        try forced_vec.append(allocator, recursively_forced);
                     }
                 } else {
                     const forced_item = try forceValue(allocator, item);
@@ -668,6 +690,7 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
         },
         else => try val.clone(allocator),
     };
+    return result;
 }
 
 // iterate: repeatedly apply f to init, lazily
