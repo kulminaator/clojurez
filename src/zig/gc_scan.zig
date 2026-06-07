@@ -1,0 +1,200 @@
+// gc_scan.zig — Scan function for the GC that understands Clojure Value structures.
+
+const std = @import("std");
+const gc = @import("gc.zig");
+const Value = @import("value.zig");
+
+/// Main scan function — dispatched by the GC for each marked block.
+pub fn valueScanFn(obj: *anyopaque, ctx: *gc.ScanContext) void {
+    const header = ctx.gc.findHeader(obj) orelse return;
+    switch (header.obj_type) {
+        .unknown => scanUnknownBlock(obj, ctx, header.size),
+        .value_array => scanValueArray(obj, ctx, header.size),
+        .map_entries => scanMapEntries(obj, ctx, header.size),
+        .set_items => scanValueArray(obj, ctx, header.size),
+        .queue_items => scanValueArray(obj, ctx, header.size),
+        .env_entries => scanEnvEntries(obj, ctx, header.size),
+        .lazy_seq_thunk => scanLazySeqThunk(obj, ctx),
+        .atom_data => scanAtomData(obj, ctx),
+        .fn_data => scanFnData(obj, ctx),
+    }
+}
+
+/// Heuristic scan for blocks without a type tag.
+fn scanUnknownBlock(obj: *anyopaque, ctx: *gc.ScanContext, size: usize) void {
+    const value_size = @sizeOf(Value);
+    const map_entry_size = @sizeOf(Value.MapEntry);
+    const atom_size = @sizeOf(Value.AtomData);
+    const thunk_size = @sizeOf(Value.LazySeqThunk);
+
+    if (size == value_size) {
+        const val: *const Value = @ptrCast(@alignCast(obj));
+        scanValueChildrenDirect(val, ctx);
+        return;
+    }
+    if (size == atom_size) {
+        scanAtomData(obj, ctx);
+        return;
+    }
+    if (size == thunk_size) {
+        scanLazySeqThunk(obj, ctx);
+        return;
+    }
+    // Array of Values (list items, vector items, set items, queue items)
+    // Only match if size is a reasonable multiple of Value size
+    if (size % value_size == 0 and size >= value_size and size / value_size <= 10000) {
+        scanValueArray(obj, ctx, size);
+        return;
+    }
+    // Array of MapEntries
+    if (size % map_entry_size == 0 and size >= map_entry_size and size / map_entry_size <= 10000) {
+        scanMapEntries(obj, ctx, size);
+        return;
+    }
+    // String/keyword/symbol data — no child pointers, nothing to scan
+}
+
+/// Scan an array of Value objects.
+fn scanValueArray(items_ptr: *anyopaque, ctx: *gc.ScanContext, total_size: usize) void {
+    const item_ptr: [*]Value = @ptrCast(@alignCast(items_ptr));
+    const count = total_size / @sizeOf(Value);
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        scanValueChildrenDirect(&item_ptr[i], ctx);
+    }
+}
+
+/// Scan MapEntry array: each entry has { key: Value, value: Value }.
+fn scanMapEntries(entries_ptr: *anyopaque, ctx: *gc.ScanContext, total_size: usize) void {
+    const entry_ptr: [*]Value.MapEntry = @ptrCast(@alignCast(entries_ptr));
+    const count = total_size / @sizeOf(Value.MapEntry);
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        scanValueChildrenDirect(&entry_ptr[i].key, ctx);
+        scanValueChildrenDirect(&entry_ptr[i].value, ctx);
+    }
+}
+
+/// Scan StringArrayHashMapUnmanaged(Value) MultiArrayList bytes buffer.
+fn scanEnvEntries(bytes_ptr: *anyopaque, ctx: *gc.ScanContext, total_size: usize) void {
+    const key_size = @sizeOf([]const u8);
+    const value_size = @sizeOf(Value);
+
+    const entry_total = key_size + value_size;
+    const count = total_size / entry_total;
+
+    // Compute offset to value array (after all keys, with alignment)
+    const keys_raw = key_size * count;
+    const value_align = @alignOf(Value);
+    const keys_padded: usize = std.math.divCeil(usize, keys_raw, value_align) catch value_align * count;
+
+    const bytes: [*]const u8 = @ptrCast(@alignCast(bytes_ptr));
+    const values_ptr: [*]const Value = @ptrCast(@alignCast(bytes + keys_padded));
+
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        scanValueChildrenDirect(&values_ptr[i], ctx);
+    }
+}
+
+/// Scan a single Value's child heap pointers and mark them.
+pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
+    switch (val.type) {
+        .nil, .bool, .integer, .float, .builtin_fn => {},
+
+        .string => {
+            if (val.str_val.len > 0) {
+                ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(val.str_val.ptr))), ctx);
+            }
+        },
+        .symbol => {
+            if (val.sym_val.len > 0) {
+                ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(val.sym_val.ptr))), ctx);
+            }
+        },
+        .keyword => {
+            if (val.kw_val.len > 0) {
+                ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(val.kw_val.ptr))), ctx);
+            }
+        },
+
+        .list => {
+            if (val.list_val.items.len > 0) {
+                ctx.gc.markRecursive(val.list_val.items.ptr, ctx);
+            }
+        },
+        .vector => {
+            if (val.vec_val.items.len > 0) {
+                ctx.gc.markRecursive(val.vec_val.items.ptr, ctx);
+            }
+        },
+        .map => {
+            if (val.map_val.items.len > 0) {
+                ctx.gc.markRecursive(val.map_val.items.ptr, ctx);
+            }
+        },
+        .set => {
+            if (val.set_val.items.len > 0) {
+                ctx.gc.markRecursive(val.set_val.items.ptr, ctx);
+            }
+        },
+        .queue => {
+            if (val.queue_val.items.len > 0) {
+                ctx.gc.markRecursive(val.queue_val.items.ptr, ctx);
+            }
+        },
+
+        .function => {
+            if (val.fn_val.arities.items.len > 0) {
+                ctx.gc.markRecursive(val.fn_val.arities.items.ptr, ctx);
+            }
+            // Env.entries is a MultiArrayList — use .bytes
+            if (val.fn_val.env.entries.entries.len > 0) {
+                ctx.gc.markRecursive(val.fn_val.env.entries.entries.bytes, ctx);
+            }
+        },
+
+        .lazy_seq => {
+            if (val.lazy_seq_val.thunk) |thunk| {
+                ctx.gc.markRecursive(thunk, ctx);
+            }
+        },
+
+        .atom => {
+            if (val.atom_val) |data| {
+                ctx.gc.markRecursive(data, ctx);
+            }
+        },
+    }
+}
+
+/// Scan a LazySeqThunk: { params: list.List, body: list.List, env: Env }.
+fn scanLazySeqThunk(thunk_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const thunk: *Value.LazySeqThunk = @ptrCast(@alignCast(thunk_ptr));
+    if (thunk.params.items.len > 0) {
+        ctx.gc.markRecursive(thunk.params.items.ptr, ctx);
+    }
+    if (thunk.body.items.len > 0) {
+        ctx.gc.markRecursive(thunk.body.items.ptr, ctx);
+    }
+    if (thunk.env.entries.entries.len > 0) {
+        ctx.gc.markRecursive(thunk.env.entries.entries.bytes, ctx);
+    }
+}
+
+/// Scan AtomData: { value: Value, ref_count: usize }.
+fn scanAtomData(data_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const data: *Value.AtomData = @ptrCast(@alignCast(data_ptr));
+    scanValueChildrenDirect(&data.value, ctx);
+}
+
+/// Scan FnData: { arities: ArrayListUnmanaged(Arity), env: Env }.
+fn scanFnData(fndata_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const fndata: *Value.FnData = @ptrCast(@alignCast(fndata_ptr));
+    if (fndata.arities.items.len > 0) {
+        ctx.gc.markRecursive(fndata.arities.items.ptr, ctx);
+    }
+    if (fndata.env.entries.entries.len > 0) {
+        ctx.gc.markRecursive(fndata.env.entries.entries.bytes, ctx);
+    }
+}

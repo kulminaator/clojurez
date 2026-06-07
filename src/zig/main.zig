@@ -9,6 +9,8 @@ const repl = @import("repl.zig");
 const core_clj = @import("core_clj.zig");
 const debug_allocator = @import("debug_allocator.zig");
 const slab_allocator = @import("slab_allocator.zig");
+const gc_mod = @import("gc.zig");
+const gc_scan = @import("gc_scan.zig");
 const sequences = @import("core/sequences.zig");
 
 const Allocator = std.mem.Allocator;
@@ -66,17 +68,27 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // The tracing condition is evaluated once at startup. When disabled, log_fn is null
     // so every alloc/free has zero overhead beyond the wrapped allocator call.
 
-    // Slab allocator: sits between page_allocator and debug_allocator.
+    // Slab allocator: sits between page_allocator and GC.
     // Reduces system calls by batching small allocations into large pages.
     var slab = slab_allocator.SlabAllocator.init(std.heap.page_allocator);
     defer slab.deinit();
 
+    // GC allocator: wraps slab allocator, provides mark-and-sweep garbage collection.
+    // All persistent Clojure values are allocated through the GC.
+    var gc_instance = gc_mod.GC.init(slab.allocator());
+    defer gc_instance.deinit();
+    // Sweep disabled: GC allocator's free is a no-op, so arena-freed blocks
+    // stay in the GC's list. Sweeping them would double-free. The gc.deinit()
+    // at program exit cleans up all remaining blocks.
+    gc_instance.setSweepEnabled(false);
+
+    // Optional debug tracing on top of GC (zero overhead when disabled).
     var debug_alloc: debug_allocator.DebugAllocator = undefined;
     if (debug_allocator.getMemTraceConfig(init.environ)) |trace_cfg| {
         defer std.heap.page_allocator.free(trace_cfg);
-        debug_alloc = debug_allocator.DebugAllocator.init(slab.allocator(), trace_cfg);
+        debug_alloc = debug_allocator.DebugAllocator.init(gc_instance.allocator(), trace_cfg);
     } else {
-        debug_alloc = debug_allocator.DebugAllocator.init(slab.allocator(), null);
+        debug_alloc = debug_allocator.DebugAllocator.init(gc_instance.allocator(), null);
     }
     defer debug_alloc.deinit();
     const allocator = debug_alloc.allocator();
@@ -100,6 +112,10 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
 
     // Load embedded Clojure core library (silent — no output)
     try loadCoreLibrary(allocator, &env);
+
+    // Register GC roots: the main env's entries array contains all persistent values.
+    // Also register namespace envs as roots.
+    registerGcRoots(&gc_instance, &env, ns_mgr);
 
     // Parse arguments
     var args = std.process.Args.Iterator.init(init.args);
@@ -341,6 +357,100 @@ fn runMain(allocator: Allocator, env: *Env, ns_name: []const u8) anyerror!void {
     try call_list.append(arena_alloc, try main_fn.clone(arena_alloc));
     var call_result = try eval.eval(allocator, arena_alloc, Value.listValue(call_list), ns_env);
     call_result.deinit(arena_alloc);
+}
+
+/// GC root callback: scans all env entries and NamespaceManager data.
+fn gcRootCallback(gc_inst: *gc_mod.GC) void {
+    var ctx = gc_mod.ScanContext{ .gc = gc_inst, .scan_fn = gc_scan.valueScanFn };
+    // This function is called from within gc.collect().
+    // We use static pointers set up during registration.
+    if (gc_root_env) |env| {
+        scanEnvEntriesDirect(env, gc_inst);
+    }
+    if (gc_root_ns_mgr) |ns_mgr| {
+        // Register NamespaceManager's own allocations as roots.
+        // These are not part of any Value, so the scan function won't find them.
+        if (ns_mgr.current_ns.len > 0) {
+            gc_inst.markRecursive(@as(*anyopaque, @ptrCast(@constCast(ns_mgr.current_ns.ptr))), &ctx);
+        }
+        // Mark the namespaces HashMap's entries buffer (MultiArrayList bytes).
+        // Set type to unknown so it's not scanned (it's not a Value array).
+        if (ns_mgr.namespaces.entries.len > 0) {
+            gc_inst.setObjectType(ns_mgr.namespaces.entries.bytes, gc_mod.GCObjectType.unknown);
+            gc_inst.markRecursive(ns_mgr.namespaces.entries.bytes, &ctx);
+        }
+        // Namespace names (keys in the namespaces map)
+        var nit = ns_mgr.namespaces.iterator();
+        while (nit.next()) |entry| {
+            // Key string
+            if (entry.key_ptr.*.len > 0) {
+                gc_inst.markRecursive(@as(*anyopaque, @ptrCast(@constCast(entry.key_ptr.*.ptr))), &ctx);
+            }
+            // Namespace env entries
+            scanEnvEntriesDirect(entry.value_ptr.*, gc_inst);
+        }
+        // Classpath entries buffer + individual strings
+        if (ns_mgr.classpath.items.len > 0) {
+            gc_inst.setObjectType(@as(*anyopaque, @ptrCast(ns_mgr.classpath.items.ptr)), gc_mod.GCObjectType.unknown);
+            gc_inst.markRecursive(@as(*anyopaque, @ptrCast(ns_mgr.classpath.items.ptr)), &ctx);
+        }
+        for (ns_mgr.classpath.items) |dir| {
+            if (dir.len > 0) {
+                gc_inst.markRecursive(@as(*anyopaque, @ptrCast(@constCast(dir.ptr))), &ctx);
+            }
+        }
+        // Aliases HashMap entries buffer + strings
+        if (ns_mgr.aliases.entries.len > 0) {
+            gc_inst.setObjectType(ns_mgr.aliases.entries.bytes, gc_mod.GCObjectType.unknown);
+            gc_inst.markRecursive(ns_mgr.aliases.entries.bytes, &ctx);
+        }
+        var ait = ns_mgr.aliases.iterator();
+        while (ait.next()) |aentry| {
+            if (aentry.key_ptr.*.len > 0) {
+                gc_inst.markRecursive(@as(*anyopaque, @ptrCast(@constCast(aentry.key_ptr.*.ptr))), &ctx);
+            }
+            var nit2 = aentry.value_ptr.iterator();
+            while (nit2.next()) |aentry2| {
+                if (aentry2.key_ptr.*.len > 0) {
+                    gc_inst.markRecursive(@as(*anyopaque, @ptrCast(@constCast(aentry2.key_ptr.*.ptr))), &ctx);
+                }
+                if (aentry2.value_ptr.*.len > 0) {
+                    gc_inst.markRecursive(@as(*anyopaque, @ptrCast(@constCast(aentry2.value_ptr.*.ptr))), &ctx);
+                }
+            }
+        }
+    }
+}
+
+/// Scan all Values in an env's entries and mark their child pointers.
+fn scanEnvEntriesDirect(env: *Env, gc_inst: *gc_mod.GC) void {
+    var ctx = gc_mod.ScanContext{ .gc = gc_inst, .scan_fn = gc_scan.valueScanFn };
+    // Mark the entries buffer itself (MultiArrayList bytes)
+    if (env.entries.entries.len > 0) {
+        const bytes_ptr = @as(*anyopaque, @ptrCast(env.entries.entries.bytes));
+        gc_inst.setObjectType(bytes_ptr, gc_mod.GCObjectType.unknown);
+        gc_inst.markRecursive(bytes_ptr, &ctx);
+    }
+    var it = env.entries.iterator();
+    while (it.next()) |entry| {
+        // Mark the key string data
+        if (entry.key_ptr.*.len > 0) {
+            gc_inst.markRecursive(@as(*anyopaque, @ptrCast(@constCast(entry.key_ptr.*.ptr))), &ctx);
+        }
+        // Scan the Value's child pointers
+        gc_scan.scanValueChildrenDirect(entry.value_ptr, &ctx);
+    }
+}
+
+// Static pointers for root callback
+var gc_root_env: ?*Env = null;
+var gc_root_ns_mgr: ?*Value.NamespaceManager = null;
+
+/// Register GC roots: main env entries + namespace env entries.
+fn registerGcRoots(gc_inst: *gc_mod.GC, env: *Env, ns_mgr: *Value.NamespaceManager) void {
+    gc_root_env = env;
+    gc_root_ns_mgr = ns_mgr;
+    gc_inst.root_fn = gcRootCallback;
 }
 
 fn printUsage() anyerror!void {

@@ -31,9 +31,24 @@ const Alignment = std.mem.Alignment;
 
 const MAGIC: u32 = 0x47434D4D; // "GCM\0"
 
+/// Type tag for GC-tracked allocations.
+/// Tells the scan function how to interpret the data area.
+pub const GCObjectType = enum(u8) {
+    unknown = 0,   // no child pointers (strings, raw buffers, etc.)
+    value_array = 1, // array of Value objects (list items, vector items, etc.)
+    map_entries = 2, // array of MapEntry { key: Value, value: Value }
+    set_items = 3,   // array of Value objects (set items)
+    queue_items = 4, // array of Value objects (queue items)
+    env_entries = 5, // array of StringArrayHashMap Entry{ key: []u8, value: Value }
+    lazy_seq_thunk = 6, // LazySeqThunk { params: list.List, body: list.List, env: Env }
+    atom_data = 7,  // AtomData { value: Value, ref_count: usize }
+    fn_data = 8,    // FnData { arities: ArrayListUnmanaged(Arity), env: Env }
+};
+
 const Header = struct {
     magic: u32 = MAGIC,
     marked: bool = false,
+    obj_type: GCObjectType = .unknown,
     size: usize = 0,
     offset: usize = 0, // bytes from header to data area (header_size + padding)
     next: ?*Header = null,
@@ -47,6 +62,10 @@ const HEADER_SIZE: usize = @sizeOf(Header);
 // ============================================================
 
 pub const ScanFn = *const fn (obj: *anyopaque, ctx: *ScanContext) void;
+
+/// Callback that returns dynamic roots at collect time.
+/// Called during the mark phase to get current root pointers.
+pub const RootFn = *const fn (gc: *GC) void;
 
 pub const ScanContext = struct {
     gc: *GC,
@@ -68,6 +87,9 @@ pub const GC = struct {
 
     // Root pointers (always considered reachable)
     roots: std.ArrayListUnmanaged(*anyopaque) = .empty,
+    // Optional callback that registers dynamic roots at collect time.
+    // Useful for roots that change address (e.g., HashMap entries after resize).
+    root_fn: ?RootFn = null,
 
     // Debug flags
     sweep_enabled: bool = true,
@@ -165,6 +187,21 @@ pub const GC = struct {
         return data_ptr;
     }
 
+    /// Allocate a GC-tracked object with a type tag for scanning.
+    pub fn allocTyped(self: *Self, size: usize, alignment: Alignment, obj_type: GCObjectType) ?*anyopaque {
+        const ptr = self.alloc(size, alignment) orelse return null;
+        // Set the type on the header
+        const header = self.findHeader(ptr) orelse return ptr;
+        header.obj_type = obj_type;
+        return ptr;
+    }
+
+    /// Set the type of an existing GC-tracked block (e.g. after reallocation).
+    pub fn setObjectType(self: *Self, ptr: *anyopaque, obj_type: GCObjectType) void {
+        const header = self.findHeader(ptr) orelse return;
+        header.obj_type = obj_type;
+    }
+
     /// Free a GC-tracked object manually. Returns true if found and freed.
     pub fn free(self: *Self, ptr: ?*anyopaque) bool {
         if (ptr == null) return false;
@@ -203,7 +240,7 @@ pub const GC = struct {
     }
 
     /// Walk the block list to find the header for a data pointer.
-    fn findHeader(self: *Self, dataPtr: *anyopaque) ?*Header {
+    pub fn findHeader(self: *Self, dataPtr: *anyopaque) ?*Header {
         var block = self.blocks;
         while (block) |b| {
             const data = @as(*anyopaque, @ptrCast(@as([*]u8, @ptrCast(b)) + b.offset));
@@ -243,13 +280,18 @@ pub const GC = struct {
             block = b.next;
         }
 
-        // Phase 2: Mark from roots
+        // Phase 2: Mark from static roots
         var ctx = ScanContext{ .gc = self, .scan_fn = scan_fn };
         for (self.roots.items) |root| {
             self.markRecursive(root, &ctx);
         }
 
-        // Phase 3: Sweep unmarked blocks
+        // Phase 3: Call root callback for dynamic roots (marks directly)
+        if (self.root_fn) |fn_ptr| {
+            fn_ptr(self);
+        }
+
+        // Phase 4: Sweep unmarked blocks
         self.sweep();
 
         self.gc_count += 1;
@@ -396,10 +438,13 @@ pub const GC = struct {
     }
 
     fn freeVTable(ctx: *anyopaque, memory: []u8, alignment: Alignment, ret_addr: usize) void {
+        _ = ctx;
+        _ = memory;
         _ = alignment;
         _ = ret_addr;
-        const self: *Self = @ptrCast(@alignCast(ctx));
-        _ = self.free(memory.ptr);
+        // No-op: GC handles all cleanup during sweep phase.
+        // Individual free() calls through the allocator interface are ignored.
+        // Use gc.free(ptr) for explicit manual cleanup before GC collect.
     }
 };
 
@@ -764,7 +809,9 @@ test "gc::allocator interface: alloc and free" {
     try std.testing.expect(ptr.id == 99);
     try std.testing.expect(gc.stats().block_count == 1);
 
-    alloc.free(ptrs);
+    // alloc.free() is a no-op (GC handles cleanup during sweep).
+    // Use gc.free() for explicit manual cleanup.
+    _ = gc.free(ptr);
     try std.testing.expect(gc.stats().block_count == 0);
 }
 
