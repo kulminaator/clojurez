@@ -5,6 +5,8 @@ const parser = @import("parser.zig");
 const eval = @import("eval.zig");
 const eval_ns = @import("eval_ns.zig");
 const sequences = @import("core/sequences.zig");
+const gc_mod = @import("gc.zig");
+const gc_scan = @import("gc_scan.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -108,6 +110,8 @@ pub fn runRepl(allocator: Allocator, env: *Value.Env) anyerror!void {
         // Append to multiline buffer with newline
         try multiline_buf.appendSlice(allocator, trimmed);
         try multiline_buf.append(allocator, '\n');
+        // Update GC root so the history buffer survives sweeps
+        gc_mod.repl_history_buffer = multiline_buf.items;
 
         // Try to parse a complete form from the accumulated buffer
         const full_input = multiline_buf.items;
@@ -127,8 +131,12 @@ pub fn runRepl(allocator: Allocator, env: *Value.Env) anyerror!void {
 
             // Clear the multiline buffer for the next expression
             multiline_buf.clearRetainingCapacity();
+            gc_mod.repl_history_buffer = multiline_buf.items;
         }
     }
+
+    // Collect garbage — history buffer is a root so it survives.
+    if (gc_mod.current_gc) |gc| gc.collect(gc_scan.valueScanFn);
 }
 
 /// Get the current namespace's env for evaluation.
@@ -197,10 +205,6 @@ fn evaluateAndPrint(allocator: Allocator, input: []const u8, env: *Value.Env) an
 
         pos += consumed;
     }
-
-    // NOTE: gc.collect() is NOT called here because the REPL's multiline_buf
-    // is a GC-allocated buffer held on the stack. Our GC doesn't scan the
-    // stack, so sweep would incorrectly free it. Cleanup happens at gc.deinit().
 
     return false;
 }

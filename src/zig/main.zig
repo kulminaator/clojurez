@@ -417,6 +417,17 @@ fn gcRootCallback(gc_inst: *gc_mod.GC) void {
             }
         }
     }
+    // Mark REPL input history buffer so it survives sweeps.
+    if (gc_mod.repl_history_buffer.len > 0) {
+        gc_inst.setObjectType(
+            @as(*anyopaque, @ptrCast(@constCast(gc_mod.repl_history_buffer.ptr))),
+            gc_mod.GCObjectType.unknown,
+        );
+        gc_inst.markRecursive(
+            @as(*anyopaque, @ptrCast(@constCast(gc_mod.repl_history_buffer.ptr))),
+            &ctx,
+        );
+    }
 }
 
 /// Scan all Values in an env's entries and mark their child pointers.

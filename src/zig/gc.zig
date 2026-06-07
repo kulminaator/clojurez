@@ -80,6 +80,9 @@ pub const ScanContext = struct {
 /// Used by repl and other modules to trigger collection.
 pub var current_gc: ?*GC = null;
 
+/// REPL input history buffer — registered as a root so it survives sweeps.
+pub var repl_history_buffer: []const u8 = "";
+
 pub const GC = struct {
     const Self = @This();
 
