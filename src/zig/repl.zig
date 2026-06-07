@@ -5,8 +5,6 @@ const parser = @import("parser.zig");
 const eval = @import("eval.zig");
 const eval_ns = @import("eval_ns.zig");
 const sequences = @import("core/sequences.zig");
-const gc_mod = @import("gc.zig");
-const gc_scan = @import("gc_scan.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -200,8 +198,9 @@ fn evaluateAndPrint(allocator: Allocator, input: []const u8, env: *Value.Env) an
         pos += consumed;
     }
 
-    // Collect garbage to free temporaries from parsing and evaluation
-    if (gc_mod.current_gc) |gc| gc.collect(gc_scan.valueScanFn);
+    // NOTE: gc.collect() is NOT called here because the REPL's multiline_buf
+    // is a GC-allocated buffer held on the stack. Our GC doesn't scan the
+    // stack, so sweep would incorrectly free it. Cleanup happens at gc.deinit().
 
     return false;
 }

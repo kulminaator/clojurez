@@ -78,11 +78,7 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     var gc_instance = gc_mod.GC.init(slab.allocator());
     defer gc_instance.deinit();
     // GC is the sole allocator — no arena in use.
-    // Sweep disabled: our GC doesn't scan the stack for live pointers.
-    // Local variables on the stack (e.g., multiline_buf in REPL) would be
-    // incorrectly swept. The gc.deinit() at program exit cleans up all blocks.
-    gc_instance.setSweepEnabled(false);
-    // Global pointer so callers can trigger mark phase (root registration).
+    gc_instance.setSweepEnabled(true);
     gc_mod.current_gc = &gc_instance;
 
     // Optional debug tracing on top of GC (zero overhead when disabled).
