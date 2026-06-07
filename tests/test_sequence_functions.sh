@@ -26,8 +26,8 @@ echo "=== Partition ==="
 run_test "partition exact" '(doall (partition 2 (list 1 2 3 4)))' '((1 2) (3 4))'
 run_test "partition with remainder" '(doall (partition 2 (list 1 2 3 4 5)))' '((1 2) (3 4))'
 run_test "partition single" '(doall (partition 1 (list 1 2 3)))' '((1) (2) (3))'
-run_test "partition larger than coll" '(doall (partition 5 (list 1 2 3)))' 'nil'
-run_test "partition empty" '(doall (partition 2 (list)))' 'nil'
+run_test "partition larger than coll" '(doall (partition 5 (list 1 2 3)))' '()'
+run_test "partition empty" '(doall (partition 2 (list)))' '()'
 
 # Regression: large range must not cause stack overflow (lazy-seq recursion bug)
 run_test "reduce large range (regression)" "(reduce + (range 1 25000))" "312487500"
