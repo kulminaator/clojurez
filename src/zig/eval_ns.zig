@@ -19,7 +19,7 @@ pub fn findNsManager(env: *const Env) ?*Value.NamespaceManager {
 }
 
 // ns special form: (ns namespace-name (:require [other.ns :as alias] ...))
-pub fn evalNs(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+pub fn evalNs(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
     _ = depth;
     if (l.items.len < 2) return error.ArityError;
 
@@ -99,7 +99,7 @@ pub fn evalNs(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *
                 try ns_mgr.addAlias(ns_name, effective_alias, req_ns_name);
 
                 // Load the required namespace file from classpath
-                try loadNamespaceFile(allocator, arena_alloc, ns_mgr, req_ns_name, env);
+                try loadNamespaceFile(allocator, ns_mgr, req_ns_name, env);
             }
         }
     }
@@ -111,7 +111,7 @@ pub fn evalNs(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *
 }
 
 // Load a namespace file from the classpath and evaluate it.
-pub fn loadNamespaceFile(allocator: Allocator, arena_alloc: Allocator, ns_mgr: *Value.NamespaceManager, ns_name: []const u8, root_env: *Env) anyerror!void {
+pub fn loadNamespaceFile(allocator: Allocator, ns_mgr: *Value.NamespaceManager, ns_name: []const u8, root_env: *Env) anyerror!void {
     // Check if already loaded
     if (ns_mgr.getNamespace(ns_name) != null) return;
 
@@ -133,17 +133,17 @@ pub fn loadNamespaceFile(allocator: Allocator, arena_alloc: Allocator, ns_mgr: *
     defer allocator.free(content);
 
     // Parse and evaluate
-    var p = try parser.Parser.init(arena_alloc, content);
+    var p = try parser.Parser.init(allocator, content);
     defer p.deinit();
 
     var forms = try p.parseAll();
-    defer forms.deinit(arena_alloc);
+    defer forms.deinit(allocator);
 
     for (forms.items) |form| {
         // Use current namespace's env for evaluation (ns form may change it)
         const eval_env = getCurrentNsEnvForLoad(root_env, ns_mgr) orelse root_env;
-        var result = try eval.evalRec(allocator, arena_alloc, form, eval_env, 0);
-        result.deinit(arena_alloc);
+        var result = try eval.evalRec(allocator, allocator, form, eval_env, 0);
+        result.deinit(allocator);
     }
 }
 

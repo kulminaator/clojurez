@@ -76,6 +76,10 @@ pub const ScanContext = struct {
 // GC — the garbage collector
 // ============================================================
 
+/// Global pointer to the current GC instance (set by main).
+/// Used by repl and other modules to trigger collection.
+pub var current_gc: ?*GC = null;
+
 pub const GC = struct {
     const Self = @This();
 

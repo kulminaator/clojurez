@@ -99,6 +99,21 @@ fn scanEnvEntries(bytes_ptr: *anyopaque, ctx: *gc.ScanContext, total_size: usize
 
 /// Scan a single Value's child heap pointers and mark them.
 pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
+    // Guard against corrupt/uninitialized Value structs.
+    // This can happen when the GC scan misidentifies a non-Value block
+    // as a Value array (e.g., a string whose length happens to be a
+    // multiple of @sizeOf(Value)).
+    const valid_types = [_]Value.Type{
+        .nil, .bool, .integer, .float, .string, .symbol, .keyword,
+        .list, .vector, .map, .set, .queue, .function, .builtin_fn,
+        .lazy_seq, .atom,
+    };
+    var is_valid = false;
+    for (valid_types) |vt| {
+        if (val.type == vt) { is_valid = true; break; }
+    }
+    if (!is_valid) return; // silently skip corrupt values
+
     switch (val.type) {
         .nil, .bool, .integer, .float, .builtin_fn => {},
 

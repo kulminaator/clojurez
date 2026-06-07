@@ -77,10 +77,13 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // All persistent Clojure values are allocated through the GC.
     var gc_instance = gc_mod.GC.init(slab.allocator());
     defer gc_instance.deinit();
-    // Sweep disabled: GC allocator's free is a no-op, so arena-freed blocks
-    // stay in the GC's list. Sweeping them would double-free. The gc.deinit()
-    // at program exit cleans up all remaining blocks.
+    // GC is the sole allocator — no arena in use.
+    // Sweep disabled: our GC doesn't scan the stack for live pointers.
+    // Local variables on the stack (e.g., multiline_buf in REPL) would be
+    // incorrectly swept. The gc.deinit() at program exit cleans up all blocks.
     gc_instance.setSweepEnabled(false);
+    // Global pointer so callers can trigger mark phase (root registration).
+    gc_mod.current_gc = &gc_instance;
 
     // Optional debug tracing on top of GC (zero overhead when disabled).
     var debug_alloc: debug_allocator.DebugAllocator = undefined;
@@ -95,11 +98,12 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
 
     // Create namespace manager
     var ns_mgr = try Value.NamespaceManager.init(allocator);
-    defer ns_mgr.deinit();
+    // No defer deinit — GC handles cleanup at program exit.
+    // Calling deinit after GC sweep would access freed memory.
 
     // Create global environment
     var env: Env = Env.init(allocator);
-    defer env.deinit(allocator);
+    // No defer deinit — GC handles cleanup at program exit.
     env.ns_manager = ns_mgr;
 
     // Set "user" namespace's parent to root env so builtins are visible
@@ -144,6 +148,8 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
                 std.process.exit(1);
             };
             try runExpression(allocator, expr, &env);
+            // Collect after function returns so local vars are out of scope
+            if (gc_mod.current_gc) |gc| gc.collect(gc_scan.valueScanFn);
         } else if (std.mem.eql(u8, arg, "-cp") or std.mem.eql(u8, arg, "--classpath")) {
             const cp = args.next() orelse {
                 try writeStderr("Error: missing classpath after -cp\n");
@@ -168,6 +174,8 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
         } else {
             // Treat as a file to execute
             try runFile(allocator, arg, &env);
+            // Collect after function returns so local vars are out of scope
+            if (gc_mod.current_gc) |gc| gc.collect(gc_scan.valueScanFn);
         }
     }
 
@@ -178,6 +186,8 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
             std.process.exit(1);
         }
         try runMain(allocator, &env, ns_name);
+        // Collect after function returns so local vars are out of scope
+        if (gc_mod.current_gc) |gc| gc.collect(gc_scan.valueScanFn);
     }
 }
 
@@ -214,20 +224,16 @@ fn getCurrentNsEnv(env: *Env) ?*Env {
 }
 
 fn runExpression(allocator: Allocator, expr: []const u8, env: *Env) anyerror!void {
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_alloc = arena.allocator();
-
-    var p = try parser.Parser.init(arena_alloc, expr);
+    var p = try parser.Parser.init(allocator, expr);
     defer p.deinit();
 
     var form = Value.nilValue();
-    errdefer form.deinit(arena_alloc);
+    errdefer form.deinit(allocator);
     form = try p.parse();
     // Use current namespace's env for evaluation
     const eval_env = getCurrentNsEnv(env) orelse env;
-    var result = try eval.eval(allocator, arena_alloc, form, eval_env);
-    defer result.deinit(arena_alloc);
+    var result = try eval.eval(allocator, allocator, form, eval_env);
+    defer result.deinit(allocator);
 
     // Force lazy-seqs before printing
     if (result.type == .lazy_seq) {
@@ -246,6 +252,7 @@ fn runExpression(allocator: Allocator, expr: []const u8, env: *Env) anyerror!voi
     defer allocator.free(formatted);
     try writeStdout(formatted);
     try writeStdout("\n");
+
 }
 
 fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void {
@@ -257,20 +264,16 @@ fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void 
     const content = try reader.interface.allocRemaining(allocator, std.Io.Limit.limited(1024 * 1024));
     defer allocator.free(content);
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_alloc = arena.allocator();
-
-    var p = try parser.Parser.init(arena_alloc, content);
+    var p = try parser.Parser.init(allocator, content);
     defer p.deinit();
 
     var forms = try p.parseAll();
-    defer forms.deinit(arena_alloc);
+    defer forms.deinit(allocator);
 
     for (forms.items) |form| {
         // Get current namespace's env for each form (ns form may change it)
         const eval_env = getCurrentNsEnv(env) orelse env;
-        var result = try eval.eval(allocator, arena_alloc, form, eval_env);
+        var result = try eval.eval(allocator, allocator, form, eval_env);
 
         // Print non-nil results (like Clojure REPL)
         if (!result.equals(Value.nilValue())) {
@@ -289,8 +292,9 @@ fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void 
             try writeStdout("\n");
         }
 
-        result.deinit(arena_alloc);
+        result.deinit(allocator);
     }
+
 }
 
 /// Run the -main function from a namespace.
@@ -320,19 +324,15 @@ fn runMain(allocator: Allocator, env: *Env, ns_name: []const u8) anyerror!void {
     const content = try reader.interface.allocRemaining(allocator, std.Io.Limit.limited(1024 * 1024));
     defer allocator.free(content);
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_alloc = arena.allocator();
-
-    var p = try parser.Parser.init(arena_alloc, content);
+    var p = try parser.Parser.init(allocator, content);
     defer p.deinit();
 
     var forms = try p.parseAll();
-    defer forms.deinit(arena_alloc);
+    defer forms.deinit(allocator);
 
     for (forms.items) |form| {
-        var result = try eval.eval(allocator, arena_alloc, form, env);
-        result.deinit(arena_alloc);
+        var result = try eval.eval(allocator, allocator, form, env);
+        result.deinit(allocator);
     }
 
     // Look up -main function in the namespace
@@ -353,10 +353,11 @@ fn runMain(allocator: Allocator, env: *Env, ns_name: []const u8) anyerror!void {
 
     // Call (-main) with no arguments
     var call_list: list.List = .empty;
-    defer call_list.deinit(arena_alloc);
-    try call_list.append(arena_alloc, try main_fn.clone(arena_alloc));
-    var call_result = try eval.eval(allocator, arena_alloc, Value.listValue(call_list), ns_env);
-    call_result.deinit(arena_alloc);
+    defer call_list.deinit(allocator);
+    try call_list.append(allocator, try main_fn.clone(allocator));
+    var call_result = try eval.eval(allocator, allocator, Value.listValue(call_list), ns_env);
+    call_result.deinit(allocator);
+
 }
 
 /// GC root callback: scans all env entries and NamespaceManager data.

@@ -5,6 +5,8 @@ const parser = @import("parser.zig");
 const eval = @import("eval.zig");
 const eval_ns = @import("eval_ns.zig");
 const sequences = @import("core/sequences.zig");
+const gc_mod = @import("gc.zig");
+const gc_scan = @import("gc_scan.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -142,10 +144,7 @@ fn getCurrentNsEnv(env: *Value.Env) ?*Value.Env {
 fn evaluateAndPrint(allocator: Allocator, input: []const u8, env: *Value.Env) anyerror!bool {
     var pos: usize = 0;
     while (pos < input.len) {
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        const arena_alloc = arena.allocator();
-
-        var p = try parser.Parser.init(arena_alloc, input[pos..]);
+        var p = try parser.Parser.init(allocator, input[pos..]);
 
         const form_result = p.parse();
         const consumed = p.consumed();
@@ -153,7 +152,6 @@ fn evaluateAndPrint(allocator: Allocator, input: []const u8, env: *Value.Env) an
 
         const parsed_form = form_result catch |err| {
             // Parser failed
-            arena.deinit();
             if (err == error.UnexpectedEof) {
                 // No more complete forms (possibly trailing whitespace)
                 break;
@@ -168,15 +166,13 @@ fn evaluateAndPrint(allocator: Allocator, input: []const u8, env: *Value.Env) an
 
         // Parser succeeded - evaluate the form
         var form = parsed_form;
-        var result = eval.eval(allocator, arena_alloc, form, env) catch |err| {
-            form.deinit(arena_alloc);
+        var result = eval.eval(allocator, allocator, form, env) catch |err| {
+            form.deinit(allocator);
             switch (err) {
                 eval.EvalError.ReplExit => {
-                    arena.deinit();
                     return true; // signal exit
                 },
                 else => {
-                    arena.deinit();
                     try writeStdout("Error: ");
                     try writeStdout(@errorName(err));
                     try writeStdout("\n");
@@ -189,7 +185,7 @@ fn evaluateAndPrint(allocator: Allocator, input: []const u8, env: *Value.Env) an
         var print_val: Value = undefined;
         if (result.type == .lazy_seq) {
             print_val = try fullyRealizeLazySeq(allocator, result);
-            result.deinit(arena_alloc);
+            result.deinit(allocator);
         } else {
             print_val = result;
         }
@@ -198,12 +194,15 @@ fn evaluateAndPrint(allocator: Allocator, input: []const u8, env: *Value.Env) an
         try writeStdout(formatted);
         try writeStdout("\n");
         allocator.free(formatted);
-        result.deinit(arena_alloc);
-        form.deinit(arena_alloc);
+        result.deinit(allocator);
+        form.deinit(allocator);
 
-        arena.deinit();
         pos += consumed;
     }
+
+    // Collect garbage to free temporaries from parsing and evaluation
+    if (gc_mod.current_gc) |gc| gc.collect(gc_scan.valueScanFn);
+
     return false;
 }
 

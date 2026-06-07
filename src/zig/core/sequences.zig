@@ -20,15 +20,8 @@ fn forceAndAppend(allocator: Allocator, val: Value, target: *list.List) anyerror
 /// Force a lazy-seq to a realized list (recursively forces nested lazy_seqs)
 pub fn forceLazySeqHelper(allocator: Allocator, lazy: Value) anyerror!Value {
     if (lazy.lazy_seq_val.thunk) |thunk| {
-        var arena = std.heap.ArenaAllocator.init(allocator);
-        const arena_alloc = arena.allocator();
-
-        const cloned_body = try list.clone(&thunk.body, arena_alloc);
-        var thunk_env = try thunk.env.clone(arena_alloc);
-        // CRITICAL: Set thunk_env.allocator to persistent allocator so that
-        // any lazy-seq thunks created during evaluation are allocated persistently.
-        // Without this, thunks created on the arena would be freed when arena.deinit() is called.
-        thunk_env.allocator = allocator;
+        const cloned_body = try list.clone(&thunk.body, allocator);
+        var thunk_env = try thunk.env.clone(allocator);
 
         // Evaluate the thunk body (already wrapped in 'do') as a list
         const body_val = Value.listValue(cloned_body);
@@ -63,7 +56,6 @@ pub fn forceLazySeqHelper(allocator: Allocator, lazy: Value) anyerror!Value {
                 try final_list.append(allocator, result);
             },
         }
-        arena.deinit();
         return Value.listValue(final_list);
     }
     return Value.listValue(list.empty());

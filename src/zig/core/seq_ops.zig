@@ -565,12 +565,9 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
         .lazy_seq => {
             // Evaluate the thunk
             if (val.lazy_seq_val.thunk) |thunk| {
-                var arena = std.heap.ArenaAllocator.init(allocator);
-                const arena_alloc = arena.allocator();
-
-                const cloned_params = try list.clone(&thunk.params, arena_alloc);
-                const cloned_body = try list.clone(&thunk.body, arena_alloc);
-                var thunk_env = try thunk.env.clone(arena_alloc);
+                const cloned_params = try list.clone(&thunk.params, allocator);
+                const cloned_body = try list.clone(&thunk.body, allocator);
+                var thunk_env = try thunk.env.clone(allocator);
 
                 const fn_val = try Value.fnValueSingle(allocator, cloned_params, cloned_body, thunk_env, null, false);
                 var result = try eval_helpers.callBuiltin(
@@ -598,8 +595,7 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
                                 try forced_list.append(allocator, forced_item);
                             }
                         }
-                        result.deinit(arena_alloc);
-                        arena.deinit();
+                        result.deinit(allocator);
                         return Value.listValue(forced_list);
                     },
                     .vector => {
@@ -618,19 +614,16 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
                                 try forced_vec.append(allocator, forced_item);
                             }
                         }
-                        result.deinit(arena_alloc);
-                        arena.deinit();
+                        result.deinit(allocator);
                         return Value.vectorValue(forced_vec);
                     },
                     .nil => {
-                        result.deinit(arena_alloc);
-                        arena.deinit();
+                        result.deinit(allocator);
                         return Value.nilValue();
                     },
                     else => {
                         const forced = try forceValue(allocator, result);
-                        result.deinit(arena_alloc);
-                        arena.deinit();
+                        result.deinit(allocator);
                         return forced;
                     },
                 }

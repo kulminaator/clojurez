@@ -248,7 +248,7 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
         // ns - namespace declaration
         // (ns namespace-name (:require [other.ns :as alias] ...))
         if (std.mem.eql(u8, name, "ns")) {
-            return try eval_ns.evalNs(allocator, arena_alloc, l, env, depth);
+            return try eval_ns.evalNs(allocator, l, env, depth);
         }
 
         if (std.mem.eql(u8, name, "quote")) {
