@@ -252,6 +252,10 @@ fn runExpression(allocator: Allocator, expr: []const u8, env: *Env) anyerror!voi
 }
 
 fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void {
+    // Detect /dev/stdin — treat as REPL-like (print results) to match JVM clojure
+    // where piped input runs as REPL. Regular script files are silent.
+    const print_results = std.mem.eql(u8, filename, "/dev/stdin");
+
     const cwd = std.Io.Dir.cwd();
     var file = try std.Io.Dir.openFile(cwd, std.Options.debug_io, filename, .{});
     defer std.Io.File.close(file, std.Options.debug_io);
@@ -271,12 +275,10 @@ fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void 
         const eval_env = getCurrentNsEnv(env) orelse env;
         var result = try eval.eval(allocator, allocator, form, eval_env);
 
-        // Print non-nil results (like Clojure REPL)
-        if (!result.equals(Value.nilValue())) {
+        if (print_results and !result.equals(Value.nilValue())) {
             var print_val: Value = undefined;
             if (result.type == .lazy_seq) {
                 print_val = try fullyRealizeLazySeq(allocator, result);
-                // Null out the thunk to prevent double-free
                 result.lazy_seq_val.thunk = null;
             } else {
                 print_val = result;

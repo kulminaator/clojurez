@@ -4,7 +4,8 @@ source tests/helpers.sh
 
 echo "=== Hanoi Sample ==="
 # Run the hanoi sample and check output (core is auto-loaded now)
-hanoi_result=$(timeout 10 ./zig-out/bin/clojurez tests/complex-samples/sample_2_hanoi/hanoi/core.clj 2>&1 | tail -n +5)
+# File execution is silent — only println output appears
+hanoi_result=$(timeout 10 ./zig-out/bin/clojurez tests/complex-samples/sample_2_hanoi/hanoi/core.clj 2>&1)
 expected_hanoi=$(cat tests/complex-samples/sample_2_hanoi/expected_output.txt)
 TEST_TOTAL=$((TEST_TOTAL + 1))
 if [ "$hanoi_result" = "$expected_hanoi" ]; then

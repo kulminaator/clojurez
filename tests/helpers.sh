@@ -85,3 +85,37 @@ run_test_cmd() {
         TEST_FAIL=$((TEST_FAIL + 1))
     fi
 }
+
+# Run a test with an arbitrary shell command, comparing FULL output (all lines)
+# Useful for file-execution tests where only println output should appear.
+run_test_cmd_full() {
+    local name="$1"
+    local cmd="$2"
+    local expected="$3"
+    TEST_TOTAL=$((TEST_TOTAL + 1))
+
+    local result
+    result=$(timeout $TIMEOUT bash -c "$cmd" 2>&1) || {
+        echo "FAIL: $name (timeout or error)"
+        echo "  Cmd:      $cmd"
+        echo "  Expected: $expected"
+        echo "  Got:      $result"
+        TEST_FAIL=$((TEST_FAIL + 1))
+        return
+    }
+
+    # Trim whitespace
+    result=$(echo "$result" | tr -d '[:space:]')
+    expected=$(echo "$expected" | tr -d '[:space:]')
+
+    if [ "$result" = "$expected" ]; then
+        echo "PASS: $name"
+        TEST_PASS=$((TEST_PASS + 1))
+    else
+        echo "FAIL: $name"
+        echo "  Cmd:      $cmd"
+        echo "  Expected: $expected"
+        echo "  Got:      $result"
+        TEST_FAIL=$((TEST_FAIL + 1))
+    fi
+}
