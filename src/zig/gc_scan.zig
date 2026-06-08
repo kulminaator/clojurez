@@ -17,6 +17,7 @@ pub fn valueScanFn(obj: *anyopaque, ctx: *gc.ScanContext) void {
         .lazy_seq_thunk => scanLazySeqThunk(obj, ctx),
         .atom_data => scanAtomData(obj, ctx),
         .fn_data => scanFnData(obj, ctx),
+        .cons_data => scanConsData(obj, ctx),
     }
 }
 
@@ -106,7 +107,7 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
     const valid_types = [_]Value.Type{
         .nil, .bool, .integer, .float, .string, .symbol, .keyword,
         .list, .vector, .map, .set, .queue, .function, .builtin_fn,
-        .lazy_seq, .atom,
+        .lazy_seq, .cons, .atom,
     };
     var is_valid = false;
     for (valid_types) |vt| {
@@ -175,6 +176,13 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
             }
         },
 
+        .cons => {
+            if (val.cons_val) |data| {
+                // Mark the ConsData struct so GC can find head and tail
+                ctx.gc.markRecursive(data, ctx);
+            }
+        },
+
         .atom => {
             if (val.atom_val) |data| {
                 ctx.gc.markRecursive(data, ctx);
@@ -212,4 +220,11 @@ fn scanFnData(fndata_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     if (fndata.env.entries.entries.len > 0) {
         ctx.gc.markRecursive(fndata.env.entries.entries.bytes, ctx);
     }
+}
+
+/// Scan ConsData: { head: Value, tail: Value, allocator: Allocator }.
+fn scanConsData(data_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const data: *Value.ConsData = @ptrCast(@alignCast(data_ptr));
+    scanValueChildrenDirect(&data.head, ctx);
+    scanValueChildrenDirect(&data.tail, ctx);
 }

@@ -21,6 +21,7 @@ pub const Type = enum {
     function,
     builtin_fn,
     lazy_seq,
+    cons,    // Cons cell: (head . tail) — tail is any sequence value
     atom,
 };
 
@@ -72,6 +73,7 @@ queue_val: Queue = .empty,
 fn_val: FnData = .{ .arities = .empty, .env = undefined },
 builtin_fn_val: BuiltinFn = undefined,
 lazy_seq_val: LazySeq = .{},
+cons_val: ?*ConsData = null,
 atom_val: ?*AtomData = null,
 
 // Single arity: one [params] + body forms + optional rest param
@@ -426,6 +428,14 @@ pub fn lazySeqValue(thunk: ?*LazySeqThunk) Self {
     return .{ .type = .lazy_seq, .lazy_seq_val = .{ .thunk = thunk } };
 }
 
+/// Create a cons cell: (head . tail)
+pub fn consValue(allocator: Allocator, head: Self, tail: Self) anyerror!Self {
+    const data = try allocator.create(ConsData);
+    errdefer allocator.destroy(data);
+    data.* = .{ .head = head, .tail = tail, .allocator = allocator };
+    return .{ .type = .cons, .cons_val = data };
+}
+
 pub fn fnValue(arities: std.ArrayListUnmanaged(Arity), env: Env, is_macro: bool) Self {
     return .{ .type = .function, .fn_val = .{ .arities = arities, .env = env, .is_macro = is_macro } };
 }
@@ -492,6 +502,14 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
             self.fn_val.env.deinit(allocator);
         },
         .builtin_fn => {},
+        .cons => {
+            if (self.cons_val) |data| {
+                const a = data.allocator;
+                data.head.deinit(a);
+                data.tail.deinit(a);
+                a.destroy(data);
+            }
+        },
         .atom => {
             // Ref-counted: decrement and free when last reference is gone
             if (self.atom_val) |data| {
@@ -574,6 +592,16 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
                 new_lazy.thunk = new_thunk;
             }
             return lazySeqValue(new_lazy.thunk);
+        },
+        .cons => {
+            if (self.cons_val) |data| {
+                return consValue(
+                    allocator,
+                    try data.head.clone(allocator),
+                    try data.tail.clone(allocator),
+                );
+            }
+            return nilValue();
         },
         .atom => {
             // Clone atom by sharing the same AtomData (atoms are identity-based)
@@ -662,6 +690,14 @@ pub fn equals(self: Self, other: Self) bool {
             }
             return true;
         },
+        .cons => {
+            if (self.cons_val) |s_data| {
+                if (other.cons_val) |o_data| {
+                    return s_data.head.equals(o_data.head) and s_data.tail.equals(o_data.tail);
+                }
+            }
+            return false;
+        },
         .atom => {
             // Atoms are never equal by identity
             return false;
@@ -687,6 +723,10 @@ pub fn fmt(self: Self, allocator: Allocator) anyerror![]const u8 {
         .function => allocator.dupe(u8, "#function"),
         .builtin_fn => allocator.dupe(u8, "#builtin"),
         .lazy_seq => allocator.dupe(u8, "#lazy-seq"),
+        .cons => {
+            if (self.cons_val) |data| return try consFmt(data, allocator);
+            return allocator.dupe(u8, "()");
+        },
         .atom => {
             if (self.atom_val) |data| {
                 const inner_str = try data.value.fmt(allocator);
@@ -753,6 +793,76 @@ pub fn mapFmt(m: Map, allocator: Allocator) anyerror![]const u8 {
     try buf.append(allocator, '}');
     return buf.toOwnedSlice(allocator);
 }
+
+/// Format a cons cell as a list: (head ...tail_elements...)
+/// Walks the cons chain and prints all elements.
+pub fn consFmt(data: *const ConsData, allocator: Allocator) anyerror![]const u8 {
+    var buf: std.ArrayList(u8) = .empty;
+    errdefer buf.deinit(allocator);
+
+    try buf.append(allocator, '(');
+
+    // Walk the cons chain without taking ownership
+    var head_ref: *const Self = &data.head;
+    var tail_ref: *const Self = &data.tail;
+    var first = true;
+
+    while (true) {
+        if (!first) try buf.append(allocator, ' ');
+        const head_str = try head_ref.fmt(allocator);
+        defer allocator.free(head_str);
+        try buf.appendSlice(allocator, head_str);
+        first = false;
+
+        // Check what the tail is
+        switch (tail_ref.type) {
+            .cons => {
+                if (tail_ref.cons_val) |tail_data| {
+                    head_ref = &tail_data.head;
+                    tail_ref = &tail_data.tail;
+                } else break;
+            },
+            .list => {
+                // Splice in the list elements
+                for (tail_ref.list_val.items) |item| {
+                    try buf.append(allocator, ' ');
+                    const item_str = try item.fmt(allocator);
+                    defer allocator.free(item_str);
+                    try buf.appendSlice(allocator, item_str);
+                }
+                break;
+            },
+            .nil => break,
+            .lazy_seq => {
+                // Print lazy-seq marker
+                try buf.append(allocator, ' ');
+                try buf.appendSlice(allocator, "#lazy-seq");
+                break;
+            },
+            else => {
+                // Dotted pair: (head . tail)
+                try buf.append(allocator, ' ');
+                try buf.append(allocator, '.');
+                try buf.append(allocator, ' ');
+                const tail_str = try tail_ref.fmt(allocator);
+                defer allocator.free(tail_str);
+                try buf.appendSlice(allocator, tail_str);
+                break;
+            },
+        }
+    }
+
+    try buf.append(allocator, ')');
+    return buf.toOwnedSlice(allocator);
+}
+
+// Cons cell data: heap-allocated, contains head, tail, and the allocator used.
+// This avoids circular dependency (Value contains *ConsData, ConsData contains Value).
+pub const ConsData = struct {
+    head: Self,
+    tail: Self,
+    allocator: Allocator,
+};
 
 // ===== Unit Tests =====
 

@@ -43,6 +43,7 @@ pub const GCObjectType = enum(u8) {
     lazy_seq_thunk = 6, // LazySeqThunk { params: list.List, body: list.List, env: Env }
     atom_data = 7,  // AtomData { value: Value, ref_count: usize }
     fn_data = 8,    // FnData { arities: ArrayListUnmanaged(Arity), env: Env }
+    cons_data = 9,  // ConsData { head: Value, tail: Value, allocator: Allocator }
 };
 
 const Header = struct {

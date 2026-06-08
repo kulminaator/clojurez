@@ -42,6 +42,46 @@ pub fn forceLazySeqToConcreteList(allocator: Allocator, val: Value) anyerror!lis
 fn forceToConcreteList(allocator: Allocator, val: Value) anyerror!list.List {
     return switch (val.type) {
         .lazy_seq => return forceLazySeqToConcreteList(allocator, val),
+        .cons => {
+            // Flatten cons chain to a list
+            var result: list.List = .empty;
+            errdefer result.deinit(allocator);
+            var current = val;
+            errdefer current.deinit(allocator);
+            while (true) {
+                switch (current.type) {
+                    .cons => {
+                        const cdata = current.cons_val.?;
+                        try result.append(allocator, try cdata.head.clone(allocator));
+                        const tail = try cdata.tail.clone(allocator);
+                        current.deinit(cdata.allocator);
+                        current = tail;
+                    },
+                    .list => {
+                        for (current.list_val.items) |item| {
+                            try result.append(allocator, try item.clone(allocator));
+                        }
+                        break;
+                    },
+                    .nil => break,
+                    .lazy_seq => {
+                        var forced = try sequences_mod.forceLazySeqHelper(allocator, current);
+                        defer forced.deinit(allocator);
+                        for (forced.list_val.items) |item| {
+                            try result.append(allocator, try item.clone(allocator));
+                        }
+                        break;
+                    },
+                    else => {
+                        try result.append(allocator, current);
+                        current = Value.nilValue();
+                        break;
+                    },
+                }
+            }
+            current.deinit(allocator);
+            return result;
+        },
         else => {
             var result: list.List = .empty;
             errdefer result.deinit(allocator);
@@ -184,6 +224,13 @@ pub fn core_mapcat(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
                     }
                 },
                 .lazy_seq => {
+                    var concrete = try forceToConcreteList(allocator, mapped);
+                    for (concrete.items) |mitem| {
+                        try result.append(allocator, try mitem.clone(allocator));
+                    }
+                    concrete.deinit(allocator);
+                },
+                .cons => {
                     var concrete = try forceToConcreteList(allocator, mapped);
                     for (concrete.items) |mitem| {
                         try result.append(allocator, try mitem.clone(allocator));
@@ -655,6 +702,31 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
                         const forced = try forceValue(allocator, result);
                         result.deinit(allocator);
                         return forced;
+                    },
+                    .cons => {
+                        // Thunk returned a cons cell. Convert to list and force nested lazy_seqs.
+                        // forceToConcreteList takes ownership of the cons value.
+                        var concrete = try forceToConcreteList(allocator, result);
+                        // Now force any lazy_seq elements in the list
+                        var forced_list: list.List = .empty;
+                        errdefer forced_list.deinit(allocator);
+                        for (concrete.items) |item| {
+                            if (item.type == .lazy_seq) {
+                                var forced = try forceValue(allocator, item);
+                                if (forced.type == .list) {
+                                    for (forced.list_val.items) |fi| {
+                                        try forced_list.append(allocator, try fi.clone(allocator));
+                                    }
+                                } else {
+                                    try forced_list.append(allocator, forced);
+                                }
+                                forced.deinit(allocator);
+                            } else {
+                                try forced_list.append(allocator, try item.clone(allocator));
+                            }
+                        }
+                        concrete.deinit(allocator);
+                        return Value.listValue(forced_list);
                     },
                     else => {
                         const forced = try forceValue(allocator, result);
