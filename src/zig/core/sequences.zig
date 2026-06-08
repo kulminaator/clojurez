@@ -311,14 +311,23 @@ pub fn core_take(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     try thunk.env.put("n", try n_val.clone(allocator));
     try thunk.env.put("coll", try args.items[1].clone(allocator));
 
-    // Build thunk body: (let [s (seq coll)] (if (and (pos? n) s) (cons (first s) (take (dec n) (rest s))) nil))
+    // Build thunk body matching JVM clojure:
+    // (lazy-seq (when (pos? n) (when-let [s (seq coll)] (cons (first s) (take (dec n) (rest s))))))
+    // Equivalent to:
+    // (if (pos? n)
+    //   (let [s (seq coll)]
+    //     (if s
+    //       (cons (first s) (take (dec n) (rest s)))
+    //       nil))
+    //   nil)
+    // CRITICAL: (pos? n) must be checked BEFORE (seq coll) to avoid
+    // forcing the lazy-seq when n <= 0.
     const a = allocator;
     const sym_let = try Value.symValue(a, "let");
     const sym_s = try Value.symValue(a, "s");
     const sym_seq = try Value.symValue(a, "seq");
     const sym_coll = try Value.symValue(a, "coll");
     const sym_if = try Value.symValue(a, "if");
-    const sym_and = try Value.symValue(a, "and");
     const sym_pos_q = try Value.symValue(a, "pos?");
     const sym_n = try Value.symValue(a, "n");
     const sym_cons = try Value.symValue(a, "cons");
@@ -342,12 +351,6 @@ pub fn core_take(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     var pos_call: list.List = .empty;
     try pos_call.append(a, sym_pos_q);
     try pos_call.append(a, sym_n);
-
-    // (and (pos? n) s)
-    var and_call: list.List = .empty;
-    try and_call.append(a, sym_and);
-    try and_call.append(a, Value.listValue(pos_call));
-    try and_call.append(a, sym_s);
 
     // (first s)
     var first_call: list.List = .empty;
@@ -376,18 +379,25 @@ pub fn core_take(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     try cons_call.append(a, Value.listValue(first_call));
     try cons_call.append(a, Value.listValue(take_call));
 
-    // (if (and (pos? n) s) (cons ...) nil)
-    var if_form: list.List = .empty;
-    try if_form.append(a, sym_if);
-    try if_form.append(a, Value.listValue(and_call));
-    try if_form.append(a, Value.listValue(cons_call));
-    try if_form.append(a, sym_nil);
+    // (if s (cons ...) nil) — inner check, only reached when (pos? n) is true
+    var inner_if: list.List = .empty;
+    try inner_if.append(a, sym_if);
+    try inner_if.append(a, sym_s);
+    try inner_if.append(a, Value.listValue(cons_call));
+    try inner_if.append(a, sym_nil);
 
-    // (let [s (seq coll)] (if ...))
+    // (let [s (seq coll)] (if s (cons ...) nil))
+    var let_form: list.List = .empty;
+    try let_form.append(a, sym_let);
+    try let_form.append(a, Value.listValue(bindings));
+    try let_form.append(a, Value.listValue(inner_if));
+
+    // (if (pos? n) (let ...) nil) — outer check, prevents (seq coll) when n <= 0
     var body: list.List = .empty;
-    try body.append(a, sym_let);
-    try body.append(a, Value.listValue(bindings));
-    try body.append(a, Value.listValue(if_form));
+    try body.append(a, sym_if);
+    try body.append(a, Value.listValue(pos_call));
+    try body.append(a, Value.listValue(let_form));
+    try body.append(a, sym_nil);
 
     thunk.body = body;
     return Value.lazySeqValue(thunk);
