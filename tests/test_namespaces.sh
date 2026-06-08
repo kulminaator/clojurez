@@ -7,12 +7,12 @@ echo "=== Namespace Tests ==="
 # Basic ns declaration
 run_test "ns basic declaration" \
     "(ns my.ns)" \
-    "nil"
+    ""
 
 # ns with require and as alias (using inline definitions)
 run_test "ns with require and alias" \
     "(ns user) (ns lib.foo) (defn greet [] \"hi\") (ns my.app (:require [lib.foo :as f]))" \
-    "nil"
+    "greet"
 
 # Qualified symbol resolution (via file)
 run_test_cmd "qualified symbol via alias" \

@@ -223,32 +223,30 @@ fn runExpression(allocator: Allocator, expr: []const u8, env: *Env) anyerror!voi
     var p = try parser.Parser.init(allocator, expr);
     defer p.deinit();
 
-    var form = Value.nilValue();
-    errdefer form.deinit(allocator);
-    form = try p.parse();
-    // Use current namespace's env for evaluation
-    const eval_env = getCurrentNsEnv(env) orelse env;
-    var result = try eval.eval(allocator, allocator, form, eval_env);
-    defer result.deinit(allocator);
+    const forms = try p.parseAll();
+    // Don't deinit forms — all values are GC-managed.
+    // The GC will clean up at program exit.
 
-    // Force lazy-seqs before printing
-    if (result.type == .lazy_seq) {
-        var realized = try fullyRealizeLazySeq(allocator, result);
-        // Null out the thunk to prevent double-free from the defer
-        result.lazy_seq_val.thunk = null;
-        const formatted = try realized.fmt(allocator);
-        defer allocator.free(formatted);
-        realized.deinit(allocator);
-        try writeStdout(formatted);
-        try writeStdout("\n");
-        return;
+    // Evaluate each form and print non-nil results (matching JVM clojure -e)
+    for (forms.items) |form| {
+        // Use current namespace's env for evaluation
+        const eval_env = getCurrentNsEnv(env) orelse env;
+        const result = try eval.eval(allocator, allocator, form, eval_env);
+
+        if (!result.equals(Value.nilValue())) {
+            const print_val = if (result.type == .lazy_seq) blk: {
+                const realized = try fullyRealizeLazySeq(allocator, result);
+                break :blk realized;
+            } else result;
+            const formatted = try print_val.fmt(allocator);
+            defer allocator.free(formatted);
+            // Don't deinit print_val/result — GC handles it
+            try writeStdout(formatted);
+            try writeStdout("\n");
+        }
+
+        // Don't deinit result — GC handles it
     }
-
-    const formatted = try result.fmt(allocator);
-    defer allocator.free(formatted);
-    try writeStdout(formatted);
-    try writeStdout("\n");
-
 }
 
 fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void {

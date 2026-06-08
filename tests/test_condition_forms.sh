@@ -86,7 +86,7 @@ run_test "and no args" '(and)' "true"
 run_test "or true false" '(or true false)' "true"
 run_test "or false true" '(or false true)' "true"
 run_test "or false false" '(or false false)' "false"
-run_test "or no args" '(or)' "nil"
+run_test "or no args" '(or)' ""
 
 # if
 run_test "if true" '(if true :yes :no)' ":yes"
@@ -95,11 +95,11 @@ run_test "if no else" '(if true :yes)' ":yes"
 
 # when
 run_test "when true" '(when true :yes)' ":yes"
-run_test "when false" '(when false :yes)' "nil"
+run_test "when false" '(when false :yes)' ""
 
 # when-not
 run_test "when-not false" '(when-not false :yes)' ":yes"
-run_test "when-not true" '(when-not true :yes)' "nil"
+run_test "when-not true" '(when-not true :yes)' ""
 
 # if-not
 run_test "if-not false" '(if-not false :yes :no)' ":yes"
@@ -108,13 +108,13 @@ run_test "if-not true" '(if-not true :yes :no)' ":no"
 # cond
 run_test "cond first" '(cond (= 1 1) :yes :else :no)' ":yes"
 run_test "cond else" '(cond (= 1 2) :yes :else :no)' ":no"
-run_test "cond no match" '(cond (= 1 2) :a (= 3 4) :b)' "nil"
+run_test "cond no match" '(cond (= 1 2) :a (= 3 4) :b)' ""
 
 # case
 run_test "case match 1" '(case 1 1 "one" 2 "two" :else "default")' "\"one\""
 run_test "case match 2" '(case 2 1 "one" 2 "two" :else "default")' "\"two\""
 run_test "case default" '(case 3 1 "one" 2 "two" :else "default")' "\"default\""
-run_test "case no match no default" '(case 3 1 "one" 2 "two")' "nil"
+run_test "case no match no default" '(case 3 1 "one" 2 "two")' ""
 run_test "case string" '(case "a" "a" :yes "b" :no :else :default)' ":yes"
 run_test "case keyword" '(case :x :x :yes :y :no :else :default)' ":yes"
 
@@ -138,11 +138,11 @@ run_test "if-let nil" '(if-let [x nil] x :nope)' ":nope"
 
 # when-let
 run_test "when-let truthy" '(when-let [x 1] x)' "1"
-run_test "when-let nil" '(when-let [x nil] x)' "nil"
+run_test "when-let nil" '(when-let [x nil] x)' ""
 
 # some
 run_test "some found" '(some #(> % 2) (list 1 2 3 4))' "true"
-run_test "some not found" '(some #(> % 10) (list 1 2 3 4))' "nil"
+run_test "some not found" '(some #(> % 10) (list 1 2 3 4))' ""
 
 # every?
 run_test "every? all" '(every? #(> % 0) (list 1 2 3))' "true"

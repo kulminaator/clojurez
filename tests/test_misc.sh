@@ -3,7 +3,7 @@
 source tests/helpers.sh
 
 echo "=== Namespace Tests ==="
-run_test "ns declaration" '(ns my.core)' "nil"
+run_test "ns declaration" '(ns my.core)' ""
 
 echo ""
 echo "=== Binding Tests ==="

@@ -26,8 +26,8 @@ run_test "empty queue" '(empty #queue(1 2))' '#queue()'
 # get-in
 run_test "get-in nested" '(get-in {:a {:b {:c 42}}} [:a :b :c])' '42'
 run_test "get-in single key" '(get-in {:a 1} [:a])' '1'
-run_test "get-in missing key" '(get-in {:a 1} [:b])' 'nil'
-run_test "get-in deep missing" '(get-in {:a {:b 1}} [:a :c :d])' 'nil'
+run_test "get-in missing key" '(get-in {:a 1} [:b])' ''
+run_test "get-in deep missing" '(get-in {:a {:b 1}} [:a :c :d])' ''
 
 # assoc-in
 run_test "assoc-in existing" '(assoc-in {:a {:b 1}} [:a :c] 2)' '{:a {:b 1 :c 2}}'
@@ -47,12 +47,12 @@ run_test "interpose two" '(interpose "-" (list "a" "b"))' '("a" "-" "b")'
 
 # when-not
 run_test "when-not false" '(when-not false "yes")' '"yes"'
-run_test "when-not true" '(when-not true "yes")' 'nil'
+run_test "when-not true" '(when-not true "yes")' ''
 run_test "when-not multi body" '(when-not false (+ 1 2))' '3'
 
 # when-some
 run_test "when-some value" '(when-some [x 5] (* x 2))' '10'
-run_test "when-some nil" '(when-some [x nil] (* x 2))' 'nil'
+run_test "when-some nil" '(when-some [x nil] (* x 2))' ''
 run_test "when-some string" '(when-some [x "hi"] (str x " there"))' '"hi there"'
 
 # if-let

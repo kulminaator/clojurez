@@ -5,7 +5,7 @@ source tests/helpers.sh
 echo "=== Map Tests ==="
 run_test "map literal" '{:a 1 :b 2}' "{:a 1 :b 2}"
 run_test "get from map" '(get {:a 1 :b 2} :a)' "1"
-run_test "get missing key" '(get {:a 1} :b)' "nil"
+run_test "get missing key" '(get {:a 1} :b)' ""
 run_test "assoc new key" '(assoc {:a 1} :b 2)' "{:a 1 :b 2}"
 run_test "assoc multiple" '(assoc {:a 1} :b 2 :c 3)' "{:a 1 :b 2 :c 3}"
 
@@ -20,7 +20,7 @@ run_test "contains? map" "(contains? {:a 1} :a)" "true"
 run_test "contains? map missing" "(contains? {:a 1} :b)" "false"
 run_test "contains? set" "(contains? #{1 2 3} 2)" "true"
 run_test "map as fn" "({:a 1 :b 2} :a)" "1"
-run_test "map as fn not found" "({:a 1} :b)" "nil"
+run_test "map as fn not found" "({:a 1} :b)" ""
 run_test "map as fn not-found" "({:a 1} :b :default)" ":default"
 run_test "count map" "(count {:a 1 :b 2})" "2"
 

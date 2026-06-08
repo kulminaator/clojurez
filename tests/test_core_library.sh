@@ -7,7 +7,7 @@ run_test_cmd "update" "$VM -e '(update {:a 1} :a inc)'" "{:a 2}"
 run_test "if-not false" '(if-not false :yes :no)' ":yes"
 run_test "if-not true" '(if-not true :yes :no)' ":no"
 run_test "if-not nil 2arg" '(if-not nil :yes)' ":yes"
-run_test "if-not true 2arg" '(if-not true :yes)' "nil"
+run_test "if-not true 2arg" '(if-not true :yes)' ""
 
 run_test "drop list" '(drop 2 (list 1 2 3 4 5))' "(3 4 5)"
 run_test "drop zero" '(drop 0 (list 1 2 3))' "(1 2 3)"

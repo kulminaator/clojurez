@@ -51,12 +51,12 @@ run_test "utf8 string? emoji" "(string? \"😀\")" "true"
 run_test "utf8 string? japanese" "(string? \"古池\")" "true"
 
 # Print with UTF-8
-run_test "utf8 print estonian" '(do (print "jõä") nil)' "jõänil"
-run_test "utf8 print emoji" '(do (print "😀") nil)' "😀nil"
-run_test "utf8 print japanese" '(do (print "古池") nil)' "古池nil"
+run_test "utf8 print estonian" '(do (print "jõä") nil)' "jõä"
+run_test "utf8 print emoji" '(do (print "😀") nil)' "😀"
+run_test "utf8 print japanese" '(do (print "古池") nil)' "古池"
 
 # nth out of bounds for UTF-8 strings
-run_test "utf8 nth out of bounds" "(nth \"jõä\" 10)" "nil"
+run_test "utf8 nth out of bounds" "(nth \"jõä\" 10)" ""
 
 # Complex mixed UTF-8 expression (using let instead of def to avoid pre-existing def+string bug)
 run_test "utf8 complex expression" '(let [greeting "tere mõnda😀"] (str greeting " maailm!"))' "\"tere mõnda😀 maailm!\""
@@ -86,4 +86,4 @@ run_test "utf8 symbol estonian" "'jõä" "jõä"
 
 # Empty UTF-8 string
 run_test "utf8 empty string count" "(count \"\")" "0"
-run_test "utf8 empty string nth" "(nth \"\" 0)" "nil"
+run_test "utf8 empty string nth" "(nth \"\" 0)" ""

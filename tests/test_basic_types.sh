@@ -24,7 +24,7 @@ echo ""
 echo "=== Boolean Tests ==="
 run_test "true literal" "true" "true"
 run_test "false literal" "false" "false"
-run_test "nil literal" "nil" "nil"
+run_test "nil literal" "nil" ""
 run_test "not true" "(not true)" "false"
 run_test "not false" "(not false)" "true"
 
