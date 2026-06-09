@@ -1111,3 +1111,125 @@
   [x]
   (zig.core/bigint x))
 
+(defn bigdec
+  "Coerce to arbitrary-precision decimal."
+  [x]
+  (zig.core/bigdec x))
+
+(defn byte
+  "Coerce to byte (truncates to 8 bits)."
+  [x]
+  (zig.core/byte x))
+
+(defn short
+  "Coerce to short (truncates to 16 bits)."
+  [x]
+  (zig.core/short x))
+
+;; ---- Keyword construction ----
+
+(defn keyword
+  "Converts a string or symbol to a keyword. With two args, creates a namespaced keyword."
+  ([name] (zig.core/keyword name))
+  ([namespace name] (zig.core/keyword namespace name)))
+
+;; ---- Conditional ----
+
+(defn if-not
+  "If test is logical false, evaluates then, else evaluates not-then (or nil if not-then omitted)."
+  ([test then]
+   (zig.core/if-not test then))
+  ([test then not-then]
+   (zig.core/if-not test then not-then)))
+
+;; ---- Reduction helpers ----
+
+(defn ensure-reduced
+  "If v is a Reduced wrapper, returns it. Otherwise wraps v in Reduced."
+  [v]
+  (zig.core/ensure-reduced v))
+
+(defn unreduced
+  "If v is a Reduced wrapper, unwraps and returns the inner value. Otherwise returns v."
+  [v]
+  (zig.core/unreduced v))
+
+;; ---- Sequence helpers ----
+
+(defn next
+  "Returns the rest of the collection after the first element, or nil if empty."
+  [coll]
+  (zig.core/next coll))
+
+(defn nthnext
+  "Returns the nth next of coll. (nthnext coll 1) is equivalent to (next coll)."
+  [coll n]
+  (if (<= n 0)
+    (seq coll)
+    (zig.core/nthnext n coll)))
+
+;; ---- Sequence operations ----
+
+(defn map
+  "Returns a lazy sequence consisting of the result of applying f to the
+   set of first items of each collection, followed by applying f to the set
+   of second items in each sequence, and so on."
+  [f coll]
+  (zig.core/map f coll))
+
+(defn mapcat
+  "Returns a lazy sequence which is the concatenation of the results of applying f to the
+   elements of the collections. f should return a collection."
+  [f coll]
+  (zig.core/mapcat f coll))
+
+(defn reduce
+  "f should be a function of 2 arguments. If val is not supplied, returns the
+   result of applying f to the first 2 items in coll, then applying f to that
+   result and the 3rd item, etc. If val is supplied, returns the result of
+   applying f to val and the first item in coll, then applying f to that
+   result and the 2nd item, etc."
+  ([f coll] (zig.core/reduce f coll))
+  ([f val coll] (zig.core/reduce f val coll)))
+
+(defn filter
+  "Returns a lazy sequence of the items in coll for which (pred item) returns logical true."
+  [pred coll]
+  (zig.core/filter pred coll))
+
+(defn remove
+  "Returns a lazy sequence of the items in coll for which (pred item) returns logical false."
+  [pred coll]
+  (zig.core/remove pred coll))
+
+(defn flatten
+  "Takes any nested combination of sequential things (lists, vectors, etc.)
+   and returns the contents as a single, flat sequence."
+  [x]
+  (zig.core/flatten x))
+
+(defn take
+  "Returns a lazy sequence of the first n items in coll."
+  [n coll]
+  (zig.core/take n coll))
+
+(defn drop
+  "Returns a lazy sequence of all but the first n items in coll."
+  [n coll]
+  (zig.core/drop n coll))
+
+(defn every?
+  "Returns true if (pred x) is logical true for every x in coll, else false."
+  [pred coll]
+  (zig.core/every? pred coll))
+
+(defn some
+  "Returns the first logical true value of (pred x) for any x in coll, else nil."
+  [pred coll]
+  (zig.core/some pred coll))
+
+(defn distinct?
+  "Returns true if no two elements in the collection are equal."
+  [coll]
+  (zig.core/distinct? coll))
+

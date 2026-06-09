@@ -19,7 +19,7 @@ run_test "every?" "(every? (fn [x] (> x 0)) (list 1 2 3))" "true"
 run_test "some" "(some (fn [x] (= x 3)) (list 1 2 3))" "true"
 run_test "distinct?" "(distinct? (list 1 2 3))" "true"
 run_test "distinct? not" "(distinct? (list 1 2 1))" "false"
-run_test "nthnext" "(nthnext 2 (list 1 2 3 4))" "(3 4)"
+run_test "nthnext" "(nthnext (list 1 2 3 4) 2)" "(3 4)"
 
 echo ""
 echo "=== Partition ==="

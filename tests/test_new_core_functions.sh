@@ -198,3 +198,99 @@ run_test "zig.core/unsigned-bit-shift-right" "(zig.core/unsigned-bit-shift-right
 run_test "bit-test set" "(bit-test 5 2)" "true"
 run_test "bit-test clear" "(bit-test 5 1)" "false"
 run_test "zig.core/bit-test" "(zig.core/bit-test 5 2)" "true"
+
+# byte
+run_test "byte" "(byte 42)" "42"
+run_test "zig.core/byte" "(zig.core/byte 100)" "100"
+
+# short
+run_test "short" "(short 42)" "42"
+run_test "zig.core/short" "(zig.core/short 100)" "100"
+
+# bigdec
+run_test "bigdec" "(bigdec 3.14)" "3.14"
+run_test "bigdec from int" "(bigdec 42)" "42"
+run_test "zig.core/bigdec" "(zig.core/bigdec 2.5)" "2.5"
+
+# keyword
+run_test "keyword from string" '(keyword "foo")' ":foo"
+run_test "keyword from symbol" "(keyword 'bar)" ":bar"
+run_test "keyword namespaced" '(keyword "ns" "name")' ":ns/name"
+run_test "zig.core/keyword" '(zig.core/keyword "x")' ":x"
+
+# if-not
+run_test "if-not false 3arg" "(if-not false :yes :no)" ":yes"
+run_test "if-not true 3arg" "(if-not true :yes :no)" ":no"
+run_test "if-not nil 2arg" "(if-not nil :yes)" ":yes"
+run_test "if-not true 2arg" "(if-not true :yes)" ""
+run_test "zig.core/if-not" "(zig.core/if-not false :a :b)" ":a"
+
+# ensure-reduced
+run_test "ensure-reduced already" "(ensure-reduced (reduced 42))" "#reduced(42)"
+run_test "ensure-reduced plain" "(ensure-reduced 42)" "#reduced(42)"
+run_test "zig.core/ensure-reduced" "(zig.core/ensure-reduced 10)" "#reduced(10)"
+
+# unreduced
+run_test "unreduced" "(unreduced (reduced 42))" "42"
+run_test "unreduced plain" "(unreduced 42)" "42"
+run_test "zig.core/unreduced" "(zig.core/unreduced (reduced 10))" "10"
+
+# next
+run_test "next" "(next '(1 2 3))" "(2 3)"
+run_test "next empty" "(next '())" ""
+run_test "zig.core/next" "(zig.core/next (list 1 2))" "(2)"
+
+# nthnext (correct Clojure arg order: coll n)
+run_test "nthnext" "(nthnext (list 1 2 3 4 5) 2)" "(3 4 5)"
+run_test "nthnext zero" "(nthnext (list 1 2 3) 0)" "(1 2 3)"
+run_test "nthnext beyond" "(nthnext (list 1 2) 5)" ""
+
+# map
+run_test "map" "(doall (map inc (list 1 2 3)))" "(2 3 4)"
+run_test "zig.core/map" "(doall (zig.core/map dec (list 3 4 5)))" "(2 3 4)"
+
+# mapcat
+run_test "mapcat" "(doall (mapcat (fn [x] (list x (* x x))) (list 1 2 3)))" "(1 1 2 4 3 9)"
+run_test "zig.core/mapcat" "(doall (zig.core/mapcat (fn [x] (list x)) (list 1 2)))" "(1 2)"
+
+# reduce
+run_test "reduce with init" "(reduce + 0 (list 1 2 3 4))" "10"
+run_test "reduce no init" "(reduce + (list 1 2 3 4))" "10"
+run_test "zig.core/reduce" "(zig.core/reduce * 1 (list 2 3 4))" "24"
+
+# filter
+run_test "filter" "(doall (filter (fn [x] (> x 2)) (list 1 2 3 4)))" "(3 4)"
+run_test "zig.core/filter" "(doall (zig.core/filter (fn [x] (even? x)) (list 1 2 3 4)))" "(2 4)"
+
+# remove
+run_test "remove" "(doall (remove (fn [x] (> x 2)) (list 1 2 3 4)))" "(1 2)"
+run_test "zig.core/remove" "(doall (zig.core/remove (fn [x] (even? x)) (list 1 2 3 4)))" "(1 3)"
+
+# flatten
+run_test "flatten" "(doall (flatten '((1 2) (3) (4 5))))" "(1 2 3 4 5)"
+run_test "zig.core/flatten" "(doall (zig.core/flatten '((1) (2 3))))" "(1 2 3)"
+
+# take
+run_test "take" "(doall (take 3 (list 1 2 3 4 5)))" "(1 2 3)"
+run_test "take all" "(doall (take 10 (list 1 2 3)))" "(1 2 3)"
+run_test "zig.core/take" "(doall (zig.core/take 2 (list 1 2 3)))" "(1 2)"
+
+# drop
+run_test "drop" "(doall (drop 2 (list 1 2 3 4 5)))" "(3 4 5)"
+run_test "drop all" "(doall (drop 10 (list 1 2 3)))" "()"
+run_test "zig.core/drop" "(doall (zig.core/drop 1 (list 1 2 3)))" "(2 3)"
+
+# every?
+run_test "every? true" "(every? (fn [x] (> x 0)) (list 1 2 3))" "true"
+run_test "every? false" "(every? (fn [x] (> x 1)) (list 1 2 3))" "false"
+run_test "zig.core/every?" "(zig.core/every? (fn [x] (even? x)) (list 2 4 6))" "true"
+
+# some
+run_test "some found" "(some (fn [x] (> x 2)) (list 1 2 3 4))" "true"
+run_test "some not found" "(some (fn [x] (> x 10)) (list 1 2 3))" ""
+run_test "zig.core/some" "(zig.core/some (fn [x] (even? x)) (list 1 3 4))" "true"
+
+# distinct?
+run_test "distinct? true" "(distinct? (list 1 2 3))" "true"
+run_test "distinct? false" "(distinct? (list 1 2 1))" "false"
+run_test "zig.core/distinct?" "(zig.core/distinct? (list 1 2 3 4))" "true"
