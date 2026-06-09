@@ -470,3 +470,48 @@
         -1
         1))))
 
+;; ---- Additional sequence operations ----
+
+(defn take-nth
+  "Returns a lazy seq of every nth item in coll."
+  [n coll]
+  (when-let [s (seq coll)]
+    (lazy-seq
+      (cons (first s) (take-nth n (drop (- n 1) (rest s)))))))
+
+(defn interleave
+  "Returns a lazy seq of the first item in each coll, then the second etc."
+  ([] ())
+  ([c1] (lazy-seq c1))
+  ([c1 c2]
+     (lazy-seq
+       (when-let [s1 (seq c1)]
+         (when-let [s2 (seq c2)]
+           (cons (first s1) (cons (first s2) (interleave (rest s1) (rest s2)))))))))
+
+(defn partition-all
+  "Returns a lazy sequence of lists like partition, but may include
+   partitions with fewer than n items at the end."
+  [n coll]
+  (when-let [s (seq coll)]
+    (lazy-seq
+      (cons (take n s) (partition-all n (drop n s))))))
+
+(defn partition-by
+  "Applies f to each value in coll, splitting it each time f returns a
+   new value. Returns a lazy seq of partitions."
+  [f coll]
+  (when-let [s (seq coll)]
+    (let [k (f (first s))
+          run (take-while (fn [x] (= (f x) k)) s)]
+      (lazy-seq
+        (cons (vec run) (partition-by f (drop (count run) s)))))))
+
+(defn frequencies
+  "Returns a map from distinct items in coll to the number of times
+  they appear."
+  [coll]
+  (reduce (fn [counts x]
+            (assoc counts x (inc (or (get counts x) 0))))
+          {} coll))
+

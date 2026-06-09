@@ -487,7 +487,12 @@
      (lazy-seq
        (when-let [s1 (seq c1)]
          (when-let [s2 (seq c2)]
-           (cons (first s1) (cons (first s2) (interleave (rest s1) (rest s2)))))))))
+           (cons (first s1) (cons (first s2) (interleave (rest s1) (rest s2))))))))
+  ([c1 c2 & colls]
+     (lazy-seq
+       (let [ss (doall (map seq (conj colls c2 c1)))]
+         (when (and (not-any? nil? ss))
+           (concat (doall (map first ss)) (apply interleave (doall (map rest ss))))))))
 
 (defn partition-all
   "Returns a lazy sequence of lists like partition, but may include
