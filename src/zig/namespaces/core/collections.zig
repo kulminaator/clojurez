@@ -1,8 +1,8 @@
 // General collection operations: conj, pop, last, reverse, peek, contains?
 const std = @import("std");
-const Value = @import("../value.zig");
-const list = @import("../list.zig");
-const vec = @import("../vector.zig");
+const Value = @import("../../value.zig");
+const list = @import("../../list.zig");
+const vec = @import("../../vector.zig");
 const Env = Value.Env;
 const sequences = @import("sequences.zig");
 const helpers = @import("helpers.zig");

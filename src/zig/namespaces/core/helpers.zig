@@ -1,8 +1,8 @@
 // Shared helper functions for core built-in modules
 const std = @import("std");
-const Value = @import("../value.zig");
-const list = @import("../list.zig");
-const vec = @import("../vector.zig");
+const Value = @import("../../value.zig");
+const list = @import("../../list.zig");
+const vec = @import("../../vector.zig");
 
 const Allocator = std.mem.Allocator;
 

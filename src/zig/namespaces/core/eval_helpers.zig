@@ -1,8 +1,8 @@
 // Shared evaluation helpers for calling user-defined functions from built-ins
 const std = @import("std");
-const Value = @import("../value.zig");
-const list = @import("../list.zig");
-const vec = @import("../vector.zig");
+const Value = @import("../../value.zig");
+const list = @import("../../list.zig");
+const vec = @import("../../vector.zig");
 const helpers = @import("helpers.zig");
 
 const Allocator = std.mem.Allocator;

@@ -5,8 +5,8 @@
 // All bitwise operations work only on integer (i64) values.
 // BigInt and float values are not supported (matching Clojure behavior).
 const std = @import("std");
-const Value = @import("../value.zig");
-const list = @import("../list.zig");
+const Value = @import("../../value.zig");
+const list = @import("../../list.zig");
 const Env = Value.Env;
 const test_utils = @import("test_utils.zig");
 

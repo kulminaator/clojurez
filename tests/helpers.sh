@@ -15,7 +15,7 @@ fi
 # Build the VM (copies core.clj into zig package for @embedFile)
 build_vm() {
     echo "Building VM..."
-    cp src/clj/core.clj src/zig/clj/core.clj 2>/dev/null || true
+    cp src/clj/core.clj src/zig/namespaces/core/clj/core.clj 2>/dev/null || true
     zig build 2>&1
     echo ""
 }

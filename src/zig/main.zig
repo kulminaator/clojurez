@@ -2,16 +2,16 @@ const std = @import("std");
 const Value = @import("value.zig");
 const Env = Value.Env;
 const list = @import("list.zig");
-const core = @import("core.zig");
+const core = @import("namespaces/core/core.zig");
 const parser = @import("parser.zig");
 const eval = @import("eval.zig");
 const repl = @import("repl.zig");
-const core_clj = @import("core_clj.zig");
+const core_clj = @import("namespaces/core/core_clj.zig");
 const debug_allocator = @import("debug_allocator.zig");
 const slab_allocator = @import("slab_allocator.zig");
 const gc_mod = @import("gc.zig");
 const gc_scan = @import("gc_scan.zig");
-const sequences = @import("core/sequences.zig");
+const sequences = @import("namespaces/core/sequences.zig");
 
 const Allocator = std.mem.Allocator;
 

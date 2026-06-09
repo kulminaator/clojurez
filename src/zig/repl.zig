@@ -4,7 +4,7 @@ const list = @import("list.zig");
 const parser = @import("parser.zig");
 const eval = @import("eval.zig");
 const eval_ns = @import("eval_ns.zig");
-const sequences = @import("core/sequences.zig");
+const sequences = @import("namespaces/core/sequences.zig");
 const gc_mod = @import("gc.zig");
 const gc_scan = @import("gc_scan.zig");
 

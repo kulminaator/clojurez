@@ -1,8 +1,8 @@
 // Basic sequence/collection functions: count, first, rest, nth, concat, list, vec
 const std = @import("std");
-const Value = @import("../value.zig");
-const list = @import("../list.zig");
-const vec = @import("../vector.zig");
+const Value = @import("../../value.zig");
+const list = @import("../../list.zig");
+const vec = @import("../../vector.zig");
 const Env = Value.Env;
 const eval_helpers = @import("eval_helpers.zig");
 const helpers = @import("helpers.zig");

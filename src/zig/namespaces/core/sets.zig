@@ -1,7 +1,7 @@
 // Set built-in functions: set, set?, disj
 const std = @import("std");
-const Value = @import("../value.zig");
-const list = @import("../list.zig");
+const Value = @import("../../value.zig");
+const list = @import("../../list.zig");
 const Env = Value.Env;
 const test_utils = @import("test_utils.zig");
 

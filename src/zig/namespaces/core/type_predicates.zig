@@ -4,13 +4,13 @@
 // integer?, int?, double?, float?, NaN?, infinite?
 // int, float, double, bigint, bigdec, byte, short
 const std = @import("std");
-const Value = @import("../value.zig");
-const list = @import("../list.zig");
+const Value = @import("../../value.zig");
+const list = @import("../../list.zig");
 const Env = Value.Env;
-const BI = @import("../big_int.zig");
+const BI = @import("../../big_int.zig");
 const test_utils = @import("test_utils.zig");
-const BD = @import("../big_decimal.zig");
-const RatioMod = @import("../ratio.zig");
+const BD = @import("../../big_decimal.zig");
+const RatioMod = @import("../../ratio.zig");
 const Allocator = std.mem.Allocator;
 
 // Type predicates

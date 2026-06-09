@@ -19,13 +19,13 @@
 //   - any / ratio → ratio
 //   - any / decimal → decimal
 const std = @import("std");
-const Value = @import("../value.zig");
-const list = @import("../list.zig");
+const Value = @import("../../value.zig");
+const list = @import("../../list.zig");
 const Env = Value.Env;
 const helpers = @import("helpers.zig");
-const BI = @import("../big_int.zig");
-const RatioMod = @import("../ratio.zig");
-const BD = @import("../big_decimal.zig");
+const BI = @import("../../big_int.zig");
+const RatioMod = @import("../../ratio.zig");
+const BD = @import("../../big_decimal.zig");
 const test_utils = @import("test_utils.zig");
 
 const Allocator = std.mem.Allocator;

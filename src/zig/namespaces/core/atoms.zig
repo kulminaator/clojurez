@@ -1,7 +1,7 @@
 // Atom built-in functions: atom, swap!, reset!
 const std = @import("std");
-const Value = @import("../value.zig");
-const list = @import("../list.zig");
+const Value = @import("../../value.zig");
+const list = @import("../../list.zig");
 const Env = Value.Env;
 const eval_helpers = @import("eval_helpers.zig");
 const test_utils = @import("test_utils.zig");

@@ -1,9 +1,9 @@
 // Higher-order sequence operations: map, mapcat, reduce, flatten, filter,
 // remove, every?, some, distinct?, next, nthnext, drop
 const std = @import("std");
-const Value = @import("../value.zig");
-const list = @import("../list.zig");
-const vec = @import("../vector.zig");
+const Value = @import("../../value.zig");
+const list = @import("../../list.zig");
+const vec = @import("../../vector.zig");
 const Env = Value.Env;
 const helpers = @import("helpers.zig");
 const eval_helpers = @import("eval_helpers.zig");

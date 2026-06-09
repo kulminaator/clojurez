@@ -1,8 +1,8 @@
 // Shared test utilities for unit tests in core/ modules.
 // Eliminates duplicated testEnv(), testSelf(), makeArgs() across files.
 const std = @import("std");
-const Value = @import("../value.zig");
-const list = @import("../list.zig");
+const Value = @import("../../value.zig");
+const list = @import("../../list.zig");
 
 /// Create a fresh empty environment for testing.
 pub fn testEnv() Value.Env {

@@ -1,27 +1,27 @@
 // Core built-in functions coordinator
 // Imports from domain modules and provides higher-order functions (apply, partial, comp, fnil, juxt, etc.)
 const std = @import("std");
-const Value = @import("value.zig");
-const list = @import("list.zig");
-const vec = @import("vector.zig");
+const Value = @import("../../value.zig");
+const list = @import("../../list.zig");
+const vec = @import("../../vector.zig");
 const Env = Value.Env;
 
 // Domain modules
-const arithmetic = @import("core/arithmetic.zig");
-const comparison = @import("core/comparison.zig");
-const type_predicates = @import("core/type_predicates.zig");
-const strings = @import("core/strings.zig");
-const sequences = @import("core/sequences.zig");
-const seq_ops = @import("core/seq_ops.zig");
-const seq_sort = @import("core/seq_sort.zig");
-const maps = @import("core/maps.zig");
-const sets = @import("core/sets.zig");
-const collections = @import("core/collections.zig");
-const io = @import("core/io.zig");
-const atoms = @import("core/atoms.zig");
-const bitwise = @import("core/bitwise.zig");
-const random = @import("core/random.zig");
-const eval_helpers = @import("core/eval_helpers.zig");
+const arithmetic = @import("arithmetic.zig");
+const comparison = @import("comparison.zig");
+const type_predicates = @import("type_predicates.zig");
+const strings = @import("strings.zig");
+const sequences = @import("sequences.zig");
+const seq_ops = @import("seq_ops.zig");
+const seq_sort = @import("seq_sort.zig");
+const maps = @import("maps.zig");
+const sets = @import("sets.zig");
+const collections = @import("collections.zig");
+const io = @import("io.zig");
+const atoms = @import("atoms.zig");
+const bitwise = @import("bitwise.zig");
+const random = @import("random.zig");
+const eval_helpers = @import("eval_helpers.zig");
 
 const Allocator = std.mem.Allocator;
 
