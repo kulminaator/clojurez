@@ -44,6 +44,14 @@ Type `(quit)` or `(exit)` or `CTRL+D` to exit.
 
 For full details — features, API, testing, and project structure — see [TECHNICAL_README.md](TECHNICAL_README.md).
 
+## Key Features
+- **Garbage collection** — automatic memory management for all runtime values
+- **Big number support** — BigInt, Ratio, and BigDecimal with arbitrary precision
+- **Macros** — full macro expansion with `defmacro`
+- **Namespaces** — `ns` declarations with `:require` and `:as` aliases
+- **Lazy sequences** — `lazy-seq`, `map`, `filter`, `take`, `drop`, etc.
+- **UTF-8** — full Unicode support in strings, symbols, and keywords
+
 ## Compatibility
 While the project strives for good compatibility, we are definitely not there yet and we will never be fully there, as we lack JVM.
 

@@ -7,6 +7,9 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 ### Data Types
 - `nil`, `true`, `false`
 - Integers and floats
+- **BigInt** — arbitrary precision integers (literal `123456789012345678901234567890N`)
+- **Ratio** — exact rational numbers (`(/ 22 7)` → `22/7`)
+- **BigDecimal** — arbitrary precision decimals (literal `123.456M`)
 - Strings (with escape sequences: `\n`, `\t`, `\\`, `\"`, `\uXXXX`, `\u{XXXXXX}`)
 - Symbols (`x`, `foo-bar`, `my-var?`) — supports Unicode characters
 - Keywords (`:foo`, `:bar-baz`) — supports Unicode characters
@@ -16,6 +19,13 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 - Sets (`#{1 2 3}`)
 - Queues (`#queue(1 2 3)`)
 - Atoms (`(atom 5)`)
+- Lazy sequences (`(lazy-seq ...)`)
+- Cons cells (`(cons 1 (list 2 3))`)
+
+### Garbage Collection
+- **Mark-and-sweep GC** — automatic memory management for all runtime values
+- Tracked allocations with header-based block management
+- Eliminates manual memory management for Clojure values
 
 ### UTF-8 Support
 - All strings are validated as UTF-8 on creation
@@ -28,8 +38,9 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 
 ### Special Forms
 - `def` — define a global variable
-- `defn` — define a named function
-- `fn` — create an anonymous function
+- `defn` — define a named function (supports multi-arity)
+- `defmacro` — define a macro (full macro expansion support)
+- `fn` — create an anonymous function (supports multi-arity)
 - `if` — conditional (`(if test then else)`)
 - `when` — shorthand for `(if test (do body...))`
 - `when-not` — shorthand for `(if (not test) (do body...))`
@@ -39,6 +50,7 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 - `let` — local bindings
 - `if-let` — conditional with binding
 - `when-let` — when test is truthy, bind and evaluate body
+- `when-some` — when test is not nil, bind and evaluate body
 - `do` — evaluate a sequence of forms
 - `quote` / `'` — prevent evaluation
 - `quasiquote` / `` ` `` — template with unquote (`unquote` / `~`) and unquote-splicing (`unquote-splicing` / `~@`)
@@ -49,7 +61,7 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 - `var` — create a mutable var
 - `deref` / `@` — get the value of a var
 - `lazy-seq` — create a lazy sequence
-- `ns` — namespace declaration (no-op)
+- `ns` — namespace declaration (with `:require` and `:as` support)
 
 ### Threading Macros
 - `->` — thread-first: inserts value as second argument
@@ -60,9 +72,14 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 ### Sequence Functions
 - `iterate` — repeatedly apply a function, collecting results
 - `map` — apply a function to each element
+- `mapcat` — map and concat
 - `take` — take first n elements
+- `take-while` — take while predicate is true
+- `drop` — drop first n elements
 - `partition` — partition a collection into chunks of n
 - `count`, `first`, `rest`, `nth`, `concat`, `list`, `vec`
+- `next`, `nthnext`, `last`, `reverse`, `flatten`, `distinct?`
+- `dorun`, `doall` — force lazy sequence evaluation
 
 ### Destructuring
 - Vector destructuring in function parameters: `(fn [[a b]] (+ a b))`
@@ -70,32 +87,31 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 - Destructuring in `let` with `& rest`: `(let [[a b & rest] [1 2 3 4]] (list a b rest))` → `(1 2 (3 4))`
 
 ### Built-in Functions
-- **Arithmetic:** `+`, `-`, `*`, `/`, `rem`
-- **Comparison:** `=`, `!=`, `not=`, `<`, `>`, `<=`, `>=`, `identical?`
+- **Arithmetic:** `+`, `-`, `*`, `/`, `rem`, `mod`, `quot`, `rationalize`
+- **Comparison:** `=`, `!=`, `not=`, `==`, `<`, `>`, `<=`, `>=`, `compare`, `identical?`
 - **Boolean:** `not`, `boolean`
-- **Predicates:** `nil?`, `some?`, `zero?`, `pos?`, `neg?`, `even?`, `odd?`, `number?`, `string?`, `list?`, `symbol?`, `keyword?`, `true?`, `false?`, `vector?`, `map?`, `queue?`, `set?`, `coll?`, `sequential?`
+- **Predicates:** `nil?`, `some?`, `true?`, `false?`, `zero?`, `pos?`, `neg?`, `even?`, `odd?`, `number?`, `string?`, `list?`, `symbol?`, `keyword?`, `vector?`, `map?`, `queue?`, `set?`, `coll?`, `sequential?`, `fn?`, `empty?`, `not-empty`, `utf8-valid?`
 - **Sequence predicates:** `some`, `every?`, `not-any?`
 - **Strings:** `str`, `utf8-valid?`
 - **I/O:** `print`, `println`, `read-line`, `spit`, `slurp`
-- **Maps:** `get`, `assoc`, `keys`, `vals`, `dissoc`, `merge`, `contains?`
-- **Sets:** `set`, `set?`, `disj`, `contains?`
-- **Collections:** `conj`, `pop`, `last`, `reverse`, `range`, `peek`, `empty?`, `not-empty`, `seq`, `count`
-- **Sequence operations:** `reduce`, `flatten`, `filter`, `remove`, `every?`, `some`, `distinct?`, `next`, `nthnext`, `drop`, `dorun`, `doall`, `partition`
-- **Functional tools:** `apply`, `if-not`, `partial`, `comp`, `fnil`, `juxt`
+- **Maps:** `get`, `assoc`, `keys`, `vals`, `dissoc`, `merge`, `contains?`, `hash-map`, `zipmap`, `get-in`, `assoc-in`, `select-keys`
+- **Sets:** `set`, `set?`, `disj`, `contains?`, `union`, `intersection`, `difference`, `subset?`, `superset?`
+- **Collections:** `conj`, `pop`, `last`, `reverse`, `range`, `peek`, `empty?`, `not-empty`, `seq`, `count`, `empty`
+- **Sequence operations:** `reduce`, `flatten`, `filter`, `remove`, `every?`, `some`, `distinct?`, `next`, `nthnext`, `drop`, `dorun`, `doall`, `partition`, `interpose`, `take-while`
+- **Functional tools:** `apply`, `if-not`, `partial`, `comp`, `fnil`, `juxt`, `trampoline`, `constantly`, `complement`
 - **Metaprogramming:** `gensym`
 - **Time:** `nano-time`
 - **Atoms:** `atom`, `swap!`, `reset!`
 
 ### Clojure Core Library
-Many common functions are implemented in `core.clj` itself, keeping the Zig VM lean:
+Many common functions are implemented in Clojure source, keeping the Zig VM lean:
 - `even?`, `odd?`, `zero?`, `pos?`, `neg?`
-- `identity`
-- `inc`, `dec`, `abs`, `max`, `min`
+- `identity`, `inc`, `dec`, `abs`, `max`, `min`
 - `cons`, `second`, `third`
-- `union`, `intersection`, `difference`, `subset?`, `superset?`
-- `select-keys`
 - `into`, `keep`, `update`
-- `when-let` (macro), `time` (macro)
+- `key`, `val`, `into-array`
+- `when-not`, `when-some`, `when-let`, `when-first` (macros)
+- `if-let` (macro), `time` (macro), `doseq` (macro), `for` (macro)
 
 ## Build
 
@@ -217,6 +233,26 @@ This is useful for verifying that `def` rebindings, `let` scopes, and function c
 (+ 1 2 3 4)           ;; => 10
 (* 6 7)               ;; => 42
 
+;; BigInt arithmetic
+(+ 123456789012345678901234567890 987654321098765432109876543210)  ;; => 1111111110111111111011111111100
+
+;; Ratios (exact rational arithmetic)
+(/ 22 7)              ;; => 22/7
+(+ (/ 1 3) (/ 1 6))   ;; => 1/2
+
+;; Modulo and quotient
+(mod -7 3)            ;; => 2  (sign follows divisor)
+(rem -7 3)            ;; => -1 (sign follows dividend)
+(quot -7 3)           ;; => -2 (truncates toward zero)
+
+;; Numeric equality (type-independent)
+(== 1 1.0)            ;; => true
+(compare 1 2)         ;; => -1
+
+;; Rationalize
+(rationalize 1.5)     ;; => 3/2
+(rationalize 0.25)    ;; => 1/4
+
 ;; Definitions
 (defn factorial [n]
   (if (<= n 1)
@@ -265,10 +301,12 @@ This is useful for verifying that `def` rebindings, `let` scopes, and function c
 (get {:a 1 :b 2} :a)          ;; => 1
 (assoc {:a 1} :b 2)           ;; => {:a 1 :b 2}
 (merge {:a 1} {:b 2})         ;; => {:a 1 :b 2}
+(get-in {:a {:b 3}} [:a :b])  ;; => 3
 
 ;; Sets
 (conj #{1 2} 3)               ;; => #{1 2 3}
 (disj #{1 2 3} 2)             ;; => #{1 3}
+(union #{1 2} #{2 3})         ;; => #{1 2 3}
 
 ;; Sequence Operations
 (reduce + 0 (list 1 2 3 4))   ;; => 10
@@ -300,36 +338,31 @@ Output: `(0 1 1 2 3 5 8 13 21 34)`
 
 ```
 src/
-├── clj/
-│   └── core.clj   — Clojure core library (baked into binary at compile time)
+├── clj/              — Clojure source (core.clj, baked into binary at compile time)
 └── zig/
-    ├── clj/
-    │   └── core.clj   — Copy of core.clj for @embedFile (auto-generated)
-    ├── main.zig       — CLI entry point, argument handling
-    ├── core_clj.zig   — Embeds core.clj source at compile time
-    ├── value.zig      — Core value types and environment
-    ├── list.zig       — List implementation
-    ├── vector.zig     — Vector implementation
-    ├── lexer.zig      — Tokenizer
-    ├── parser.zig     — S-expression parser
-    ├── eval.zig       — Evaluator / VM core (special forms, threading, sequences)
-    ├── core.zig       — Built-in functions (Zig)
-    ├── debug_allocator.zig — Memory trace allocator (CLJVM_MEM_TRACE)
-    └── repl.zig       — Read-Eval-Print loop
+    ├── clj/          — Copy of core.clj for @embedFile (auto-generated)
+    ├── core/         — Domain modules (arithmetic, comparison, maps, sets, etc.)
+    ├── *.zig         — Core VM modules (eval, lexer, parser, value, gc, etc.)
+    └── ...
 
-run_tests.sh       — Test runner
-GUIDELINES.md      — Development & testing guidelines
+tests/
+├── helpers.sh        — Shared test infrastructure
+├── test_*.sh         — Integration test suites (domain-based)
+└── complex-samples/  — Sample programs (fibonacci, hanoi, etc.)
+
+run_tests.sh          — Test runner
+GUIDELINES.md         — Development & testing guidelines
 ```
 
 ## Testing
 
 ```bash
-# Run CLI/integration tests (230 tests, all must complete within 10s each)
+# Run CLI/integration tests (587 tests, all must complete within 10s each)
 # (automatically copies core.clj and builds)
 ./run_tests.sh
 
-# Run Zig unit tests (10 parser tests)
-zig test -fsingle-threaded src/zig/parser.zig
+# Run Zig unit tests (211 tests)
+zig test -fsingle-threaded src/zig/all_tests.zig
 
 # Build all 3 variants
 zig build
@@ -339,28 +372,35 @@ See [GUIDELINES.md](GUIDELINES.md) for testing standards.
 
 ## What Works
 
-- Core data types (nil, bool, int, float, string, symbol, keyword, list, vector, map, set, queue, atom)
-- Special forms (def, defn, fn, if, when, cond, let, do, quote, quasiquote, set!, and, or, loop, recur, binding, var, deref, lazy-seq, ns)
+- Core data types (nil, bool, int, float, bigint, ratio, decimal, string, symbol, keyword, list, vector, map, set, queue, atom, lazy-seq, cons)
+- **Garbage collection** (mark-and-sweep, automatic memory management)
+- Special forms (def, defn, defmacro, fn, if, when, cond, case, let, do, quote, quasiquote, set!, and, or, loop, recur, binding, var, deref, lazy-seq, ns)
 - **Namespaces** (`ns` with `:require` and `:as` aliases, classpath via `-cp`, main function via `-m`)
-- Macros (`defmacro` with full macro expansion support)
-- Threading macros (`->`, `->>`)
-- Sequence operations (iterate, map, take, partition, reduce, flatten, filter, remove, every?, some, distinct?, next, nthnext, drop, dorun, doall)
+- **Macros** (`defmacro` with full macro expansion support, when-not, when-some, when-let, when-first, if-let, for, doseq, time)
+- Threading macros (`->`, `->>`, `cond->`, `cond->>`)
+- Sequence operations (iterate, map, mapcat, take, take-while, drop, partition, interpose, reduce, flatten, filter, remove, every?, some, distinct?, next, nthnext, dorun, doall)
 - Vector destructuring in function parameters and `let` (including `& rest`)
 - Metaprogramming (`gensym`)
-- Arithmetic, comparison, boolean, type check, string, I/O functions (including `spit`/`slurp` for file I/O)
-- Map operations (get, assoc, keys, vals, dissoc, merge, contains?)
-- Set operations (set, set?, disj)
-- Collection operations (conj, pop, last, reverse, range, peek, empty?, not-empty, seq, count)
-- Functional tools (apply, if-not, partial, comp, fnil, juxt)
+- Arithmetic (+, -, *, /, rem, mod, quot, rationalize) with bigint/ratio/decimal support
+- Comparison (=, !=, not=, ==, <, >, <=, >=, compare, identical?)
+- Boolean, type check, string, I/O functions (including `spit`/`slurp` for file I/O)
+- Map operations (get, assoc, keys, vals, dissoc, merge, contains?, hash-map, zipmap, get-in, assoc-in, select-keys)
+- Set operations (set, set?, disj, union, intersection, difference, subset?, superset?)
+- Collection operations (conj, pop, last, reverse, range, peek, empty?, not-empty, seq, count, empty)
+- Functional tools (apply, if-not, partial, comp, fnil, juxt, trampoline, constantly, complement)
 - Atoms (atom, swap!, reset!)
 - Time functions (nano-time)
-- Clojure core library bootstrapped from `.clj` files (includes when-let, time macros)
+- Clojure core library bootstrapped from `.clj` files
 
 ## What's Missing
 
 - **Transients** (mutable versions of persistent data structures)
 - **Shorthand syntax** (`~` for unquote, `~@` for unquote-splicing, backtick for quasiquote, `@` for deref — use full names instead)
 - **Java interop** (not applicable for a standalone VM)
+- **JIT compilation** (we are a parsing/interpreting VM)
+- **Chunked sequences** (simpler sequence implementation)
+- **Full spec system** (no `s/def`, `s/valid?`, etc.)
+- **Protocol/multimethod system**
 
 ## Design Philosophy
 
@@ -369,3 +409,4 @@ See [GUIDELINES.md](GUIDELINES.md) for testing standards.
 - **Small steps:** Incremental development with tests after every change
 - **10s timeout:** All tests complete within 10 seconds
 - **80%+ coverage:** Target minimum line coverage
+- **GC-managed memory:** All Clojure runtime values managed by garbage collector
