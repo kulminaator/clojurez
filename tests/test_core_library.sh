@@ -104,3 +104,62 @@ run_test "rationalize 0.25" '(rationalize 0.25)' '1/4'
 run_test "rationalize 2.0" '(rationalize 2.0)' '2'
 run_test "rationalize 0.33" '(rationalize 0.33)' '33/100'
 run_test "rationalize neg" '(rationalize -1.5)' '-3/2'
+
+echo ""
+echo "=== Zig-Delegated Function Wrapper Tests ==="
+
+# compare
+run_test "compare less" '(compare 1 2)' '-1'
+run_test "compare greater" '(compare 2 1)' '1'
+run_test "compare equal" '(compare 1 1)' '0'
+run_test "compare strings" '(compare "a" "b")' '-1'
+run_test "zig.core/compare" '(zig.core/compare 3 2)' '1'
+
+# identical?
+run_test "identical? same int" '(identical? 1 1)' 'true'
+run_test "identical? same string" '(identical? "a" "a")' 'true'
+run_test "zig.core/identical?" '(zig.core/identical? 42 42)' 'true'
+
+# get (already tested via other tests, add wrapper-specific tests)
+run_test "get wrapper" '(get {:x 10} :x)' '10'
+run_test "get wrapper not-found" '(get {:x 10} :y)' ''
+run_test "get wrapper default" '(get {:x 10} :y "missing")' '"missing"'
+run_test "zig.core/get" '(zig.core/get {:a 1} :a)' '1'
+
+# conj
+run_test "conj vector" '(conj [1 2] 3)' '[1 2 3]'
+run_test "conj set" '(conj #{1 2} 3)' '#{1 2 3}'
+run_test "conj map" '(conj {:a 1} [:b 2])' '{:a 1 :b 2}'
+run_test "zig.core/conj" '(zig.core/conj [1] 2)' '[1 2]'
+
+# str
+run_test "str empty" '(str)' '""'
+run_test "str one arg" '(str 42)' '"42"'
+run_test "str multi" '(str "hello" " " "world")' '"hello world"'
+run_test "zig.core/str" '(zig.core/str "a" "b")' '"ab"'
+
+# nano-time
+run_test "nano-time positive" '(> (nano-time) 0)' 'true'
+run_test "nano-time integer" '(integer? (nano-time))' 'true'
+run_test "zig.core/nano-time" '(> (zig.core/nano-time) 0)' 'true'
+
+# rand-int
+run_test "rand-int range" '(and (>= (rand-int 100) 0) (< (rand-int 100) 100))' 'true'
+run_test "rand-int 1" '(= (rand-int 1) 0)' 'true'
+run_test "zig.core/rand-int" '(and (>= (zig.core/rand-int 50) 0) (< (zig.core/rand-int 50) 50))' 'true'
+
+# gensym
+run_test "gensym symbol" '(symbol? (gensym))' 'true'
+run_test "gensym with prefix" '(symbol? (gensym "tmp"))' 'true'
+run_test "gensym unique" '(not= (gensym) (gensym))' 'true'
+run_test "zig.core/gensym" '(symbol? (zig.core/gensym "x"))' 'true'
+
+# distinct
+run_test "distinct basic" '(distinct [1 2 1 3 2 4])' '(1 2 3 4)'
+run_test "distinct all same" '(distinct [5 5 5])' '(5)'
+run_test "distinct empty" '(distinct [])' '()'
+run_test "zig.core/distinct" '(zig.core/distinct [1 1 2])' '(1 2)'
+
+# get inside lazy-seq (regression test for qualified symbol resolution)
+run_test "get in for" '(doall (for [k [:a :b]] (get {:a 1 :b 2} k)))' '(1 2)'
+run_test "get in map" '(doall (map (fn [m] (get m :x)) (list {:x 1} {:x 2})))' '(1 2)'

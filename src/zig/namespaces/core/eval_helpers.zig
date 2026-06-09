@@ -4,6 +4,7 @@ const Value = @import("../../value.zig");
 const list = @import("../../list.zig");
 const vec = @import("../../vector.zig");
 const helpers = @import("helpers.zig");
+const eval_ns = @import("../../eval_ns.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -127,6 +128,26 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
     switch (form.type) {
         .nil, .bool, .integer, .float, .string, .keyword => return try form.clone(allocator),
         .symbol => {
+            // Handle qualified symbols: alias/name or namespace/name
+            if (std.mem.indexOfScalar(u8, form.sym_val, '/')) |slash_idx| {
+                const alias = form.sym_val[0..slash_idx];
+                const name = form.sym_val[slash_idx + 1 ..];
+                const ns_mgr = eval_ns.findNsManager(env) orelse {
+                    const val2 = env.get(form.sym_val);
+                    if (val2) |v| return try v.clone(allocator);
+                    return error.UndefinedSymbol;
+                };
+                const current_ns = ns_mgr.getCurrentNamespace();
+                const target_ns = ns_mgr.resolveAlias(current_ns, alias) orelse alias;
+                const target_env = ns_mgr.getNamespace(target_ns) orelse {
+                    const val3 = env.get(form.sym_val);
+                    if (val3) |v| return try v.clone(allocator);
+                    return error.UndefinedSymbol;
+                };
+                const val4 = target_env.get(name);
+                if (val4) |v| return try v.clone(allocator);
+                return error.UndefinedSymbol;
+            }
             if (env.get(form.sym_val)) |v| return try v.clone(allocator);
             return error.UndefinedSymbol;
         },

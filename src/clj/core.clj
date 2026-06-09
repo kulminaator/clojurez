@@ -602,3 +602,70 @@
   [& args]
   (apply zig.core/== args))
 
+;; ---- Comparison ----
+
+(defn compare
+  "Compare two values. Returns -1, 0, or 1 indicating less-than, equal-to,
+   or greater-than. Supports numbers, strings, and collections."
+  [x y]
+  (zig.core/compare x y))
+
+(defn rationalize
+  "Returns the simplest ratio that is within 0.5 of mag.
+   For integers, returns the integer. For floats, returns a ratio.
+   For ratios, returns the ratio."
+  [x]
+  (zig.core/rationalize x))
+
+(defn identical?
+  "Returns true if x and y are the same object (by identity/reference),
+   not merely equal in value."
+  [x y]
+  (zig.core/identical? x y))
+
+;; ---- Map operations ----
+
+(defn get
+  "Returns the value mapped to key, not-found (nil) if not present."
+  [& args]
+  (apply zig.core/get args))
+
+;; ---- Collection operations ----
+
+(defn conj
+  "Conj[oin]. Returns a new collection with the items added.
+   (conj item) returns a list with item.
+   (conj coll item) adds item to coll."
+  [& args]
+  (apply zig.core/conj args))
+
+(defn str
+  "With no args, returns the empty string. With one arg, returns
+   (.toString arg). With more args, returns the concatenation of
+   the .toString of each."
+  [& args]
+  (apply zig.core/str args))
+
+(defn nano-time
+  "Returns current instant's nanosecond time (monotonic clock).
+   Useful for measuring elapsed time."
+  []
+  (zig.core/nano-time))
+
+(defn rand-int
+  "Returns a random integer between 0 (inclusive) and n (exclusive)."
+  [n]
+  (zig.core/rand-int n))
+
+(defn gensym
+  "Makes a new symbol with a unique name. If prefix is supplied, the name
+   starts with prefix, otherwise it starts with 'G'."
+  ([] (zig.core/gensym))
+  ([prefix] (zig.core/gensym prefix)))
+
+(defn distinct
+  "Returns a lazy sequence of the distinct elements in coll.
+   Preserves order of first occurrence."
+  [coll]
+  (zig.core/distinct coll))
+
