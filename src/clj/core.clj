@@ -722,3 +722,61 @@
   [& args]
   (apply zig.core/disj args))
 
+;; ---- Map operations ----
+
+(defn assoc
+  "Associates key(s) with value(s) in a map, returning a new map."
+  [& args]
+  (apply zig.core/assoc args))
+
+(defn merge
+  "Merges multiple maps into one. Later maps override earlier ones for duplicate keys."
+  [& args]
+  (apply zig.core/merge args))
+
+(defn hash-map
+  "Returns a map with the given key-value pairs."
+  [& args]
+  (apply zig.core/hash-map args))
+
+(defn dissoc
+  "Returns a new map without the given keys."
+  [& args]
+  (apply zig.core/dissoc args))
+
+;; ---- Collection operations ----
+
+(defn contains?
+  "Returns true if key is present in the collection."
+  [coll key]
+  (zig.core/contains? coll key))
+
+(defn last
+  "Returns the last item in a collection."
+  [coll]
+  (zig.core/last coll))
+
+(defn range
+  "Returns a lazy sequence of integers from start (inclusive) to end (exclusive),
+   with optional step. (range end) starts from 0. (range start end) uses step 1."
+  ([end] (zig.core/range 0 end 1))
+  ([start end] (zig.core/range start end 1))
+  ([start end step] (zig.core/range start end step)))
+
+;; ---- Sequence operations ----
+
+(defn replace
+  "Returns a lazy sequence with elements replaced using the given map."
+  [smap coll]
+  (zig.core/replace smap coll))
+
+(defn group-by
+  "Returns a map of key -> (list of items) grouped by the result of f."
+  [f coll]
+  (zig.core/group-by f coll))
+
+(defn bounded-count
+  "Returns the count of coll if it is <= n, else returns n+1."
+  [n coll]
+  (zig.core/bounded-count n coll))
+

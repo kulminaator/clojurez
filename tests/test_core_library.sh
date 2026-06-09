@@ -212,3 +212,58 @@ run_test "zig.core/set" '(zig.core/set [1 2 1])' '#{1 2}'
 run_test "disj one" '(disj #{1 2 3} 2)' '#{1 3}'
 run_test "disj multiple" '(disj #{1 2 3 4} 2 3)' '#{1 4}'
 run_test "zig.core/disj" '(zig.core/disj #{1 2} 1)' '#{2}'
+
+# assoc
+run_test "assoc basic" '(assoc {:a 1} :b 2)' '{:a 1 :b 2}'
+run_test "assoc multi" '(assoc {:a 1} :b 2 :c 3)' '{:a 1 :b 2 :c 3}'
+run_test "assoc empty" '(assoc {} :x 1)' '{:x 1}'
+run_test "zig.core/assoc" '(zig.core/assoc {:a 1} :b 2)' '{:a 1 :b 2}'
+
+# merge
+run_test "merge two" '(merge {:a 1} {:b 2})' '{:a 1 :b 2}'
+run_test "merge override" '(merge {:a 1} {:a 2})' '{:a 2}'
+run_test "merge empty" '(merge {} {:a 1})' '{:a 1}'
+run_test "zig.core/merge" '(zig.core/merge {:a 1} {:b 2})' '{:a 1 :b 2}'
+
+# hash-map
+run_test "hash-map basic" '(hash-map :a 1 :b 2)' '{:a 1 :b 2}'
+run_test "hash-map empty" '(hash-map)' '{}'
+run_test "zig.core/hash-map" '(zig.core/hash-map :x 1)' '{:x 1}'
+
+# dissoc
+run_test "dissoc one" '(dissoc {:a 1 :b 2} :a)' '{:b 2}'
+run_test "dissoc multi" '(dissoc {:a 1 :b 2 :c 3} :a :b)' '{:c 3}'
+run_test "zig.core/dissoc" '(zig.core/dissoc {:a 1 :b 2} :a)' '{:b 2}'
+
+# contains?
+run_test "contains? map true" '(contains? {:a 1} :a)' 'true'
+run_test "contains? map false" '(contains? {:a 1} :b)' 'false'
+run_test "zig.core/contains?" '(zig.core/contains? {:a 1} :a)' 'true'
+
+# last
+run_test "last vector" '(last [1 2 3])' '3'
+run_test "last list" '(last (list 1 2 3))' '3'
+run_test "zig.core/last" '(zig.core/last [1 2 3])' '3'
+
+# range
+run_test "range one arg" '(range 5)' '(0 1 2 3 4)'
+run_test "range two args" '(range 2 5)' '(2 3 4)'
+run_test "range three args" '(range 0 10 3)' '(0 3 6 9)'
+run_test "zig.core/range" '(zig.core/range 3)' '(0 1 2)'
+
+# replace
+run_test "replace basic" '(replace {:a :x} (list :a :b :a))' '(:x :b :x)'
+run_test "replace no match" '(replace {:a :x} (list :b :c))' '(:b :c)'
+run_test "zig.core/replace" '(zig.core/replace {:a :x} (list :a))' '(:x)'
+
+# group-by
+run_test "group-by even" '(group-by even? [1 2 3 4])' '{false [1 3] true [2 4]}'
+run_test "zig.core/group-by" '(zig.core/group-by even? [1 2])' '{false [1] true [2]}'
+
+# bounded-count
+run_test "bounded-count under" '(bounded-count 10 [1 2 3])' '3'
+run_test "bounded-count over" '(bounded-count 2 [1 2 3 4])' '2'
+run_test "zig.core/bounded-count" '(zig.core/bounded-count 5 [1 2])' '2'
+
+# assoc inside lazy-seq (regression for qualified symbol resolution)
+run_test "assoc in map" '(get (first (doall (map (fn [m] (assoc m :x 99)) (list {:a 1} {:b 2})))) :x)' '99'
