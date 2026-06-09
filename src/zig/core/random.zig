@@ -1,0 +1,123 @@
+// Random number generation: rand, rand-int
+const std = @import("std");
+const Value = @import("../value.zig");
+const list = @import("../list.zig");
+const Env = Value.Env;
+const helpers = @import("helpers.zig");
+
+const toInt = helpers.toInt;
+
+// Use SplitMix64 PRNG seeded with monotonic time
+var prng = std.Random.SplitMix64.init(42);
+
+pub fn initRandom() void {
+    var ts: std.os.linux.timespec = undefined;
+    _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts);
+    const seed: u64 = @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+    prng = std.Random.SplitMix64.init(seed);
+}
+
+// Get a random u64 from the PRNG
+fn nextRandom() u64 {
+    return prng.next();
+}
+
+// rand - returns a random double in [0.0, 1.0)
+// (rand) => random double in [0.0, 1.0)
+// (rand n) => random integer in [0, n)
+pub fn core_rand(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    _ = env_env;
+    if (args.items.len > 1) return error.ArityError;
+
+    if (args.items.len == 0) {
+        // (rand) => random double in [0.0, 1.0)
+        // Mask to 53 bits (f64 mantissa precision), then divide by 2^53
+        const bits = nextRandom() & 0x001F_FFFF_FFFF_FFFF;
+        const frac = @as(f64, @floatFromInt(bits)) / 9007199254740992.0;
+        return Value.floatValue(frac);
+    }
+
+    // (rand n) => random integer in [0, n)
+    const n = try toInt(args.items[0]);
+    if (n <= 0) return error.ArgumentError;
+    const r = nextRandom() % @as(u64, @intCast(n));
+    return Value.intValue(@as(i64, @intCast(r)));
+}
+
+// rand-int - returns a random integer in [0, n)
+pub fn core_rand_int(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    _ = env_env;
+    if (args.items.len != 1) return error.ArityError;
+    const n = try toInt(args.items[0]);
+    if (n <= 0) return error.ArgumentError;
+    const r = nextRandom() % @as(u64, @intCast(n));
+    return Value.intValue(@as(i64, @intCast(r)));
+}
+
+pub fn registerRandomFunctions(env: *Env) anyerror!void {
+    initRandom();
+    try env.put("rand", Value.builtinFnValue(core_rand));
+    try env.put("rand-int", Value.builtinFnValue(core_rand_int));
+}
+
+// ===== Unit Tests =====
+
+fn testEnv() Value.Env {
+    return Value.Env.init(std.heap.page_allocator);
+}
+
+fn makeArgs(args: []const Value) list.List {
+    var result: list.List = .empty;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        _ = result.append(std.heap.page_allocator, args[i]) catch unreachable;
+    }
+    return result;
+}
+
+var _testSelf: Value = Value.nilValue();
+fn testSelf() *Value {
+    return &_testSelf;
+}
+
+test "random::rand: no args returns float in [0.0, 1.0)" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{});
+    var result = core_rand(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .float);
+    try std.testing.expect(result.float_val >= 0.0);
+    try std.testing.expect(result.float_val < 1.0);
+}
+
+test "random::rand: with arg returns int in [0, n)" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(100) });
+    var result = core_rand(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .integer);
+    try std.testing.expect(result.int_val >= 0);
+    try std.testing.expect(result.int_val < 100);
+}
+
+test "random::rand-int: returns int in [0, n)" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(50) });
+    var result = core_rand_int(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .integer);
+    try std.testing.expect(result.int_val >= 0);
+    try std.testing.expect(result.int_val < 50);
+}
+
+test "random::rand-int: wrong arity" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{});
+    try std.testing.expectError(error.ArityError, core_rand_int(testSelf(), args, &a));
+}

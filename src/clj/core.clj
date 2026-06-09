@@ -378,3 +378,95 @@
   "Returns true if (some f coll) is logical false."
   [f coll] (not (some f coll)))
 
+;; ---- Set construction ----
+
+(defn hash-set
+  "Returns a set containing the given args."
+  [& args]
+  (set args))
+
+;; ---- Random functions ----
+
+(defn rand-nth
+  "Return a random element of the (sequential) collection. O(1) when possible."
+  [coll]
+  (nth coll (rand-int (count coll))))
+
+(defn shuffle
+  "Return a random permutation of coll. Uses Fisher-Yates shuffle."
+  [coll]
+  (let [v (vec coll)
+        n (count v)]
+    (loop [i n result v]
+      (if (zero? i)
+        result
+        (let [j (rand-int i)
+              tmp (nth result j)
+              result (assoc result j (nth result (- i 1)))
+              result (assoc result (- i 1) tmp)]
+          (recur (dec i) result))))))
+
+;; ---- Sequence operations ----
+
+(defn drop-last
+  "Return a lazy sequence of all but the last n (default 1) items in coll."
+  ([coll] (drop-last 1 coll))
+  ([n coll]
+   (take (- (count coll) n) coll)))
+
+(defn take-last
+  "Returns a seq of the last n items in coll."
+  [n coll]
+  (reverse (take n (reverse coll))))
+
+(defn drop-while
+  "Returns a lazy sequence of the items in coll starting from the first item
+   for which (pred item) returns logical false."
+  [pred coll]
+  (lazy-seq
+    (when-let [s (seq coll)]
+      (if (pred (first s))
+        (drop-while pred (rest s))
+        s))))
+
+;; cycle is implemented as a Zig built-in for proper lazy-seq support
+
+(defn repeat
+  "Returns a lazy (infinite) sequence of x. Also accepts count: (repeat n x)."
+  ([x]
+   (lazy-seq
+     (cons x (repeat x))))
+  ([n x]
+   (if (pos? n)
+     (lazy-seq
+       (cons x (repeat (dec n) x)))
+     ())))
+
+(defn replicate
+  "Returns a lazy sequence of n copies of x. Same as (repeat n x)."
+  [n x]
+  (repeat n x))
+
+(defn split-at
+  "Returns a vector of [(take n coll) (drop n coll)]."
+  [n coll]
+  [(take n coll) (drop n coll)])
+
+(defn split-with
+  "Returns a vector of [(take-while pred coll) (drop-while pred coll)]."
+  [pred coll]
+  [(take-while pred coll) (drop-while pred coll)])
+
+;; ---- Comparator ----
+
+(defn comparator
+  "Returns a comparator (a function of two arguments) that imposes an ordering
+   based on f. Returns a function of two arguments that returns -1, 0, or 1."
+  [f]
+  (fn [a b]
+    (if (= a b)
+      0
+      (if (f a b)
+        -1
+        1))))
+

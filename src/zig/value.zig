@@ -781,6 +781,67 @@ pub fn equals(self: Self, other: Self) bool {
     }
 }
 
+/// Convert a numeric value to f64 for comparison
+fn toNumValue(v: Self) f64 {
+    return switch (v.type) {
+        .integer => @as(f64, @floatFromInt(v.int_val)),
+        .float => v.float_val,
+        else => 0,
+    };
+}
+
+/// Three-way comparison: returns -1, 0, or 1
+/// Mirrors the behavior of core_compare
+pub fn compare(self: Self, other: Self) i64 {
+    // nil handling: nil < everything else
+    if (self.type == .nil and other.type == .nil) return 0;
+    if (self.type == .nil) return -1;
+    if (other.type == .nil) return 1;
+
+    // For numbers, compare as f64
+    const is_self_num = switch (self.type) {
+        .integer, .float, .bigint, .ratio, .decimal => true,
+        else => false,
+    };
+    const is_other_num = switch (other.type) {
+        .integer, .float, .bigint, .ratio, .decimal => true,
+        else => false,
+    };
+    if (is_self_num and is_other_num) {
+        const a_num = toNumValue(self);
+        const b_num = toNumValue(other);
+        if (a_num < b_num) return -1;
+        if (a_num > b_num) return 1;
+        return 0;
+    }
+
+    // For same types, use equals check
+    if (self.type == other.type) {
+        if (self.equals(other)) return 0;
+        // For strings, do lexicographic comparison
+        if (self.type == .string) {
+            return compareStrings(self.str_val, other.str_val);
+        }
+        // Fallback: use type order
+        return 1;
+    }
+
+    // Different non-numeric types: compare by type order
+    return @as(i64, @intFromEnum(self.type)) - @as(i64, @intFromEnum(other.type));
+}
+
+fn compareStrings(a: []const u8, b: []const u8) i64 {
+    const len = if (a.len < b.len) a.len else b.len;
+    var i: usize = 0;
+    while (i < len) : (i += 1) {
+        if (a[i] < b[i]) return -1;
+        if (a[i] > b[i]) return 1;
+    }
+    if (a.len < b.len) return -1;
+    if (a.len > b.len) return 1;
+    return 0;
+}
+
 pub fn fmt(self: Self, allocator: Allocator) anyerror![]const u8 {
     return switch (self.type) {
         .nil => allocator.dupe(u8, "nil"),

@@ -156,6 +156,7 @@ pub fn evalRec(allocator: Allocator, arena_alloc: Allocator, form: Value, env: *
 
 // Parse ([params] body...)+ pairs from a list slice.
 // Returns an ArrayListUnmanaged(Value.Arity) and updates *idx to point past the last consumed item.
+// Handles both flattened form: (fn [x] body) and wrapped form: (fn ([x] body))
 fn parseArityForms(allocator: Allocator, arena_alloc: Allocator, items: []const Value, end: usize, idx: *usize) anyerror!std.ArrayListUnmanaged(Value.Arity) {
     var arities: std.ArrayListUnmanaged(Value.Arity) = .empty;
     errdefer {
@@ -168,21 +169,61 @@ fn parseArityForms(allocator: Allocator, arena_alloc: Allocator, items: []const 
     }
 
     while (idx.* < end) {
-        const params_form = items[idx.*];
-        if (params_form.type != .list and params_form.type != .vector) return error.TypeError;
-        const params_list = if (params_form.type == .vector) try helpers.listFromVector(arena_alloc, params_form.vec_val) else params_form.list_val;
+        const form = items[idx.*];
         idx.* += 1;
 
-        // Collect body forms until next [params] or end
-        const body_start = idx.*;
-        while (idx.* < end) {
-            const next = items[idx.*];
-            if (looksLikeParamList(next) and idx.* + 1 < end) {
-                break;
+        var params_list: list.List = undefined;
+        var body_forms: []const Value = undefined;
+
+        if (form.type == .vector) {
+            // Flattened form: (fn [x] body1 body2 [y] body3)
+            // params = [x], body = body1 body2
+            params_list = try helpers.listFromVector(arena_alloc, form.vec_val);
+
+            // Collect body forms until next [params] or end
+            const body_start = idx.*;
+            while (idx.* < end) {
+                const next = items[idx.*];
+                if (looksLikeParamList(next) and idx.* + 1 < end) {
+                    break;
+                }
+                idx.* += 1;
             }
-            idx.* += 1;
+            body_forms = items[body_start..idx.*];
+        } else if (form.type == .list) {
+            // Wrapped form: (fn ([x] body1 body2) ([y] body3))
+            // Or: (fn (x y) body) from macro-generated code where (list x y) creates (x y)
+            // Extract params and body from within the list
+            if (form.list_val.items.len == 0) return error.TypeError;
+            const inner_first = form.list_val.items[0];
+            if (inner_first.type == .vector) {
+                // Standard: (fn ([x] body))
+                params_list = try helpers.listFromVector(arena_alloc, inner_first.vec_val);
+                body_forms = form.list_val.items[1..];
+            } else if (inner_first.type == .list) {
+                // Nested list params: (fn ((x y) body)) - treat inner list as params
+                params_list = inner_first.list_val;
+                body_forms = form.list_val.items[1..];
+            } else {
+                // Macro-generated: (fn (x) body) where (list x) created (x)
+                // The entire list is the params form: (x) means params = [x]
+                // Body forms come from the parent list after this form
+                params_list = form.list_val;
+
+                // Collect body forms from the parent list
+                const body_start = idx.*;
+                while (idx.* < end) {
+                    const next = items[idx.*];
+                    if (looksLikeParamList(next) and idx.* + 1 < end) {
+                        break;
+                    }
+                    idx.* += 1;
+                }
+                body_forms = items[body_start..idx.*];
+            }
+        } else {
+            return error.TypeError;
         }
-        const body_forms = items[body_start..idx.*];
 
         // Wrap body in a do block
         var body_list: list.List = .empty;

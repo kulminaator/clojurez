@@ -812,6 +812,184 @@ pub fn core_iterate(self: *Value, args: list.List, env_env: *Env) anyerror!Value
     return Value.lazySeqValue(thunk);
 }
 
+// cycle: returns a lazy (infinite) sequence of repetitions of the items in coll
+// Mirrors Clojure: (lazy-seq (when-let [s (seq coll)] (concat s (cycle coll))))
+// Uses cons-based approach to avoid concat's lazy-seq embedding issue
+pub fn core_cycle(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const allocator = env_env.allocator;
+    const coll = args.items[0];
+
+    // Return a lazy-seq: (lazy-seq (let [s (seq coll)] (when s (cons (first s) (cycle (conj (vec (rest s)) (first s)))))))
+    const thunk = try allocator.create(Value.LazySeqThunk);
+    thunk.* = .{ .params = list.empty(), .body = list.empty(), .env = try env_env.clone(allocator) };
+    try thunk.env.put("coll", try coll.clone(allocator));
+
+    const a = allocator;
+    const sym_let = try Value.symValue(a, "let");
+    const sym_s = try Value.symValue(a, "s");
+    const sym_seq = try Value.symValue(a, "seq");
+    const sym_coll = try Value.symValue(a, "coll");
+    const sym_when = try Value.symValue(a, "when");
+    const sym_cons = try Value.symValue(a, "cons");
+    const sym_first = try Value.symValue(a, "first");
+    const sym_cycle = try Value.symValue(a, "cycle");
+    const sym_conj = try Value.symValue(a, "conj");
+    const sym_vec = try Value.symValue(a, "vec");
+    const sym_rest = try Value.symValue(a, "rest");
+
+    // (seq coll)
+    var seq_call: list.List = .empty;
+    try seq_call.append(a, sym_seq);
+    try seq_call.append(a, sym_coll);
+
+    // [s (seq coll)]
+    var bindings: list.List = .empty;
+    try bindings.append(a, sym_s);
+    try bindings.append(a, Value.listValue(seq_call));
+
+    // (first s)
+    var first_call: list.List = .empty;
+    try first_call.append(a, sym_first);
+    try first_call.append(a, sym_s);
+
+    // (rest s)
+    var rest_call: list.List = .empty;
+    try rest_call.append(a, sym_rest);
+    try rest_call.append(a, sym_s);
+
+    // (vec (rest s))
+    var vec_call: list.List = .empty;
+    try vec_call.append(a, sym_vec);
+    try vec_call.append(a, Value.listValue(rest_call));
+
+    // (conj (vec (rest s)) (first s))
+    var conj_call: list.List = .empty;
+    try conj_call.append(a, sym_conj);
+    try conj_call.append(a, Value.listValue(vec_call));
+    try conj_call.append(a, Value.listValue(first_call));
+
+    // (cycle (conj (vec (rest s)) (first s)))
+    var cycle_call: list.List = .empty;
+    try cycle_call.append(a, sym_cycle);
+    try cycle_call.append(a, Value.listValue(conj_call));
+
+    // (cons (first s) (cycle ...))
+    var cons_call: list.List = .empty;
+    try cons_call.append(a, sym_cons);
+    try cons_call.append(a, Value.listValue(first_call));
+    try cons_call.append(a, Value.listValue(cycle_call));
+
+    // (when s (cons ...))
+    var when_call: list.List = .empty;
+    try when_call.append(a, sym_when);
+    try when_call.append(a, sym_s);
+    try when_call.append(a, Value.listValue(cons_call));
+
+    // (let [s (seq coll)] (when s (cons ...)))
+    var body: list.List = .empty;
+    try body.append(a, sym_let);
+    try body.append(a, Value.listValue(bindings));
+    try body.append(a, Value.listValue(when_call));
+
+    thunk.body = body;
+    return Value.lazySeqValue(thunk);
+}
+
+// sort: returns a sorted sequence of the items in coll
+// Uses a simple insertion sort (fine for small collections)
+pub fn core_sort(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const allocator = env_env.allocator;
+    const coll = args.items[0];
+
+    // Force to a list
+    var items = try forceToConcreteList(allocator, coll);
+    defer items.deinit(allocator);
+
+    // Clone items for sorting
+    var sorted: []Value = try allocator.alloc(Value, items.items.len);
+    var i: usize = 0;
+    while (i < items.items.len) : (i += 1) {
+        sorted[i] = try items.items[i].clone(allocator);
+    }
+
+    // Insertion sort using compare
+    var j: usize = 1;
+    while (j < sorted.len) : (j += 1) {
+        const key = sorted[j];
+        var k: usize = j;
+        while (k > 0 and sorted[k - 1].compare(key) > 0) {
+            sorted[k] = sorted[k - 1];
+            k -= 1;
+        }
+        sorted[k] = key;
+    }
+
+    // Build result list
+    var result: list.List = .empty;
+    errdefer result.deinit(allocator);
+    i = 0;
+    while (i < sorted.len) : (i += 1) {
+        try result.append(allocator, sorted[i]);
+    }
+    allocator.free(sorted);
+    return Value.listValue(result);
+}
+
+// sort-by: returns a sorted sequence of coll, sorted by the comparison of (keyfn item)
+pub fn core_sort_by(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 2) return error.ArityError;
+    const allocator = env_env.allocator;
+    const keyfn = args.items[0];
+    const coll = args.items[1];
+
+    // Force to a list
+    var items = try forceToConcreteList(allocator, coll);
+    defer items.deinit(allocator);
+
+    // Pre-compute keys for each item
+    var keys: []Value = try allocator.alloc(Value, items.items.len);
+    var sorted: []Value = try allocator.alloc(Value, items.items.len);
+    var i: usize = 0;
+    while (i < items.items.len) : (i += 1) {
+        sorted[i] = try items.items[i].clone(allocator);
+        var arg_list: list.List = .empty;
+        defer arg_list.deinit(allocator);
+        try arg_list.append(allocator, try items.items[i].clone(allocator));
+        keys[i] = try eval_helpers.callBuiltin(allocator, keyfn, arg_list, env_env);
+    }
+
+    // Insertion sort using key comparison
+    var j: usize = 1;
+    while (j < sorted.len) : (j += 1) {
+        const key_item = sorted[j];
+        const key_val = keys[j];
+        var k: usize = j;
+        while (k > 0 and keys[k - 1].compare(key_val) > 0) {
+            sorted[k] = sorted[k - 1];
+            keys[k] = keys[k - 1];
+            k -= 1;
+        }
+        sorted[k] = key_item;
+        keys[k] = key_val;
+    }
+
+    // Build result list
+    var result: list.List = .empty;
+    errdefer result.deinit(allocator);
+    i = 0;
+    while (i < sorted.len) : (i += 1) {
+        try result.append(allocator, sorted[i]);
+    }
+    allocator.free(sorted);
+    allocator.free(keys);
+    return Value.listValue(result);
+}
+
 pub fn registerSequenceOpFunctions(env: *Env) anyerror!void {
     try env.put("map", Value.builtinFnValue(core_map));
     try env.put("mapcat", Value.builtinFnValue(core_mapcat));
@@ -827,6 +1005,9 @@ pub fn registerSequenceOpFunctions(env: *Env) anyerror!void {
     try env.put("drop", Value.builtinFnValue(core_drop));
     try env.put("doall*", Value.builtinFnValue(core_doall_star));
     try env.put("iterate", Value.builtinFnValue(core_iterate));
+    try env.put("cycle", Value.builtinFnValue(core_cycle));
+    try env.put("sort", Value.builtinFnValue(core_sort));
+    try env.put("sort-by", Value.builtinFnValue(core_sort_by));
 }
 
 // ===== Unit Tests =====
