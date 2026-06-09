@@ -75,11 +75,21 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 - `mapcat` — map and concat
 - `take` — take first n elements
 - `take-while` — take while predicate is true
+- `take-last` — take last n elements
 - `drop` — drop first n elements
+- `drop-last` — drop last n elements
+- `drop-while` — drop while predicate is true
 - `partition` — partition a collection into chunks of n
+- `cycle` — repeat collection infinitely (lazy)
+- `repeat` / `replicate` — repeat value n times (lazy)
+- `split-at` — split collection at index
+- `split-with` — split while predicate is true
 - `count`, `first`, `rest`, `nth`, `concat`, `list`, `vec`
 - `next`, `nthnext`, `last`, `reverse`, `flatten`, `distinct?`
 - `dorun`, `doall` — force lazy sequence evaluation
+- `sort`, `sort-by` — sort collection (with optional key function)
+- `shuffle` — random permutation
+- `interpose`, `interleave` — interleave collections
 
 ### Destructuring
 - Vector destructuring in function parameters: `(fn [[a b]] (+ a b))`
@@ -95,9 +105,11 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 - **Strings:** `str`, `utf8-valid?`
 - **I/O:** `print`, `println`, `read-line`, `spit`, `slurp`
 - **Maps:** `get`, `assoc`, `keys`, `vals`, `dissoc`, `merge`, `contains?`, `hash-map`, `zipmap`, `get-in`, `assoc-in`, `select-keys`
-- **Sets:** `set`, `set?`, `disj`, `contains?`, `union`, `intersection`, `difference`, `subset?`, `superset?`
+- **Sets:** `set`, `set?`, `disj`, `contains?`, `union`, `intersection`, `difference`, `subset?`, `superset?`, `hash-set`
 - **Collections:** `conj`, `pop`, `last`, `reverse`, `range`, `peek`, `empty?`, `not-empty`, `seq`, `count`, `empty`
-- **Sequence operations:** `reduce`, `flatten`, `filter`, `remove`, `every?`, `some`, `distinct?`, `next`, `nthnext`, `drop`, `dorun`, `doall`, `partition`, `interpose`, `take-while`
+- **Sequence operations:** `reduce`, `flatten`, `filter`, `remove`, `every?`, `some`, `distinct?`, `next`, `nthnext`, `drop`, `drop-last`, `drop-while`, `dorun`, `doall`, `partition`, `interpose`, `take-while`, `take-last`, `cycle`, `repeat`, `replicate`, `split-at`, `split-with`, `sort`, `sort-by`, `shuffle`
+- **Random:** `rand`, `rand-int`, `rand-nth`
+- **Comparator:** `comparator` — create comparator from fn
 - **Functional tools:** `apply`, `if-not`, `partial`, `comp`, `fnil`, `juxt`, `trampoline`, `constantly`, `complement`
 - **Metaprogramming:** `gensym`
 - **Time:** `nano-time`
@@ -110,6 +122,7 @@ Many common functions are implemented in Clojure source, keeping the Zig VM lean
 - `cons`, `second`, `third`
 - `into`, `keep`, `update`
 - `key`, `val`, `into-array`
+- `hash-set` — create set from args
 - `when-not`, `when-some`, `when-let`, `when-first` (macros)
 - `if-let` (macro), `time` (macro), `doseq` (macro), `for` (macro)
 
@@ -361,7 +374,7 @@ GUIDELINES.md         — Development & testing guidelines
 # (automatically copies core.clj and builds)
 ./run_tests.sh
 
-# Run Zig unit tests (211 tests)
+# Run Zig unit tests (262 tests)
 zig test -fsingle-threaded src/zig/all_tests.zig
 
 # Build all 3 variants
@@ -378,14 +391,16 @@ See [GUIDELINES.md](GUIDELINES.md) for testing standards.
 - **Namespaces** (`ns` with `:require` and `:as` aliases, classpath via `-cp`, main function via `-m`)
 - **Macros** (`defmacro` with full macro expansion support, when-not, when-some, when-let, when-first, if-let, for, doseq, time)
 - Threading macros (`->`, `->>`, `cond->`, `cond->>`)
-- Sequence operations (iterate, map, mapcat, take, take-while, drop, partition, interpose, reduce, flatten, filter, remove, every?, some, distinct?, next, nthnext, dorun, doall)
+- Sequence operations (iterate, map, mapcat, take, take-while, take-last, drop, drop-last, drop-while, partition, interpose, reduce, flatten, filter, remove, every?, some, distinct?, next, nthnext, dorun, doall, cycle, repeat, replicate, split-at, split-with, sort, sort-by, shuffle)
+- Random functions (rand, rand-int, rand-nth)
+- Comparator (comparator)
 - Vector destructuring in function parameters and `let` (including `& rest`)
 - Metaprogramming (`gensym`)
 - Arithmetic (+, -, *, /, rem, mod, quot, rationalize) with bigint/ratio/decimal support
 - Comparison (=, !=, not=, ==, <, >, <=, >=, compare, identical?)
 - Boolean, type check, string, I/O functions (including `spit`/`slurp` for file I/O)
 - Map operations (get, assoc, keys, vals, dissoc, merge, contains?, hash-map, zipmap, get-in, assoc-in, select-keys)
-- Set operations (set, set?, disj, union, intersection, difference, subset?, superset?)
+- Set operations (set, set?, disj, union, intersection, difference, subset?, superset?, hash-set)
 - Collection operations (conj, pop, last, reverse, range, peek, empty?, not-empty, seq, count, empty)
 - Functional tools (apply, if-not, partial, comp, fnil, juxt, trampoline, constantly, complement)
 - Atoms (atom, swap!, reset!)
