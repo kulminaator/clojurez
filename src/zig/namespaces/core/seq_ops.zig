@@ -940,10 +940,12 @@ pub fn core_cycle(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     const allocator = env_env.allocator;
     const coll = args.items[0];
 
-    // Return a lazy-seq: (lazy-seq (let [s (seq coll)] (when s (cons (first s) (cycle (conj (vec (rest s)) (first s)))))))
+    // Return a lazy-seq: (lazy-seq (let [s (seq coll)] (when s (cons (first s) (__zig_cycle (conj (vec (rest s)) (first s)))))))
     const thunk = try allocator.create(Value.LazySeqThunk);
     thunk.* = .{ .params = list.empty(), .body = list.empty(), .env = try env_env.clone(allocator) };
     try thunk.env.put("coll", try coll.clone(allocator));
+    // Self-reference: thunk calls core_cycle directly, not via global symbol
+    try thunk.env.put("__zig_cycle", Value.builtinFnValue(core_cycle));
 
     const a = allocator;
     const sym_let = try Value.symValue(a, "let");
@@ -953,7 +955,7 @@ pub fn core_cycle(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     const sym_when = try Value.symValue(a, "when");
     const sym_cons = try Value.symValue(a, "cons");
     const sym_first = try Value.symValue(a, "first");
-    const sym_cycle = try Value.symValue(a, "cycle");
+    const sym_zig_cycle = try Value.symValue(a, "__zig_cycle");
     const sym_conj = try Value.symValue(a, "conj");
     const sym_vec = try Value.symValue(a, "vec");
     const sym_rest = try Value.symValue(a, "rest");
@@ -989,9 +991,9 @@ pub fn core_cycle(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     try conj_call.append(a, Value.listValue(vec_call));
     try conj_call.append(a, Value.listValue(first_call));
 
-    // (cycle (conj (vec (rest s)) (first s)))
+    // (__zig_cycle (conj (vec (rest s)) (first s)))
     var cycle_call: list.List = .empty;
-    try cycle_call.append(a, sym_cycle);
+    try cycle_call.append(a, sym_zig_cycle);
     try cycle_call.append(a, Value.listValue(conj_call));
 
     // (cons (first s) (cycle ...))

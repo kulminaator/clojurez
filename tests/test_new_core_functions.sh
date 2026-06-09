@@ -338,3 +338,62 @@ run_test "zig.core/partial" "((zig.core/partial + 3) 7)" "10"
 run_test "trampoline simple" "(trampoline (fn [] 42))" "42"
 run_test "trampoline nested" "(trampoline (fn [] (fn [] 42)))" "42"
 run_test "zig.core/trampoline" "(zig.core/trampoline (fn [] 99))" "99"
+
+# sort
+run_test "sort basic" "(sort [3 1 4 1 5 9 2 6])" "(1 1 2 3 4 5 6 9)"
+run_test "sort empty" "(sort [])" "()"
+run_test "sort single" "(sort [42])" "(42)"
+run_test "sort strings" '(sort ["b" "a" "c"])' '("a" "b" "c")'
+run_test "zig.core/sort" "(zig.core/sort [3 1 2])" "(1 2 3)"
+
+# sort-by
+run_test "sort-by identity" "(sort-by identity [3 1 4])" "(1 3 4)"
+run_test "sort-by str" '(sort-by str [10 2 1])' "(1 10 2)"
+run_test "zig.core/sort-by" "(zig.core/sort-by identity [3 1 2])" "(1 2 3)"
+
+# cons
+run_test "cons list" "(cons 1 (list 2 3 4))" "(1 2 3 4)"
+run_test "cons vector" '(cons "a" ["b" "c"])' '("a" . ["b" "c"])'
+run_test "cons nil" "(cons 1 nil)" "(1)"
+run_test "zig.core/cons" "(zig.core/cons 1 (list 2 3))" "(1 2 3)"
+
+# cycle
+run_test "cycle basic" "(take 10 (cycle [1 2 3]))" "(1 2 3 1 2 3 1 2 3 1)"
+run_test "cycle single" "(take 5 (cycle [42]))" "(42 42 42 42 42)"
+run_test "cycle strings" '(take 4 (cycle ["a" "b"]))' '("a" "b" "a" "b")'
+run_test "zig.core/cycle" "(take 6 (zig.core/cycle [1 2]))" "(1 2 1 2 1 2)"
+
+# = (equality)
+run_test "= equal ints" "(= 1 1)" "true"
+run_test "= not equal" "(= 1 2)" "false"
+run_test "= multiple args" "(= 3 3 3)" "true"
+run_test "= maps" "(= {:a 1} {:a 1})" "true"
+run_test "zig.core/=" "(zig.core/= 5 5)" "true"
+
+# != (not equal)
+run_test "!= different" "(!= 1 2)" "true"
+run_test "!= same" "(!= 1 1)" "false"
+run_test "!= multiple" "(!= 1 2 3)" "true"
+run_test "zig.core/!=" "(zig.core/!= 1 2)" "true"
+
+# < (less than)
+run_test "< ascending" "(< 1 2 3)" "true"
+run_test "< not ascending" "(< 3 2 1)" "false"
+run_test "< floats" "(< 1.0 2.0 3.0)" "true"
+run_test "zig.core/<" "(zig.core/< 1 2)" "true"
+
+# > (greater than)
+run_test "> descending" "(> 3 2 1)" "true"
+run_test "> not descending" "(> 1 2 3)" "false"
+run_test "> floats" "(> 3.0 2.0 1.0)" "true"
+run_test "zig.core/>" "(zig.core/> 3 2)" "true"
+
+# <= (less than or equal)
+run_test "<= ascending eq" "(<= 1 1 2)" "true"
+run_test "<= not ascending" "(<= 3 2 1)" "false"
+run_test "zig.core/<=" "(zig.core/<= 1 1)" "true"
+
+# >= (greater than or equal)
+run_test ">= descending eq" "(>= 3 2 2)" "true"
+run_test ">= not descending" "(>= 1 2 3)" "false"
+run_test "zig.core/>=" "(zig.core/>= 2 2)" "true"

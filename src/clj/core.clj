@@ -53,9 +53,11 @@
 
 ;; ---- List helpers ----
 
-;; cons is implemented as a Zig built-in for proper lazy-seq support
-;; The Clojure version (concat (list x) xs) creates a concrete list
-;; which breaks rest/seq semantics for lazy sequences.
+(defn cons
+  "Returns a list/seq with x as the first element and xs as the rest.
+   Unlike (concat (list x) xs), this creates a proper cons cell that
+   preserves lazy-seq semantics." [x xs]
+  (zig.core/cons x xs))
 
 (defn second [xs]
   (first (rest xs)))
@@ -144,10 +146,14 @@
 
 ;; ---- Sequence operations ----
 
+(defn doall*
+  "Internal: realizes all elements of a lazy sequence and returns it."
+  [coll]
+  (zig.core/doall* coll))
+
 (defn doall
   "Realizes all elements of a lazy sequence and returns it."
   [coll]
-  ;; doall is implemented as a Zig built-in for proper lazy-seq realization
   (doall* coll))
 
 (defn into-array
@@ -429,7 +435,10 @@
         (drop-while pred (rest s))
         s))))
 
-;; cycle is implemented as a Zig built-in for proper lazy-seq support
+(defn cycle
+  "Returns a lazy (infinite) sequence of the items in coll, repeated indefinitely."
+  [coll]
+  (zig.core/cycle coll))
 
 (defn repeat
   "Returns a lazy (infinite) sequence of x. Also accepts count: (repeat n x)."
@@ -554,6 +563,18 @@
 ;; ---- Map with index ----
 ;; map-indexed is implemented as a Zig built-in for proper lazy-seq handling
 
+;; ---- Sort operations ----
+
+(defn sort
+  "Returns a sorted sequence of the items in coll, sorted by compare.
+   coll must support count and nth." [coll]
+  (zig.core/sort coll))
+
+(defn sort-by
+  "Returns a sorted sequence of the items in coll, sorted by the comparison
+   of (keyfn item). coll must support count and nth." [keyfn coll]
+  (zig.core/sort-by keyfn coll))
+
 ;; ---- Keep with index ----
 ;; keep-indexed is implemented as a Zig built-in for proper lazy-seq handling
 
@@ -601,6 +622,36 @@
    falls back to value equality."
   [& args]
   (apply zig.core/== args))
+
+(defn =
+  "Returns true if all args are equal (value equality). Requires at least 2 args."
+  [& args]
+  (apply zig.core/= args))
+
+(defn !=
+  "Returns true if not all args are equal. Requires at least 2 args."
+  [& args]
+  (apply zig.core/!= args))
+
+(defn <
+  "Returns true if numerically ascending (strictly less than). Requires at least 2 args."
+  [& args]
+  (apply zig.core/< args))
+
+(defn >
+  "Returns true if numerically descending (strictly greater than). Requires at least 2 args."
+  [& args]
+  (apply zig.core/> args))
+
+(defn <=
+  "Returns true if numerically ascending (less than or equal). Requires at least 2 args."
+  [& args]
+  (apply zig.core/<= args))
+
+(defn >=
+  "Returns true if numerically descending (greater than or equal). Requires at least 2 args."
+  [& args]
+  (apply zig.core/>= args))
 
 ;; ---- Comparison ----
 
