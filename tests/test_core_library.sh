@@ -163,3 +163,52 @@ run_test "zig.core/distinct" '(zig.core/distinct [1 1 2])' '(1 2)'
 # get inside lazy-seq (regression test for qualified symbol resolution)
 run_test "get in for" '(doall (for [k [:a :b]] (get {:a 1 :b 2} k)))' '(1 2)'
 run_test "get in map" '(doall (map (fn [m] (get m :x)) (list {:x 1} {:x 2})))' '(1 2)'
+
+# reduced
+run_test "reduced wraps" '(reduced? (reduced 42))' 'true'
+run_test "reduced not wraps" '(reduced? 42)' 'false'
+run_test "zig.core/reduced" '(zig.core/reduced? (zig.core/reduced 5))' 'true'
+
+# keys
+run_test "keys basic" '(keys {:a 1 :b 2})' '(:a :b)'
+run_test "keys empty" "(keys {})" "()"
+run_test "zig.core/keys" '(zig.core/keys {:x 1})' '(:x)'
+
+# vals
+run_test "vals basic" '(vals {:a 1 :b 2})' '(1 2)'
+run_test "vals empty" "(vals {})" "()"
+run_test "zig.core/vals" '(zig.core/vals {:x 1})' '(1)'
+
+# rand
+run_test "rand range" '(and (>= (rand) 0) (< (rand) 1))' 'true'
+run_test "rand with n" '(and (>= (rand 100) 0) (< (rand 100) 100))' 'true'
+run_test "zig.core/rand" '(and (>= (zig.core/rand) 0) (< (zig.core/rand) 1))' 'true'
+
+# rand inside lazy-seq (regression for qualified symbol resolution)
+run_test "rand in map" '(every? (fn [x] (and (>= x 0) (< x 1))) (doall (map (fn [_] (rand)) (list 1 2 3))))' 'true'
+
+# pop
+run_test "pop vector" '(pop [1 2 3])' '[1 2]'
+run_test "pop list" '(pop (list 1 2 3))' '(1 2)'
+run_test "zig.core/pop" '(zig.core/pop [1 2])' '[1]'
+
+# peek
+run_test "peek vector" '(peek [1 2 3])' '3'
+run_test "peek list" '(peek (list 1 2 3))' '3'
+run_test "zig.core/peek" '(zig.core/peek [1 2])' '2'
+
+# reverse
+run_test "reverse vector" '(reverse [1 2 3])' '[3 2 1]'
+run_test "reverse list" '(reverse (list 1 2 3))' '(3 2 1)'
+run_test "zig.core/reverse" '(zig.core/reverse [1 2])' '[2 1]'
+
+# set
+run_test "set from list" '(set (list 1 2 1 3))' '#{1 2 3}'
+run_test "set from vector" '(set [1 2 3])' '#{1 2 3}'
+run_test "set from set" '(set #{1 2})' '#{1 2}'
+run_test "zig.core/set" '(zig.core/set [1 2 1])' '#{1 2}'
+
+# disj
+run_test "disj one" '(disj #{1 2 3} 2)' '#{1 3}'
+run_test "disj multiple" '(disj #{1 2 3 4} 2 3)' '#{1 4}'
+run_test "zig.core/disj" '(zig.core/disj #{1 2} 1)' '#{2}'

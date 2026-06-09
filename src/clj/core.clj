@@ -669,3 +669,56 @@
   [coll]
   (zig.core/distinct coll))
 
+(defn reduced
+  "Wrap a value in Reduced to signal early termination of a reduction."
+  [v]
+  (zig.core/reduced v))
+
+(defn reduced?
+  "Returns true if v is a Reduced wrapper."
+  [v]
+  (zig.core/reduced? v))
+
+(defn keys
+  "Returns a sequence of the keys in the map."
+  [m]
+  (zig.core/keys m))
+
+(defn vals
+  "Returns a sequence of the values in the map."
+  [m]
+  (zig.core/vals m))
+
+(defn rand
+  "Returns a random floating point number between 0 (inclusive) and 1.0 (exclusive).
+   With an argument n, returns a random float between 0 and n."
+  ([] (zig.core/rand))
+  ([n] (zig.core/rand n)))
+
+(defn pop
+  "Returns a new collection with the last item removed.
+   For vectors, removes the last element. For lists, removes the first."
+  [coll]
+  (zig.core/pop coll))
+
+(defn peek
+  "Returns the last item of a collection without removing it.
+   For vectors, returns the last element. For lists/queues, returns the first."
+  [coll]
+  (zig.core/peek coll))
+
+(defn reverse
+  "Returns a seq of the items in coll in reverse order."
+  [coll]
+  (zig.core/reverse coll))
+
+(defn set
+  "Returns a set of the items in coll."
+  [coll]
+  (zig.core/set coll))
+
+(defn disj
+  "Returns a new set with the items removed."
+  [& args]
+  (apply zig.core/disj args))
+
