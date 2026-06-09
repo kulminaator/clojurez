@@ -6,6 +6,7 @@ const vec = @import("../vector.zig");
 const Env = Value.Env;
 const eval_helpers = @import("eval_helpers.zig");
 const helpers = @import("helpers.zig");
+const test_utils = @import("test_utils.zig");
 const Allocator = std.mem.Allocator;
 
 /// Force a value and append to target list.
@@ -643,24 +644,9 @@ pub fn registerSequenceFunctions(env: *Env) anyerror!void {
 }
 
 // ===== Unit Tests =====
-
-fn testEnv() Value.Env {
-    return Value.Env.init(std.heap.page_allocator);
-}
-
-fn makeArgs(args: []const Value) list.List {
-    var result: list.List = .empty;
-    var i: usize = 0;
-    while (i < args.len) : (i += 1) {
-        _ = result.append(std.heap.page_allocator, args[i]) catch unreachable;
-    }
-    return result;
-}
-
-var _testSelf: Value = Value.nilValue();
-fn testSelf() *Value {
-    return &_testSelf;
-}
+const testEnv = test_utils.testEnv;
+const makeArgs = test_utils.makeArgs;
+const testSelf = test_utils.testSelf;
 
 test "sequences::count: list" {
     var a = testEnv();

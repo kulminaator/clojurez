@@ -2,6 +2,7 @@
 // Usage: zig test -fsingle-threaded src/zig/all_tests.zig
 
 const test_value = @import("value.zig");
+const test_value_tests = @import("test_value.zig");
 const test_list = @import("list.zig");
 const test_vector = @import("vector.zig");
 const test_lexer = @import("lexer.zig");
@@ -14,6 +15,7 @@ const test_type_predicates = @import("core/type_predicates.zig");
 const test_strings = @import("core/strings.zig");
 const test_sequences = @import("core/sequences.zig");
 const test_seq_ops = @import("core/seq_ops.zig");
+const test_seq_sort = @import("core/seq_sort.zig");
 const test_maps = @import("core/maps.zig");
 const test_sets = @import("core/sets.zig");
 const test_collections = @import("core/collections.zig");
@@ -33,6 +35,7 @@ const test_repl = @import("repl.zig");
 // Suppress unused import warnings
 comptime {
     _ = test_value;
+    _ = test_value_tests;
     _ = test_list;
     _ = test_vector;
     _ = test_lexer;
@@ -45,6 +48,7 @@ comptime {
     _ = test_strings;
     _ = test_sequences;
     _ = test_seq_ops;
+    _ = test_seq_sort;
     _ = test_maps;
     _ = test_sets;
     _ = test_collections;

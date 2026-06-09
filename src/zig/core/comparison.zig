@@ -4,6 +4,7 @@ const Value = @import("../value.zig");
 const list = @import("../list.zig");
 const Env = Value.Env;
 const helpers = @import("helpers.zig");
+const test_utils = @import("test_utils.zig");
 
 const toNum = helpers.toNum;
 
@@ -213,24 +214,9 @@ pub fn registerComparisonFunctions(env: *Env) anyerror!void {
 }
 
 // ===== Unit Tests =====
-
-fn testEnv() Value.Env {
-    return Value.Env.init(std.heap.page_allocator);
-}
-
-var _testSelf: Value = Value.nilValue();
-fn testSelf() *Value {
-    return &_testSelf;
-}
-
-fn makeArgs(args: []const Value) list.List {
-    var result: list.List = .empty;
-    var i: usize = 0;
-    while (i < args.len) : (i += 1) {
-        _ = result.append(std.heap.page_allocator, args[i]) catch unreachable;
-    }
-    return result;
-}
+const testEnv = test_utils.testEnv;
+const testSelf = test_utils.testSelf;
+const makeArgs = test_utils.makeArgs;
 
 test "comparison::eq: equal integers" {
     var a = testEnv();

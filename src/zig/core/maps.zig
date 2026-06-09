@@ -4,6 +4,7 @@ const Value = @import("../value.zig");
 const list = @import("../list.zig");
 const vec = @import("../vector.zig");
 const Env = Value.Env;
+const test_utils = @import("test_utils.zig");
 
 pub fn core_get(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
@@ -273,24 +274,9 @@ pub fn registerMapFunctions(env: *Env) anyerror!void {
 }
 
 // ===== Unit Tests =====
-
-fn testEnv() Value.Env {
-    return Value.Env.init(std.heap.page_allocator);
-}
-
-fn makeArgs(args: []const Value) list.List {
-    var result: list.List = .empty;
-    var i: usize = 0;
-    while (i < args.len) : (i += 1) {
-        _ = result.append(std.heap.page_allocator, args[i]) catch unreachable;
-    }
-    return result;
-}
-
-var _testSelf: Value = Value.nilValue();
-fn testSelf() *Value {
-    return &_testSelf;
-}
+const testEnv = test_utils.testEnv;
+const makeArgs = test_utils.makeArgs;
+const testSelf = test_utils.testSelf;
 
 fn makeMap(kvs: []const Value) Value {
     const a = std.heap.page_allocator;
