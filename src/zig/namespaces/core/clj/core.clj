@@ -586,3 +586,19 @@
   [prob coll]
   (filter (fn [_] (< (rand) prob)) coll))
 
+;; ---- Zig-delegated functions ----
+;; These are thin wrappers that delegate to zig.core implementations.
+;; The actual logic lives in Zig for performance or VM-level access.
+
+(defn iterate
+  "Returns a lazy (infinite) sequence of x, (f x), (f (f x)) etc."
+  [f x]
+  (zig.core/iterate f x))
+
+(defn ==
+  "Numeric equality (type-independent). Returns true if all args are
+   numerically equal (e.g. (== 1 1.0) => true). For non-numeric args,
+   falls back to value equality."
+  [& args]
+  (apply zig.core/== args))
+

@@ -112,6 +112,9 @@ pub fn evalNs(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyer
 
 // Load a namespace file from the classpath and evaluate it.
 pub fn loadNamespaceFile(allocator: Allocator, ns_mgr: *Value.NamespaceManager, ns_name: []const u8, root_env: *Env) anyerror!void {
+    // Built-in virtual namespaces (zig.*) — no file to load
+    if (std.mem.startsWith(u8, ns_name, "zig.")) return;
+
     // Check if already loaded
     if (ns_mgr.getNamespace(ns_name) != null) return;
 

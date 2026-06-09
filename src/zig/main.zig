@@ -110,6 +110,12 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // Register Zig built-in functions
     try core.registerCoreFunctions(&env);
 
+    // Create zig.core virtual namespace and populate it with all Zig builtins.
+    // This allows Clojure code to call Zig functions via (zig.core/fn-name ...).
+    const zc_env = try ns_mgr.createNamespace("zig.core");
+    zc_env.parent = null; // isolated — doesn't inherit from root env
+    try copyBuiltinsToNamespace(&env, zc_env);
+
     // Load embedded Clojure core library (silent — no output)
     try loadCoreLibrary(allocator, &env);
 
@@ -184,6 +190,18 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
         try runMain(allocator, &env, ns_name);
         // Collect after function returns so local vars are out of scope
         if (gc_mod.current_gc) |gc| gc.collect(gc_scan.valueScanFn);
+    }
+}
+
+/// Copy all builtin_fn values from the root env into a target namespace env.
+/// builtinFnValue clones are cheap (just a function pointer, no heap data).
+fn copyBuiltinsToNamespace(root_env: *Env, target_env: *Env) anyerror!void {
+    var it = root_env.entries.iterator();
+    while (it.next()) |entry| {
+        if (entry.value_ptr.type == .builtin_fn) {
+            // builtinFnValue is just a function pointer — clone is trivial
+            try target_env.put(entry.key_ptr.*, Value.builtinFnValue(entry.value_ptr.builtin_fn_val));
+        }
     }
 }
 

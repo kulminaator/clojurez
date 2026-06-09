@@ -888,7 +888,10 @@ pub fn core_iterate(self: *Value, args: list.List, env_env: *Env) anyerror!Value
     const f = args.items[0];
     const x = args.items[1];
 
-    // Return a lazy-seq: (lazy-seq (cons x (iterate f (f x))))
+    // Return a lazy-seq: (lazy-seq (cons x (__zig_iterate f (f x))))
+    // We use __zig_iterate (a private self-reference) instead of the global
+    // "iterate" symbol, so the thunk calls this Zig function directly without
+    // going through any Clojure wrapper (e.g. core.clj defn delegating to zig.core/iterate).
     const thunk = try allocator.create(Value.LazySeqThunk);
     thunk.* = .{
         .params = list.empty(),
@@ -897,26 +900,28 @@ pub fn core_iterate(self: *Value, args: list.List, env_env: *Env) anyerror!Value
     };
     try thunk.env.put("f", try f.clone(allocator));
     try thunk.env.put("x", try x.clone(allocator));
+    // Store a self-reference so the thunk body calls core_iterate directly
+    try thunk.env.put("__zig_iterate", Value.builtinFnValue(core_iterate));
 
-    // Build thunk body: (cons x (iterate f (f x)))
+    // Build thunk body: (cons x (__zig_iterate f (f x)))
     const a = allocator;
     const sym_cons = try Value.symValue(a, "cons");
     const sym_x = try Value.symValue(a, "x");
     const sym_f = try Value.symValue(a, "f");
-    const sym_iterate = try Value.symValue(a, "iterate");
+    const sym_zig_iterate = try Value.symValue(a, "__zig_iterate");
 
     // (f x)
     var f_call: list.List = .empty;
     try f_call.append(a, sym_f);
     try f_call.append(a, sym_x);
 
-    // (iterate f (f x))
+    // (__zig_iterate f (f x))
     var iterate_call: list.List = .empty;
-    try iterate_call.append(a, sym_iterate);
+    try iterate_call.append(a, sym_zig_iterate);
     try iterate_call.append(a, sym_f);
     try iterate_call.append(a, Value.listValue(f_call));
 
-    // (cons x (iterate f (f x)))
+    // (cons x (__zig_iterate f (f x)))
     var cons_call: list.List = .empty;
     try cons_call.append(a, sym_cons);
     try cons_call.append(a, sym_x);
