@@ -88,6 +88,9 @@ source tests/test_condition_forms.sh
 echo ""
 
 source tests/test_namespaces.sh
+echo ""
+
+source tests/test_big_numbers.sh
 
 echo ""
 echo "========================================"

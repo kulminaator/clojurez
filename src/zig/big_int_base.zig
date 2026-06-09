@@ -281,9 +281,9 @@ pub fn divLimbs(allocator: Allocator, a: []const LIMB, b: []const LIMB) anyerror
 
         var q_hat: LIMB = 0;
         if (b_top > 0) {
-            const combined = (w_top << 64) | w_next;
-            q_hat = @as(LIMB, @intCast(combined / b_top));
-            if (q_hat >= Base) q_hat = Base - 1;
+            const combined = w_top * Base + w_next;
+            const q_hat_est = combined / b_top;
+            q_hat = if (q_hat_est >= Base) (Base - 1) else @as(LIMB, @intCast(q_hat_est));
         }
 
         while (q_hat > 0) {

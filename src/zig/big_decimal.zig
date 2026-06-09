@@ -101,6 +101,9 @@ pub const BigDecimal = struct {
 
         const digits = abs_str;
         const digit_len = digits.len;
+        const is_neg = self.unscaled.sign == .negative;
+
+        if (is_neg) try buf.append(allocator, '-');
 
         if (self.scale == 0) {
             try buf.appendSlice(allocator, digits);

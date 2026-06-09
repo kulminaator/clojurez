@@ -203,6 +203,7 @@ pub const Lexer = struct {
         // Check if it's a number
         var is_number = true;
         var has_dot = false;
+        var has_digit = false;
         var i = self.pos;
 
         if (i < self.input.len and (self.input[i] == '-' or self.input[i] == '+')) {
@@ -212,6 +213,8 @@ pub const Lexer = struct {
             if (self.input[i] == '.') {
                 if (has_dot) { is_number = false; break; }
                 has_dot = true;
+            } else {
+                has_digit = true;
             }
             i += 1;
         }
@@ -220,7 +223,7 @@ pub const Lexer = struct {
             i += 1;
         }
 
-        if (is_number and i > start and i == self.findNumEnd()) {
+        if (is_number and has_digit and i > start and i == self.findNumEnd()) {
             const num_str = try self.allocator.dupe(u8, self.input[start..i]);
             self.pos = i;
             return .{ .number = num_str };
@@ -236,6 +239,10 @@ pub const Lexer = struct {
 
     fn findNumEnd(self: Lexer) usize {
         var i = self.pos;
+        // Handle optional sign prefix
+        if (i < self.input.len and (self.input[i] == '-' or self.input[i] == '+')) {
+            i += 1;
+        }
         while (i < self.input.len and (std.ascii.isDigit(self.input[i]) or self.input[i] == '.')) {
             i += 1;
         }
