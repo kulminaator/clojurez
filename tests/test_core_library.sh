@@ -267,3 +267,58 @@ run_test "zig.core/bounded-count" '(zig.core/bounded-count 5 [1 2])' '2'
 
 # assoc inside lazy-seq (regression for qualified symbol resolution)
 run_test "assoc in map" '(get (first (doall (map (fn [m] (assoc m :x 99)) (list {:a 1} {:b 2})))) :x)' '99'
+
+# rem
+run_test "rem positive" '(rem 7 3)' '1'
+run_test "rem negative" '(rem -7 3)' '-1'
+run_test "zig.core/rem" '(zig.core/rem 7 3)' '1'
+
+# mod
+run_test "mod positive" '(mod 7 3)' '1'
+run_test "mod negative" '(mod -7 3)' '2'
+run_test "zig.core/mod" '(zig.core/mod 7 3)' '1'
+
+# quot
+run_test "quot positive" '(quot 7 3)' '2'
+run_test "quot negative" '(quot -7 3)' '-2'
+run_test "zig.core/quot" '(zig.core/quot 7 3)' '2'
+
+# nil?
+run_test "nil? nil" '(nil? nil)' 'true'
+run_test "nil? not nil" '(nil? 42)' 'false'
+run_test "zig.core/nil?" '(zig.core/nil? nil)' 'true'
+
+# number?
+run_test "number? int" '(number? 42)' 'true'
+run_test "number? float" '(number? 3.14)' 'true'
+run_test "number? string" '(number? "x")' 'false'
+run_test "zig.core/number?" '(zig.core/number? 1)' 'true'
+
+# string?
+run_test "string? string" '(string? "hello")' 'true'
+run_test "string? int" '(string? 42)' 'false'
+run_test "zig.core/string?" '(zig.core/string? "x")' 'true'
+
+# utf8-valid?
+run_test "utf8-valid? valid" '(utf8-valid? "hello")' 'true'
+run_test "zig.core/utf8-valid?" '(zig.core/utf8-valid? "world")' 'true'
+
+# count
+run_test "count vector" '(count [1 2 3])' '3'
+run_test "count list" '(count (list 1 2))' '2'
+run_test "count string" '(count "abc")' '3'
+run_test "zig.core/count" '(zig.core/count [1 2])' '2'
+
+# first
+run_test "first vector" '(first [1 2 3])' '1'
+run_test "first list" '(first (list 1 2 3))' '1'
+run_test "first empty" "(first [])" ''
+run_test "zig.core/first" '(zig.core/first [1 2 3])' '1'
+
+# set?
+run_test "set? set" '(set? #{1 2})' 'true'
+run_test "set? vector" '(set? [1 2])' 'false'
+run_test "zig.core/set?" '(zig.core/set? #{1})' 'true'
+
+# count inside lazy-seq (regression for qualified symbol resolution)
+run_test "count in map" '(doall (map (fn [x] (count x)) (list [1 2] [1 2 3])))' '(2 3)'

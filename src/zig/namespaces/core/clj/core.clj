@@ -776,7 +776,67 @@
   (zig.core/group-by f coll))
 
 (defn bounded-count
-  "Returns the count of coll if it is <= n, else returns n+1."
+  "Returns the count of coll if it is <= n, else returns n."
   [n coll]
   (zig.core/bounded-count n coll))
+
+;; ---- Arithmetic ----
+
+(defn rem
+  "Returns remainder of dividing numerator by denominator.
+   Sign follows the dividend."
+  [num den]
+  (zig.core/rem num den))
+
+(defn mod
+  "Returns modulus of numerator and denominator.
+   Sign follows the divisor."
+  [num den]
+  (zig.core/mod num den))
+
+(defn quot
+  "Integer division. Truncates toward zero."
+  [num den]
+  (zig.core/quot num den))
+
+;; ---- Type predicates ----
+
+(defn nil?
+  "Returns true if x is nil."
+  [x]
+  (zig.core/nil? x))
+
+(defn number?
+  "Returns true if x is a number (integer, float, bigint, ratio, or decimal)."
+  [x]
+  (zig.core/number? x))
+
+(defn string?
+  "Returns true if x is a string."
+  [x]
+  (zig.core/string? x))
+
+(defn utf8-valid?
+  "Returns true if the string is valid UTF-8."
+  [s]
+  (zig.core/utf8-valid? s))
+
+;; ---- Sequence operations ----
+
+(defn count
+  "Returns the number of items in a collection. For strings, returns code point count."
+  [coll]
+  (zig.core/count coll))
+
+(defn first
+  "Returns the first item of a collection, or nil if empty."
+  [coll]
+  (zig.core/first coll))
+
+;; ---- Set predicates ----
+
+(defn set?
+  "Returns true if x is a set."
+  [x]
+  (zig.core/set? x))
 
