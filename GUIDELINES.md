@@ -479,11 +479,11 @@ Before starting a task, ask:
 
 | Category | Count | Status |
 |----------|-------|--------|
-| CLI/Integration tests | 230 | All passing |
-| Zig unit tests (parser) | 10 | All passing |
+| CLI/Integration tests | 859 | All passing |
+| Zig unit tests | 269 | All passing |
 | Fibonacci sample | 1 | Passing |
 | Hanoi sample | 1 | Passing |
-| **Total** | **242** | **242/242 passing** |
+| **Total** | **1130** | **1130/1130 passing** |
 
 ### Test Categories (run_tests.sh)
 

@@ -900,3 +900,62 @@
   [& args]
   (apply zig.core/bit-and args))
 
+(defn bit-or
+  "Returns the bitwise OR of the args."
+  [& args]
+  (apply zig.core/bit-or args))
+
+;; ---- I/O ----
+
+(defn spit
+  "Writes the string content to a file, creating it if it doesn't exist."
+  [filename content]
+  (zig.core/spit filename content))
+
+(defn slurp
+  "Opens and reads the file from the given path, returning its contents as a string."
+  [filename]
+  (zig.core/slurp filename))
+
+;; ---- Atoms ----
+
+(defn swap!
+  "Atomically swaps the value of the atom to be: (apply f current-value & args)."
+  [& args]
+  (apply zig.core/swap! args))
+
+(defn reset!
+  "Reset the atom's value to new-val and return it."
+  [a new-val]
+  (zig.core/reset! a new-val))
+
+(defn deref
+  "Returns the current value of the atom or var."
+  [v]
+  (zig.core/deref v))
+
+;; ---- Type predicates ----
+
+(defn list?
+  "Returns true if x is a list."
+  [x]
+  (zig.core/list? x))
+
+(defn vector?
+  "Returns true if x is a vector."
+  [x]
+  (zig.core/vector? x))
+
+(defn map?
+  "Returns true if x is a map."
+  [x]
+  (zig.core/map? x))
+
+;; ---- Collection predicates ----
+
+(defn empty?
+  "Returns true if coll has no items. Different from (not coll) because both
+   nil and false return true for not. nil is considered empty."
+  [coll]
+  (if (nil? coll) true (zig.core/empty? coll)))
+

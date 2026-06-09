@@ -374,7 +374,7 @@ GUIDELINES.md         — Development & testing guidelines
 # (automatically copies core.clj and builds)
 ./run_tests.sh
 
-# Run Zig unit tests (262 tests)
+# Run Zig unit tests (269 tests)
 zig test -fsingle-threaded src/zig/all_tests.zig
 
 # Build all 3 variants

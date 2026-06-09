@@ -374,3 +374,50 @@ run_test "zig.core/bit-and" '(zig.core/bit-and 15 8)' '8'
 
 # rest inside lazy-seq (regression for qualified symbol resolution)
 run_test "rest in map" '(doall (map rest (list [1 2] [3 4])))' '((2) (4))'
+
+# bit-or
+run_test "bit-or basic" '(bit-or 8 2)' '10'
+run_test "bit-or multi" '(bit-or 1 2 4)' '7'
+run_test "zig.core/bit-or" '(zig.core/bit-or 8 2)' '10'
+
+# spit / slurp
+run_test_cmd "spit and slurp" "$VM -e '(spit \"/tmp/clj_test.txt\" \"hello\") (slurp \"/tmp/clj_test.txt\")'" '"hello"'
+run_test_cmd "zig.core/spit slurp" "$VM -e '(zig.core/spit \"/tmp/clj_test2.txt\" \"world\") (zig.core/slurp \"/tmp/clj_test2.txt\")'" '"world"'
+
+# swap!
+run_test "swap! inc" '(do (def a (atom 10)) (swap! a inc) (deref a))' '11'
+run_test "swap! with fn" '(do (def a (atom 5)) (swap! a (fn [x] (* x 3))) (deref a))' '15'
+run_test "zig.core/swap!" '(do (def a (atom 1)) (zig.core/swap! a inc) (deref a))' '2'
+
+# reset!
+run_test "reset! basic" '(do (def a (atom 10)) (reset! a 99) (deref a))' '99'
+run_test "zig.core/reset!" '(do (def a (atom 1)) (zig.core/reset! a 42) (deref a))' '42'
+
+# deref
+run_test "deref atom" '(deref (atom 42))' '42'
+run_test "zig.core/deref" '(zig.core/deref (atom 99))' '99'
+
+# list?
+run_test "list? list" '(list? (list 1 2))' 'true'
+run_test "list? vector" '(list? [1 2])' 'false'
+run_test "zig.core/list?" '(zig.core/list? (list 1))' 'true'
+
+# vector?
+run_test "vector? vector" '(vector? [1 2])' 'true'
+run_test "vector? list" '(vector? (list 1 2))' 'false'
+run_test "zig.core/vector?" '(zig.core/vector? [1])' 'true'
+
+# map?
+run_test "map? map" '(map? {:a 1})' 'true'
+run_test "map? vector" '(map? [1 2])' 'false'
+run_test "zig.core/map?" '(zig.core/map? {:x 1})' 'true'
+
+# empty?
+run_test "empty? empty vector" '(empty? [])' 'true'
+run_test "empty? non-empty" '(empty? [1])' 'false'
+run_test "empty? empty list" '(empty? ())' 'true'
+run_test "empty? nil" '(empty? nil)' 'true'
+run_test "zig.core/empty?" '(zig.core/empty? [])' 'true'
+
+# empty? inside lazy-seq (regression for qualified symbol resolution)
+run_test "empty? in map" '(doall (map empty? (list [] [1] () (list 1))))' '(true false true false)'
