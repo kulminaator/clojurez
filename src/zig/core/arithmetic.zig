@@ -882,7 +882,7 @@ fn divValues(allocator: Allocator, a: Value, b: Value) anyerror!Value {
     };
 }
 
-/// Remainder of a / b.
+/// Remainder of a / b. Sign follows dividend (truncates toward zero).
 fn remValues(allocator: Allocator, a: Value, b: Value) anyerror!Value {
     const b_is_zero: bool = switch (b.type) {
         .integer => b.int_val == 0,
@@ -937,6 +937,187 @@ fn remValues(allocator: Allocator, a: Value, b: Value) anyerror!Value {
             else => return error.TypeError,
         },
         .ratio, .decimal => return error.TypeError, // rem not defined for ratio/decimal
+        else => return error.TypeError,
+    };
+}
+
+/// Modulo of a / b. Sign follows divisor (truncates toward negative infinity).
+/// Clojure: (mod num div) = if (rem has same sign as div or is zero) rem else (rem + div)
+fn modValues(allocator: Allocator, a: Value, b: Value) anyerror!Value {
+    const b_is_zero: bool = switch (b.type) {
+        .integer => b.int_val == 0,
+        .float => b.float_val == 0.0,
+        .bigint => if (b.bigint_val) |bp| bp.isZero() else true,
+        .ratio => if (b.ratio_val) |bp| bp.isZero() else true,
+        .decimal => if (b.decimal_val) |bp| bp.isZero() else true,
+        else => return error.TypeError,
+    };
+    if (b_is_zero) return error.DivisionByZero;
+
+    return switch (a.type) {
+        .integer => switch (b.type) {
+            .integer => {
+                const r = @rem(a.int_val, b.int_val);
+                if (r == 0) return Value.intValue(0);
+                // If remainder and divisor have different signs, add divisor
+                const same_sign = (r > 0 and b.int_val > 0) or (r < 0 and b.int_val < 0);
+                if (same_sign) return Value.intValue(r);
+                const result = try std.math.add(i64, r, b.int_val);
+                return Value.intValue(result);
+            },
+            .float => {
+                const r = @rem(@as(f64, @floatFromInt(a.int_val)), b.float_val);
+                if (r == 0.0) return Value.floatValue(0.0);
+                const same_sign = (r > 0 and b.float_val > 0) or (r < 0 and b.float_val < 0);
+                if (same_sign) return Value.floatValue(r);
+                return Value.floatValue(r + b.float_val);
+            },
+            .bigint => {
+                var a_bi = BI.bigIntFromI64(allocator, a.int_val);
+                defer a_bi.deinit();
+                var b_bi: BI.BigInt = undefined;
+                if (b.bigint_val) |bp| b_bi = try bp.clone(allocator);
+                defer b_bi.deinit();
+                var r = try BI.mod(a_bi, b_bi);
+                defer r.deinit();
+                if (r.isZero()) return Value.intValue(0);
+                // Check if remainder and divisor have same sign
+                const r_sign = r.sign;
+                const b_sign = b_bi.sign;
+                if (r_sign == b_sign) return bigIntValueOwned(allocator, &r);
+                var result = BI.add(r, b_bi);
+                return bigIntValueOwned(allocator, &result);
+            },
+            .ratio, .decimal => return error.TypeError,
+            else => return error.TypeError,
+        },
+        .float => switch (b.type) {
+            .integer => {
+                const r = @rem(a.float_val, @as(f64, @floatFromInt(b.int_val)));
+                if (r == 0.0) return Value.floatValue(0.0);
+                const b_f = @as(f64, @floatFromInt(b.int_val));
+                const same_sign = (r > 0 and b_f > 0) or (r < 0 and b_f < 0);
+                if (same_sign) return Value.floatValue(r);
+                return Value.floatValue(r + b_f);
+            },
+            .float => {
+                const r = @rem(a.float_val, b.float_val);
+                if (r == 0.0) return Value.floatValue(0.0);
+                const same_sign = (r > 0 and b.float_val > 0) or (r < 0 and b.float_val < 0);
+                if (same_sign) return Value.floatValue(r);
+                return Value.floatValue(r + b.float_val);
+            },
+            else => return error.TypeError,
+        },
+        .bigint => switch (b.type) {
+            .integer => {
+                var a_bi: BI.BigInt = undefined;
+                if (a.bigint_val) |ap| a_bi = try ap.clone(allocator);
+                defer a_bi.deinit();
+                var b_bi = BI.bigIntFromI64(allocator, b.int_val);
+                defer b_bi.deinit();
+                var r = try BI.mod(a_bi, b_bi);
+                defer r.deinit();
+                if (r.isZero()) return Value.intValue(0);
+                const r_sign = r.sign;
+                const b_sign = b_bi.sign;
+                if (r_sign == b_sign) return bigIntValueOwned(allocator, &r);
+                var result = BI.add(r, b_bi);
+                return bigIntValueOwned(allocator, &result);
+            },
+            .bigint => {
+                var a_bi: BI.BigInt = undefined;
+                var b_bi: BI.BigInt = undefined;
+                if (a.bigint_val) |ap| a_bi = try ap.clone(allocator);
+                if (b.bigint_val) |bp| b_bi = try bp.clone(allocator);
+                defer { a_bi.deinit(); b_bi.deinit(); }
+                var r = try BI.mod(a_bi, b_bi);
+                defer r.deinit();
+                if (r.isZero()) return Value.intValue(0);
+                const r_sign = r.sign;
+                const b_sign = b_bi.sign;
+                if (r_sign == b_sign) return bigIntValueOwned(allocator, &r);
+                var result = BI.add(r, b_bi);
+                return bigIntValueOwned(allocator, &result);
+            },
+            else => return error.TypeError,
+        },
+        .ratio, .decimal => return error.TypeError,
+        else => return error.TypeError,
+    };
+}
+
+/// Quotient of a / b. Integer division truncating toward zero.
+fn quotValues(allocator: Allocator, a: Value, b: Value) anyerror!Value {
+    const b_is_zero: bool = switch (b.type) {
+        .integer => b.int_val == 0,
+        .float => b.float_val == 0.0,
+        .bigint => if (b.bigint_val) |bp| bp.isZero() else true,
+        .ratio => if (b.ratio_val) |bp| bp.isZero() else true,
+        .decimal => if (b.decimal_val) |bp| bp.isZero() else true,
+        else => return error.TypeError,
+    };
+    if (b_is_zero) return error.DivisionByZero;
+
+    return switch (a.type) {
+        .integer => switch (b.type) {
+            .integer => Value.intValue(@divTrunc(a.int_val, b.int_val)),
+            .float => {
+                const q = @as(f64, @floatFromInt(a.int_val)) / b.float_val;
+                // Truncate toward zero
+                const truncated: i64 = @intFromFloat(q);
+                return Value.intValue(truncated);
+            },
+            .bigint => {
+                var a_bi = BI.bigIntFromI64(allocator, a.int_val);
+                defer a_bi.deinit();
+                var b_bi: BI.BigInt = undefined;
+                if (b.bigint_val) |bp| b_bi = try bp.clone(allocator);
+                defer b_bi.deinit();
+                var dm = try BI.divmod(a_bi, b_bi);
+                defer dm.remainder.deinit();
+                return bigIntValueOwned(allocator, &dm.quotient);
+            },
+            .ratio, .decimal => return error.TypeError,
+            else => return error.TypeError,
+        },
+        .float => switch (b.type) {
+            .integer => {
+                const q = a.float_val / @as(f64, @floatFromInt(b.int_val));
+                const truncated: i64 = @intFromFloat(q);
+                return Value.intValue(truncated);
+            },
+            .float => {
+                const q = a.float_val / b.float_val;
+                const truncated: i64 = @intFromFloat(q);
+                return Value.intValue(truncated);
+            },
+            else => return error.TypeError,
+        },
+        .bigint => switch (b.type) {
+            .integer => {
+                var a_bi: BI.BigInt = undefined;
+                if (a.bigint_val) |ap| a_bi = try ap.clone(allocator);
+                defer a_bi.deinit();
+                var b_bi = BI.bigIntFromI64(allocator, b.int_val);
+                defer b_bi.deinit();
+                var dm = try BI.divmod(a_bi, b_bi);
+                defer dm.remainder.deinit();
+                return bigIntValueOwned(allocator, &dm.quotient);
+            },
+            .bigint => {
+                var a_bi: BI.BigInt = undefined;
+                var b_bi: BI.BigInt = undefined;
+                if (a.bigint_val) |ap| a_bi = try ap.clone(allocator);
+                if (b.bigint_val) |bp| b_bi = try bp.clone(allocator);
+                defer { a_bi.deinit(); b_bi.deinit(); }
+                var dm = try BI.divmod(a_bi, b_bi);
+                defer dm.remainder.deinit();
+                return bigIntValueOwned(allocator, &dm.quotient);
+            },
+            else => return error.TypeError,
+        },
+        .ratio, .decimal => return error.TypeError,
         else => return error.TypeError,
     };
 }
@@ -1006,11 +1187,87 @@ pub fn core_div(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return result;
 }
 
-pub fn core_mod(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_rem(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 2) return error.ArityError;
     return remValues(allocator, args.items[0], args.items[1]);
+}
+
+pub fn core_mod(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    const allocator = env_env.allocator;
+    if (args.items.len != 2) return error.ArityError;
+    return modValues(allocator, args.items[0], args.items[1]);
+}
+
+pub fn core_quot(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    const allocator = env_env.allocator;
+    if (args.items.len != 2) return error.ArityError;
+    return quotValues(allocator, args.items[0], args.items[1]);
+}
+
+// rationalize - returns the rational value of num
+// For integers/bigints/ratios: returns the value as-is
+// For floats/decimals: converts to a ratio (unscaled / 10^scale)
+pub fn core_rationalize(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    const allocator = env_env.allocator;
+    if (args.items.len != 1) return error.ArityError;
+    const v = args.items[0];
+
+    return switch (v.type) {
+        .integer => try v.clone(allocator),
+        .bigint => try v.clone(allocator),
+        .ratio => try v.clone(allocator),
+        .float => {
+            // Convert float to BigDecimal string, then to ratio
+            const s = try std.fmt.allocPrint(allocator, "{d}", .{v.float_val});
+            defer allocator.free(s);
+            var bd = try BD.BigDecimal.fromString(allocator, s);
+            defer bd.deinit();
+            // Create ratio: unscaled / 10^scale
+            if (bd.scale == 0) {
+                // No decimal places, return as integer/bigint
+                if (bigintToI64(bd.unscaled)) |i| {
+                    return Value.intValue(i);
+                }
+                return bigIntValueOwned(allocator, &bd.unscaled);
+            }
+            const num = try bd.unscaled.clone(allocator);
+            var den = BI.bigIntFromI64(allocator, 1);
+            var s_idx: usize = 0;
+            while (s_idx < bd.scale) : (s_idx += 1) {
+                den = BI.mul(den, BI.bigIntFromI64(allocator, 10));
+            }
+            var r = try RatioMod.Ratio.fromBigInt(allocator, num, den);
+            defer r.deinit();
+            return ratioValueOwned(allocator, &r);
+        },
+        .decimal => {
+            if (v.decimal_val) |dp| {
+                if (dp.scale == 0) {
+                    // No decimal places, return as integer/bigint
+                    if (bigintToI64(dp.unscaled)) |i| {
+                        return Value.intValue(i);
+                    }
+                    return bigIntValueOwned(allocator, &dp.unscaled);
+                }
+                const num = try dp.unscaled.clone(allocator);
+                var den = BI.bigIntFromI64(allocator, 1);
+                var s_idx: usize = 0;
+                while (s_idx < dp.scale) : (s_idx += 1) {
+                    den = BI.mul(den, BI.bigIntFromI64(allocator, 10));
+                }
+                var r = try RatioMod.Ratio.fromBigInt(allocator, num, den);
+                defer r.deinit();
+                return ratioValueOwned(allocator, &r);
+            }
+            return Value.intValue(0);
+        },
+        else => return error.TypeError,
+    };
 }
 
 pub fn registerArithmeticFunctions(env: *Env) anyerror!void {
@@ -1019,10 +1276,131 @@ pub fn registerArithmeticFunctions(env: *Env) anyerror!void {
     try env.put("mult", Value.builtinFnValue(core_mult));
     try env.put("div", Value.builtinFnValue(core_div));
     try env.put("mod", Value.builtinFnValue(core_mod));
+    try env.put("rem", Value.builtinFnValue(core_rem));
+    try env.put("quot", Value.builtinFnValue(core_quot));
+    try env.put("rationalize", Value.builtinFnValue(core_rationalize));
     // Clojure-style aliases
     try env.put("+", Value.builtinFnValue(core_plus));
     try env.put("-", Value.builtinFnValue(core_minus));
     try env.put("*", Value.builtinFnValue(core_mult));
     try env.put("/", Value.builtinFnValue(core_div));
-    try env.put("rem", Value.builtinFnValue(core_mod));
+}
+
+// ===== Unit Tests =====
+
+fn testEnv() Value.Env {
+    return Value.Env.init(std.heap.page_allocator);
+}
+
+var _testSelf: Value = Value.nilValue();
+fn testSelf() *Value {
+    return &_testSelf;
+}
+
+fn makeArgs(args: []const Value) list.List {
+    var result: list.List = .empty;
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        _ = result.append(std.heap.page_allocator, args[i]) catch unreachable;
+    }
+    return result;
+}
+
+test "arithmetic::mod: positive values" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(7), Value.intValue(3) });
+    var result = core_mod(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .integer);
+    try std.testing.expect(result.int_val == 1);
+}
+
+test "arithmetic::mod: neg dividend" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(-7), Value.intValue(3) });
+    var result = core_mod(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .integer);
+    try std.testing.expect(result.int_val == 2);
+}
+
+test "arithmetic::mod: neg divisor" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(7), Value.intValue(-3) });
+    var result = core_mod(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .integer);
+    try std.testing.expect(result.int_val == -2);
+}
+
+test "arithmetic::mod: both neg" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(-7), Value.intValue(-3) });
+    var result = core_mod(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .integer);
+    try std.testing.expect(result.int_val == -1);
+}
+
+test "arithmetic::rem: neg dividend" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(-7), Value.intValue(3) });
+    var result = core_rem(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .integer);
+    try std.testing.expect(result.int_val == -1);
+}
+
+test "arithmetic::quot: positive" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(7), Value.intValue(3) });
+    var result = core_quot(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .integer);
+    try std.testing.expect(result.int_val == 2);
+}
+
+test "arithmetic::quot: neg dividend" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(-7), Value.intValue(3) });
+    var result = core_quot(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .integer);
+    try std.testing.expect(result.int_val == -2);
+}
+
+test "arithmetic::rationalize: int" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(5) });
+    var result = core_rationalize(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .integer);
+    try std.testing.expect(result.int_val == 5);
+}
+
+test "arithmetic::rationalize: 1.0 to int" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.floatValue(1.0) });
+    var result = core_rationalize(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .integer);
+    try std.testing.expect(result.int_val == 1);
+}
+
+test "arithmetic::rationalize: 1.5 to ratio" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.floatValue(1.5) });
+    var result = core_rationalize(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .ratio);
 }

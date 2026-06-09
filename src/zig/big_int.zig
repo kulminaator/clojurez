@@ -198,15 +198,39 @@ pub fn gcd(a: BigInt, b: BigInt) anyerror!BigInt {
     while (!y.isZero()) {
         const dm = try B.divLimbs(allocator, x.limbs, y.limbs);
         allocator.free(dm.quotient);
-        y.deinit();
-        y = BigInt.init(allocator);
-        y.limbs = dm.remainder;
-        y.owns_limbs = true;
-        y.normalize();
+        // x = y, y = x mod y (Euclidean algorithm)
+        var new_y = BigInt.init(allocator);
+        new_y.limbs = dm.remainder;
+        new_y.owns_limbs = true;
+        new_y.normalize();
         x.deinit();
-        x = y.clone(allocator) catch unreachable;
+        x = try y.clone(allocator);
+        y.deinit();
+        y = new_y;
     }
     y.deinit();
     x.normalize();
     return x;
+}
+
+// ===== Unit Tests =====
+
+test "big_int::gcd: gcd(15, 10) = 5" {
+    const allocator = std.heap.page_allocator;
+    var a = bigIntFromI64(allocator, 15);
+    var b = bigIntFromI64(allocator, 10);
+    defer { a.deinit(); b.deinit(); }
+    var g = try gcd(a, b);
+    defer g.deinit();
+    try std.testing.expect(g.toI64() == 5);
+}
+
+test "big_int::gcd: gcd(3, 2) = 1" {
+    const allocator = std.heap.page_allocator;
+    var a = bigIntFromI64(allocator, 3);
+    var b = bigIntFromI64(allocator, 2);
+    defer { a.deinit(); b.deinit(); }
+    var g = try gcd(a, b);
+    defer g.deinit();
+    try std.testing.expect(g.toI64() == 1);
 }

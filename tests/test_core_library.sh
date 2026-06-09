@@ -48,3 +48,59 @@ run_test_cmd "min" "$VM -e '(min 3 7)'" "3"
 run_test_cmd "cons" "$VM -e '(cons 0 (list 1 2))'" "(0 1 2)"
 run_test_cmd "second" "$VM -e '(second (list 1 2 3))'" "2"
 run_test_cmd "third" "$VM -e '(third (list 1 2 3))'" "3"
+
+echo ""
+echo "=== Mod Tests ==="
+run_test "mod positive" '(mod 7 3)' '1'
+run_test "mod neg dividend" '(mod -7 3)' '2'
+run_test "mod neg divisor" '(mod 7 -3)' '-2'
+run_test "mod both neg" '(mod -7 -3)' '-1'
+run_test "mod zero" '(mod 0 5)' '0'
+run_test "mod exact" '(mod 6 3)' '0'
+run_test "mod float" '(mod 7.5 3.0)' '1.5'
+run_test "mod float neg" '(mod -7.5 3.0)' '1.5'
+
+echo ""
+echo "=== Quot Tests ==="
+run_test "quot positive" '(quot 7 3)' '2'
+run_test "quot neg dividend" '(quot -7 3)' '-2'
+run_test "quot neg divisor" '(quot 7 -3)' '-2'
+run_test "quot both neg" '(quot -7 -3)' '2'
+run_test "quot zero" '(quot 0 5)' '0'
+run_test "quot exact" '(quot 6 3)' '2'
+
+echo ""
+echo "=== Compare Tests ==="
+run_test "compare less" '(compare 1 2)' '-1'
+run_test "compare greater" '(compare 2 1)' '1'
+run_test "compare equal" '(compare 1 1)' '0'
+run_test "compare int float" '(compare 1 1.0)' '0'
+run_test "compare string lt" '(compare "a" "b")' '-1'
+run_test "compare string gt" '(compare "b" "a")' '1'
+run_test "compare string eq" '(compare "a" "a")' '0'
+run_test "compare nil less" '(compare nil 1)' '-1'
+run_test "compare nil greater" '(compare 1 nil)' '1'
+run_test "compare nil nil" '(compare nil nil)' '0'
+
+echo ""
+echo "=== Double Eq Tests ==="
+run_test "== int float equal" '(== 1 1.0)' 'true'
+run_test "== int int equal" '(== 1 1)' 'true'
+run_test "== int int not equal" '(== 1 2)' 'false'
+run_test "== float float equal" '(== 1.0 1.0)' 'true'
+run_test "== float float not equal" '(== 1.0 2.0)' 'false'
+run_test "== multiple equal" '(== 1 1.0 1)' 'true'
+run_test "== multiple not equal" '(== 1 2 3)' 'false'
+run_test "== zero args" '(==)' 'true'
+run_test "== one arg" '(== 5)' 'true'
+
+echo ""
+echo "=== Rationalize Tests ==="
+run_test "rationalize int" '(rationalize 5)' '5'
+run_test "rationalize 1.0" '(rationalize 1.0)' '1'
+run_test "rationalize 1.5" '(rationalize 1.5)' '3/2'
+run_test "rationalize 0.1" '(rationalize 0.1)' '1/10'
+run_test "rationalize 0.25" '(rationalize 0.25)' '1/4'
+run_test "rationalize 2.0" '(rationalize 2.0)' '2'
+run_test "rationalize 0.33" '(rationalize 0.33)' '33/100'
+run_test "rationalize neg" '(rationalize -1.5)' '-3/2'
