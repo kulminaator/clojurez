@@ -840,3 +840,63 @@
   [x]
   (zig.core/set? x))
 
+;; ---- Sequence operations ----
+
+(defn rest
+  "Returns a possibly-empty sequence of the items after the first."
+  [coll]
+  (zig.core/rest coll))
+
+(defn nth
+  "Returns the item at index. Returns nil if index is out of bounds."
+  ([coll index]
+   (zig.core/nth coll index))
+  ([coll index not-found]
+   (zig.core/nth coll index not-found)))
+
+(defn list
+  "Returns a list of the args."
+  [& args]
+  (apply zig.core/list args))
+
+(defn vec
+  "Returns a vector of the args, or converts a collection to a vector."
+  [& args]
+  (apply zig.core/vec args))
+
+(defn concat
+  "Returns a lazy sequence consisting of the items in each collection, in order."
+  [& args]
+  (apply zig.core/concat args))
+
+(defn seq
+  "Returns a sequence of the collection. Returns nil if the collection is empty."
+  [coll]
+  (zig.core/seq coll))
+
+;; ---- I/O ----
+
+(defn print
+  "Prints the string representation of the args to stdout."
+  [& args]
+  (apply zig.core/print args))
+
+(defn println
+  "Prints the string representation of the args to stdout, followed by a newline."
+  [& args]
+  (apply zig.core/println args))
+
+;; ---- Atoms ----
+
+(defn atom
+  "Creates and returns an Atom with an initial value and no validators or watchers."
+  [v]
+  (zig.core/atom v))
+
+;; ---- Bitwise operations ----
+
+(defn bit-and
+  "Returns the bitwise AND of the args."
+  [& args]
+  (apply zig.core/bit-and args))
+

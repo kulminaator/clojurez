@@ -322,3 +322,55 @@ run_test "zig.core/set?" '(zig.core/set? #{1})' 'true'
 
 # count inside lazy-seq (regression for qualified symbol resolution)
 run_test "count in map" '(doall (map (fn [x] (count x)) (list [1 2] [1 2 3])))' '(2 3)'
+
+# rest
+run_test "rest vector" '(rest [1 2 3])' '(2 3)'
+run_test "rest list" '(rest (list 1 2 3))' '(2 3)'
+run_test "rest empty" "(rest [])" "()"
+run_test "zig.core/rest" '(zig.core/rest [1 2 3])' '(2 3)'
+
+# nth
+run_test "nth vector" '(nth [1 2 3] 1)' '2'
+run_test "nth list" '(nth (list 1 2 3) 0)' '1'
+run_test "nth out of bounds" "(nth [1 2] 10)" ''
+run_test "nth string" "(nth \"abc\" 1)" "\"b\""
+run_test "zig.core/nth" '(zig.core/nth [1 2 3] 2)' '3'
+
+# list
+run_test "list basic" '(list 1 2 3)' '(1 2 3)'
+run_test "list empty" '(list)' '()'
+run_test "zig.core/list" '(zig.core/list 1 2)' '(1 2)'
+
+# vec
+run_test "vec basic" '(vec 1 2 3)' '[1 2 3]'
+run_test "vec empty" '(vec)' '[]'
+run_test "vec from list" '(vec (list 1 2 3))' '[1 2 3]'
+run_test "zig.core/vec" '(zig.core/vec 1 2)' '[1 2]'
+
+# concat
+run_test "concat two" '(concat [1 2] [3 4])' '(1 2 3 4)'
+run_test "concat three" '(concat [1] [2] [3])' '(1 2 3)'
+run_test "zig.core/concat" '(zig.core/concat [1] [2])' '(1 2)'
+
+# seq
+run_test "seq vector" '(seq [1 2 3])' '[1 2 3]'
+run_test "seq empty" "(seq [])" ''
+run_test "zig.core/seq" '(zig.core/seq [1])' '[1]'
+
+# print / println (use run_test_cmd for stdout capture)
+run_test_cmd "print basic" "$VM -e '(print \"hello\")'" "hello"
+run_test_cmd "println basic" "$VM -e '(println \"hello\")'" "hello"
+run_test_cmd "zig.core/print" "$VM -e '(zig.core/print 1 2 3)'" "123"
+run_test_cmd "zig.core/println" "$VM -e '(zig.core/println 1 2 3)'" "123"
+
+# atom
+run_test "atom creates" '(deref (atom 42))' '42'
+run_test "zig.core/atom" '(deref (zig.core/atom 1))' '1'
+
+# bit-and
+run_test "bit-and basic" '(bit-and 15 8)' '8'
+run_test "bit-and multi" '(bit-and 15 8 3)' '0'
+run_test "zig.core/bit-and" '(zig.core/bit-and 15 8)' '8'
+
+# rest inside lazy-seq (regression for qualified symbol resolution)
+run_test "rest in map" '(doall (map rest (list [1 2] [3 4])))' '((2) (4))'
