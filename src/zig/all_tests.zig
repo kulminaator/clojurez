@@ -19,6 +19,7 @@ const test_sets = @import("core/sets.zig");
 const test_collections = @import("core/collections.zig");
 const test_io = @import("core/io.zig");
 const test_atoms = @import("core/atoms.zig");
+const test_bitwise = @import("core/bitwise.zig");
 const test_eval_helpers = @import("core/eval_helpers.zig");
 const test_slab = @import("slab_allocator.zig");
 const test_debug_alloc = @import("debug_allocator.zig");
@@ -49,6 +50,7 @@ comptime {
     _ = test_collections;
     _ = test_io;
     _ = test_atoms;
+    _ = test_bitwise;
     _ = test_eval_helpers;
     _ = test_slab;
     _ = test_debug_alloc;

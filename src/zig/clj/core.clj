@@ -18,6 +18,15 @@
 (defn neg? [n]
   (< n 0))
 
+(defn pos-int? [n]
+  (and (int? n) (pos? n)))
+
+(defn neg-int? [n]
+  (and (int? n) (neg? n)))
+
+(defn nat-int? [n]
+  (and (int? n) (not (neg? n))))
+
 ;; ---- Identity ----
 
 (defn identity [x]
