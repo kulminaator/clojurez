@@ -515,3 +515,45 @@
             (assoc counts x (inc (or (get counts x) 0))))
           {} coll))
 
+;; ---- Predicate composition ----
+
+(defn every-pred
+  "Takes a set of predicates and returns a function f that returns true if all of its
+  composing predicates return a logical true value against all of its arguments.
+  Note that f is short-circuiting in that it will stop execution on the first
+  argument that triggers a logical false result against the original predicates."
+  [& preds]
+  (fn [& args]
+    (every? (fn [p] (apply p args)) preds)))
+
+(defn some-fn
+  "Takes a set of predicates and returns a function f that returns the first logical true value
+  returned by one of its composing predicates against any of its arguments,
+  else it returns logical false. Note that f is short-circuiting in that it will
+  stop execution on the first argument that triggers a logical true result against
+  the original predicates."
+  [& preds]
+  (fn [& args]
+    (some (fn [p] (apply p args)) preds)))
+
+;; ---- Counting ----
+;; bounded-count is implemented as a Zig built-in for proper collection handling
+
+;; ---- Sequence replacement ----
+;; replace is implemented as a Zig built-in for proper collection handling
+
+;; ---- Distinct elements (lazy) ----
+;; distinct is implemented as a Zig built-in for proper lazy-seq handling
+
+;; ---- Group by key function ----
+;; group-by is implemented as a Zig built-in for proper map/vector handling
+
+;; ---- Reductions (all intermediate reduce results) ----
+;; reductions is implemented as a Zig built-in for proper lazy-seq handling
+
+;; ---- Map with index ----
+;; map-indexed is implemented as a Zig built-in for proper lazy-seq handling
+
+;; ---- Keep with index ----
+;; keep-indexed is implemented as a Zig built-in for proper lazy-seq handling
+

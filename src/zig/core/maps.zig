@@ -17,6 +17,10 @@ pub fn core_get(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
             return try entry.value.clone(env_env.allocator);
         }
     }
+    // Return default value if provided, otherwise nil
+    if (args.items.len >= 3) {
+        return try args.items[2].clone(env_env.allocator);
+    }
     return Value.nilValue();
 }
 
