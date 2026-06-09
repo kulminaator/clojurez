@@ -905,6 +905,56 @@
   [& args]
   (apply zig.core/bit-or args))
 
+(defn bit-not
+  "Returns the bitwise NOT of the arg."
+  [x]
+  (zig.core/bit-not x))
+
+(defn bit-xor
+  "Returns the bitwise XOR of the args."
+  [& args]
+  (apply zig.core/bit-xor args))
+
+(defn bit-and-not
+  "Returns the bitwise AND NOT (clear bits in x that are set in y)."
+  [x y]
+  (zig.core/bit-and-not x y))
+
+(defn bit-clear
+  "Clears the bit at position n in x (sets it to 0)."
+  [x n]
+  (zig.core/bit-clear x n))
+
+(defn bit-set
+  "Sets the bit at position n in x (sets it to 1)."
+  [x n]
+  (zig.core/bit-set x n))
+
+(defn bit-flip
+  "Flips the bit at position n in x (0 becomes 1, 1 becomes 0)."
+  [x n]
+  (zig.core/bit-flip x n))
+
+(defn bit-shift-left
+  "Shifts the bits of x to the left by n positions."
+  [x n]
+  (zig.core/bit-shift-left x n))
+
+(defn bit-shift-right
+  "Shifts the bits of x to the right by n positions (arithmetic shift, preserves sign)."
+  [x n]
+  (zig.core/bit-shift-right x n))
+
+(defn unsigned-bit-shift-right
+  "Shifts the bits of x to the right by n positions (logical shift, fills with zeros)."
+  [x n]
+  (zig.core/unsigned-bit-shift-right x n))
+
+(defn bit-test
+  "Returns true if the bit at position n in x is set, false otherwise."
+  [x n]
+  (zig.core/bit-test x n))
+
 ;; ---- I/O ----
 
 (defn spit
@@ -916,6 +966,11 @@
   "Opens and reads the file from the given path, returning its contents as a string."
   [filename]
   (zig.core/slurp filename))
+
+(defn read-line
+  "Reads a line from stdin (or the input stream). Returns nil on EOF."
+  []
+  (zig.core/read-line))
 
 ;; ---- Atoms ----
 
@@ -951,6 +1006,76 @@
   [x]
   (zig.core/map? x))
 
+(defn symbol?
+  "Returns true if x is a symbol."
+  [x]
+  (zig.core/symbol? x))
+
+(defn keyword?
+  "Returns true if x is a keyword."
+  [x]
+  (zig.core/keyword? x))
+
+(defn true?
+  "Returns true if x is the value true, false otherwise."
+  [x]
+  (zig.core/true? x))
+
+(defn false?
+  "Returns true if x is the value false, false otherwise."
+  [x]
+  (zig.core/false? x))
+
+(defn fn?
+  "Returns true if x is a function."
+  [x]
+  (zig.core/fn? x))
+
+(defn queue?
+  "Returns true if x is a queue."
+  [x]
+  (zig.core/queue? x))
+
+(defn coll?
+  "Returns true if x is a collection (list, vector, map, set, or queue)."
+  [x]
+  (zig.core/coll? x))
+
+(defn sequential?
+  "Returns true if x is a sequential collection (list or vector)."
+  [x]
+  (zig.core/sequential? x))
+
+(defn int?
+  "Returns true if x is a 64-bit integer."
+  [x]
+  (zig.core/int? x))
+
+(defn integer?
+  "Returns true if x is an integer (64-bit int or BigInt)."
+  [x]
+  (zig.core/integer? x))
+
+(defn double?
+  "Returns true if x is a double-precision floating point number."
+  [x]
+  (zig.core/double? x))
+
+(defn float?
+  "Returns true if x is a floating point number (float or double)."
+  [x]
+  (zig.core/float? x))
+
+(defn NaN?
+  "Returns true if x is a not-a-number (NaN) value."
+  [x]
+  (zig.core/NaN? x))
+
+(defn infinite?
+  "Returns true if x is positive or negative infinity."
+  [x]
+  (zig.core/infinite? x))
+
 ;; ---- Collection predicates ----
 
 (defn empty?
@@ -958,4 +1083,31 @@
    nil and false return true for not. nil is considered empty."
   [coll]
   (if (nil? coll) true (zig.core/empty? coll)))
+
+(defn not-empty
+  "Returns the first item of coll if it is not empty, nil otherwise."
+  [coll]
+  (zig.core/not-empty coll))
+
+;; ---- Type conversion ----
+
+(defn int
+  "Coerce to 64-bit integer. Truncates floats, returns the value for integers."
+  [x]
+  (zig.core/int x))
+
+(defn float
+  "Coerce to floating point number. Returns the value for floats, converts integers."
+  [x]
+  (zig.core/float x))
+
+(defn double
+  "Coerce to double-precision floating point number."
+  [x]
+  (zig.core/double x))
+
+(defn bigint
+  "Coerce to arbitrary-precision integer. Truncates floats to integer part."
+  [x]
+  (zig.core/bigint x))
 
