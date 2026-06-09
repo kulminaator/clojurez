@@ -5,6 +5,8 @@ const Lexer = @import("lexer.zig").Lexer;
 const Value = @import("value.zig");
 const list = @import("list.zig");
 const vec = @import("vector.zig");
+const BI = @import("big_int.zig");
+const BD = @import("big_decimal.zig");
 
 pub const ParseError = error{
     UnexpectedToken,
@@ -323,13 +325,30 @@ pub const Parser = struct {
         }
     }
 
-    fn parseNumber(_: *Parser, s: []const u8) anyerror!Value {
+    fn parseNumber(self: *Parser, s: []const u8) anyerror!Value {
+        const allocator = self.allocator;
+        // Check for BigDecimal suffix 'M' (e.g., "123.456M")
+        if (s.len > 1 and s[s.len - 1] == 'M') {
+            const bd = try BD.BigDecimal.fromString(allocator, s[0 .. s.len - 1]);
+            return try Value.decimalValue(allocator, bd);
+        }
+        // Check for BigInt suffix 'N' (e.g., "12345678901234567890N")
+        if (s.len > 1 and s[s.len - 1] == 'N') {
+            const bi = try BI.bigIntFromString(allocator, s[0 .. s.len - 1]);
+            return try Value.bigIntValue(allocator, bi);
+        }
+        // Check for float (contains '.')
         if (std.mem.indexOfScalar(u8, s, '.')) |_| {
             const f = try std.fmt.parseFloat(f64, s);
             return Value.floatValue(f);
-        } else {
-            const i = try std.fmt.parseInt(i64, s, 10);
+        }
+        // Try to parse as i64
+        if (std.fmt.parseInt(i64, s, 10)) |i| {
             return Value.intValue(i);
+        } else |_| {
+            // Overflow: parse as BigInt
+            const bi = try BI.bigIntFromString(allocator, s);
+            return try Value.bigIntValue(allocator, bi);
         }
     }
 

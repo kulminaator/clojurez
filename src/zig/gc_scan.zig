@@ -105,7 +105,8 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
     // as a Value array (e.g., a string whose length happens to be a
     // multiple of @sizeOf(Value)).
     const valid_types = [_]Value.Type{
-        .nil, .bool, .integer, .float, .string, .symbol, .keyword,
+        .nil, .bool, .integer, .float, .bigint, .ratio, .decimal,
+        .string, .symbol, .keyword,
         .list, .vector, .map, .set, .queue, .function, .builtin_fn,
         .lazy_seq, .cons, .atom,
     };
@@ -117,6 +118,42 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
 
     switch (val.type) {
         .nil, .bool, .integer, .float, .builtin_fn => {},
+
+        .bigint => {
+            if (val.bigint_val) |bi_ptr| {
+                // Mark the BigInt struct itself
+                ctx.gc.markRecursive(bi_ptr, ctx);
+                // Mark the limbs array inside BigInt
+                if (bi_ptr.limbs.len > 0 and bi_ptr.owns_limbs) {
+                    ctx.gc.markRecursive(bi_ptr.limbs.ptr, ctx);
+                }
+            }
+        },
+
+        .ratio => {
+            if (val.ratio_val) |r_ptr| {
+                // Mark the Ratio struct itself
+                ctx.gc.markRecursive(r_ptr, ctx);
+                // Mark the limbs arrays inside num and den BigInts
+                if (r_ptr.num.limbs.len > 0 and r_ptr.num.owns_limbs) {
+                    ctx.gc.markRecursive(r_ptr.num.limbs.ptr, ctx);
+                }
+                if (r_ptr.den.limbs.len > 0 and r_ptr.den.owns_limbs) {
+                    ctx.gc.markRecursive(r_ptr.den.limbs.ptr, ctx);
+                }
+            }
+        },
+
+        .decimal => {
+            if (val.decimal_val) |d_ptr| {
+                // Mark the BigDecimal struct itself
+                ctx.gc.markRecursive(d_ptr, ctx);
+                // Mark the limbs array inside unscaled BigInt
+                if (d_ptr.unscaled.limbs.len > 0 and d_ptr.unscaled.owns_limbs) {
+                    ctx.gc.markRecursive(d_ptr.unscaled.limbs.ptr, ctx);
+                }
+            }
+        },
 
         .string => {
             if (val.str_val.len > 0) {

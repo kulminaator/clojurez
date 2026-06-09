@@ -215,6 +215,10 @@ pub const Lexer = struct {
             }
             i += 1;
         }
+        // Check for BigInt suffix 'N' or BigDecimal suffix 'M'
+        if (is_number and i < self.input.len and (self.input[i] == 'N' or self.input[i] == 'M')) {
+            i += 1;
+        }
 
         if (is_number and i > start and i == self.findNumEnd()) {
             const num_str = try self.allocator.dupe(u8, self.input[start..i]);
@@ -233,6 +237,10 @@ pub const Lexer = struct {
     fn findNumEnd(self: Lexer) usize {
         var i = self.pos;
         while (i < self.input.len and (std.ascii.isDigit(self.input[i]) or self.input[i] == '.')) {
+            i += 1;
+        }
+        // Include BigInt/BigDecimal suffix
+        if (i < self.input.len and (self.input[i] == 'N' or self.input[i] == 'M')) {
             i += 1;
         }
         return i;

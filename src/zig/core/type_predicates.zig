@@ -16,7 +16,8 @@ pub fn core_nil_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
 pub fn core_number_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
-    return Value.boolValue(args.items[0].type == .integer or args.items[0].type == .float);
+    const t = args.items[0].type;
+    return Value.boolValue(t == .integer or t == .float or t == .bigint or t == .ratio or t == .decimal);
 }
 
 pub fn core_string_q(self: *Value, args: list.List, _: *Env) anyerror!Value {

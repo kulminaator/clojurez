@@ -57,7 +57,7 @@ pub fn evalRec(allocator: Allocator, arena_alloc: Allocator, form: Value, env: *
     if (depth > MAX_RECURSION) return error.RecursionLimit;
 
     switch (form.type) {
-        .nil, .bool, .integer, .float, .string, .keyword, .set, .queue, .atom => {
+        .nil, .bool, .integer, .float, .bigint, .ratio, .decimal, .string, .keyword, .set, .queue, .atom => {
             return try form.clone(arena_alloc);
         },
         .symbol => {

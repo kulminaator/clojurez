@@ -4,12 +4,18 @@ const Allocator = std.mem.Allocator;
 const Self = @This();
 const list = @import("list.zig");
 const vec = @import("vector.zig");
+const BI = @import("big_int.zig");
+const RatioMod = @import("ratio.zig");
+const BD = @import("big_decimal.zig");
 
 pub const Type = enum {
     nil,
     bool,
     integer,
     float,
+    bigint,
+    ratio,
+    decimal,
     string,
     symbol,
     keyword,
@@ -62,6 +68,9 @@ nil_val: void = {},
 bool_val: bool = false,
 int_val: i64 = 0,
 float_val: f64 = 0.0,
+bigint_val: ?*BI.BigInt = null,
+ratio_val: ?*RatioMod.Ratio = null,
+decimal_val: ?*BD.BigDecimal = null,
 str_val: []const u8 = "",
 sym_val: []const u8 = "",
 kw_val: []const u8 = "",
@@ -342,6 +351,24 @@ pub fn floatValue(f: f64) Self {
     return .{ .type = .float, .float_val = f };
 }
 
+pub fn bigIntValue(allocator: Allocator, bi: BI.BigInt) anyerror!Self {
+    const ptr = try allocator.create(BI.BigInt);
+    ptr.* = bi;
+    return .{ .type = .bigint, .bigint_val = ptr };
+}
+
+pub fn ratioValue(allocator: Allocator, r: RatioMod.Ratio) anyerror!Self {
+    const ptr = try allocator.create(RatioMod.Ratio);
+    ptr.* = r;
+    return .{ .type = .ratio, .ratio_val = ptr };
+}
+
+pub fn decimalValue(allocator: Allocator, d: BD.BigDecimal) anyerror!Self {
+    const ptr = try allocator.create(BD.BigDecimal);
+    ptr.* = d;
+    return .{ .type = .decimal, .decimal_val = ptr };
+}
+
 pub fn stringValue(allocator: Allocator, s: []const u8) anyerror!Self {
     // Validate UTF-8 encoding
     if (!std.unicode.utf8ValidateSlice(s)) return error.InvalidUTF8;
@@ -455,6 +482,24 @@ pub fn builtinFnValue(fn_ptr: BuiltinFn) Self {
 pub fn deinit(self: *Self, allocator: Allocator) void {
     switch (self.type) {
         .nil, .bool, .integer, .float => {},
+        .bigint => {
+            if (self.bigint_val) |ptr| {
+                ptr.deinit();
+                allocator.destroy(ptr);
+            }
+        },
+        .ratio => {
+            if (self.ratio_val) |ptr| {
+                ptr.deinit();
+                allocator.destroy(ptr);
+            }
+        },
+        .decimal => {
+            if (self.decimal_val) |ptr| {
+                ptr.deinit();
+                allocator.destroy(ptr);
+            }
+        },
         .string => allocator.free(self.str_val),
         .symbol => allocator.free(self.sym_val),
         .keyword => allocator.free(self.kw_val),
@@ -529,6 +574,18 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
         .bool => return boolValue(self.bool_val),
         .integer => return intValue(self.int_val),
         .float => return floatValue(self.float_val),
+        .bigint => {
+            if (self.bigint_val) |ptr| return try bigIntValue(allocator, try ptr.clone(allocator));
+            return nilValue();
+        },
+        .ratio => {
+            if (self.ratio_val) |ptr| return try ratioValue(allocator, try ptr.clone(allocator));
+            return nilValue();
+        },
+        .decimal => {
+            if (self.decimal_val) |ptr| return try decimalValue(allocator, try ptr.clone(allocator));
+            return nilValue();
+        },
         .string => return stringValue(allocator, self.str_val),
         .symbol => return symValue(allocator, self.sym_val),
         .keyword => return keywordValue(allocator, self.kw_val),
@@ -658,6 +715,24 @@ pub fn equals(self: Self, other: Self) bool {
         .bool => return self.bool_val == other.bool_val,
         .integer => return self.int_val == other.int_val,
         .float => return self.float_val == other.float_val,
+        .bigint => {
+            if (self.bigint_val) |a| {
+                if (other.bigint_val) |b| return BI.equals(a.*, b.*);
+            }
+            return false;
+        },
+        .ratio => {
+            if (self.ratio_val) |a| {
+                if (other.ratio_val) |b| return RatioMod.equals(a.*, b.*);
+            }
+            return false;
+        },
+        .decimal => {
+            if (self.decimal_val) |a| {
+                if (other.decimal_val) |b| return BD.equals(a.*, b.*);
+            }
+            return false;
+        },
         .string => return std.mem.eql(u8, self.str_val, other.str_val),
         .symbol => return std.mem.eql(u8, self.sym_val, other.sym_val),
         .keyword => return std.mem.eql(u8, self.kw_val, other.kw_val),
@@ -712,6 +787,18 @@ pub fn fmt(self: Self, allocator: Allocator) anyerror![]const u8 {
         .bool => if (self.bool_val) allocator.dupe(u8, "true") else allocator.dupe(u8, "false"),
         .integer => try std.fmt.allocPrint(allocator, "{d}", .{self.int_val}),
         .float => try std.fmt.allocPrint(allocator, "{d}", .{self.float_val}),
+        .bigint => {
+            if (self.bigint_val) |ptr| return try ptr.toString(allocator);
+            return allocator.dupe(u8, "0");
+        },
+        .ratio => {
+            if (self.ratio_val) |ptr| return try ptr.toString(allocator);
+            return allocator.dupe(u8, "0");
+        },
+        .decimal => {
+            if (self.decimal_val) |ptr| return try ptr.toString(allocator);
+            return allocator.dupe(u8, "0");
+        },
         .string => try std.fmt.allocPrint(allocator, "\"{s}\"", .{self.str_val}),
         .symbol => allocator.dupe(u8, self.sym_val),
         .keyword => try std.fmt.allocPrint(allocator, ":{s}", .{self.kw_val}),
