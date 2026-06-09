@@ -294,3 +294,47 @@ run_test "zig.core/some" "(zig.core/some (fn [x] (even? x)) (list 1 3 4))" "true
 run_test "distinct? true" "(distinct? (list 1 2 3))" "true"
 run_test "distinct? false" "(distinct? (list 1 2 1))" "false"
 run_test "zig.core/distinct?" "(zig.core/distinct? (list 1 2 3 4))" "true"
+
+# not
+run_test "not true" "(not true)" "false"
+run_test "not false" "(not false)" "true"
+run_test "not nil" "(not nil)" "true"
+run_test "not 1" "(not 1)" "false"
+run_test "zig.core/not" "(zig.core/not true)" "false"
+
+# reductions
+run_test "reductions with init" "(doall (reductions + 0 (list 1 2 3)))" "(0 1 3 6)"
+run_test "reductions no init" "(doall (reductions + (list 1 2 3)))" "(1 3 6)"
+run_test "reductions conj" "(doall (reductions conj [] (list 1 2 3)))" "([] [1] [1 2] [1 2 3])"
+run_test "zig.core/reductions" "(doall (zig.core/reductions + 0 (list 1 2)))" "(0 1 3)"
+
+# map-indexed
+run_test "map-indexed" "(doall (map-indexed (fn [i x] [i x]) (list \"a\" \"b\")))" "([0 \"a\"] [1 \"b\"])"
+run_test "zig.core/map-indexed" "(doall (zig.core/map-indexed (fn [i x] [i x]) (list \"x\")))" "([0 \"x\"])"
+
+# keep-indexed
+run_test "keep-indexed" "(doall (keep-indexed (fn [i x] (when (even? i) x)) (list \"a\" \"b\" \"c\")))" "(\"a\" \"c\")"
+run_test "zig.core/keep-indexed" "(doall (zig.core/keep-indexed (fn [i x] (when (= i 0) x)) (list \"x\" \"y\")))" "(\"x\")"
+
+# comp
+run_test "comp single" "((comp inc) 5)" "6"
+run_test "comp two" "((comp inc dec) 10)" "10"
+run_test "zig.core/comp" "((zig.core/comp inc) 5)" "6"
+
+# fnil
+run_test "fnil" '((fnil str "default") nil)' '"default"'
+run_test "fnil two defaults" "((fnil / 0 1) nil 5)" "0"
+run_test "zig.core/fnil" '((zig.core/fnil str "x") nil)' '"x"'
+
+# juxt
+run_test "juxt two" "((juxt inc dec) 5)" "[6 4]"
+run_test "zig.core/juxt" "((zig.core/juxt inc) 5)" "[6]"
+
+# partial
+run_test "partial" "((partial + 10) 5)" "15"
+run_test "zig.core/partial" "((zig.core/partial + 3) 7)" "10"
+
+# trampoline
+run_test "trampoline simple" "(trampoline (fn [] 42))" "42"
+run_test "trampoline nested" "(trampoline (fn [] (fn [] 42)))" "42"
+run_test "zig.core/trampoline" "(zig.core/trampoline (fn [] 99))" "99"

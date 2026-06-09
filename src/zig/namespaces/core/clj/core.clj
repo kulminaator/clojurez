@@ -1233,3 +1233,58 @@
   [coll]
   (zig.core/distinct? coll))
 
+;; ---- Boolean ----
+
+(defn not
+  "Returns true if x is logical false, true otherwise."
+  [x]
+  (zig.core/not x))
+
+;; ---- Functional utilities ----
+;; apply: kept as global builtin (bootstrapping function — can't wrap without circular dep)
+
+(defn comp
+  "Returns a function that is the composition of the supplied functions."
+  [& fns]
+  (apply zig.core/comp fns))
+
+(defn fnil
+  "Returns a function that calls f with nil replaced by the supplied defaults."
+  [f & defaults]
+  (apply zig.core/fnil (vec (concat (list f) defaults))))
+
+(defn juxt
+  "Returns a function that calls each of the supplied functions and returns
+   a vector of the results."
+  [& fns]
+  (apply zig.core/juxt fns))
+
+(defn partial
+  "Returns a function that is a partial application of f with the supplied args."
+  [f & args]
+  (apply zig.core/partial (vec (concat (list f) args))))
+
+(defn trampoline
+  "Calls f with the supplied args. If f returns a fn, calls that fn,
+   repeating until a non-fn result is returned."
+  [f & args]
+  (apply zig.core/trampoline (vec (concat (list f) args))))
+
+;; ---- Lazy sequence operations ----
+
+(defn reductions
+  "Returns a lazy sequence of the intermediate values of a reduction.
+   With init, starts from init. Without init, starts from first element."
+  ([f coll] (zig.core/reductions f coll))
+  ([f init coll] (zig.core/reductions f init coll)))
+
+(defn map-indexed
+  "Returns a lazy sequence of ([i (f i x1)] for each item x1 and index i)."
+  [f coll]
+  (zig.core/map-indexed f coll))
+
+(defn keep-indexed
+  "Returns a lazy sequence of the non-nil results of (f i x)."
+  [f coll]
+  (zig.core/keep-indexed f coll))
+
