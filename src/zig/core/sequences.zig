@@ -514,6 +514,12 @@ pub fn core_seq(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     // This is needed for map/filter/etc. to properly detect end of sequence
     if (args.items[0].type == .lazy_seq) {
         var val = try forceLazySeqGetResult(allocator, &args.items[0]);
+        // Keep forcing nested lazy_seqs until we get a concrete result
+        while (val.type == .lazy_seq) {
+            var nested = val;
+            val = try forceLazySeqGetResult(allocator, &nested);
+            nested.deinit(allocator);
+        }
         // After forcing, handle the result type
         switch (val.type) {
             .cons => return val, // cons is non-empty seq
@@ -532,7 +538,6 @@ pub fn core_seq(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
                 }
                 return val;
             },
-            .lazy_seq => return val, // nested lazy_seq, return as-is
             else => {
                 val.deinit(allocator);
                 return Value.nilValue();

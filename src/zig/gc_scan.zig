@@ -108,7 +108,7 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         .nil, .bool, .integer, .float, .bigint, .ratio, .decimal,
         .string, .symbol, .keyword,
         .list, .vector, .map, .set, .queue, .function, .builtin_fn,
-        .lazy_seq, .cons, .atom,
+        .lazy_seq, .cons, .atom, .reduced,
     };
     var is_valid = false;
     for (valid_types) |vt| {
@@ -222,6 +222,13 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
 
         .atom => {
             if (val.atom_val) |data| {
+                ctx.gc.markRecursive(data, ctx);
+            }
+        },
+
+        .reduced => {
+            // Scan the wrapped value
+            if (val.reduced_val) |data| {
                 ctx.gc.markRecursive(data, ctx);
             }
         },

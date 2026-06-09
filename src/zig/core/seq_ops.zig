@@ -342,11 +342,53 @@ pub fn core_reduce(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
         try arg_list.append(env_env.allocator, try acc.clone(env_env.allocator));
         try arg_list.append(env_env.allocator, try items[i].clone(env_env.allocator));
 
-        const new_acc = try eval_helpers.callBuiltin(env_env.allocator, f, arg_list, env_env);
+        var new_acc = try eval_helpers.callBuiltin(env_env.allocator, f, arg_list, env_env);
         acc.deinit(env_env.allocator);
+        // Check for early reduction termination
+        if (new_acc.type == .reduced) {
+            if (new_acc.reduced_val) |data| {
+                acc = data.*;
+                // Null out pointer before deinit to avoid double-free
+                new_acc.reduced_val = null;
+                new_acc.deinit(env_env.allocator);
+                return acc;
+            }
+        }
         acc = new_acc;
     }
     return acc;
+}
+
+// reduced - wrap x for early reduction termination
+pub fn core_reduced(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    return Value.reducedValue(env_env.allocator, args.items[0]);
+}
+
+// reduced? - check if value is a reduced wrapper
+pub fn core_reduced_q(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    _ = env_env;
+    if (args.items.len != 1) return error.ArityError;
+    return Value.boolValue(args.items[0].isReduced());
+}
+
+// ensure-reduced - if already reduced, return as-is; else wrap in reduced
+pub fn core_ensure_reduced(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    if (args.items[0].isReduced()) {
+        return try args.items[0].clone(env_env.allocator);
+    }
+    return Value.reducedValue(env_env.allocator, args.items[0]);
+}
+
+// unreduced - unwrap reduced value if reduced, else return as-is
+pub fn core_unreduced(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    return Value.unreducedValue(env_env.allocator, args.items[0]);
 }
 
 pub fn core_flatten(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
@@ -761,6 +803,77 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
             }
             return Value.vectorValue(forced_vec);
         },
+        .cons => {
+            // Force cons cells: walk the chain and force nested lazy_seqs
+            // Clone all elements, don't consume the original
+            var forced_list: list.List = .empty;
+            errdefer forced_list.deinit(allocator);
+            var current: Value = val;
+            while (true) {
+                switch (current.type) {
+                    .cons => {
+                        const cdata = current.cons_val.?;
+                        // Force the head if it's a lazy_seq
+                        if (cdata.head.type == .lazy_seq) {
+                            var head_forced = try forceValue(allocator, cdata.head);
+                            if (head_forced.type == .list) {
+                                for (head_forced.list_val.items) |fi| {
+                                    try forced_list.append(allocator, try fi.clone(allocator));
+                                }
+                            } else {
+                                try forced_list.append(allocator, head_forced);
+                            }
+                            head_forced.deinit(allocator);
+                        } else {
+                            try forced_list.append(allocator, try cdata.head.clone(allocator));
+                        }
+                        // Move to tail (clone it, current is still the original cons)
+                        const tail = try cdata.tail.clone(allocator);
+                        current = tail;
+                    },
+                    .list => {
+                        for (current.list_val.items) |item| {
+                            if (item.type == .lazy_seq) {
+                                var forced = try forceValue(allocator, item);
+                                if (forced.type == .list) {
+                                    for (forced.list_val.items) |fi| {
+                                        try forced_list.append(allocator, try fi.clone(allocator));
+                                    }
+                                } else {
+                                    try forced_list.append(allocator, forced);
+                                }
+                                forced.deinit(allocator);
+                            } else {
+                                try forced_list.append(allocator, try item.clone(allocator));
+                            }
+                        }
+                        current.deinit(allocator);
+                        break;
+                    },
+                    .nil => {
+                        current.deinit(allocator);
+                        break;
+                    },
+                    .lazy_seq => {
+                        var forced = try forceValue(allocator, current);
+                        if (forced.type == .list) {
+                            for (forced.list_val.items) |fi| {
+                                try forced_list.append(allocator, try fi.clone(allocator));
+                            }
+                        }
+                        forced.deinit(allocator);
+                        current.deinit(allocator);
+                        break;
+                    },
+                    else => {
+                        try forced_list.append(allocator, try current.clone(allocator));
+                        current.deinit(allocator);
+                        break;
+                    },
+                }
+            }
+            return Value.listValue(forced_list);
+        },
         else => try val.clone(allocator),
     };
     return result;
@@ -914,6 +1027,12 @@ pub fn registerSequenceOpFunctions(env: *Env) anyerror!void {
     try env.put("doall*", Value.builtinFnValue(core_doall_star));
     try env.put("iterate", Value.builtinFnValue(core_iterate));
     try env.put("cycle", Value.builtinFnValue(core_cycle));
+
+    // Reduced wrapper functions
+    try env.put("reduced", Value.builtinFnValue(core_reduced));
+    try env.put("reduced?", Value.builtinFnValue(core_reduced_q));
+    try env.put("ensure-reduced", Value.builtinFnValue(core_ensure_reduced));
+    try env.put("unreduced", Value.builtinFnValue(core_unreduced));
 }
 
 const testEnv = test_utils.testEnv;
@@ -1058,3 +1177,77 @@ test "seq_ops::nthnext: out of range returns nil" {
     try std.testing.expect(result.type == .nil);
 }
 
+
+test "seq_ops::reduced: wraps value" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(42) });
+    var result = core_reduced(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .reduced);
+    try std.testing.expect(result.reduced_val.?.int_val == 42);
+}
+
+test "seq_ops::reduced_q: true for reduced" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var reduced_val = Value.reducedValue(std.heap.page_allocator, Value.intValue(42)) catch unreachable;
+    defer reduced_val.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ reduced_val });
+    var result = core_reduced_q(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .bool);
+    try std.testing.expect(result.bool_val == true);
+}
+
+test "seq_ops::reduced_q: false for non-reduced" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(42) });
+    var result = core_reduced_q(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .bool);
+    try std.testing.expect(result.bool_val == false);
+}
+
+test "seq_ops::ensure_reduced: wraps non-reduced" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(42) });
+    var result = core_ensure_reduced(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .reduced);
+}
+
+test "seq_ops::ensure_reduced: passes through reduced" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var reduced_val = Value.reducedValue(std.heap.page_allocator, Value.intValue(42)) catch unreachable;
+    defer reduced_val.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ reduced_val });
+    var result = core_ensure_reduced(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .reduced);
+}
+
+test "seq_ops::unreduced: unwraps reduced" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var reduced_val = Value.reducedValue(std.heap.page_allocator, Value.intValue(42)) catch unreachable;
+    defer reduced_val.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ reduced_val });
+    var result = core_unreduced(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .integer);
+    try std.testing.expect(result.int_val == 42);
+}
+
+test "seq_ops::unreduced: passes through non-reduced" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(42) });
+    var result = core_unreduced(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .integer);
+    try std.testing.expect(result.int_val == 42);
+}

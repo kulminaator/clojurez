@@ -29,6 +29,7 @@ pub const Type = enum {
     lazy_seq,
     cons,    // Cons cell: (head . tail) — tail is any sequence value
     atom,
+    reduced, // Wrapper for early reduction termination
 };
 
 pub const MapEntry = struct {
@@ -84,6 +85,7 @@ builtin_fn_val: BuiltinFn = undefined,
 lazy_seq_val: LazySeq = .{},
 cons_val: ?*ConsData = null,
 atom_val: ?*AtomData = null,
+reduced_val: ?*Self = null, // wrapped value for early reduction
 
 // Single arity: one [params] + body forms + optional rest param
 pub const Arity = struct {
@@ -451,6 +453,29 @@ pub fn atomValueShared(data: *AtomData) Self {
     return .{ .type = .atom, .atom_val = data };
 }
 
+/// Create a reduced wrapper for early reduction termination
+pub fn reducedValue(allocator: Allocator, val: Self) anyerror!Self {
+    const data = try allocator.create(Self);
+    data.* = try val.clone(allocator);
+    return .{ .type = .reduced, .reduced_val = data };
+}
+
+/// Check if a value is a reduced wrapper
+pub fn isReduced(self: Self) bool {
+    return self.type == .reduced;
+}
+
+/// Unwrap a reduced value if it is reduced, otherwise return the value itself
+pub fn unreducedValue(allocator: Allocator, self: Self) anyerror!Self {
+    if (self.type == .reduced) {
+        if (self.reduced_val) |data| {
+            return try data.clone(allocator);
+        }
+        return nilValue();
+    }
+    return try self.clone(allocator);
+}
+
 pub fn lazySeqValue(thunk: ?*LazySeqThunk) Self {
     return .{ .type = .lazy_seq, .lazy_seq_val = .{ .thunk = thunk } };
 }
@@ -563,6 +588,12 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
                     data.value.deinit(allocator);
                     allocator.destroy(data);
                 }
+            }
+        },
+        .reduced => {
+            if (self.reduced_val) |data| {
+                data.deinit(allocator);
+                allocator.destroy(data);
             }
         },
     }
@@ -693,6 +724,12 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
             return fnValue(cloned_arities, try fnv.env.clone(allocator), fnv.is_macro);
         },
         .builtin_fn => return builtinFnValue(self.builtin_fn_val),
+        .reduced => {
+            if (self.reduced_val) |data| {
+                return reducedValue(allocator, data.*);
+            }
+            return .{ .type = .reduced, .reduced_val = null };
+        },
     }
 }
 
@@ -775,6 +812,14 @@ pub fn equals(self: Self, other: Self) bool {
         },
         .atom => {
             // Atoms are never equal by identity
+            return false;
+        },
+        .reduced => {
+            if (self.reduced_val) |s_data| {
+                if (other.reduced_val) |o_data| {
+                    return s_data.equals(o_data.*);
+                }
+            }
             return false;
         },
         else => return false,
@@ -882,6 +927,14 @@ pub fn fmt(self: Self, allocator: Allocator) anyerror![]const u8 {
                 return try std.fmt.allocPrint(allocator, "#atom({s})", .{inner_str});
             }
             return allocator.dupe(u8, "#atom(nil)");
+        },
+        .reduced => {
+            if (self.reduced_val) |data| {
+                const inner_str = try data.fmt(allocator);
+                defer allocator.free(inner_str);
+                return try std.fmt.allocPrint(allocator, "#reduced({s})", .{inner_str});
+            }
+            return allocator.dupe(u8, "#reduced(nil)");
         },
     };
 }

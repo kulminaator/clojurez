@@ -57,7 +57,7 @@ pub fn evalRec(allocator: Allocator, arena_alloc: Allocator, form: Value, env: *
     if (depth > MAX_RECURSION) return error.RecursionLimit;
 
     switch (form.type) {
-        .nil, .bool, .integer, .float, .bigint, .ratio, .decimal, .string, .keyword, .set, .queue, .atom => {
+        .nil, .bool, .integer, .float, .bigint, .ratio, .decimal, .string, .keyword, .set, .queue, .atom, .reduced => {
             return try form.clone(arena_alloc);
         },
         .symbol => {
@@ -564,6 +564,16 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
             if (arg.type == .atom) {
                 if (arg.atom_val) |data| {
                     const val = try data.value.clone(arena_alloc);
+                    arg.deinit(arena_alloc);
+                    return val;
+                }
+                arg.deinit(arena_alloc);
+                return Value.nilValue();
+            }
+            // Extract value from reduced wrapper
+            if (arg.type == .reduced) {
+                if (arg.reduced_val) |data| {
+                    const val = try data.clone(arena_alloc);
                     arg.deinit(arena_alloc);
                     return val;
                 }

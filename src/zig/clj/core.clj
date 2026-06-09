@@ -557,3 +557,32 @@
 ;; ---- Keep with index ----
 ;; keep-indexed is implemented as a Zig built-in for proper lazy-seq handling
 
+;; ---- Repeatedly ----
+(defn repeatedly
+  "Takes a function of no args, presumably with side effects, and
+  returns an infinite (or length n if supplied) lazy sequence of calls
+  to it."
+  ([f] (lazy-seq (cons (f) (repeatedly f))))
+  ([n f] (take n (repeatedly f))))
+
+;; ---- Cat ----
+(defn cat
+  "Concatenate the contents of each collection into one sequence."
+  [& colls]
+  (apply concat colls))
+
+;; ---- Dedupe ----
+(defn dedupe
+  "Returns a lazy sequence removing consecutive duplicates in coll."
+  [coll]
+  (lazy-seq
+    (when-let [s (seq coll)]
+      (cons (first s)
+            (dedupe (drop-while (fn [x] (= x (first s))) (rest s)))))))
+
+;; ---- Random Sample ----
+(defn random-sample
+  "Returns items from coll with random probability of prob (0.0 - 1.0)."
+  [prob coll]
+  (filter (fn [_] (< (rand) prob)) coll))
+
