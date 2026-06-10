@@ -1146,7 +1146,10 @@ pub fn core_minus(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len == 0) return error.ArityError;
-    if (args.items.len == 1) return try args.items[0].clone(allocator);
+    if (args.items.len == 1) {
+        // (- x) => 0 - x (negation)
+        return subValues(allocator, Value.intValue(0), args.items[0]);
+    }
 
     var result = try args.items[0].clone(allocator);
     var i: usize = 1;
@@ -1177,6 +1180,10 @@ pub fn core_div(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len == 0) return error.ArityError;
+    if (args.items.len == 1) {
+        // (/ x) => 1 / x (reciprocal)
+        return divValues(allocator, Value.intValue(1), args.items[0]);
+    }
 
     var result = try args.items[0].clone(allocator);
     var i: usize = 1;
@@ -1435,4 +1442,86 @@ test "arithmetic::rationalize: 1.5 to ratio" {
     var result = core_rationalize(testSelf(), args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .ratio);
+}
+
+test "regression: minus single arg negation" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(7) });
+    var result = core_minus(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .integer);
+    try std.testing.expect(result.int_val == -7);
+}
+
+test "regression: minus single arg negation of negative" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(-5) });
+    var result = core_minus(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .integer);
+    try std.testing.expect(result.int_val == 5);
+}
+
+test "regression: minus single arg negation of float" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.floatValue(3.14) });
+    var result = core_minus(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .float);
+    try std.testing.expect(std.math.approxEqAbs(f64, result.float_val, -3.14, 0.001));
+}
+
+test "regression: minus zero args arity error" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{});
+    try std.testing.expectError(error.ArityError, core_minus(testSelf(), args, &a));
+}
+
+test "regression: div single arg reciprocal" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(2) });
+    var result = core_div(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .ratio);
+}
+
+test "regression: div single arg reciprocal of 1" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(1) });
+    var result = core_div(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .integer);
+    try std.testing.expect(result.int_val == 1);
+}
+
+test "regression: div single arg reciprocal of negative" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(-5) });
+    var result = core_div(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .ratio);
+}
+
+test "regression: div single arg reciprocal of float" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.floatValue(2.0) });
+    var result = core_div(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .float);
+    try std.testing.expect(std.math.approxEqAbs(f64, result.float_val, 0.5, 0.001));
+}
+
+test "regression: div zero args arity error" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{});
+    try std.testing.expectError(error.ArityError, core_div(testSelf(), args, &a));
 }
