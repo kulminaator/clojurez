@@ -210,7 +210,9 @@ pub const DebugAllocator = struct {
 /// Called exactly once at startup. Returns null if disabled, or the log
 /// target ("stderr" or file path) if enabled.
 pub fn getMemTraceConfig(environ: std.process.Environ) ?[]const u8 {
-    const val = std.process.Environ.getPosix(environ, "CLJVM_MEM_TRACE") orelse return null;
+    var map = std.process.Environ.createMap(environ, std.heap.page_allocator) catch return null;
+    defer map.deinit();
+    const val = map.get("CLJVM_MEM_TRACE") orelse return null;
     if (val.len == 0) return null;
     if (std.mem.eql(u8, val, "1")) {
         return std.heap.page_allocator.dupe(u8, "stderr") catch null;

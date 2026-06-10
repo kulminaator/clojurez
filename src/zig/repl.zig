@@ -240,8 +240,9 @@ fn readLineWithLeftover(buf: []u8, leftover_buf: []u8, leftover_len: *usize) any
 
     // Read more data from stdin
     var hit_eof = false;
+    var stdin_reader = std.Io.File.stdin().reader(std.Options.debug_io, &[_]u8{});
     while (len < buf.len) {
-        const n = std.posix.read(std.posix.STDIN_FILENO, buf[len..]) catch break;
+        const n = stdin_reader.interface.readSliceShort(buf[len..]) catch break;
         if (n == 0) {
             hit_eof = true;
             break; // EOF
