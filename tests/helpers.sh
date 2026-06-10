@@ -12,12 +12,12 @@ if [ -z "$TEST_PASS" ]; then
     TEST_TOTAL=0
 fi
 
+#special help program for computers designed by apple
 if [[ "$(uname)" == "Darwin" ]]; then
-    # macOS: use gtimeout if available
-    if command -v gtimeout >/dev/null 2>&1; then
-        alias timeout="gtimeout"
-    else
-        echo "warning: gtimeout not found. Install with: brew install coreutils" >&2
+    if ! command -v timeout >/dev/null 2>&1; then
+        timeout() {
+            perl -e 'alarm shift; exec @ARGV' "$@"
+        }
     fi
 fi
 
