@@ -136,11 +136,8 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // Also register namespace envs as roots.
     registerGcRoots(&gc_instance, clojure_core_env, ns_mgr);
 
-    // Parse arguments
-    var args = std.process.Args.Iterator.init(init.args);
-    _ = args.next(); // skip program name
-
-    const arg_count = countArgs(init.args);
+    // Count arguments
+    const arg_count = countArgs(init.args, allocator);
 
     // Get user namespace env for REPL and expression evaluation.
     // user namespace has clojure.core as parent, so all functions are visible.
@@ -154,18 +151,19 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
         return repl.runRepl(allocator, user_env);
     }
 
-    // Reset iterator and skip program name
-    args = std.process.Args.Iterator.init(init.args);
-    _ = args.next();
+    // Create iterator (initAllocator works on all platforms including Windows)
+    var it = try std.process.Args.Iterator.initAllocator(init.args, allocator);
+    defer it.deinit();
+    _ = it.next(); // skip program name
 
     var classpath_set = false;
     var main_ns: ?[]const u8 = null;
     var i: usize = 0;
     while (i < arg_count) : (i += 1) {
-        const arg = args.next() orelse break;
+        const arg = it.next() orelse break;
 
         if (std.mem.eql(u8, arg, "-e") or std.mem.eql(u8, arg, "--eval")) {
-            const expr = args.next() orelse {
+            const expr = it.next() orelse {
                 try writeStderr("Error: missing expression after -e\n");
                 std.process.exit(1);
             };
@@ -173,7 +171,7 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
             // Collect after function returns so local vars are out of scope
             if (gc_mod.current_gc) |gc| gc.collect(gc_scan.valueScanFn);
         } else if (std.mem.eql(u8, arg, "-cp") or std.mem.eql(u8, arg, "--classpath")) {
-            const cp = args.next() orelse {
+            const cp = it.next() orelse {
                 try writeStderr("Error: missing classpath after -cp\n");
                 std.process.exit(1);
             };
@@ -184,7 +182,7 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
             }
             classpath_set = true;
         } else if (std.mem.eql(u8, arg, "-m") or std.mem.eql(u8, arg, "--main")) {
-            main_ns = args.next() orelse {
+            main_ns = it.next() orelse {
                 try writeStderr("Error: missing namespace after -m\n");
                 std.process.exit(1);
             };
@@ -243,8 +241,9 @@ fn loadCoreLibrary(allocator: Allocator, env: *Env) anyerror!void {
     }
 }
 
-fn countArgs(args: std.process.Args) usize {
-    var it = std.process.Args.Iterator.init(args);
+fn countArgs(args: std.process.Args, allocator: std.mem.Allocator) usize {
+    var it = std.process.Args.Iterator.initAllocator(args, allocator) catch unreachable;
+    defer it.deinit();
     var count: usize = 0;
     while (it.next()) |_| : (count += 1) {}
     return count - 1; // subtract program name
