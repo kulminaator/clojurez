@@ -423,3 +423,69 @@ run_test "zig.core/*" "(zig.core/* 2 3 4)" "24"
 # / (wrapper)
 run_test "/ basic" "(/ 10 2)" "5"
 run_test "zig.core//" "(zig.core// 10 2)" "5"
+
+# numerator
+run_test "numerator ratio" "(numerator (/ 22 7))" "22"
+run_test "numerator int" "(numerator 42)" "42"
+run_test "numerator neg ratio" "(numerator (/ -3 4))" "-3"
+run_test "zig.core/numerator" "(zig.core/numerator (/ 5 2))" "5"
+
+# denominator
+run_test "denominator ratio" "(denominator (/ 22 7))" "7"
+run_test "denominator int" "(denominator 42)" "1"
+run_test "denominator neg ratio" "(denominator (/ -3 4))" "4"
+run_test "zig.core/denominator" "(zig.core/denominator (/ 5 2))" "2"
+
+# num (alias for numerator)
+run_test "num ratio" "(num (/ 22 7))" "22"
+run_test "num int" "(num 42)" "42"
+
+# denom (alias for denominator)
+run_test "denom ratio" "(denom (/ 22 7))" "7"
+run_test "denom int" "(denom 42)" "1"
+
+# rational (alias for rationalize)
+run_test "rational float" "(rational 1.5)" "3/2"
+run_test "rational int" "(rational 5)" "5"
+run_test "rational ratio" "(rational (/ 22 7))" "22/7"
+
+# boolean?
+run_test "boolean? true" "(boolean? true)" "true"
+run_test "boolean? false" "(boolean? false)" "true"
+run_test "boolean? nil" "(boolean? nil)" "false"
+run_test "boolean? int" "(boolean? 42)" "false"
+run_test "boolean? string" '(boolean? "hello")' "false"
+run_test "zig.core/boolean?" "(zig.core/boolean? false)" "true"
+
+# find
+run_test "find existing" "(find {:a 1 :b 2} :a)" "{:key :a :val 1}"
+run_test "find missing" "(find {:a 1} :b)" ""
+run_test "find key" "(key (find {:a 1} :a))" ":a"
+run_test "find val" "(val (find {:a 1} :a))" "1"
+
+# filterv
+run_test "filterv even" "(filterv even? (list 1 2 3 4))" "[2 4]"
+run_test "filterv empty" "(filterv even? (list 1 3 5))" "[]"
+
+# mapv
+run_test "mapv inc" "(mapv inc (list 1 2 3))" "[2 3 4]"
+run_test "mapv str" '(mapv str (list 1 2 3))' '["1" "2" "3"]'
+
+# keepv
+run_test "keepv" '(keepv (fn [x] (when (even? x) (* x 2))) (list 1 2 3 4))' "[4 8]"
+run_test "keepv all nil" '(keepv (fn [x] nil) (list 1 2 3))' "[]"
+
+# reducev
+run_test "reducev + 0" "(reducev + 0 [1 2 3 4])" "10"
+run_test "reducev empty" "(reducev + 0 [])" "0"
+run_test "reducev conj" "(reducev conj [] (list 1 2 3))" "[1 2 3]"
+
+# completing
+run_test "completing 1 arg" "(let [f (completing + 0)] (f 5))" "5"
+run_test "completing 2 args" "(let [f (completing + 0)] (f 5 3))" "8"
+run_test "completing conj 2 args" "(let [f (completing conj [])] (f [1] 2))" "[1 2]"
+
+# memoize
+run_test "memoize inc" "(let [f (memoize inc)] (f 5))" "6"
+run_test "memoize square" "(let [f (memoize (fn [x] (* x x)))] (f 5))" "25"
+run_test "memoize cached" "(let [f (memoize (fn [x] (* x x)))] (f 5) (f 5))" "25"

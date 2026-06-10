@@ -125,6 +125,58 @@
   [f coll]
   (filter identity (map f coll)))
 
+;; ---- Vector-returning sequence operations ----
+
+(defn filterv
+  "Returns a vector of the items in coll for which (pred item) returns logical true."
+  [pred coll]
+  (into [] (filter pred coll)))
+
+(defn mapv
+  "Returns a vector of (f applied to) the items in coll."
+  [f coll]
+  (into [] (doall (map f coll))))
+
+(defn keepv
+  "Returns a vector of the non-nil results of (f applied to) the items in coll."
+  [f coll]
+  (reduce (fn [v x]
+            (let [result (f x)]
+              (if (nil? result)
+                v
+                (conj v result))))
+          [] coll))
+
+(defn reducev
+  "f should be a function of 2 arguments. Returns the result of applying f
+   to init and the first item in coll, then applying f to that result and
+   the second item in coll, and so on. If coll is empty, returns init."
+  [f init coll]
+  (reduce f init coll))
+
+(defn completing
+  "Takes a reducing function f (of 2 params) and a completion value,
+   and returns a reducing function with the same arity that supplies
+   completion for x when f is called with only 1 parameter."
+  [f completion]
+  (fn
+    ([x] (f x completion))
+    ([x y] (f x y))))
+
+(defn memoize
+  "Returns a memoized version of a referentially transparent function.
+  The memoized version keeps a cache of the mapping of arguments to results."
+  [f]
+  (let [mem (atom {})]
+    (fn [& args]
+      (let [key (vec args)
+            entry (find @mem key)]
+        (if entry
+          (val entry)
+          (let [ret (apply f args)]
+            (swap! mem assoc key ret)
+            ret))))))
+
 ;; ---- Map update ----
 
 (defn update
@@ -143,6 +195,13 @@
   "Returns the value of the map entry."
   [e]
   (get e :val))
+
+(defn find
+  "Returns the map entry for key, or nil if the key is not in the map.
+   The map entry is a map with :key and :val keys."
+  [m key]
+  (when (contains? m key)
+    {:key key :val (get m key)}))
 
 ;; ---- Sequence operations ----
 
@@ -673,6 +732,37 @@
   [x]
   (zig.core/rationalize x))
 
+(defn rational
+  "Returns the rational number equivalent of x.
+   For integers, returns the integer. For floats, returns a ratio.
+   For ratios, returns the ratio. Alias for rationalize."
+  [x]
+  (rationalize x))
+
+(defn numerator
+  "Returns the numerator of x, which must be an integer, bigint, or ratio.
+   For integers/bigints, returns the value itself. For ratios, returns the numerator."
+  [x]
+  (zig.core/numerator x))
+
+(defn denominator
+  "Returns the denominator of x, which must be an integer, bigint, or ratio.
+   For integers/bigints, returns 1. For ratios, returns the denominator."
+  [x]
+  (zig.core/denominator x))
+
+(defn num
+  "Returns the numerator of x, which must be an integer, bigint, or ratio.
+   Alias for numerator."
+  [x]
+  (zig.core/numerator x))
+
+(defn denom
+  "Returns the denominator of x, which must be an integer, bigint, or ratio.
+   Alias for denominator."
+  [x]
+  (zig.core/denominator x))
+
 (defn identical?
   "Returns true if x and y are the same object (by identity/reference),
    not merely equal in value."
@@ -1107,6 +1197,11 @@
   "Returns true if x is the value false, false otherwise."
   [x]
   (zig.core/false? x))
+
+(defn boolean?
+  "Returns true if x is a boolean (true or false), false otherwise."
+  [x]
+  (zig.core/boolean? x))
 
 (defn fn?
   "Returns true if x is a function."

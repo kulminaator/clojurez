@@ -63,6 +63,14 @@ pub fn core_false_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
     return Value.boolValue(args.items[0].type == .bool and !args.items[0].bool_val);
 }
 
+/// Returns true if x is a boolean (true or false).
+/// Clojure: (boolean? x)
+pub fn core_boolean_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    return Value.boolValue(args.items[0].type == .bool);
+}
+
 pub fn core_fn_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
@@ -439,6 +447,7 @@ pub fn registerTypePredicateFunctions(env: *Env) anyerror!void {
     try env.put("queue?", Value.builtinFnValue(core_queue_q));
     try env.put("coll?", Value.builtinFnValue(core_coll_q));
     try env.put("sequential?", Value.builtinFnValue(core_sequential_q));
+    try env.put("boolean?", Value.builtinFnValue(core_boolean_q));
     // Numeric type predicates
     try env.put("integer?", Value.builtinFnValue(core_integer_q));
     try env.put("int?", Value.builtinFnValue(core_int_q));

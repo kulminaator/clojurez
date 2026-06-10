@@ -1271,6 +1271,48 @@ pub fn core_rationalize(self: *Value, args: list.List, env_env: *Env) anyerror!V
     };
 }
 
+/// Returns the numerator of a ratio, or the value itself for integers/bigints.
+/// Clojure: (numerator x)
+pub fn core_numerator(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    const allocator = env_env.allocator;
+    if (args.items.len != 1) return error.ArityError;
+    const v = args.items[0];
+
+    return switch (v.type) {
+        .integer => try v.clone(allocator),
+        .bigint => try v.clone(allocator),
+        .ratio => {
+            if (v.ratio_val) |rp| {
+                return try bigIntValueOwned(allocator, &rp.num);
+            }
+            return error.TypeError;
+        },
+        else => return error.TypeError,
+    };
+}
+
+/// Returns the denominator of a ratio, or 1 for integers/bigints.
+/// Clojure: (denominator x)
+pub fn core_denominator(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    const allocator = env_env.allocator;
+    if (args.items.len != 1) return error.ArityError;
+    const v = args.items[0];
+
+    return switch (v.type) {
+        .integer => Value.intValue(1),
+        .bigint => Value.intValue(1),
+        .ratio => {
+            if (v.ratio_val) |rp| {
+                return try bigIntValueOwned(allocator, &rp.den);
+            }
+            return error.TypeError;
+        },
+        else => return error.TypeError,
+    };
+}
+
 pub fn registerArithmeticFunctions(env: *Env) anyerror!void {
     try env.put("plus", Value.builtinFnValue(core_plus));
     try env.put("minus", Value.builtinFnValue(core_minus));
@@ -1280,6 +1322,10 @@ pub fn registerArithmeticFunctions(env: *Env) anyerror!void {
     try env.put("rem", Value.builtinFnValue(core_rem));
     try env.put("quot", Value.builtinFnValue(core_quot));
     try env.put("rationalize", Value.builtinFnValue(core_rationalize));
+    try env.put("numerator", Value.builtinFnValue(core_numerator));
+    try env.put("denominator", Value.builtinFnValue(core_denominator));
+    try env.put("num", Value.builtinFnValue(core_numerator));
+    try env.put("denom", Value.builtinFnValue(core_denominator));
     // Clojure-style aliases
     try env.put("+", Value.builtinFnValue(core_plus));
     try env.put("-", Value.builtinFnValue(core_minus));
