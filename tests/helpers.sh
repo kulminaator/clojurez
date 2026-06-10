@@ -12,6 +12,15 @@ if [ -z "$TEST_PASS" ]; then
     TEST_TOTAL=0
 fi
 
+if [[ "$(uname)" == "Darwin" ]]; then
+    # macOS: use gtimeout if available
+    if command -v gtimeout >/dev/null 2>&1; then
+        alias timeout="gtimeout"
+    else
+        echo "warning: gtimeout not found. Install with: brew install coreutils" >&2
+    fi
+fi
+
 # Build the VM (core.clj copy is handled by build.zig)
 build_vm() {
     echo "Building VM..."
