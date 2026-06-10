@@ -188,9 +188,9 @@ pub fn core_spit(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 pub fn core_nano_time(self: *Value, args: list.List, _: *Env) anyerror!Value {
     _ = self;
     _ = args;
-    var ts: std.os.linux.timespec = undefined;
-    _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts);
-    return Value.intValue((ts.sec * 1_000_000_000) + ts.nsec);
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const ts = std.Io.Clock.awake.now(io);
+    return Value.intValue(@as(i64, @intCast(ts.nanoseconds)));
 }
 
 pub fn registerIOFunctions(env: *Env) anyerror!void {
