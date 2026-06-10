@@ -49,3 +49,21 @@ else
     echo "  Got:      $ns_result"
     TEST_FAIL=$((TEST_FAIL + 1))
 fi
+
+echo ""
+echo "=== GC Stress Sample ==="
+# Run the GC stress test — checks that auto-GC triggers, manual sweep
+# frees memory, and sweep count increases. Only the final RESULT line
+# is checked (memory values vary by build/platform).
+gc_result=$(timeout 30 ./zig-out/bin/clojurez tests/complex-samples/sample_4_gc_stress/core.clj 2>&1 | tail -1)
+expected_gc=$(cat tests/complex-samples/sample_4_gc_stress/expected_output.txt | tr -d '\n')
+TEST_TOTAL=$((TEST_TOTAL + 1))
+if [ "$gc_result" = "$expected_gc" ]; then
+    echo "PASS: gc stress sample"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: gc stress sample"
+    echo "  Expected: $expected_gc"
+    echo "  Got:      $gc_result"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi

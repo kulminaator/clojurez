@@ -50,6 +50,7 @@ const Header = struct {
     magic: u32 = MAGIC,
     marked: bool = false,
     obj_type: GCObjectType = .unknown,
+    generation: u32 = 0, // generation this block was allocated in
     size: usize = 0,
     offset: usize = 0, // bytes from header to data area (header_size + padding)
     next: ?*Header = null,
@@ -109,6 +110,15 @@ pub const GC = struct {
     last_collected_memory: usize = 0,
     auto_gc_active: bool = false,
     auto_gc_pending: bool = false,
+    // Deferred sweep: when gc-sweep is called from within Clojure evaluation,
+    // we can't safely free in-flight values (stack-local pointers the GC can't see).
+    // Instead, we mark and defer the actual sweep to the next safe point.
+    manual_sweep_pending: bool = false,
+
+    // Generational sweep protection: blocks allocated in the current generation
+    // are never swept, even if unreachable. This protects in-flight evaluation
+    // state when gc-sweep is called from within Clojure code.
+    generation: u32 = 0,
 
     // Temporary hash table for O(1) header lookup during collect.
     // Simple open-addressing hash table for *anyopaque → *Header mapping.
@@ -203,6 +213,7 @@ pub const GC = struct {
         header.* = .{
             .size = actual_size,
             .offset = HEADER_SIZE + padding,
+            .generation = self.generation,
             .next = self.blocks,
             .prev = null,
         };
@@ -425,8 +436,12 @@ pub const GC = struct {
 
     /// Full mark-and-sweep collection cycle.
     pub fn collect(self: *Self, scan_fn: ScanFn) void {
-        self.log("[GC] === COLLECT START blocks={d} roots={d} ===\n",
-            .{ self.block_count, self.roots.items.len });
+        // Advance generation: blocks allocated in the new generation
+        // are protected from sweeping (in-flight evaluation state).
+        self.generation += 1;
+
+        self.log("[GC] === COLLECT START blocks={d} roots={d} gen={d} ===\n",
+            .{ self.block_count, self.roots.items.len, self.generation });
 
         // Build O(1) header lookup table for this collection cycle
         self.buildHeaderTable();
@@ -489,7 +504,12 @@ pub const GC = struct {
 
         while (block) |b| {
             const next = b.next;
-            if (!b.marked) {
+            // Generational protection: never sweep blocks from the current
+            // or previous generation. They may be referenced by in-flight
+            // evaluation state (stack-local pointers the GC can't see).
+            // A block must be at least 2 generations old to be swept.
+            const protected_gen = if (self.generation > 0) self.generation - 1 else 0;
+            if (!b.marked and b.generation < protected_gen) {
                 // Remove from linked list
                 if (b.prev) |prev| {
                     prev.next = b.next;
@@ -547,12 +567,15 @@ pub const GC = struct {
     }
 
     /// Check if auto-GC threshold was exceeded and collect if so.
-    /// Call this at safe points (between form evaluations) where no
-    /// in-flight allocations exist.
+    /// Also handles deferred manual sweeps (from zig.core/gc-sweep called
+    /// during evaluation). Call this at safe points (between form evaluations)
+    /// where no in-flight allocations exist.
     pub fn tryAutoCollect(self: *Self) void {
-        if (self.auto_gc_pending) {
+        const need_collect = self.auto_gc_pending or self.manual_sweep_pending;
+        if (need_collect) {
             if (self.scan_fn) |fn_ptr| {
                 self.auto_gc_pending = false;
+                self.manual_sweep_pending = false;
                 self.collect(fn_ptr);
             }
         }

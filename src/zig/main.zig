@@ -266,6 +266,21 @@ fn runExpression(allocator: Allocator, expr: []const u8, env: *Env) anyerror!voi
     // The GC will clean up at program exit.
 
     // Evaluate each form and print non-nil results (matching JVM clojure -e)
+    // Protect the forms buffer as a GC root for the entire loop —
+    // user code (e.g. zig.core/gc-sweep) may trigger collection mid-loop.
+    if (gc_mod.current_gc) |gc| {
+        if (forms.items.len > 0) {
+            gc.addRoot(@as(*anyopaque, @ptrCast(forms.items.ptr)));
+        }
+    }
+    defer {
+        if (gc_mod.current_gc) |gc| {
+            if (forms.items.len > 0) {
+                gc.removeRoot(@as(*anyopaque, @ptrCast(forms.items.ptr)));
+            }
+        }
+    }
+
     for (forms.items) |form| {
         // Use current namespace's env for evaluation
         const eval_env = getCurrentNsEnv(env) orelse env;
@@ -285,14 +300,7 @@ fn runExpression(allocator: Allocator, expr: []const u8, env: *Env) anyerror!voi
 
         // Don't deinit result — GC handles it
         // Auto-GC: check threshold between form evaluations (safe point).
-        // Protect the forms buffer as a temporary root so GC doesn't sweep it.
-        if (gc_mod.current_gc) |gc| {
-            if (forms.items.len > 0) {
-                gc.addRoot(@as(*anyopaque, @ptrCast(forms.items.ptr)));
-                gc.tryAutoCollect();
-                gc.removeRoot(@as(*anyopaque, @ptrCast(forms.items.ptr)));
-            }
-        }
+        if (gc_mod.current_gc) |gc| gc.tryAutoCollect();
     }
 }
 
@@ -307,13 +315,29 @@ fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void 
 
     var reader = file.reader(std.Options.debug_io, &[_]u8{});
     const content = try reader.interface.allocRemaining(allocator, std.Io.Limit.limited(1024 * 1024));
-    defer allocator.free(content);
+    // No defer free — source content is GC-managed but not a root.
+    // After heavy GC activity it may be swept. OS reclaims on exit.
 
     var p = try parser.Parser.init(allocator, content);
     defer p.deinit();
 
     var forms = try p.parseAll();
     defer forms.deinit(allocator);
+
+    // Protect the forms buffer as a GC root for the entire loop —
+    // user code (e.g. zig.core/gc-sweep) may trigger collection mid-loop.
+    if (gc_mod.current_gc) |gc| {
+        if (forms.items.len > 0) {
+            gc.addRoot(@as(*anyopaque, @ptrCast(forms.items.ptr)));
+        }
+    }
+    defer {
+        if (gc_mod.current_gc) |gc| {
+            if (forms.items.len > 0) {
+                gc.removeRoot(@as(*anyopaque, @ptrCast(forms.items.ptr)));
+            }
+        }
+    }
 
     for (forms.items) |form| {
         // Get current namespace's env for each form (ns form may change it)
@@ -337,14 +361,7 @@ fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void 
 
         result.deinit(allocator);
         // Auto-GC: check threshold between form evaluations (safe point).
-        // Protect the forms buffer as a temporary root so GC doesn't sweep it.
-        if (gc_mod.current_gc) |gc| {
-            if (forms.items.len > 0) {
-                gc.addRoot(@as(*anyopaque, @ptrCast(forms.items.ptr)));
-                gc.tryAutoCollect();
-                gc.removeRoot(@as(*anyopaque, @ptrCast(forms.items.ptr)));
-            }
-        }
+        if (gc_mod.current_gc) |gc| gc.tryAutoCollect();
     }
 
 }
@@ -374,7 +391,7 @@ fn runMain(allocator: Allocator, env: *Env, ns_name: []const u8) anyerror!void {
 
     var reader = file.reader(std.Options.debug_io, &[_]u8{});
     const content = try reader.interface.allocRemaining(allocator, std.Io.Limit.limited(1024 * 1024));
-    defer allocator.free(content);
+    // No defer free — same reasoning as runFile.
 
     var p = try parser.Parser.init(allocator, content);
     defer p.deinit();

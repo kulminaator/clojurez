@@ -21,6 +21,7 @@ const io = @import("io.zig");
 const atoms = @import("atoms.zig");
 const bitwise = @import("bitwise.zig");
 const random = @import("random.zig");
+const gc_builtins = @import("gc.zig");
 const eval_helpers = @import("eval_helpers.zig");
 
 const Allocator = std.mem.Allocator;
@@ -352,6 +353,7 @@ pub fn registerCoreFunctions(env: *Env) anyerror!void {
     try atoms.registerAtomFunctions(env);
     try bitwise.registerBitwiseFunctions(env);
     try random.registerRandomFunctions(env);
+    try gc_builtins.registerGCFunctions(env);
 
     // Collection predicates (kept here)
     try env.put("empty?", Value.builtinFnValue(core_empty_q));
