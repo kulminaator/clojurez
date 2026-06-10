@@ -371,7 +371,7 @@ pub const Parser = struct {
         if (std.mem.eql(u8, s, "true")) return Value.boolValue(true);
         if (std.mem.eql(u8, s, "false")) return Value.boolValue(false);
         if (std.mem.eql(u8, s, "nil")) return Value.nilValue();
-        // Copy via stack buffer to avoid aliasing with brk_allocator
+        // Copy via stack buffer to avoid aliasing with page_allocator
         var tmp_buf: [256]u8 = undefined;
         const copy_len = if (s.len < tmp_buf.len) s.len else tmp_buf.len;
         @memcpy(tmp_buf[0..copy_len], s[0..copy_len]);
@@ -498,7 +498,7 @@ pub const Parser = struct {
 };
 
 test "parser: empty list" {
-    var arena = std.heap.ArenaAllocator.init(std.heap.brk_allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -513,7 +513,7 @@ test "parser: empty list" {
 }
 
 test "parser: simple list" {
-    var arena = std.heap.ArenaAllocator.init(std.heap.brk_allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -528,7 +528,7 @@ test "parser: simple list" {
 }
 
 test "parser: nested list" {
-    var arena = std.heap.ArenaAllocator.init(std.heap.brk_allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -543,7 +543,7 @@ test "parser: nested list" {
 }
 
 test "parser: vector" {
-    var arena = std.heap.ArenaAllocator.init(std.heap.brk_allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -558,7 +558,7 @@ test "parser: vector" {
 }
 
 test "parser: string" {
-    var arena = std.heap.ArenaAllocator.init(std.heap.brk_allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -573,7 +573,7 @@ test "parser: string" {
 }
 
 test "parser: keyword" {
-    var arena = std.heap.ArenaAllocator.init(std.heap.brk_allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -588,7 +588,7 @@ test "parser: keyword" {
 }
 
 test "parser: integer" {
-    var arena = std.heap.ArenaAllocator.init(std.heap.brk_allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -603,7 +603,7 @@ test "parser: integer" {
 }
 
 test "parser: float" {
-    var arena = std.heap.ArenaAllocator.init(std.heap.brk_allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -617,7 +617,7 @@ test "parser: float" {
 }
 
 test "parser: booleans" {
-    var arena = std.heap.ArenaAllocator.init(std.heap.brk_allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -637,7 +637,7 @@ test "parser: booleans" {
 }
 
 test "parser: nil" {
-    var arena = std.heap.ArenaAllocator.init(std.heap.brk_allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -649,7 +649,7 @@ test "parser: nil" {
 }
 
 test "parser: fn shorthand single arg" {
-    var arena = std.heap.ArenaAllocator.init(std.heap.brk_allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -672,7 +672,7 @@ test "parser: fn shorthand single arg" {
 }
 
 test "parser: fn shorthand no args" {
-    var arena = std.heap.ArenaAllocator.init(std.heap.brk_allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
@@ -690,7 +690,7 @@ test "parser: fn shorthand no args" {
 }
 
 test "parser: fn shorthand two args" {
-    var arena = std.heap.ArenaAllocator.init(std.heap.brk_allocator);
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
