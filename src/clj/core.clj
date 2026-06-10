@@ -621,42 +621,42 @@
    numerically equal (e.g. (== 1 1.0) => true). For non-numeric args,
    falls back to value equality."
   [& args]
-  (apply zig.core/== args))
+  (zig.core/apply zig.core/== args))
 
 (defn =
   "Returns true if all args are equal (value equality). Requires at least 2 args."
   [& args]
-  (apply zig.core/= args))
+  (zig.core/apply zig.core/= args))
 
 (defn !=
   "Returns true if not all args are equal. Requires at least 2 args."
   [& args]
-  (apply zig.core/!= args))
+  (zig.core/apply zig.core/!= args))
 
 (defn not=
   "Returns true if not all args are equal. Alias for !=. Requires at least 2 args."
   [& args]
-  (apply zig.core/not= args))
+  (zig.core/apply zig.core/not= args))
 
 (defn <
   "Returns true if numerically ascending (strictly less than). Requires at least 2 args."
   [& args]
-  (apply zig.core/< args))
+  (zig.core/apply zig.core/< args))
 
 (defn >
   "Returns true if numerically descending (strictly greater than). Requires at least 2 args."
   [& args]
-  (apply zig.core/> args))
+  (zig.core/apply zig.core/> args))
 
 (defn <=
   "Returns true if numerically ascending (less than or equal). Requires at least 2 args."
   [& args]
-  (apply zig.core/<= args))
+  (zig.core/apply zig.core/<= args))
 
 (defn >=
   "Returns true if numerically descending (greater than or equal). Requires at least 2 args."
   [& args]
-  (apply zig.core/>= args))
+  (zig.core/apply zig.core/>= args))
 
 ;; ---- Comparison ----
 
@@ -684,7 +684,7 @@
 (defn get
   "Returns the value mapped to key, not-found (nil) if not present."
   [& args]
-  (apply zig.core/get args))
+  (zig.core/apply zig.core/get args))
 
 ;; ---- Collection operations ----
 
@@ -693,14 +693,14 @@
    (conj item) returns a list with item.
    (conj coll item) adds item to coll."
   [& args]
-  (apply zig.core/conj args))
+  (zig.core/apply zig.core/conj args))
 
 (defn str
   "With no args, returns the empty string. With one arg, returns
    (.toString arg). With more args, returns the concatenation of
    the .toString of each."
   [& args]
-  (apply zig.core/str args))
+  (zig.core/apply zig.core/str args))
 
 (defn nano-time
   "Returns current instant's nanosecond time (monotonic clock).
@@ -776,29 +776,29 @@
 (defn disj
   "Returns a new set with the items removed."
   [& args]
-  (apply zig.core/disj args))
+  (zig.core/apply zig.core/disj args))
 
 ;; ---- Map operations ----
 
 (defn assoc
   "Associates key(s) with value(s) in a map, returning a new map."
   [& args]
-  (apply zig.core/assoc args))
+  (zig.core/apply zig.core/assoc args))
 
 (defn merge
   "Merges multiple maps into one. Later maps override earlier ones for duplicate keys."
   [& args]
-  (apply zig.core/merge args))
+  (zig.core/apply zig.core/merge args))
 
 (defn hash-map
   "Returns a map with the given key-value pairs."
   [& args]
-  (apply zig.core/hash-map args))
+  (zig.core/apply zig.core/hash-map args))
 
 (defn dissoc
   "Returns a new map without the given keys."
   [& args]
-  (apply zig.core/dissoc args))
+  (zig.core/apply zig.core/dissoc args))
 
 ;; ---- Collection operations ----
 
@@ -845,24 +845,24 @@
   ([] (zig.core/+))
   ([a] (zig.core/+ a))
   ([a b] (zig.core/+ a b))
-  ([a b & args] (apply zig.core/+ a b args)))
+  ([a b & args] (zig.core/apply zig.core/+ a b args)))
 
 (defn -
   "Subtracts nums from the first. With one arg, returns its negation. (-) throws."
   [& args]
-  (apply zig.core/- args))
+  (zig.core/apply zig.core/- args))
 
 (defn *
   "Returns the product of nums. (*) returns 1."
   ([] (zig.core/*))
   ([a] (zig.core/* a))
   ([a b] (zig.core/* a b))
-  ([& args] (apply zig.core/* args)))
+  ([& args] (zig.core/apply zig.core/* args)))
 
 (defn /
   "Divides nums. (/ x) returns the reciprocal. (/) throws."
   [& args]
-  (apply zig.core// args))
+  (zig.core/apply zig.core// args))
 
 (defn rem
   "Returns remainder of dividing numerator by denominator.
@@ -939,17 +939,17 @@
 (defn list
   "Returns a list of the args."
   [& args]
-  (apply zig.core/list args))
+  (zig.core/apply zig.core/list args))
 
 (defn vec
   "Returns a vector of the args, or converts a collection to a vector."
   [& args]
-  (apply zig.core/vec args))
+  (zig.core/apply zig.core/vec args))
 
 (defn concat
   "Returns a lazy sequence consisting of the items in each collection, in order."
   [& args]
-  (apply zig.core/concat args))
+  (zig.core/apply zig.core/concat args))
 
 (defn seq
   "Returns a sequence of the collection. Returns nil if the collection is empty."
@@ -961,12 +961,12 @@
 (defn print
   "Prints the string representation of the args to stdout."
   [& args]
-  (apply zig.core/print args))
+  (zig.core/apply zig.core/print args))
 
 (defn println
   "Prints the string representation of the args to stdout, followed by a newline."
   [& args]
-  (apply zig.core/println args))
+  (zig.core/apply zig.core/println args))
 
 ;; ---- Atoms ----
 
@@ -980,12 +980,12 @@
 (defn bit-and
   "Returns the bitwise AND of the args."
   [& args]
-  (apply zig.core/bit-and args))
+  (zig.core/apply zig.core/bit-and args))
 
 (defn bit-or
   "Returns the bitwise OR of the args."
   [& args]
-  (apply zig.core/bit-or args))
+  (zig.core/apply zig.core/bit-or args))
 
 (defn bit-not
   "Returns the bitwise NOT of the arg."
@@ -995,7 +995,7 @@
 (defn bit-xor
   "Returns the bitwise XOR of the args."
   [& args]
-  (apply zig.core/bit-xor args))
+  (zig.core/apply zig.core/bit-xor args))
 
 (defn bit-and-not
   "Returns the bitwise AND NOT (clear bits in x that are set in y)."
@@ -1059,7 +1059,7 @@
 (defn swap!
   "Atomically swaps the value of the atom to be: (apply f current-value & args)."
   [& args]
-  (apply zig.core/swap! args))
+  (zig.core/apply zig.core/swap! args))
 
 (defn reset!
   "Reset the atom's value to new-val and return it."
@@ -1328,29 +1328,45 @@
 (defn comp
   "Returns a function that is the composition of the supplied functions."
   [& fns]
-  (apply zig.core/comp fns))
+  (zig.core/apply zig.core/comp fns))
 
 (defn fnil
   "Returns a function that calls f with nil replaced by the supplied defaults."
   [f & defaults]
-  (apply zig.core/fnil (vec (concat (list f) defaults))))
+  (zig.core/apply zig.core/fnil (vec (concat (list f) defaults))))
 
 (defn juxt
   "Returns a function that calls each of the supplied functions and returns
    a vector of the results."
   [& fns]
-  (apply zig.core/juxt fns))
+  (zig.core/apply zig.core/juxt fns))
 
 (defn partial
   "Returns a function that is a partial application of f with the supplied args."
   [f & args]
-  (apply zig.core/partial (vec (concat (list f) args))))
+  (zig.core/apply zig.core/partial (vec (concat (list f) args))))
 
 (defn trampoline
   "Calls f with the supplied args. If f returns a fn, calls that fn,
    repeating until a non-fn result is returned."
   [f & args]
-  (apply zig.core/trampoline (vec (concat (list f) args))))
+  (zig.core/apply zig.core/trampoline (vec (concat (list f) args))))
+
+;; ---- Generic ----
+(defn list*
+  "Creates a new seq containing the items prepended to the rest, the last of which will be treated as a sequence."
+  ([args] (seq args))
+  ([a args] (cons a args))
+  ([a b args] (cons a (cons b args)))
+  ([a b c args] (cons a (cons b (cons c args))))
+  ([a b c d & more]
+     (cons a (cons b (cons c (cons d (spread more)))))))
+
+(defn __apply
+  "Applies fn f to the argument list formed by prepending intervening arguments to args."
+  [fn & args]
+  (zig.core/apply fn args))
+
 
 ;; ---- Lazy sequence operations ----
 
