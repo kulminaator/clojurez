@@ -216,7 +216,7 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
                     }
                 }
             }
-            // Env.entries is a MultiArrayList — use .bytes
+            // Mark the fn's env entries buffer
             if (val.fn_val.env.entries.entries.len > 0) {
                 ctx.gc.markRecursive(val.fn_val.env.entries.entries.bytes, ctx);
             }
@@ -263,8 +263,18 @@ fn scanLazySeqThunk(thunk_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     if (thunk.body.items.len > 0) {
         ctx.gc.markRecursive(thunk.body.items.ptr, ctx);
     }
+    // Mark the thunk's env entries buffer
     if (thunk.env.entries.entries.len > 0) {
         ctx.gc.markRecursive(thunk.env.entries.entries.bytes, ctx);
+    }
+    // Mark the thunk's env index_header (separate allocation)
+    if (thunk.env.entries.index_header) |header| {
+        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(header)), ctx);
+    }
+    // Scan the thunk's env values (they contain child pointers)
+    var it = thunk.env.entries.iterator();
+    while (it.next()) |entry| {
+        scanValueChildrenDirect(entry.value_ptr, ctx);
     }
 }
 
@@ -279,9 +289,33 @@ fn scanFnData(fndata_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     const fndata: *Value.FnData = @ptrCast(@alignCast(fndata_ptr));
     if (fndata.arities.items.len > 0) {
         ctx.gc.markRecursive(fndata.arities.items.ptr, ctx);
+        // Each Arity has params and body lists that need marking
+        for (fndata.arities.items) |arity| {
+            if (arity.params.items.len > 0) {
+                ctx.gc.markRecursive(arity.params.items.ptr, ctx);
+            }
+            if (arity.body.items.len > 0) {
+                ctx.gc.markRecursive(arity.body.items.ptr, ctx);
+            }
+            if (arity.rest_name) |rn| {
+                if (rn.len > 0) {
+                    ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(rn.ptr))), ctx);
+                }
+            }
+        }
     }
+    // Mark the fn's env entries buffer
     if (fndata.env.entries.entries.len > 0) {
         ctx.gc.markRecursive(fndata.env.entries.entries.bytes, ctx);
+    }
+    // Mark the fn's env index_header (separate allocation)
+    if (fndata.env.entries.index_header) |header| {
+        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(header)), ctx);
+    }
+    // Scan the fn's env values (they contain child pointers)
+    var it = fndata.env.entries.iterator();
+    while (it.next()) |entry| {
+        scanValueChildrenDirect(entry.value_ptr, ctx);
     }
 }
 
