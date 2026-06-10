@@ -842,8 +842,10 @@
 
 (defn +
   "Returns the sum of nums. (+) returns 0."
-  [& args]
-  (apply zig.core/+ args))
+  ([] (zig.core/+))
+  ([a] (zig.core/+ a))
+  ([a b] (zig.core/+ a b))
+  ([a b & args] (apply zig.core/+ a b args)))
 
 (defn -
   "Subtracts nums from the first. With one arg, returns its negation. (-) throws."
@@ -852,8 +854,10 @@
 
 (defn *
   "Returns the product of nums. (*) returns 1."
-  [& args]
-  (apply zig.core/* args))
+  ([] (zig.core/*))
+  ([a] (zig.core/* a))
+  ([a b] (zig.core/* a b))
+  ([& args] (apply zig.core/* args)))
 
 (defn /
   "Divides nums. (/ x) returns the reciprocal. (/) throws."
