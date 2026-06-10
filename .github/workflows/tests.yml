@@ -27,8 +27,10 @@ jobs:
           zig-version: 0.17.0-dev.702+18b3c78a9
 
       - name: Build
-        run: zig build -Drelease-safe=true
-
+        run: zig build 
+        #should we add this there Doptimize=ReleaseSafe ?
+        
+        
       - name: Make test script executable (Unix)
         if: runner.os != 'Windows'
         run: chmod +x tests/run-tests.sh
