@@ -103,6 +103,13 @@ pub const GC = struct {
     sweep_enabled: bool = true,
     verbose: bool = false,
 
+    // Temporary hash table for O(1) header lookup during collect.
+    // Simple open-addressing hash table for *anyopaque → *Header mapping.
+    header_table_keys: []?*anyopaque = &.{},
+    header_table_vals: []?*Header = &.{},
+    header_table_cap: usize = 0,
+    header_table_len: usize = 0,
+
     // Statistics
     alloc_count: usize = 0,
     free_count: usize = 0,
@@ -129,6 +136,7 @@ pub const GC = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        self.freeHeaderTable();
         self.log("[GC] DEINIT: blocks={d} live={d}\n", .{ self.block_count, self.current_allocated });
 
         // Free all remaining blocks
@@ -214,9 +222,12 @@ pub const GC = struct {
     pub fn free(self: *Self, ptr: ?*anyopaque) bool {
         if (ptr == null) return false;
         const real_ptr: *anyopaque = ptr.?;
-
         const header = self.findHeader(real_ptr) orelse return false;
+        return self.freeHeader(header);
+    }
 
+    /// Internal: free a block given its header.
+    fn freeHeader(self: *Self, header: *Header) bool {
         // Remove from linked list
         if (header.prev) |prev| {
             prev.next = header.next;
@@ -241,14 +252,117 @@ pub const GC = struct {
             self.current_allocated -= block_size;
         }
 
-        self.log("[GC] FREE  size={d} ptr={*} blocks={d} live={d}\n",
-            .{ block_size, real_ptr, self.block_count, self.current_allocated });
-
         return true;
     }
 
-    /// Walk the block list to find the header for a data pointer.
+    /// Find the header for a data pointer.
+    /// Uses hash table for O(1) lookup during collect, falls back to linear scan.
     pub fn findHeader(self: *Self, dataPtr: *anyopaque) ?*Header {
+        // Fast path: use hash table if built
+        if (self.header_table_len > 0) {
+            const header = self.headerTableGet(dataPtr);
+            if (header) |h| return h;
+            // Not in table — this pointer is not a GC-tracked block
+            return null;
+        }
+        // Slow path: linear scan
+        return self.findHeaderSlow(dataPtr);
+    }
+
+    /// Build hash table from block list for O(1) lookup.
+    fn buildHeaderTable(self: *Self) void {
+        // Calculate needed capacity (load factor ~0.5), power of 2
+        const needed = self.block_count * 2;
+        var new_cap: usize = 16;
+        while (new_cap < needed) : (new_cap *= 2) {}
+
+        // Allocate if needed
+        if (self.header_table_keys.len < new_cap) {
+            if (self.header_table_cap > 0) {
+                self.wrapped.free(self.header_table_keys);
+                self.wrapped.free(self.header_table_vals);
+            }
+            self.header_table_keys = self.wrapped.alloc(?*anyopaque, new_cap) catch @panic("GC OOM");
+            self.header_table_vals = self.wrapped.alloc(?*Header, new_cap) catch @panic("GC OOM");
+        }
+        self.header_table_cap = new_cap;
+        self.header_table_len = 0;
+
+        // Clear table
+        var i: usize = 0;
+        while (i < self.header_table_cap) : (i += 1) {
+            self.header_table_keys[i] = null;
+            self.header_table_vals[i] = null;
+        }
+
+        // Insert all blocks
+        var block = self.blocks;
+        while (block) |b| {
+            const data = @as(*anyopaque, @ptrCast(@as([*]u8, @ptrCast(b)) + b.offset));
+            self.headerTablePut(data, b);
+            block = b.next;
+        }
+    }
+
+    /// Hash function for pointers.
+    fn hashPtr(self: *Self, ptr: *anyopaque) usize {
+        _ = self;
+        const addr: usize = @intFromPtr(ptr);
+        // Simple but effective hash for pointers
+        return addr ^ (addr >> 14) ^ (addr >> 28);
+    }
+
+    /// Insert into hash table.
+    fn headerTablePut(self: *Self, key: *anyopaque, val: *Header) void {
+        const cap = self.header_table_cap;
+        const mask = cap - 1;
+        var idx = self.hashPtr(key) & mask;
+        var i: usize = 0;
+        while (i < cap) : (i += 1) {
+            if (self.header_table_keys[idx] == null) {
+                self.header_table_keys[idx] = key;
+                self.header_table_vals[idx] = val;
+                self.header_table_len += 1;
+                return;
+            }
+            if (self.header_table_keys[idx] == key) {
+                self.header_table_vals[idx] = val;
+                return;
+            }
+            idx = (idx + 1) & mask;
+        }
+    }
+
+    /// Lookup in hash table.
+    fn headerTableGet(self: *Self, key: *anyopaque) ?*Header {
+        const cap = self.header_table_cap;
+        const mask = cap - 1;
+        var idx = self.hashPtr(key) & mask;
+        var i: usize = 0;
+        while (i < cap) : (i += 1) {
+            const entry = self.header_table_keys[idx];
+            if (entry == null) return null; // empty slot
+            if (entry == key) return self.header_table_vals[idx];
+            idx = (idx + 1) & mask;
+        }
+        return null;
+    }
+
+    /// Free hash table memory.
+    fn freeHeaderTable(self: *Self) void {
+        if (self.header_table_keys.len > 0) {
+            self.wrapped.free(self.header_table_keys);
+            self.wrapped.free(self.header_table_vals);
+        }
+        self.header_table_keys = &.{};
+        self.header_table_vals = &.{};
+        self.header_table_cap = 0;
+        self.header_table_len = 0;
+    }
+
+    /// Walk the block list to find the header for a data pointer.
+    /// Slow fallback for pointers not allocated through gc.alloc.
+    fn findHeaderSlow(self: *Self, dataPtr: *anyopaque) ?*Header {
         var block = self.blocks;
         while (block) |b| {
             const data = @as(*anyopaque, @ptrCast(@as([*]u8, @ptrCast(b)) + b.offset));
@@ -280,6 +394,10 @@ pub const GC = struct {
     pub fn collect(self: *Self, scan_fn: ScanFn) void {
         self.log("[GC] === COLLECT START blocks={d} roots={d} ===\n",
             .{ self.block_count, self.roots.items.len });
+
+        // Build O(1) header lookup table for this collection cycle
+        self.buildHeaderTable();
+        defer self.freeHeaderTable();
 
         // Phase 1: Clear all marks
         var block = self.blocks;
