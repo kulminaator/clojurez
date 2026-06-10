@@ -399,9 +399,13 @@ fn gcRootCallback(gc_inst: *gc_mod.GC) void {
     // This function is called from within gc.collect().
     // We use static pointers set up during registration.
     if (gc_root_env) |env| {
+        // Mark the Env struct itself (allocated via GC allocator)
+        gc_inst.markRecursive(env, &ctx);
         scanEnvEntriesDirect(env, gc_inst);
     }
     if (gc_root_ns_mgr) |ns_mgr| {
+        // Mark the NamespaceManager struct itself (allocated via GC allocator)
+        gc_inst.markRecursive(ns_mgr, &ctx);
         // Register NamespaceManager's own allocations as roots.
         // These are not part of any Value, so the scan function won't find them.
         if (ns_mgr.current_ns.len > 0) {
@@ -413,6 +417,11 @@ fn gcRootCallback(gc_inst: *gc_mod.GC) void {
             gc_inst.setObjectType(ns_mgr.namespaces.entries.bytes, gc_mod.GCObjectType.unknown);
             gc_inst.markRecursive(ns_mgr.namespaces.entries.bytes, &ctx);
         }
+        // Mark the namespaces HashMap's index_header (separate allocation)
+        if (ns_mgr.namespaces.index_header) |header| {
+            gc_inst.setObjectType(@as(*anyopaque, @ptrCast(header)), gc_mod.GCObjectType.unknown);
+            gc_inst.markRecursive(@as(*anyopaque, @ptrCast(header)), &ctx);
+        }
         // Namespace names (keys in the namespaces map)
         var nit = ns_mgr.namespaces.iterator();
         while (nit.next()) |entry| {
@@ -420,6 +429,8 @@ fn gcRootCallback(gc_inst: *gc_mod.GC) void {
             if (entry.key_ptr.*.len > 0) {
                 gc_inst.markRecursive(@as(*anyopaque, @ptrCast(@constCast(entry.key_ptr.*.ptr))), &ctx);
             }
+            // Mark the Env struct itself (allocated via GC allocator)
+            gc_inst.markRecursive(entry.value_ptr.*, &ctx);
             // Namespace env entries
             scanEnvEntriesDirect(entry.value_ptr.*, gc_inst);
         }
@@ -438,12 +449,27 @@ fn gcRootCallback(gc_inst: *gc_mod.GC) void {
             gc_inst.setObjectType(ns_mgr.aliases.entries.bytes, gc_mod.GCObjectType.unknown);
             gc_inst.markRecursive(ns_mgr.aliases.entries.bytes, &ctx);
         }
+        // Mark the aliases HashMap's index_header (separate allocation)
+        if (ns_mgr.aliases.index_header) |header| {
+            gc_inst.setObjectType(@as(*anyopaque, @ptrCast(header)), gc_mod.GCObjectType.unknown);
+            gc_inst.markRecursive(@as(*anyopaque, @ptrCast(header)), &ctx);
+        }
         var ait = ns_mgr.aliases.iterator();
         while (ait.next()) |aentry| {
             if (aentry.key_ptr.*.len > 0) {
                 gc_inst.markRecursive(@as(*anyopaque, @ptrCast(@constCast(aentry.key_ptr.*.ptr))), &ctx);
             }
-            var nit2 = aentry.value_ptr.iterator();
+            // Mark inner HashMap (NamespaceAliases) entries buffer + index_header
+            const inner_map = aentry.value_ptr.*;
+            if (inner_map.entries.len > 0) {
+                gc_inst.setObjectType(@as(*anyopaque, @ptrCast(inner_map.entries.bytes)), gc_mod.GCObjectType.unknown);
+                gc_inst.markRecursive(@as(*anyopaque, @ptrCast(inner_map.entries.bytes)), &ctx);
+            }
+            if (inner_map.index_header) |header| {
+                gc_inst.setObjectType(@as(*anyopaque, @ptrCast(header)), gc_mod.GCObjectType.unknown);
+                gc_inst.markRecursive(@as(*anyopaque, @ptrCast(header)), &ctx);
+            }
+            var nit2 = inner_map.iterator();
             while (nit2.next()) |aentry2| {
                 if (aentry2.key_ptr.*.len > 0) {
                     gc_inst.markRecursive(@as(*anyopaque, @ptrCast(@constCast(aentry2.key_ptr.*.ptr))), &ctx);
@@ -475,6 +501,11 @@ fn scanEnvEntriesDirect(env: *Env, gc_inst: *gc_mod.GC) void {
         const bytes_ptr = @as(*anyopaque, @ptrCast(env.entries.entries.bytes));
         gc_inst.setObjectType(bytes_ptr, gc_mod.GCObjectType.unknown);
         gc_inst.markRecursive(bytes_ptr, &ctx);
+    }
+    // Mark the index_header (separate allocation for the hash index array)
+    if (env.entries.index_header) |header| {
+        gc_inst.setObjectType(@as(*anyopaque, @ptrCast(header)), gc_mod.GCObjectType.unknown);
+        gc_inst.markRecursive(@as(*anyopaque, @ptrCast(header)), &ctx);
     }
     var it = env.entries.iterator();
     while (it.next()) |entry| {

@@ -139,15 +139,28 @@ pub const GC = struct {
         self.freeHeaderTable();
         self.log("[GC] DEINIT: blocks={d} live={d}\n", .{ self.block_count, self.current_allocated });
 
-        // Free all remaining blocks
+        // Free all remaining blocks.
+        // Safeguard: verify magic number to protect against corrupted headers.
+        // At program exit, the OS reclaims all memory anyway, so we just
+        // need to avoid double-frees or invalid frees that could crash.
         var block = self.blocks;
+        var freed: usize = 0;
+        var skipped: usize = 0;
         while (block) |b| {
             const next = b.next;
-            const total = b.offset + b.size;
-            const block_start = @as([*]u8, @ptrCast(b));
-            self.wrapped.free(block_start[0..total]);
+            if (b.magic == MAGIC) {
+                const total = b.offset + b.size;
+                const block_start = @as([*]u8, @ptrCast(b));
+                self.wrapped.free(block_start[0..total]);
+                freed += 1;
+            } else {
+                // Corrupted header — skip to avoid invalid free.
+                // The OS will reclaim this memory on exit.
+                skipped += 1;
+            }
             block = next;
         }
+        self.log("[GC] DEINIT: freed={d} skipped={d}\n", .{ freed, skipped });
         self.blocks = null;
         self.block_count = 0;
         self.wrapped.free(self.roots.items);

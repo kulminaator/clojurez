@@ -306,6 +306,8 @@ pub const Env = struct {
             var it = self.entries.iterator();
             while (it.next()) |entry| {
                 if (std.mem.eql(u8, entry.key_ptr.*, name)) {
+                    // Free old key string to avoid leak
+                    allocator.free(entry.key_ptr.*);
                     entry.key_ptr.* = owned_key;
                     entry.value_ptr.* = value;
                     return;

@@ -198,12 +198,31 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         },
 
         .function => {
+            // Mark the arities array buffer itself
             if (val.fn_val.arities.items.len > 0) {
                 ctx.gc.markRecursive(val.fn_val.arities.items.ptr, ctx);
+                // Each Arity has params (list) and body (list) that need marking
+                for (val.fn_val.arities.items) |arity| {
+                    if (arity.params.items.len > 0) {
+                        ctx.gc.markRecursive(arity.params.items.ptr, ctx);
+                    }
+                    if (arity.body.items.len > 0) {
+                        ctx.gc.markRecursive(arity.body.items.ptr, ctx);
+                    }
+                    if (arity.rest_name) |rn| {
+                        if (rn.len > 0) {
+                            ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(rn.ptr))), ctx);
+                        }
+                    }
+                }
             }
             // Env.entries is a MultiArrayList — use .bytes
             if (val.fn_val.env.entries.entries.len > 0) {
                 ctx.gc.markRecursive(val.fn_val.env.entries.entries.bytes, ctx);
+            }
+            // Also mark the env's index_header
+            if (val.fn_val.env.entries.index_header) |header| {
+                ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(header)), ctx);
             }
         },
 

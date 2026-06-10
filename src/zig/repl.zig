@@ -129,6 +129,11 @@ pub fn runRepl(allocator: Allocator, env: *Value.Env) anyerror!void {
             const should_exit = try evaluateAndPrint(allocator, full_input, eval_env);
             if (should_exit) break;
 
+            // Collect garbage after each expression — temporary values from
+            // evaluation (strings, lists, intermediate results) are no longer
+            // reachable and should be swept.
+            if (gc_mod.current_gc) |gc| gc.collect(gc_scan.valueScanFn);
+
             // Clear the multiline buffer for the next expression
             multiline_buf.clearRetainingCapacity();
             gc_mod.repl_history_buffer = multiline_buf.items;
