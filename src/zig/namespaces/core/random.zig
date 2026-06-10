@@ -12,9 +12,9 @@ const toInt = helpers.toInt;
 var prng = std.Random.SplitMix64.init(42);
 
 pub fn initRandom() void {
-    var ts: std.os.linux.timespec = undefined;
-    _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts);
-    const seed: u64 = @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const ts = std.Io.Clock.awake.now(io);
+    const seed: u64 = @intCast(ts.nanoseconds);
     prng = std.Random.SplitMix64.init(seed);
 }
 
