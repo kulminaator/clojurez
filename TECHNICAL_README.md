@@ -391,19 +391,48 @@ GUIDELINES.md         — Development & testing guidelines
 
 ## Testing
 
+**Whenever you make changes to the codebase, you must run BOTH test suites.** Each covers a different layer and neither alone is sufficient to verify correctness.
+
+### 1. Zig Unit Tests
+
+Tests individual functions and modules in isolation:
+
 ```bash
-# Run CLI/integration tests (all must complete within 10s each)
-# (automatically copies core.clj and builds)
-./run_tests.sh
-
-# Run Zig unit tests
 zig test -fsingle-threaded src/zig/all_tests.zig
+```
 
-# Build all 3 variants
+### 2. CLI / Integration Tests
+
+Tests the full pipeline — lexer, parser, evaluator, and runtime — through the CLI interface. This script also copies `core.clj` and builds the binary automatically:
+
+```bash
+./run_tests.sh
+```
+
+### Always Run Both
+
+| Change type | Run Zig tests | Run integration tests |
+| ----------- | :-----------: | :-------------------: |
+| Lexer / Parser changes | ✅ | ✅ |
+| Evaluator / special forms | ✅ | ✅ |
+| Core built-in functions | ✅ | ✅ |
+| GC / memory management | ✅ | ✅ |
+| `core.clj` (Clojure library) | — | ✅ (still run Zig tests too) |
+| Any other change | ✅ | ✅ |
+
+```bash
+# Quick way to run both in sequence:
+zig test -fsingle-threaded src/zig/all_tests.zig && ./run_tests.sh
+```
+
+### Build
+
+```bash
+# Build all 3 variants (copies core.clj automatically)
 zig build
 ```
 
-See [GUIDELINES.md](GUIDELINES.md) for testing standards.
+See [GUIDELINES.md](GUIDELINES.md) for testing standards and detailed coverage requirements.
 
 ## What Works
 
