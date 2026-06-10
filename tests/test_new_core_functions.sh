@@ -376,6 +376,12 @@ run_test "!= same" "(!= 1 1)" "false"
 run_test "!= multiple" "(!= 1 2 3)" "true"
 run_test "zig.core/!=" "(zig.core/!= 1 2)" "true"
 
+# not= (alias for !=)
+run_test "not= different" "(not= 1 2)" "true"
+run_test "not= same" "(not= 1 1)" "false"
+run_test "not= multiple" "(not= 1 2 3)" "true"
+run_test "zig.core/not=" "(zig.core/not= 1 2)" "true"
+
 # < (less than)
 run_test "< ascending" "(< 1 2 3)" "true"
 run_test "< not ascending" "(< 3 2 1)" "false"
@@ -397,3 +403,23 @@ run_test "zig.core/<=" "(zig.core/<= 1 1)" "true"
 run_test ">= descending eq" "(>= 3 2 2)" "true"
 run_test ">= not descending" "(>= 1 2 3)" "false"
 run_test "zig.core/>=" "(zig.core/>= 2 2)" "true"
+
+# + (wrapper)
+run_test "+ basic" "(+ 1 2 3)" "6"
+run_test "+ zero args" "(+)" "0"
+run_test "+ one arg" "(+ 5)" "5"
+run_test "zig.core/+" "(zig.core/+ 1 2 3)" "6"
+
+# - (wrapper)
+run_test "- two args" "(- 10 3)" "7"
+run_test "- three args" "(- 10 3 2)" "5"
+run_test "zig.core/-" "(zig.core/- 10 3)" "7"
+
+# * (wrapper)
+run_test "* basic" "(* 2 3 4)" "24"
+run_test "* zero args" "(*)" "1"
+run_test "zig.core/*" "(zig.core/* 2 3 4)" "24"
+
+# / (wrapper)
+run_test "/ basic" "(/ 10 2)" "5"
+run_test "zig.core//" "(zig.core// 10 2)" "5"

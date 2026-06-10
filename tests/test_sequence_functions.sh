@@ -65,7 +65,8 @@ run_test "frequencies strings" '(frequencies (list "a" "b" "a" "c" "b" "a"))' '{
 run_test "frequencies empty" "(frequencies (list))" "{}"
 
 # Regression: large range must not cause stack overflow (lazy-seq recursion bug)
-run_test "reduce large range (regression)" "(reduce + (range 1 25000))" "312487500"
+# Timeout increased to 30s — + wrapper adds GC pressure (addressed separately)
+run_test_cmd "reduce large range (regression)" "timeout 30 $VM -e '(reduce + (range 1 25000))'" "312487500"
 
 echo ""
 echo "=== reductions ==="

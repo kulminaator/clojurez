@@ -633,6 +633,11 @@
   [& args]
   (apply zig.core/!= args))
 
+(defn not=
+  "Returns true if not all args are equal. Alias for !=. Requires at least 2 args."
+  [& args]
+  (apply zig.core/not= args))
+
 (defn <
   "Returns true if numerically ascending (strictly less than). Requires at least 2 args."
   [& args]
@@ -832,6 +837,28 @@
   (zig.core/bounded-count n coll))
 
 ;; ---- Arithmetic ----
+;; Wrapped Zig builtins. For max performance in tight loops, use zig.core/+ etc.
+;; Wrapper overhead: ~16x for computation, plus GC amplification.
+
+(defn +
+  "Returns the sum of nums. (+) returns 0."
+  [& args]
+  (apply zig.core/+ args))
+
+(defn -
+  "Subtracts nums from the first. With one arg, returns its negation. (-) throws."
+  [& args]
+  (apply zig.core/- args))
+
+(defn *
+  "Returns the product of nums. (*) returns 1."
+  [& args]
+  (apply zig.core/* args))
+
+(defn /
+  "Divides nums. (/ x) returns the reciprocal. (/) throws."
+  [& args]
+  (apply zig.core// args))
 
 (defn rem
   "Returns remainder of dividing numerator by denominator.
