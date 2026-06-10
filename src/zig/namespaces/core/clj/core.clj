@@ -1353,13 +1353,12 @@
   (zig.core/apply zig.core/trampoline (vec (concat (list f) args))))
 
 ;; ---- Generic ----
+
 (defn apply
   "Applies fn f to the argument list formed by prepending intervening arguments to args."
   [fn & args]
-  ;; (println (vec (concat (list fn) args)))
   (zig.core/apply zig.core/apply (vec (concat (list fn) args)))
 )
-
 
 ;; ---- Lazy sequence operations ----
 
