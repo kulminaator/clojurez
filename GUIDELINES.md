@@ -287,10 +287,10 @@ This ensures the bug never reappears.
 ### Running All Tests
 
 ```bash
-# Run CLI/integration tests (47 tests)
+# Run CLI/integration tests
 ./run_tests.sh
 
-# Run Zig unit tests (10 parser tests)
+# Run Zig unit tests
 zig test -fsingle-threaded src/zig/parser.zig
 ```
 
@@ -475,15 +475,9 @@ Before starting a task, ask:
 
 ---
 
-## Appendix: Current Test Status
+## Appendix: Test Requirements
 
-| Category | Count | Status |
-|----------|-------|--------|
-| CLI/Integration tests | 859 | All passing |
-| Zig unit tests | 269 | All passing |
-| Fibonacci sample | 1 | Passing |
-| Hanoi sample | 1 | Passing |
-| **Total** | **1130** | **1130/1130 passing** |
+**All tests must pass.** Both CLI/integration tests and Zig unit tests.
 
 ### Test Categories (run_tests.sh)
 

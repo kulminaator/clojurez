@@ -37,8 +37,8 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 - Full support for Estonian (õäö), emoji (😀😃), Japanese (古池や), and all UTF-8 text
 
 ### Special Forms
-- `def` — define a global variable
-- `defn` — define a named function (supports multi-arity)
+- `def` — define a var in the current namespace
+- `defn` — define a named function in the current namespace (supports multi-arity)
 - `defmacro` — define a macro (full macro expansion support)
 - `fn` — create an anonymous function (supports multi-arity)
 - `if` — conditional (`(if test then else)`)
@@ -193,6 +193,27 @@ Example with `:require`:
 
 (defn -main []
   (println (str (h/get-hello) " " (w/get-world))))
+```
+
+### Namespace Architecture
+
+The VM follows Clojure's namespace model. There are no "global" functions — everything lives in a namespace:
+
+- **`user`** — the default namespace. REPL, `-e`, and file execution start here.
+- **`clojure.core`** — the public API namespace. All built-in functions and `core.clj` definitions live here. `user` inherits from `clojure.core` by default, so all functions are available without qualification.
+- **`zig.core`** — internal implementation namespace. Raw Zig builtins live here. Clojure wrappers in `clojure.core` delegate to `zig.core/` internally.
+
+**Symbol resolution chain:**
+```
+(+ 1 2) from user namespace:
+  user → (not found) → clojure.core → (+ wrapper) → (apply zig.core/+ args) → zig.core → (+ builtin) → 3
+```
+
+Qualified names work as expected:
+```clojure
+user/x          ;; looks up x in user namespace
+clojure.core/+  ;; looks up + in clojure.core namespace
+zig.core/+      ;; looks up + in zig.core namespace (raw Zig builtin)
 ```
 
 ### Core Functions
@@ -354,7 +375,8 @@ src/
 ├── clj/              — Clojure source (core.clj, baked into binary at compile time)
 └── zig/
     ├── clj/          — Copy of core.clj for @embedFile (auto-generated)
-    ├── core/         — Domain modules (arithmetic, comparison, maps, sets, etc.)
+    ├── namespaces/
+    │   └── core/     — Zig builtin implementations (arithmetic, comparison, maps, etc.)
     ├── *.zig         — Core VM modules (eval, lexer, parser, value, gc, etc.)
     └── ...
 
@@ -370,11 +392,11 @@ GUIDELINES.md         — Development & testing guidelines
 ## Testing
 
 ```bash
-# Run CLI/integration tests (587 tests, all must complete within 10s each)
+# Run CLI/integration tests (all must complete within 10s each)
 # (automatically copies core.clj and builds)
 ./run_tests.sh
 
-# Run Zig unit tests (269 tests)
+# Run Zig unit tests
 zig test -fsingle-threaded src/zig/all_tests.zig
 
 # Build all 3 variants
@@ -388,7 +410,7 @@ See [GUIDELINES.md](GUIDELINES.md) for testing standards.
 - Core data types (nil, bool, int, float, bigint, ratio, decimal, string, symbol, keyword, list, vector, map, set, queue, atom, lazy-seq, cons)
 - **Garbage collection** (mark-and-sweep, automatic memory management)
 - Special forms (def, defn, defmacro, fn, if, when, cond, case, let, do, quote, quasiquote, set!, and, or, loop, recur, binding, var, deref, lazy-seq, ns)
-- **Namespaces** (`ns` with `:require` and `:as` aliases, classpath via `-cp`, main function via `-m`)
+- **Namespaces** (`user` default namespace, `clojure.core` public API, `zig.core` raw builtins, `ns` with `:require` and `:as` aliases, classpath via `-cp`, main function via `-m`)
 - **Macros** (`defmacro` with full macro expansion support, when-not, when-some, when-let, when-first, if-let, for, doseq, time)
 - Threading macros (`->`, `->>`, `cond->`, `cond->>`)
 - Sequence operations (iterate, map, mapcat, take, take-while, take-last, drop, drop-last, drop-while, partition, interpose, reduce, flatten, filter, remove, every?, some, distinct?, next, nthnext, dorun, doall, cycle, repeat, replicate, split-at, split-with, sort, sort-by, shuffle)
