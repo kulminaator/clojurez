@@ -1353,19 +1353,12 @@
   (zig.core/apply zig.core/trampoline (vec (concat (list f) args))))
 
 ;; ---- Generic ----
-(defn list*
-  "Creates a new seq containing the items prepended to the rest, the last of which will be treated as a sequence."
-  ([args] (seq args))
-  ([a args] (cons a args))
-  ([a b args] (cons a (cons b args)))
-  ([a b c args] (cons a (cons b (cons c args))))
-  ([a b c d & more]
-     (cons a (cons b (cons c (cons d (spread more)))))))
-
-(defn __apply
+(defn apply
   "Applies fn f to the argument list formed by prepending intervening arguments to args."
   [fn & args]
-  (zig.core/apply fn args))
+  ;; (println (vec (concat (list fn) args)))
+  (zig.core/apply zig.core/apply (vec (concat (list fn) args)))
+)
 
 
 ;; ---- Lazy sequence operations ----
