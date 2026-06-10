@@ -1,5 +1,8 @@
 name: Build and Test
 
+#FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true
+
+
 on:
   push:
     branches: [ "main" ]
@@ -21,7 +24,7 @@ jobs:
       - name: Install Zig
         uses: goto-bus-stop/setup-zig@v2
         with:
-          zig-version: master
+          zig-version: 0.17.0-dev.702+18b3c78a9
 
       - name: Build
         run: zig build -Drelease-safe=true
