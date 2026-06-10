@@ -6,8 +6,7 @@ const vec = @import("../../vector.zig");
 const Env = Value.Env;
 const sequences = @import("sequences.zig");
 
-const stdout_file = std.Io.File.stdout();
-const stdin_file = std.Io.File.stdin();
+
 
 /// Fully realize a lazy-seq into a concrete list for printing.
 fn fullyRealizeLazySeq(allocator: std.mem.Allocator, val: Value) anyerror!Value {
@@ -69,8 +68,9 @@ fn fmtValue(allocator: std.mem.Allocator, val: Value) anyerror![]const u8 {
 
 pub fn core_print(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
+    const stdout = std.Io.File.stdout();
     var buf: [256]u8 = undefined;
-    var writer = stdout_file.writer(std.Options.debug_io, &buf);
+    var writer = stdout.writer(std.Options.debug_io, &buf);
     for (args.items) |arg| {
         const s = try fmtValue(env_env.allocator, arg);
         defer env_env.allocator.free(s);
@@ -86,8 +86,9 @@ pub fn core_print(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 
 pub fn core_println(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
+    const stdout = std.Io.File.stdout();
     var buf: [256]u8 = undefined;
-    var writer = stdout_file.writer(std.Options.debug_io, &buf);
+    var writer = stdout.writer(std.Options.debug_io, &buf);
     for (args.items, 0..) |arg, i| {
         if (i > 0) try writer.interface.writeAll(" ");
         const s = try fmtValue(env_env.allocator, arg);
@@ -106,8 +107,9 @@ pub fn core_println(self: *Value, args: list.List, env_env: *Env) anyerror!Value
 pub fn core_read_line(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
     _ = args;
+    const stdin = std.Io.File.stdin();
     var buf: [1024]u8 = undefined;
-    var reader = stdin_file.reader(std.Options.debug_io, &buf);
+    var reader = stdin.reader(std.Options.debug_io, &buf);
     var len: usize = 0;
     while (len < buf.len) {
         var slices = [_][]u8{buf[len..]};
