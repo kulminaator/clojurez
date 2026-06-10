@@ -12,6 +12,7 @@ pub fn build(b: *std.Build) void {
         "src/clj/core.clj",
         "src/zig/namespaces/core/clj/core.clj",
     });
+    copy_core.addFileInput(b.path("src/clj/core.clj"));
 
     const src_path = b.path("src/zig/main.zig");
 
@@ -46,6 +47,7 @@ pub fn build(b: *std.Build) void {
 
         // All variants depend on core.clj being copied first
         exe.step.dependOn(&copy_core.step);
+
 
         const install = b.addInstallArtifact(exe, .{});
         b.getInstallStep().dependOn(&install.step);
