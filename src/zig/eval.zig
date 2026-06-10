@@ -329,19 +329,15 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
             if (l.items.len < 2 or l.items.len > 3) return error.ArityError;
             const sym = l.items[1];
             if (sym.type != .symbol) return error.TypeError;
-            const docstring = if (l.items.len == 3 and l.items[2].type == .string)
-                l.items[2]
-            else null;
-            const eval_idx: usize = if (l.items.len == 3 and l.items[2].type != .string) 2 else 1;
+            // (def name value) — always evaluate item[2] (or item[1] if only 2 items)
+            // Docstrings are handled via metadata: (def ^{:doc "..."} name value)
+            const eval_idx: usize = if (l.items.len >= 3) 2 else 1;
             var val = try evalRec(allocator, arena_alloc, l.items[eval_idx], env, depth + 1);
             // Clone to main allocator before storing in persistent env
             const persistent_val = try val.clone(allocator);
             val.deinit(arena_alloc);
             // Bind in current namespace's env if namespace manager is available
             try bindInCurrentNamespace(env, sym.sym_val, persistent_val);
-            if (docstring) |ds| {
-                _ = try ds.clone(arena_alloc); // keep docstring alive (simplified)
-            }
             return try sym.clone(arena_alloc);
         }
 
