@@ -103,6 +103,13 @@ pub const GC = struct {
     sweep_enabled: bool = true,
     verbose: bool = false,
 
+    // Auto-GC: trigger collection when memory grows past threshold since last sweep.
+    // Threshold = max(last_collected_memory * 20%, 1MB).
+    scan_fn: ?ScanFn = null,
+    last_collected_memory: usize = 0,
+    auto_gc_active: bool = false,
+    auto_gc_pending: bool = false,
+
     // Temporary hash table for O(1) header lookup during collect.
     // Simple open-addressing hash table for *anyopaque → *Header mapping.
     header_table_keys: []?*anyopaque = &.{},
@@ -208,6 +215,19 @@ pub const GC = struct {
         self.total_allocated += actual_size;
         self.current_allocated += actual_size;
         if (self.current_allocated > self.peak_allocated) self.peak_allocated = self.current_allocated;
+
+        // Auto-GC: track whether threshold is exceeded. Actual collection
+        // happens at safe points (between form evaluations), not here,
+        // because in-flight allocations are not yet reachable from roots.
+        if (self.auto_gc_active) {
+            const growth = self.current_allocated - self.last_collected_memory;
+            const percent_threshold = (self.last_collected_memory * 20) / 100;
+            const min_threshold: usize = 1024 * 1024; // 1MB
+            const threshold = if (percent_threshold > min_threshold) percent_threshold else min_threshold;
+            if (growth >= threshold) {
+                self.auto_gc_pending = true;
+            }
+        }
 
         const data_ptr = @as(*anyopaque, @ptrCast(mem + HEADER_SIZE + padding));
         self.log("[GC] ALLOC size={d} align={d} ptr={*} blocks={d} live={d}\n",
@@ -434,6 +454,8 @@ pub const GC = struct {
         self.sweep();
 
         self.gc_count += 1;
+        // Record memory level after sweep for auto-GC threshold tracking.
+        self.last_collected_memory = self.current_allocated;
         self.log("[GC] === COLLECT END blocks={d} live={d} ===\n",
             .{ self.block_count, self.current_allocated });
     }
@@ -511,6 +533,29 @@ pub const GC = struct {
     pub fn setSweepEnabled(self: *Self, enabled: bool) void {
         self.sweep_enabled = enabled;
         self.log("[GC] SWEEP {s}\n", .{ if (enabled) "ENABLED" else "DISABLED" });
+    }
+
+    /// Enable automatic GC: trigger collection when memory grows by
+    /// max(last_collected_memory * 20%, 1MB) since the last sweep.
+    /// The scan_fn is stored so alloc() can invoke collect() without a caller.
+    /// Baseline memory is captured at enable time.
+    pub fn setAutoGC(self: *Self, scan_fn: ScanFn) void {
+        self.scan_fn = scan_fn;
+        self.last_collected_memory = self.current_allocated;
+        self.auto_gc_active = true;
+        self.log("[GC] AUTO-GC ENABLED baseline={d}\n", .{self.last_collected_memory});
+    }
+
+    /// Check if auto-GC threshold was exceeded and collect if so.
+    /// Call this at safe points (between form evaluations) where no
+    /// in-flight allocations exist.
+    pub fn tryAutoCollect(self: *Self) void {
+        if (self.auto_gc_pending) {
+            if (self.scan_fn) |fn_ptr| {
+                self.auto_gc_pending = false;
+                self.collect(fn_ptr);
+            }
+        }
     }
 
     /// Statistics snapshot.

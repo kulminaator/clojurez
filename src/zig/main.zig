@@ -79,6 +79,7 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     defer gc_instance.deinit();
     // GC is the sole allocator — no arena in use.
     gc_instance.setSweepEnabled(true);
+    gc_instance.setAutoGC(gc_scan.valueScanFn);
     gc_mod.current_gc = &gc_instance;
 
     // Optional debug tracing on top of GC (zero overhead when disabled).
@@ -283,6 +284,15 @@ fn runExpression(allocator: Allocator, expr: []const u8, env: *Env) anyerror!voi
         }
 
         // Don't deinit result — GC handles it
+        // Auto-GC: check threshold between form evaluations (safe point).
+        // Protect the forms buffer as a temporary root so GC doesn't sweep it.
+        if (gc_mod.current_gc) |gc| {
+            if (forms.items.len > 0) {
+                gc.addRoot(@as(*anyopaque, @ptrCast(forms.items.ptr)));
+                gc.tryAutoCollect();
+                gc.removeRoot(@as(*anyopaque, @ptrCast(forms.items.ptr)));
+            }
+        }
     }
 }
 
@@ -326,6 +336,15 @@ fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void 
         }
 
         result.deinit(allocator);
+        // Auto-GC: check threshold between form evaluations (safe point).
+        // Protect the forms buffer as a temporary root so GC doesn't sweep it.
+        if (gc_mod.current_gc) |gc| {
+            if (forms.items.len > 0) {
+                gc.addRoot(@as(*anyopaque, @ptrCast(forms.items.ptr)));
+                gc.tryAutoCollect();
+                gc.removeRoot(@as(*anyopaque, @ptrCast(forms.items.ptr)));
+            }
+        }
     }
 
 }
