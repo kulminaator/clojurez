@@ -66,6 +66,44 @@ pub fn callBuiltin(allocator: Allocator, f: Value, args_list: list.List, env: *V
             if (matched_arity == null) return error.ArityError;
             const arity = matched_arity.?;
 
+            // Fast path: 2-param, no-rest, body is a single 2-arg call with matching params.
+            // Covers wrapper functions like (defn + [a b] (zig.core/+ a b)).
+            // Avoids env creation, hash-map param binding, body cloning, and symbol resolution.
+            if (arity.params.items.len == 2 and arity.rest_name == null and arg_count == 2) {
+                if (arity.params.items[0].type == .symbol and arity.params.items[1].type == .symbol) {
+                    // Body is wrapped as (do <call>). Find the actual call.
+                    var body_call: list.List = undefined;
+                    if (arity.body.items.len >= 2 and
+                        arity.body.items[0].type == .symbol and
+                        std.mem.eql(u8, arity.body.items[0].sym_val, "do") and
+                        arity.body.items[1].type == .list)
+                    {
+                        body_call = arity.body.items[1].list_val;
+                    } else if (arity.body.items.len == 1 and arity.body.items[0].type == .list) {
+                        body_call = arity.body.items[0].list_val;
+                    } else {
+                        body_call = list.empty();
+                    }
+                    if (body_call.items.len == 3) {
+                        const body_op = body_call.items[0];
+                        const body_arg0 = body_call.items[1];
+                        const body_arg1 = body_call.items[2];
+                        if (body_arg0.type == .symbol and body_arg1.type == .symbol and
+                            std.mem.eql(u8, body_arg0.sym_val, arity.params.items[0].sym_val) and
+                            std.mem.eql(u8, body_arg1.sym_val, arity.params.items[1].sym_val))
+                        {
+                            var resolved_op = try evalForm(allocator, body_op, env);
+                            defer resolved_op.deinit(allocator);
+                            var call_args: list.List = .empty;
+                            errdefer call_args.deinit(allocator);
+                            try call_args.append(allocator, try args_list.items[0].clone(allocator));
+                            try call_args.append(allocator, try args_list.items[1].clone(allocator));
+                            return try callBuiltin(allocator, resolved_op, call_args, env);
+                        }
+                    }
+                }
+            }
+
             // Optimization: if function env has no local entries, skip clone
             // and create a thin wrapper pointing to the parent
             var new_env: Value.Env = undefined;

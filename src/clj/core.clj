@@ -939,8 +939,9 @@
 
 (defn -
   "Subtracts nums from the first. With one arg, returns its negation. (-) throws."
-  [& args]
-  (zig.core/apply zig.core/- args))
+  ([a] (zig.core/- a))
+  ([a b] (zig.core/- a b))
+  ([a b & args] (zig.core/apply zig.core/- a b args)))
 
 (defn *
   "Returns the product of nums. (*) returns 1."
@@ -951,8 +952,9 @@
 
 (defn /
   "Divides nums. (/ x) returns the reciprocal. (/) throws."
-  [& args]
-  (zig.core/apply zig.core// args))
+  ([a] (zig.core// a))
+  ([a b] (zig.core// a b))
+  ([a b & args] (zig.core/apply zig.core// a b args)))
 
 (defn rem
   "Returns remainder of dividing numerator by denominator.
