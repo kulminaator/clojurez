@@ -5,3 +5,5 @@ original_clojure/
 zig-out/
 *.o
 codereview.md
+src/zig/namespaces/**/*.clj
+src/zig/namespaces/*.clj
