@@ -1,0 +1,45 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+
+jobs:
+  build-test:
+    name: Build & Test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Zig
+        uses: goto-bus-stop/setup-zig@v2
+        with:
+          zig-version: master
+
+      - name: Build
+        run: zig build -Drelease-safe=true
+
+      - name: Make test script executable (Unix)
+        if: runner.os != 'Windows'
+        run: chmod +x tests/run-tests.sh
+       
+      - name: Run zig tests
+        run: zig test -fsingle-threaded src/zig/all_tests.zig
+
+      - name: Run full test suite (Bash)
+        shell: bash
+        run: ./run_tests.sh
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: zig-build-${{ matrix.os }}
+          path: zig-out/bin/
+
