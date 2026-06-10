@@ -33,7 +33,7 @@ jobs:
         
       - name: Make test script executable (Unix)
         if: runner.os != 'Windows'
-        run: chmod +x tests/run-tests.sh
+        run: chmod +x run_tests.sh
        
       - name: Run zig tests
         run: zig test -fsingle-threaded src/zig/all_tests.zig
