@@ -4,6 +4,15 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Copy core.clj into zig package for @embedFile
+    // Source of truth: src/clj/core.clj
+    // Destination: src/zig/namespaces/core/clj/core.clj (referenced by core_clj.zig)
+    const copy_core = b.addSystemCommand(&.{
+        "cp",
+        "src/clj/core.clj",
+        "src/zig/namespaces/core/clj/core.clj",
+    });
+
     const src_path = b.path("src/zig/main.zig");
 
     // Build 3 variants into zig-out/bin/:
@@ -34,6 +43,9 @@ pub fn build(b: *std.Build) void {
             .name = v.name,
             .root_module = module,
         });
+
+        // All variants depend on core.clj being copied first
+        exe.step.dependOn(&copy_core.step);
 
         const install = b.addInstallArtifact(exe, .{});
         b.getInstallStep().dependOn(&install.step);

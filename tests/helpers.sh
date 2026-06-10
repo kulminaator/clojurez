@@ -12,10 +12,9 @@ if [ -z "$TEST_PASS" ]; then
     TEST_TOTAL=0
 fi
 
-# Build the VM (copies core.clj into zig package for @embedFile)
+# Build the VM (core.clj copy is handled by build.zig)
 build_vm() {
     echo "Building VM..."
-    cp src/clj/core.clj src/zig/namespaces/core/clj/core.clj 2>/dev/null || true
     zig build 2>&1
     echo ""
 }
