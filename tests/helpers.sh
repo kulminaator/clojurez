@@ -16,7 +16,32 @@ fi
 if [[ "$(uname)" == "Darwin" ]]; then
     if ! command -v timeout >/dev/null 2>&1; then
         timeout() {
-            perl -e 'alarm shift; exec @ARGV' "$@"
+	    local seconds="$1"
+	    shift
+
+	    # Start command in a new process group
+	    (
+		exec "$@"
+	    ) &
+	    local pid=$!
+
+	    # Put the process into its own group
+	    if kill -0 "$pid" 2>/dev/null; then
+		# macOS and Linux both support this
+		kill -s 0 -"$pid" 2>/dev/null
+	    fi
+
+	    # Watchdog: kill process group after timeout
+	    (
+		sleep "$seconds"
+		kill -TERM -"$pid" 2>/dev/null
+		sleep 1
+		kill -KILL -"$pid" 2>/dev/null
+	    ) &
+
+	    # Wait for the command to finish
+	    wait "$pid"
+	    return $?
         }
     fi
 fi
