@@ -102,26 +102,38 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // No defer deinit — GC handles cleanup at program exit.
     env.ns_manager = ns_mgr;
 
-    // Set "user" namespace's parent to root env so builtins are visible
+    // Create clojure.core namespace — this is the public API namespace.
+    // All Clojure-facing functions live here.
+    const clojure_core_env = try ns_mgr.createNamespace("clojure.core");
+    clojure_core_env.parent = null;
+    clojure_core_env.ns_manager = ns_mgr; // needed for findNsManager resolution
+
+    // Create zig.core virtual namespace — internal implementation detail.
+    // Raw Zig builtins live here. Clojure wrappers in clojure.core call zig.core/... internally.
+    const zc_env = try ns_mgr.createNamespace("zig.core");
+    zc_env.parent = null; // isolated — doesn't inherit from any namespace
+
+    // Register Zig built-in functions directly in zig.core namespace.
+    // No global builtins in root env — everything is namespaced.
+    try core.registerCoreFunctions(zc_env);
+
+    // Copy builtins to clojure.core as well, so they are directly accessible.
+    // The Clojure wrappers in core.clj will shadow these with docstrings.
+    try copyBuiltinsToNamespace(zc_env, clojure_core_env);
+
+    // Set "user" namespace's parent to clojure.core so all functions are visible.
+    // This mirrors real Clojure where user namespace refers to clojure.core by default.
     if (ns_mgr.getNamespace("user")) |user_env| {
-        user_env.parent = &env;
+        user_env.parent = clojure_core_env;
     }
 
-    // Register Zig built-in functions
-    try core.registerCoreFunctions(&env);
+    // Load embedded Clojure core library into clojure.core namespace.
+    // The defn wrappers shadow the raw builtins with docstrings.
+    try loadCoreLibrary(allocator, clojure_core_env);
 
-    // Create zig.core virtual namespace and populate it with all Zig builtins.
-    // This allows Clojure code to call Zig functions via (zig.core/fn-name ...).
-    const zc_env = try ns_mgr.createNamespace("zig.core");
-    zc_env.parent = null; // isolated — doesn't inherit from root env
-    try copyBuiltinsToNamespace(&env, zc_env);
-
-    // Load embedded Clojure core library (silent — no output)
-    try loadCoreLibrary(allocator, &env);
-
-    // Register GC roots: the main env's entries array contains all persistent values.
+    // Register GC roots: clojure.core env contains all persistent values (builtins + core.clj defs).
     // Also register namespace envs as roots.
-    registerGcRoots(&gc_instance, &env, ns_mgr);
+    registerGcRoots(&gc_instance, clojure_core_env, ns_mgr);
 
     // Parse arguments
     var args = std.process.Args.Iterator.init(init.args);
@@ -129,9 +141,16 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
 
     const arg_count = countArgs(init.args);
 
+    // Get user namespace env for REPL and expression evaluation.
+    // user namespace has clojure.core as parent, so all functions are visible.
+    const user_env = ns_mgr.getNamespace("user") orelse {
+        try writeStderr("Error: user namespace not found\n");
+        std.process.exit(1);
+    };
+
     if (arg_count == 0) {
         // No arguments: start REPL
-        return repl.runRepl(allocator, &env);
+        return repl.runRepl(allocator, user_env);
     }
 
     // Reset iterator and skip program name
@@ -149,7 +168,7 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
                 try writeStderr("Error: missing expression after -e\n");
                 std.process.exit(1);
             };
-            try runExpression(allocator, expr, &env);
+            try runExpression(allocator, expr, user_env);
             // Collect after function returns so local vars are out of scope
             if (gc_mod.current_gc) |gc| gc.collect(gc_scan.valueScanFn);
         } else if (std.mem.eql(u8, arg, "-cp") or std.mem.eql(u8, arg, "--classpath")) {
@@ -172,10 +191,10 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
             printUsage() catch {};
             std.process.exit(0);
         } else if (std.mem.eql(u8, arg, "--repl")) {
-            try repl.runRepl(allocator, &env);
+            try repl.runRepl(allocator, user_env);
         } else {
             // Treat as a file to execute
-            try runFile(allocator, arg, &env);
+            try runFile(allocator, arg, user_env);
             // Collect after function returns so local vars are out of scope
             if (gc_mod.current_gc) |gc| gc.collect(gc_scan.valueScanFn);
         }
@@ -187,7 +206,7 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
             try writeStderr("Error: -m requires -cp to be set\n");
             std.process.exit(1);
         }
-        try runMain(allocator, &env, ns_name);
+        try runMain(allocator, user_env, ns_name);
         // Collect after function returns so local vars are out of scope
         if (gc_mod.current_gc) |gc| gc.collect(gc_scan.valueScanFn);
     }
