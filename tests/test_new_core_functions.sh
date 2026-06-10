@@ -489,3 +489,20 @@ run_test "completing conj 2 args" "(let [f (completing conj [])] (f [1] 2))" "[1
 run_test "memoize inc" "(let [f (memoize inc)] (f 5))" "6"
 run_test "memoize square" "(let [f (memoize (fn [x] (* x x)))] (f 5))" "25"
 run_test "memoize cached" "(let [f (memoize (fn [x] (* x x)))] (f 5) (f 5))" "25"
+
+# def with string value (regression: was incorrectly treated as docstring)
+run_test "def string value" "(do (def greet \"hello\") greet)" "\"hello\""
+run_test "def string then use" "(do (def msg \"world\") (str msg))" "\"world\""
+run_test "def qualified access" "(do (def user-val 99) user/user-val)" "99"
+
+# defn with string docstring-like body
+run_test "defn returns string" "(do (defn get-greeting [] \"hi\") (get-greeting))" "\"hi\""
+run_test "defn string arg" "(do (defn echo [s] s) (echo \"test\"))" "\"test\""
+
+# user namespace vs clojure.core namespace resolution
+run_test "defn in user ns qualified call" "(do (defn sing [] \"lalala\") (user/sing))" "\"lalala\""
+run_test "def in user ns qualified read" "(do (def my-ans 42) user/my-ans)" "42"
+run_test "clojure.core function from user" "(clojure.core/+ 10 20)" "30"
+run_test "clojure.core str qualified" "(clojure.core/str \"ns-\" \"test\")" "\"ns-test\""
+run_test "user def shadows core" "(do (def + (fn [a b] (* a b))) (+ 3 4))" "12"
+run_test "core still accessible after shadow" "(do (def + (fn [a b] (* a b))) (clojure.core/+ 3 4))" "7"
