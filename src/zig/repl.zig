@@ -115,12 +115,27 @@ pub fn runRepl(allocator: Allocator, env: *Value.Env) anyerror!void {
 
         // Try to parse a complete form from the accumulated buffer
         const full_input = multiline_buf.items;
-        var p = try parser.Parser.init(allocator, full_input);
+        const init_result = parser.Parser.init(allocator, full_input);
+        if (init_result == error.UnexpectedEof or
+            init_result == error.UnterminatedString) {
+            // Incomplete expression or multiline string, wait for more input
+            continue;
+        }
+        var p = init_result catch |err| {
+            // Other parse error during init
+            try writeStdout("Error: ");
+            try writeStdout(@errorName(err));
+            try writeStdout("\n");
+            multiline_buf.clearRetainingCapacity();
+            gc_mod.repl_history_buffer = multiline_buf.items;
+            continue;
+        };
         defer p.deinit();
 
         const parse_result = p.parse();
-        if (parse_result == error.UnexpectedEof) {
-            // Incomplete expression, wait for more input
+        if (parse_result == error.UnexpectedEof or
+            parse_result == error.UnterminatedString) {
+            // Incomplete expression or multiline string, wait for more input
             continue;
         } else {
             // We have a complete form - evaluate it (and any remaining forms)

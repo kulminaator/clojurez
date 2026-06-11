@@ -212,3 +212,51 @@ else
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
 fi
+
+# REPL multiline string literal
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT bash -c "printf '\"hello\nworld\"\n(exit)\n' | $VM --repl 2>&1 | grep -c 'hello'" ) || {
+    echo "FAIL: repl multiline string literal (timeout or error)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+}
+if [ "$result" -ge "1" ]; then
+    echo "PASS: repl multiline string literal"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: repl multiline string literal"
+    echo "  Expected: output containing 'hello'"
+    echo "  Got:      $result matches"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
+
+# REPL def with multiline string value
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT bash -c "printf '(def msg \"line1\nline2\")\n(count msg)\n(exit)\n' | $VM --repl 2>&1 | grep '11' | head -1 | tr -d '[:space:]'" ) || {
+    echo "FAIL: repl def multiline string (timeout or error)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+}
+if [ "$result" = "user=>11" ]; then
+    echo "PASS: repl def multiline string"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: repl def multiline string"
+    echo "  Expected: user=>11"
+    echo "  Got:      $result"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
+
+# REPL defn with multiline docstring
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT bash -c "printf '(defn greet\n\"Say hello\nto everyone\"\n[name] (str \"Hi \" name))\n(greet \"Zig\")\n(exit)\n' | $VM --repl 2>&1 | grep 'Hi Zig' | head -1 | tr -d '[:space:]'" ) || {
+    echo "FAIL: repl defn multiline docstring (timeout or error)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+}
+if [ "$result" = "user=>\"HiZig\"" ]; then
+    echo "PASS: repl defn multiline docstring"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: repl defn multiline docstring"
+    echo "  Expected: user=>\"HiZig\""
+    echo "  Got:      $result"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
