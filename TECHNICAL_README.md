@@ -27,6 +27,11 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 - Tracked allocations with header-based block management
 - Eliminates manual memory management for Clojure values
 
+### Operating system support
+- Our code is expected to run the same on every major platform Linux, macOS, Windows
+- Do not use functionality or libraries that do not work cross platform
+- Always prefer cross platform functions over if-ing around os types and using special methods
+
 ### UTF-8 Support
 - All strings are validated as UTF-8 on creation
 - `count` on strings returns Unicode code point count (not byte length)
