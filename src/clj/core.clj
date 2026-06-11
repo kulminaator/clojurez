@@ -1146,6 +1146,21 @@
   []
   (zig.core/read-line))
 
+(defn read-string
+  "Reads one Clojure form from a string. Returns the parsed data structure."
+  [s]
+  (zig.core/read-string s))
+
+(defn eval
+  "Evaluates a single Clojure form (data structure) in the current environment."
+  [form]
+  (zig.core/eval form))
+
+(defn load-file
+  "Loads and evaluates all forms in a file. Returns the value of the last form."
+  [filename]
+  (zig.core/load-file filename))
+
 ;; ---- Atoms ----
 
 (defn swap!

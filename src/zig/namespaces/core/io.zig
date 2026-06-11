@@ -1,10 +1,12 @@
-// I/O built-in functions: print, println, read-line, spit, slurp, nano-time
+// I/O built-in functions: print, println, read-line, spit, slurp, nano-time, load-file
 const std = @import("std");
 const Value = @import("../../value.zig");
 const list = @import("../../list.zig");
 const vec = @import("../../vector.zig");
 const Env = Value.Env;
 const sequences = @import("sequences.zig");
+const parser = @import("../../parser.zig");
+const eval_mod = @import("../../eval.zig");
 
 
 
@@ -193,6 +195,79 @@ pub fn core_nano_time(self: *Value, args: list.List, _: *Env) anyerror!Value {
     return Value.intValue(@as(i64, @intCast(ts.nanoseconds)));
 }
 
+/// read-string: parses a string into a single Clojure form (data structure).
+/// Returns the parsed form (list, vector, map, symbol, etc.).
+pub fn core_read_string(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const input = args.items[0];
+    if (input.type != .string) return error.TypeError;
+
+    var p = try parser.Parser.init(env_env.allocator, input.str_val);
+    defer p.deinit();
+
+    const form = try p.parse();
+    return form;
+}
+
+/// load-file: reads a file, parses and evaluates all forms, returns last result.
+pub fn core_load_file(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const filename = args.items[0];
+    if (filename.type != .string) return error.TypeError;
+
+    // Open and read the file
+    const cwd = std.Io.Dir.cwd();
+    var file = std.Io.Dir.openFile(cwd, std.Options.debug_io, filename.str_val, .{}) catch {
+        return error.FileError;
+    };
+    defer std.Io.File.close(file, std.Options.debug_io);
+
+    var reader = file.reader(std.Options.debug_io, &[_]u8{});
+    const content = try reader.interface.allocRemaining(env_env.allocator, std.Io.Limit.limited(10 * 1024 * 1024));
+
+    // Parse all forms
+    var p = try parser.Parser.init(env_env.allocator, content);
+    defer p.deinit();
+    const forms = try p.parseAll();
+
+    // Evaluate each form, keeping track of last result
+    var last_result: Value = Value.nilValue();
+    for (forms.items) |form| {
+        var eval_env: *Env = env_env;
+        if (eval_mod.findNsManager(env_env)) |ns_mgr| {
+            const current_ns = ns_mgr.getCurrentNamespace();
+            if (ns_mgr.getNamespace(current_ns)) |ns_env| {
+                eval_env = ns_env;
+            }
+        }
+        const result = try eval_mod.eval(env_env.allocator, env_env.allocator, form, eval_env);
+        last_result.deinit(env_env.allocator);
+        last_result = result;
+    }
+
+    return last_result;
+}
+
+/// eval: evaluates a single Clojure form (data structure) in the current environment.
+pub fn core_eval(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const form = args.items[0];
+
+    // Resolve current namespace's env (same as main.zig's runExpression)
+    var eval_env: *Env = env_env;
+    if (eval_mod.findNsManager(env_env)) |ns_mgr| {
+        const current_ns = ns_mgr.getCurrentNamespace();
+        if (ns_mgr.getNamespace(current_ns)) |ns_env| {
+            eval_env = ns_env;
+        }
+    }
+
+    return eval_mod.eval(env_env.allocator, env_env.allocator, form, eval_env);
+}
+
 pub fn registerIOFunctions(env: *Env) anyerror!void {
     try env.put("print", Value.builtinFnValue(core_print));
     try env.put("println", Value.builtinFnValue(core_println));
@@ -200,5 +275,8 @@ pub fn registerIOFunctions(env: *Env) anyerror!void {
     try env.put("spit", Value.builtinFnValue(core_spit));
     try env.put("slurp", Value.builtinFnValue(core_slurp));
     try env.put("nano-time", Value.builtinFnValue(core_nano_time));
+    try env.put("read-string", Value.builtinFnValue(core_read_string));
+    try env.put("eval", Value.builtinFnValue(core_eval));
+    try env.put("load-file", Value.builtinFnValue(core_load_file));
 }
 
