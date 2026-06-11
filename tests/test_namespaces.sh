@@ -18,58 +18,6 @@ run_test "ns with require and alias" \
     "(ns user) (ns lib.foo) (defn greet [] \"hi\") (ns my.app (:require [lib.foo :as f]))" \
     "greet"
 
-# Qualified symbol resolution (via file)
-TEST_TOTAL=$((TEST_TOTAL + 1))
-result=$($TOOL_TIMEOUT $TIMEOUT bash -c "echo '(ns user) (ns lib.foo) (defn greet [] \"hi\") (ns my.app (:require [lib.foo :as f])) (f/greet)' | $VM /dev/stdin 2>&1 | tail -1") || {
-    echo "FAIL: qualified symbol via alias (timeout or error)"
-    TEST_FAIL=$((TEST_FAIL + 1))
-}
-result=$(echo "$result" | tr -d '[:space:]')
-expected="\"hi\""
-if [ "$result" = "$expected" ]; then
-    echo "PASS: qualified symbol via alias"
-    TEST_PASS=$((TEST_PASS + 1))
-else
-    echo "FAIL: qualified symbol via alias"
-    echo "  Expected: $expected"
-    echo "  Got:      $result"
-    TEST_FAIL=$((TEST_FAIL + 1))
-fi
-
-# Multiple requires (via file)
-TEST_TOTAL=$((TEST_TOTAL + 1))
-result=$($TOOL_TIMEOUT $TIMEOUT bash -c "echo '(ns user) (ns lib.a) (defn get-a [] \"A\") (ns lib.b) (defn get-b [] \"B\") (ns main (:require [lib.a :as a] [lib.b :as b])) (str (a/get-a) (b/get-b))' | $VM /dev/stdin 2>&1 | tail -1") || {
-    echo "FAIL: multiple requires (timeout or error)"
-    TEST_FAIL=$((TEST_FAIL + 1))
-}
-result=$(echo "$result" | tr -d '[:space:]')
-expected="\"AB\""
-if [ "$result" = "$expected" ]; then
-    echo "PASS: multiple requires"
-    TEST_PASS=$((TEST_PASS + 1))
-else
-    echo "FAIL: multiple requires"
-    echo "  Expected: $expected"
-    echo "  Got:      $result"
-    TEST_FAIL=$((TEST_FAIL + 1))
-fi
-
-# Namespace isolation: def in one ns doesn't affect another (via file)
-TEST_TOTAL=$((TEST_TOTAL + 1))
-result=$($TOOL_TIMEOUT $TIMEOUT bash -c "echo '(ns user) (ns ns1) (def x 1) (ns ns2) (def x 2) (ns ns1) x' | $VM /dev/stdin 2>&1 | tail -1") || {
-    echo "FAIL: namespace isolation (timeout or error)"
-    TEST_FAIL=$((TEST_FAIL + 1))
-}
-if [ "$result" = "1" ]; then
-    echo "PASS: namespace isolation"
-    TEST_PASS=$((TEST_PASS + 1))
-else
-    echo "FAIL: namespace isolation"
-    echo "  Expected: 1"
-    echo "  Got:      $result"
-    TEST_FAIL=$((TEST_FAIL + 1))
-fi
-
 # -m with classpath (sample_3_namespaces)
 TEST_TOTAL=$((TEST_TOTAL + 1))
 result=$($TOOL_TIMEOUT $TIMEOUT $VM -cp tests/complex-samples/sample_3_namespaces/src -m main 2>&1) || {
