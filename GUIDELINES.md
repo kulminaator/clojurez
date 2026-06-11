@@ -41,7 +41,7 @@ Our design is a **minimal Zig VM** with **Clojure code on top of it**.
 - **Keep `core.zig` lean** — each function should do one thing that Clojure cannot do.
 - **Keep `core.clj` rich** — this is where most library functions live.
 - **`core.clj` is auto-loaded** — it is embedded into the binary at compile time and loaded silently on startup. All functions defined in `core.clj` are always available to the user without any explicit loading.
-- **Build copies `core.clj`** — the build process copies `src/clj/core.clj` to `src/zig/clj/core.clj` so `@embedFile` can find it. Always edit `src/clj/core.clj` (the source of truth), never `src/zig/clj/core.clj`.
+- **Build copies `core.clj` automatically to matching zig namespace folder** — Always edit `src/clj/core.clj` (the source of truth), never edit raw copied .clj files anywhere under `src/zig`.
 
 ---
 
@@ -151,7 +151,7 @@ Use Zig's built-in code coverage tools:
 
 ```bash
 # Build with coverage instrumentation
-cp src/clj/core.clj src/zig/clj/core.clj && zig build-exe -femit-coverage src/zig/main.zig
+zig build-exe -femit-coverage src/zig/main.zig
 
 # Run tests and generate coverage report
 llvm-cov show ...
