@@ -29,12 +29,14 @@ jobs:
       - name: Build
         run: zig build 
         #should we add this there Doptimize=ReleaseSafe ?
-        
-        
+
       - name: Make test script executable (Unix)
         if: runner.os != 'Windows'
         run: chmod +x run_tests.sh
-       
+
+      - name: Set TMPDIR
+        run: echo "TMPDIR=$RUNNER_TEMP" >> $GITHUB_ENV
+
       - name: Run zig tests
         run: zig test -fsingle-threaded src/zig/all_tests.zig
 
