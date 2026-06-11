@@ -8,7 +8,37 @@ const sequences = @import("sequences.zig");
 const parser = @import("../../parser.zig");
 const eval_mod = @import("../../eval.zig");
 
+/// Global environment variable map, populated once at startup.
+/// Valid for the lifetime of the process — no cleanup needed.
+pub var env_vars: std.process.Environ.Map = undefined;
 
+/// temp-dir: returns the OS temp directory as a string.
+/// Checks TMPDIR (Unix), TEMP and TMP (Windows) environment variables.
+/// Falls back to /tmp on Unix-like systems.
+pub fn core_temp_dir(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    _ = args;
+
+    const builtin = @import("builtin");
+
+    if (builtin.target.os.tag == .windows) {
+        // Windows: check TEMP, then TMP
+        if (env_vars.get("TEMP")) |temp| {
+            return Value.stringValue(env_env.allocator, temp);
+        }
+        if (env_vars.get("TMP")) |tmp| {
+            return Value.stringValue(env_env.allocator, tmp);
+        }
+        // Fallback for Windows
+        return Value.stringValue(env_env.allocator, "C:\\Windows\\Temp");
+    } else {
+        // Unix-like: check TMPDIR, fall back to /tmp
+        if (env_vars.get("TMPDIR")) |tmpdir| {
+            return Value.stringValue(env_env.allocator, tmpdir);
+        }
+        return Value.stringValue(env_env.allocator, "/tmp");
+    }
+}
 
 /// Fully realize a lazy-seq into a concrete list for printing.
 fn fullyRealizeLazySeq(allocator: std.mem.Allocator, val: Value) anyerror!Value {
@@ -278,5 +308,6 @@ pub fn registerIOFunctions(env: *Env) anyerror!void {
     try env.put("read-string", Value.builtinFnValue(core_read_string));
     try env.put("eval", Value.builtinFnValue(core_eval));
     try env.put("load-file", Value.builtinFnValue(core_load_file));
+    try env.put("temp-dir", Value.builtinFnValue(core_temp_dir));
 }
 

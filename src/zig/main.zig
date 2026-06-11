@@ -3,6 +3,7 @@ const Value = @import("value.zig");
 const Env = Value.Env;
 const list = @import("list.zig");
 const core = @import("namespaces/core/core.zig");
+const io_mod = @import("namespaces/core/io.zig");
 const parser = @import("parser.zig");
 const eval = @import("eval.zig");
 const repl = @import("repl.zig");
@@ -92,6 +93,10 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     }
     defer debug_alloc.deinit();
     const allocator = debug_alloc.allocator();
+
+    // Read environment variables once at startup into a map.
+    // Valid for the lifetime of the process — no cleanup needed.
+    io_mod.env_vars = std.process.Environ.createMap(init.environ, allocator) catch std.process.Environ.Map.init(allocator);
 
     // Create namespace manager
     var ns_mgr = try Value.NamespaceManager.init(allocator);
@@ -217,6 +222,8 @@ fn copyBuiltinsToNamespace(root_env: *Env, target_env: *Env) anyerror!void {
     var it = root_env.entries.iterator();
     while (it.next()) |entry| {
         if (entry.value_ptr.type == .builtin_fn) {
+            // Skip zig-only functions that should not leak into clojure.core
+            if (std.mem.eql(u8, entry.key_ptr.*, "temp-dir")) continue;
             // builtinFnValue is just a function pointer — clone is trivial
             try target_env.put(entry.key_ptr.*, Value.builtinFnValue(entry.value_ptr.builtin_fn_val));
         }
