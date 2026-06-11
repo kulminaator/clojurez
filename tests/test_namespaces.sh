@@ -75,3 +75,19 @@ run_test_cmd "repl qualified fn call cross-namespace" \
 run_test_cmd "repl namespace isolation" \
     "printf '(def x 100)\n(ns other)\n(def x 200)\n(ns user)\nx\n(exit)\n' | ./zig-out/bin/clojurez --repl 2>&1 | grep 'user=> 100' | head -1 | tr -d '[:space:]'" \
     "user=>100"
+
+# Regression: REPL freeze after first expression (readSliceShort blocked on TTY)
+# Multiple expressions must be evaluated without freezing
+run_test_cmd "repl multiple expressions no freeze" \
+    "printf '(+ 1 2)\n(+ 3 4)\n(+ 5 6)\n(exit)\n' | ./zig-out/bin/clojurez --repl 2>&1 | grep -c 'user=>'" \
+    "4"
+
+# Regression: REPL with function definitions and calls across multiple lines
+run_test_cmd "repl defn then call no freeze" \
+    "printf '(defn double [n] (* n 2))\n(double 21)\n(exit)\n' | ./zig-out/bin/clojurez --repl 2>&1 | grep '42' | head -1 | tr -d '[:space:]'" \
+    "user=>42"
+
+# Regression: REPL handles EOF without explicit exit
+run_test_cmd "repl eof without exit" \
+    "printf '(+ 1 2)\n(+ 3 4)' | ./zig-out/bin/clojurez --repl 2>&1 | grep -c 'user=>'" \
+    "3"

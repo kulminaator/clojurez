@@ -238,20 +238,35 @@ fn readLineWithLeftover(buf: []u8, leftover_buf: []u8, leftover_len: *usize) any
         leftover_len.* = 0;
     }
 
-    // Read more data from stdin
+    // Read more data from stdin using a streaming reader's readVec.
+    // We use streaming mode directly to avoid the positional->streaming
+    // mode switch that causes readVec to return 0 on pipes/TTYs.
+    // We call readVec once per iteration (not in a loop like readSliceShort)
+    // so we get available data without blocking for more.
     var hit_eof = false;
-    var stdin_reader = std.Io.File.stdin().reader(std.Options.debug_io, &[_]u8{});
+    var stdin_reader = std.Io.File.stdin().readerStreaming(std.Options.debug_io, &[_]u8{});
     while (len < buf.len) {
-        const n = stdin_reader.interface.readSliceShort(buf[len..]) catch break;
+        var data: [1][]u8 = .{buf[len..]};
+        const n = stdin_reader.interface.readVec(&data) catch |err| {
+            if (err == error.EndOfStream) {
+                hit_eof = true;
+            }
+            break;
+        };
         if (n == 0) {
-            hit_eof = true;
-            break; // EOF
+            // readVec can return 0 when switching modes. In streaming mode
+            // this means EOF, but we need to distinguish from temporary 0.
+            // If we have no data at all, it's EOF.
+            if (len == 0) {
+                hit_eof = true;
+            }
+            break;
         }
-        len += @as(usize, n);
-        // Find the FIRST newline in the buffer
+        len += n;
+        // Find newline in the data we just read
         if (std.mem.indexOfScalar(u8, buf[0..len], '\n')) |nl_pos| {
             const line_len = nl_pos;
-            // Store remaining data (after the newline) as leftover
+            // Store remaining data as leftover
             const remaining = buf[nl_pos + 1 .. len];
             const store_len = if (remaining.len < leftover_buf.len) remaining.len else leftover_buf.len;
             std.mem.copyForwards(u8, leftover_buf[0..store_len], remaining[0..store_len]);
