@@ -32,16 +32,21 @@ pub fn evalNs(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyer
 
     // Create or get the namespace
     const ns_env = try ns_mgr.createNamespace(ns_name);
-    // Set parent to root env so builtins are visible
+    // Set parent to clojure.core so core functions are visible
     if (ns_env.parent == null) {
-        // Find the root env (the one with ns_manager)
-        var root_env: ?*Env = env;
-        while (root_env) |e| {
-            if (e.ns_manager != null) break;
-            root_env = e.parent;
-        }
-        if (root_env) |re| {
-            ns_env.parent = re;
+        const clojure_core = ns_mgr.getNamespace("clojure.core");
+        if (clojure_core) |core_env| {
+            ns_env.parent = core_env;
+        } else {
+            // Fallback to root env
+            var root_env: ?*Env = env;
+            while (root_env) |e| {
+                if (e.ns_manager != null) break;
+                root_env = e.parent;
+            }
+            if (root_env) |re| {
+                ns_env.parent = re;
+            }
         }
     }
 
@@ -156,4 +161,45 @@ pub fn getCurrentNsEnvForLoad(_root_env: *Env, ns_mgr: *Value.NamespaceManager) 
     _ = _root_env;
     const current_ns = ns_mgr.getCurrentNamespace();
     return ns_mgr.getNamespace(current_ns);
+}
+
+// in-ns special form: (in-ns namespace-name)
+// Creates or finds the namespace and sets it as the current namespace.
+// Simpler than ns — no :require, :use, :import clauses.
+pub fn evalInNs(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+    _ = allocator;
+    _ = depth;
+    if (l.items.len < 2) return error.ArityError;
+
+    const ns_name_sym = l.items[1];
+    if (ns_name_sym.type != .symbol) return error.TypeError;
+    const ns_name = ns_name_sym.sym_val;
+
+    // Find the namespace manager
+    const ns_mgr = findNsManager(env) orelse return Value.nilValue();
+
+    // Create or get the namespace
+    const ns_env = try ns_mgr.createNamespace(ns_name);
+    // Set parent to clojure.core so core functions are visible
+    if (ns_env.parent == null) {
+        const clojure_core = ns_mgr.getNamespace("clojure.core");
+        if (clojure_core) |core_env| {
+            ns_env.parent = core_env;
+        } else {
+            // Fallback to root env
+            var root_env: ?*Env = env;
+            while (root_env) |e| {
+                if (e.ns_manager != null) break;
+                root_env = e.parent;
+            }
+            if (root_env) |re| {
+                ns_env.parent = re;
+            }
+        }
+    }
+
+    // Set current namespace
+    try ns_mgr.setCurrentNamespace(ns_name);
+
+    return Value.nilValue();
 }

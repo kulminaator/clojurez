@@ -314,6 +314,12 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
             return try eval_ns.evalNs(allocator, l, env, depth);
         }
 
+        // in-ns - create/find namespace and set as current
+        // (in-ns namespace-name)
+        if (std.mem.eql(u8, name, "in-ns")) {
+            return try eval_ns.evalInNs(allocator, l, env, depth);
+        }
+
         if (std.mem.eql(u8, name, "quote")) {
             if (l.items.len != 2) return error.ArityError;
             return try l.items[1].clone(arena_alloc);
