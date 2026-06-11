@@ -107,7 +107,7 @@ pub const NamespaceManager = struct {
     /// Maps namespace name → Env pointer for that namespace
     namespaces: std.StringArrayHashMapUnmanaged(*Env) = .empty,
     /// Current namespace name (owned string)
-    current_ns: []const u8 = "user",
+    current_ns: []const u8 = undefined,
     /// Maps namespace name → (alias name → target namespace name)
     aliases: std.StringArrayHashMapUnmanaged(NamespaceAliases) = .empty,
     /// Classpath directories for loading .clj files
@@ -118,6 +118,8 @@ pub const NamespaceManager = struct {
     pub fn init(allocator: Allocator) anyerror!*NamespaceManager {
         const mgr = try allocator.create(NamespaceManager);
         mgr.* = .{ .allocator = allocator };
+        // Heap-allocate initial namespace name so setCurrentNamespace/deinit can free it.
+        mgr.current_ns = try allocator.dupe(u8, "user");
         // Create default "user" namespace
         _ = try mgr.createNamespace("user");
         return mgr;

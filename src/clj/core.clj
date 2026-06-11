@@ -1,6 +1,8 @@
 ;; Clojure VM Core Library
 ;; Bootstrapped from Clojure source - keeps the Zig VM lean
 
+(ns clojure.core)
+
 ;; ---- Basic predicates ----
 
 (defn even? [n]

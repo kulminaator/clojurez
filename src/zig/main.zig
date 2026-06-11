@@ -137,6 +137,10 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // The defn wrappers shadow the raw builtins with docstrings.
     try loadCoreLibrary(allocator, clojure_core_env);
 
+    // Switch back to user namespace after loading core.
+    // core.clj starts with (ns clojure.core), so we need to restore user context.
+    try ns_mgr.setCurrentNamespace("user");
+
     // Register GC roots: clojure.core env contains all persistent values (builtins + core.clj defs).
     // Also register namespace envs as roots.
     registerGcRoots(&gc_instance, clojure_core_env, ns_mgr);
