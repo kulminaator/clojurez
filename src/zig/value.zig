@@ -775,11 +775,25 @@ pub fn equals(self: Self, other: Self) bool {
         .string => return std.mem.eql(u8, self.str_val, other.str_val),
         .symbol => return std.mem.eql(u8, self.sym_val, other.sym_val),
         .keyword => return std.mem.eql(u8, self.kw_val, other.kw_val),
+        .list => {
+            if (self.list_val.items.len != other.list_val.items.len) return false;
+            for (self.list_val.items, 0..) |item, i| {
+                if (!item.equals(other.list_val.items[i])) return false;
+            }
+            return true;
+        },
+        .vector => {
+            if (self.vec_val.items.len != other.vec_val.items.len) return false;
+            for (self.vec_val.items, 0..) |item, i| {
+                if (!item.equals(other.vec_val.items[i])) return false;
+            }
+            return true;
+        },
         .map => {
             if (self.map_val.items.len != other.map_val.items.len) return false;
-            for (self.map_val.items, 0..) |entry, i| {
-                const other_entry = other.map_val.items[i];
-                if (!entry.key.equals(other_entry.key) or !entry.value.equals(other_entry.value)) return false;
+            for (self.map_val.items) |entry| {
+                const other_val = mapLookup(other.map_val, entry.key);
+                if (other_val == null or !entry.value.equals(other_val.?)) return false;
             }
             return true;
         },
@@ -826,6 +840,14 @@ pub fn equals(self: Self, other: Self) bool {
         },
         else => return false,
     }
+}
+
+/// Look up a key in a map, returning the value or null.
+fn mapLookup(m: Map, key: Self) ?Self {
+    for (m.items) |entry| {
+        if (entry.key.equals(key)) return entry.value;
+    }
+    return null;
 }
 
 /// Convert a numeric value to f64 for comparison

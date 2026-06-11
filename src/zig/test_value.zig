@@ -2,6 +2,7 @@
 const std = @import("std");
 const Value = @import("value.zig");
 const list = @import("list.zig");
+const vec = @import("vector.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -145,7 +146,7 @@ test "value::equals: sets (order independent)" {
     try std.testing.expect(v1.equals(v2));
 }
 
-test "value::equals: maps (order dependent)" {
+test "value::equals: maps (order independent)" {
     const a = std.heap.page_allocator;
 
     var m1: Map = .empty;
@@ -153,9 +154,10 @@ test "value::equals: maps (order dependent)" {
     try m1.append(a, .{ .key = intValue(2), .value = intValue(20) });
     var v1 = mapValue(m1);
 
+    // Same keys/values, different insertion order
     var m2: Map = .empty;
-    try m2.append(a, .{ .key = intValue(1), .value = intValue(10) });
     try m2.append(a, .{ .key = intValue(2), .value = intValue(20) });
+    try m2.append(a, .{ .key = intValue(1), .value = intValue(10) });
     var v2 = mapValue(m2);
 
     defer v1.deinit(a);
@@ -163,12 +165,187 @@ test "value::equals: maps (order dependent)" {
 
     try std.testing.expect(v1.equals(v2));
 
+    // Different value for same key
     var m3: Map = .empty;
     try m3.append(a, .{ .key = intValue(1), .value = intValue(99) });
+    try m3.append(a, .{ .key = intValue(2), .value = intValue(20) });
     var v3 = mapValue(m3);
     defer v3.deinit(a);
 
     try std.testing.expect(!v1.equals(v3));
+
+    // Different size (subset)
+    var m4: Map = .empty;
+    try m4.append(a, .{ .key = intValue(1), .value = intValue(10) });
+    var v4 = mapValue(m4);
+    defer v4.deinit(a);
+
+    try std.testing.expect(!v1.equals(v4));
+}
+
+test "value::equals: lists (deep comparison)" {
+    const a = std.heap.page_allocator;
+
+    // Equal lists
+    var l1: list.List = .empty;
+    try l1.append(a, intValue(1));
+    try l1.append(a, intValue(2));
+    try l1.append(a, intValue(3));
+    var v1 = listValue(l1);
+
+    var l2: list.List = .empty;
+    try l2.append(a, intValue(1));
+    try l2.append(a, intValue(2));
+    try l2.append(a, intValue(3));
+    var v2 = listValue(l2);
+
+    defer v1.deinit(a);
+    defer v2.deinit(a);
+
+    try std.testing.expect(v1.equals(v2));
+
+    // Different values
+    var l3: list.List = .empty;
+    try l3.append(a, intValue(1));
+    try l3.append(a, intValue(9));
+    try l3.append(a, intValue(3));
+    var v3 = listValue(l3);
+    defer v3.deinit(a);
+
+    try std.testing.expect(!v1.equals(v3));
+
+    // Different lengths
+    var l4: list.List = .empty;
+    try l4.append(a, intValue(1));
+    try l4.append(a, intValue(2));
+    var v4 = listValue(l4);
+    defer v4.deinit(a);
+
+    try std.testing.expect(!v1.equals(v4));
+
+    // Empty lists
+    const l5: list.List = .empty;
+    const v5 = listValue(l5);
+    const l6: list.List = .empty;
+    const v6 = listValue(l6);
+
+    try std.testing.expect(v5.equals(v6));
+}
+
+test "value::equals: vectors (deep comparison)" {
+    const a = std.heap.page_allocator;
+
+    // Equal vectors
+    var vec1: vec.Vector = .empty;
+    try vec1.append(a, intValue(1));
+    try vec1.append(a, intValue(2));
+    var v1 = vectorValue(vec1);
+
+    var vec2: vec.Vector = .empty;
+    try vec2.append(a, intValue(1));
+    try vec2.append(a, intValue(2));
+    var v2 = vectorValue(vec2);
+
+    defer v1.deinit(a);
+    defer v2.deinit(a);
+
+    try std.testing.expect(v1.equals(v2));
+
+    // Different values
+    var vec3: vec.Vector = .empty;
+    try vec3.append(a, intValue(1));
+    try vec3.append(a, intValue(9));
+    var v3 = vectorValue(vec3);
+    defer v3.deinit(a);
+
+    try std.testing.expect(!v1.equals(v3));
+
+    // Different lengths
+    var vec4: vec.Vector = .empty;
+    try vec4.append(a, intValue(1));
+    var v4 = vectorValue(vec4);
+    defer v4.deinit(a);
+
+    try std.testing.expect(!v1.equals(v4));
+
+    // Empty vectors
+    const vec5: vec.Vector = .empty;
+    const v5 = vectorValue(vec5);
+    const vec6: vec.Vector = .empty;
+    const v6 = vectorValue(vec6);
+
+    try std.testing.expect(v5.equals(v6));
+}
+
+test "value::equals: nested structures" {
+    const a = std.heap.page_allocator;
+
+    // Nested vector in vector: [[1 2] [3 4]]
+    var inner1: vec.Vector = .empty;
+    try inner1.append(a, intValue(1));
+    try inner1.append(a, intValue(2));
+    var inner2: vec.Vector = .empty;
+    try inner2.append(a, intValue(3));
+    try inner2.append(a, intValue(4));
+
+    var outer1: vec.Vector = .empty;
+    try outer1.append(a, vectorValue(inner1));
+    try outer1.append(a, vectorValue(inner2));
+    var v1 = vectorValue(outer1);
+
+    var inner3: vec.Vector = .empty;
+    try inner3.append(a, intValue(1));
+    try inner3.append(a, intValue(2));
+    var inner4: vec.Vector = .empty;
+    try inner4.append(a, intValue(3));
+    try inner4.append(a, intValue(4));
+
+    var outer2: vec.Vector = .empty;
+    try outer2.append(a, vectorValue(inner3));
+    try outer2.append(a, vectorValue(inner4));
+    var v2 = vectorValue(outer2);
+
+    defer v1.deinit(a);
+    defer v2.deinit(a);
+
+    try std.testing.expect(v1.equals(v2));
+
+    // Nested map in map: {:a {:b 1}}
+    var inner_map1: Map = .empty;
+    try inner_map1.append(a, .{ .key = intValue(1), .value = intValue(10) });
+    var outer_map1: Map = .empty;
+    try outer_map1.append(a, .{ .key = intValue(2), .value = mapValue(inner_map1) });
+    var mv1 = mapValue(outer_map1);
+
+    var inner_map2: Map = .empty;
+    try inner_map2.append(a, .{ .key = intValue(1), .value = intValue(10) });
+    var outer_map2: Map = .empty;
+    try outer_map2.append(a, .{ .key = intValue(2), .value = mapValue(inner_map2) });
+    var mv2 = mapValue(outer_map2);
+
+    defer mv1.deinit(a);
+    defer mv2.deinit(a);
+
+    try std.testing.expect(mv1.equals(mv2));
+}
+
+test "value::equals: map with string keys" {
+    const a = std.heap.page_allocator;
+
+    var m1: Map = .empty;
+    try m1.append(a, .{ .key = try stringValue(a, "hello"), .value = intValue(1) });
+    try m1.append(a, .{ .key = try stringValue(a, "world"), .value = intValue(2) });
+    var v1 = mapValue(m1);
+
+    var m2: Map = .empty;
+    try m2.append(a, .{ .key = try stringValue(a, "world"), .value = intValue(2) });
+    try m2.append(a, .{ .key = try stringValue(a, "hello"), .value = intValue(1) });
+    var v2 = mapValue(m2);
+
+    defer v1.deinit(a);
+    defer v2.deinit(a);
+
+    try std.testing.expect(v1.equals(v2));
 }
 
 test "value::equals: queues" {
