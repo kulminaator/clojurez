@@ -379,7 +379,6 @@ Output: `(0 1 1 2 3 5 8 13 21 34)`
 src/
 ├── clj/              — Clojure source (core.clj, baked into binary at compile time)
 └── zig/
-    ├── clj/          — Copy of core.clj for @embedFile (auto-generated)
     ├── namespaces/
     │   └── core/     — Zig builtin implementations (arithmetic, comparison, maps, etc.)
     ├── *.zig         — Core VM modules (eval, lexer, parser, value, gc, etc.)
@@ -393,6 +392,7 @@ tests/
 run_tests.sh          — Test runner
 GUIDELINES.md         — Development & testing guidelines
 ```
+The tmp folder in project directory exists for local debugging purposes only and is not intended for automated builds or any i/o from our codebase.
 
 ## Testing
 
