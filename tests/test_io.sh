@@ -1,26 +1,21 @@
 #!/bin/bash
-# I/O: print, println, spit, slurp
+# I/O error tests (stderr capture — cannot be tested from within Clojure)
 source tests/helpers.sh
 
-echo "=== I/O Tests ==="
-# println prints to stdout and returns nil
-# We can't easily test println output in this framework, so we just verify it doesn't error
-# Instead test print which also works
-run_test "print works" '(do (print "x") nil)' "x"
+VM="./zig-out/bin/clojurez"
+TIMEOUT=10
+TOOL_TIMEOUT="tests/timeout.sh"
 
-echo ""
-echo "=== File I/O Tests (spit/slurp) ==="
-# spit writes content to a file, returns nil
-run_test "spit basic" '(spit "/tmp/clojure_vm_test_spit.txt" "hello world")' ""
-# slurp reads file contents as string
-run_test "slurp basic" '(slurp "/tmp/clojure_vm_test_spit.txt")' '"hello world"'
-# spit with integer (converted to string)
-run_test "spit integer" '(spit "/tmp/clojure_vm_test_spit2.txt" 42)' ""
-run_test "slurp integer" '(slurp "/tmp/clojure_vm_test_spit2.txt")' '"42"'
-# slurp and str operations
-run_test "slurp with str" '(str (slurp "/tmp/clojure_vm_test_spit.txt"))' '"hello world"'
-# slurp nonexistent file should error (we test it doesn't crash)
-run_test_cmd "slurp nonexistent" 'timeout 10 ./zig-out/bin/clojurez -e '"'"'(slurp "/tmp/clojure_vm_nonexistent_xyz.txt")'"'"' 2>&1 | head -1' 'error: FileError'
-
-# Clean up temp files
-rm -f /tmp/clojure_vm_test_spit.txt /tmp/clojure_vm_test_spit2.txt
+echo "=== I/O Error Tests ==="
+# slurp nonexistent file should error
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT $VM -e '(slurp "/tmp/clojure_vm_nonexistent_xyz.txt")' 2>&1 | head -1) || true
+if [ "$result" = "error: FileError" ]; then
+    echo "PASS: slurp nonexistent"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: slurp nonexistent"
+    echo "  Expected: error: FileError"
+    echo "  Got:      $result"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi

@@ -1,6 +1,10 @@
 #!/bin/bash
-# Miscellaneous: Namespace, and/or, quasiquote, set!, binding, var, deref
+# Miscellaneous: Namespace, binding, file execution tests
 source tests/helpers.sh
+
+VM="./zig-out/bin/clojurez"
+TIMEOUT=10
+TOOL_TIMEOUT="tests/timeout.sh"
 
 echo "=== Namespace Tests ==="
 run_test "ns declaration" '(ns my.core)' ""
@@ -15,15 +19,8 @@ run_test "binding nested" '(do (def x 10) (binding [x 20] (binding [x 30] x)))' 
 
 echo ""
 echo "=== File Execution: No Eval Output ==="
-# When running a script file (clojure file.clj), only explicit println
-# output should appear — not the results of def, defn, or other form
-# evaluations. Piped stdin (cat file | clojure) runs as REPL and DOES
-# print results — that is a separate mode.
 
 # Test 1: lazy-seq should not evaluate more elements than consumed.
-# Uses an atom to track evaluation count instead of println side-effects.
-# take 3 forces exactly 3 realizations: 1 initial call + 3 forced = 4.
-# If more than 3 elements are realized, the counter will be > 4.
 cat > /tmp/cljvm_test_lazy_no_overeval.clj << 'CLJEOF'
 (def counter (atom 0))
 
@@ -39,9 +36,20 @@ cat > /tmp/cljvm_test_lazy_no_overeval.clj << 'CLJEOF'
 (println (str "count=" @counter " result=" result))
 CLJEOF
 
-run_test_cmd_full "file-exec: lazy-seq no over-evaluation" \
-    "timeout $TIMEOUT $VM /tmp/cljvm_test_lazy_no_overeval.clj 2>&1" \
-    "count=4 result=6"
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT $VM /tmp/cljvm_test_lazy_no_overeval.clj 2>&1) || {
+    echo "FAIL: file-exec: lazy-seq no over-evaluation (timeout or error)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+}
+if [ "$result" = "count=4 result=6" ]; then
+    echo "PASS: file-exec: lazy-seq no over-evaluation"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: file-exec: lazy-seq no over-evaluation"
+    echo "  Expected: count=4 result=6"
+    echo "  Got:      $result"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
 
 # Test 2: multiple def/defn forms should not produce output when running
 # a script file — only the final println should appear.
@@ -60,9 +68,20 @@ cat > /tmp/cljvm_test_script_no_eval_output.clj << 'CLJEOF'
 (println (str "sum=" sum " product=" product))
 CLJEOF
 
-run_test_cmd_full "file-exec: no eval output from def/defn" \
-    "timeout $TIMEOUT $VM /tmp/cljvm_test_script_no_eval_output.clj 2>&1" \
-    "sum=30 product=200"
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT $VM /tmp/cljvm_test_script_no_eval_output.clj 2>&1) || {
+    echo "FAIL: file-exec: no eval output from def/defn (timeout or error)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+}
+if [ "$result" = "sum=30 product=200" ]; then
+    echo "PASS: file-exec: no eval output from def/defn"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: file-exec: no eval output from def/defn"
+    echo "  Expected: sum=30 product=200"
+    echo "  Got:      $result"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
 
 # Cleanup test files
 rm -f /tmp/cljvm_test_lazy_no_overeval.clj /tmp/cljvm_test_script_no_eval_output.clj

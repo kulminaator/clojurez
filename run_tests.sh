@@ -24,75 +24,17 @@ fi
 echo "Running test suites..."
 echo ""
 
-source tests/test_basic_types.sh
-echo ""
-
-source tests/test_lists_sequences.sh
-echo ""
-
-source tests/test_special_forms.sh
-echo ""
-
-source tests/test_functions.sh
-echo ""
-
-source tests/test_macros.sh
-echo ""
-
-source tests/test_maps.sh
-echo ""
-
-source tests/test_sets.sh
-echo ""
-
-source tests/test_queues.sh
-echo ""
-
-source tests/test_collections.sh
-echo ""
-
-source tests/test_thread_macros.sh
-echo ""
-
-source tests/test_sequence_functions.sh
-echo ""
-
-source tests/test_destructuring.sh
-echo ""
-
-source tests/test_core_library.sh
-echo ""
-
-source tests/test_core_library_new.sh
-echo ""
-
-source tests/test_new_core_functions.sh
-echo ""
-
+# I/O-dependent shell tests (stdin, file execution, -cp -m, REPL)
 source tests/test_io.sh
-echo ""
-
-source tests/test_utf8.sh
-echo ""
-
-source tests/test_lazy_seq.sh
-echo ""
-
-source tests/test_samples.sh
 echo ""
 
 source tests/test_misc.sh
 echo ""
 
-source tests/test_condition_forms.sh
-echo ""
-
 source tests/test_namespaces.sh
 echo ""
 
-source tests/test_big_numbers.sh
-
-echo ""
+source tests/test_samples.sh
 echo "========================================"
 echo "=== Test Summary ==="
 echo "Total: $TEST_TOTAL, Passed: $TEST_PASS, Failed: $TEST_FAIL"
