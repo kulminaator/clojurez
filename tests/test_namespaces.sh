@@ -8,16 +8,6 @@ TOOL_TIMEOUT="tests/timeout.sh"
 
 echo "=== Namespace Tests ==="
 
-# Basic ns declaration
-run_test "ns basic declaration" \
-    "(ns my.ns)" \
-    ""
-
-# ns with require and as alias (using inline definitions)
-run_test "ns with require and alias" \
-    "(ns user) (ns lib.foo) (defn greet [] \"hi\") (ns my.app (:require [lib.foo :as f]))" \
-    "greet"
-
 # -m with classpath (sample_3_namespaces)
 TEST_TOTAL=$((TEST_TOTAL + 1))
 result=$($TOOL_TIMEOUT $TIMEOUT $VM -cp tests/complex-samples/sample_3_namespaces/src -m main 2>&1) || {

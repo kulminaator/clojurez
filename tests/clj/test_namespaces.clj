@@ -14,6 +14,11 @@
   (println (str "SUMMARY: " @passes " passed, " @failures " failed")))
 (ns user)
 
+;; --- ns declaration returns nil/symbol ---
+(check "ns declaration" (ns test.ns.decl) nil)
+(check "ns basic declaration" (ns test.ns.basic) nil)
+(ns user)
+
 ;; --- qualified symbol via alias ---
 (ns lib.foo)
 (defn greet [] "hi")

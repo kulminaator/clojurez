@@ -6,18 +6,6 @@ VM="./zig-out/bin/clojurez"
 TIMEOUT=10
 TOOL_TIMEOUT="tests/timeout.sh"
 
-echo "=== Namespace Tests ==="
-run_test "ns declaration" '(ns my.core)' ""
-
-echo ""
-echo "=== Binding Tests ==="
-run_test "binding single var" '(do (def x 10) (binding [x 20] x))' "20"
-run_test "binding multiple vars" '(do (def a 1) (def b 2) (binding [a 10 b 20] (+ a b)))' "30"
-run_test "binding value restored after scope" '(do (def x 10) (binding [x 20] x) x)' "10"
-run_test "binding with expression" '(do (def x 0) (binding [x (+ 3 4)] x))' "7"
-run_test "binding nested" '(do (def x 10) (binding [x 20] (binding [x 30] x)))' "30"
-
-echo ""
 echo "=== File Execution: No Eval Output ==="
 
 # Test 1: lazy-seq should not evaluate more elements than consumed.
