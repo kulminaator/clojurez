@@ -8,7 +8,7 @@ const parser = @import("parser.zig");
 const eval = @import("eval.zig");
 const repl = @import("repl.zig");
 const core_clj = @import("namespaces/core/core_clj.zig");
-const regexp_clj = @import("namespaces/regexp/regexp_clj.zig");
+const regexp_api = @import("namespaces/regexp/api.zig");
 const debug_allocator = @import("debug_allocator.zig");
 const slab_allocator = @import("slab_allocator.zig");
 const gc_mod = @import("gc.zig");
@@ -151,13 +151,13 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
         }
     }
 
-    // Create zig.regexp virtual namespace — regexp engine in pure Clojure.
+    // Create zig.regexp virtual namespace — regexp engine in pure Zig.
     // Parent set to clojure.core so regexp code can use core functions.
     const zr_env = try ns_mgr.createNamespace("zig.regexp");
     zr_env.parent = clojure_core_env;
 
-    // Load embedded regexp library into zig.regexp namespace.
-    try loadRegexpLibrary(allocator, zr_env);
+    // Register regexp built-in functions into zig.regexp namespace.
+    try regexp_api.registerRegexpFunctions(zr_env);
 
     // Set "user" namespace's parent to clojure.core so all functions are visible.
     // This mirrors real Clojure where user namespace refers to clojure.core by default.
@@ -277,23 +277,6 @@ fn loadCoreLibrary(allocator: Allocator, env: *Env) anyerror!void {
         var result = try eval.eval(allocator, allocator, form, env);
         result.deinit(allocator);
         // Silent: don't print results during core library loading
-    }
-}
-
-/// Load the embedded regexp library into zig.regexp namespace.
-fn loadRegexpLibrary(allocator: Allocator, env: *Env) anyerror!void {
-    const content = regexp_clj.regexp_clj_source;
-
-    var p = try parser.Parser.init(allocator, content);
-    defer p.deinit();
-
-    var forms = try p.parseAll();
-    defer forms.deinit(allocator);
-
-    for (forms.items) |form| {
-        var result = try eval.eval(allocator, allocator, form, env);
-        result.deinit(allocator);
-        // Silent: don't print results during regexp library loading
     }
 }
 
