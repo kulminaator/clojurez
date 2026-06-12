@@ -49,9 +49,9 @@ watchdog=$!
 wait "$pid" 2>/dev/null
 exit_code=$?
 
-# Clean up the watchdog
+# Clean up the watchdog (suppress all output including job termination messages)
 kill "$watchdog" 2>/dev/null || true
-wait "$watchdog" 2>/dev/null || true
+wait "$watchdog" >/dev/null 2>&1 || true
 
 # If killed by our watchdog (SIGTERM=143, SIGKILL=137), report as timeout
 if [ "$exit_code" -eq 143 ] || [ "$exit_code" -eq 137 ]; then
