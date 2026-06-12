@@ -21,22 +21,28 @@ shift
 # Convert to tenths of seconds for the polling loop
 max_ticks=$((seconds * 10))
 
+# Flag file: watchdog runs while it exists, exits cleanly when removed.
+# This avoids killing the watchdog subshell which on macOS causes bash
+# to print "Terminated: 15" to stderr — a message that leaks into
+# 2>&1 captures and corrupts test output.
+FLAG_FILE=$(mktemp /tmp/cljvm_timeout.XXXXXX)
+trap 'rm -f "$FLAG_FILE"' EXIT
+
 # Start the command in background
 "$@" &
 pid=$!
 
-# Watchdog: poll every 0.1s, kill if still alive after timeout
+# Watchdog: poll every 0.1s, kill target if still alive after timeout.
+# Exits cleanly when the flag file is removed (no kill needed).
 (
     ticks=0
-    while [ "$ticks" -lt "$max_ticks" ]; do
-        # Check if the process is still running
+    while [ "$ticks" -lt "$max_ticks" ] && [ -f "$FLAG_FILE" ]; do
         if ! kill -0 "$pid" 2>/dev/null; then
             break
         fi
         sleep 0.1
         ticks=$((ticks + 1))
     done
-    # If we get here, either timed out or process finished
     if kill -0 "$pid" 2>/dev/null; then
         kill "$pid" 2>/dev/null || true
         sleep 1
@@ -49,9 +55,10 @@ watchdog=$!
 wait "$pid" 2>/dev/null
 exit_code=$?
 
-# Clean up the watchdog (suppress all output including job termination messages)
-kill "$watchdog" 2>/dev/null || true
-wait "$watchdog" >/dev/null 2>&1 || true
+# Remove flag file so watchdog loop condition fails and it exits cleanly.
+# Do this BEFORE wait so the watchdog has time to notice and exit.
+rm -f "$FLAG_FILE"
+wait "$watchdog" 2>/dev/null || true
 
 # If killed by our watchdog (SIGTERM=143, SIGKILL=137), report as timeout
 if [ "$exit_code" -eq 143 ] || [ "$exit_code" -eq 137 ]; then
