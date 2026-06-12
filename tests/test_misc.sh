@@ -85,3 +85,51 @@ fi
 
 # Cleanup test files
 rm -f /tmp/cljvm_test_lazy_no_overeval.clj /tmp/cljvm_test_script_no_eval_output.clj
+
+# ============================================================
+# REPL: Long input lines (>4096 bytes) should not be truncated
+# ============================================================
+echo ""
+echo "=== REPL Long Input Tests ==="
+
+# Test: REPL handles a single expression > 4096 bytes correctly
+# Generate a (+ 1 1 1 ...) expression with 3000 ones = ~6000 chars
+LONG_EXPR_4K=$(python3 -c "n=3000; print('(+ ' + ' '.join(['1']*n) + ')')")
+LONG_EXPR_4K_LEN=${#LONG_EXPR_4K}
+echo "  (long expr length: $LONG_EXPR_4K_LEN chars)"
+
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT bash -c "printf '%s\n(println :ok)\n(exit)\n' '$LONG_EXPR_4K' | $VM --repl 2>&1" ) || {
+    echo "FAIL: repl long expression >4096 bytes (timeout or error)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+}
+# Check that the long expression evaluated correctly AND the next expression ran
+if echo "$result" | grep -q "3000" && echo "$result" | grep -q ":ok"; then
+    echo "PASS: repl long expression >4096 bytes"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: repl long expression >4096 bytes"
+    echo "  Expected output to contain: 3000 and :ok"
+    echo "  Got:      $(echo "$result" | tr '\n' ' ' | head -c 200)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
+
+# Test: REPL handles a single expression > 8192 bytes (2x buffer) correctly
+LONG_EXPR_8K=$(python3 -c "n=6000; print('(+ ' + ' '.join(['1']*n) + ')')")
+LONG_EXPR_8K_LEN=${#LONG_EXPR_8K}
+echo "  (long expr length: $LONG_EXPR_8K_LEN chars)"
+
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT bash -c "printf '%s\n(println :ok)\n(exit)\n' '$LONG_EXPR_8K' | $VM --repl 2>&1" ) || {
+    echo "FAIL: repl long expression >8192 bytes (timeout or error)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+}
+if echo "$result" | grep -q "6000" && echo "$result" | grep -q ":ok"; then
+    echo "PASS: repl long expression >8192 bytes"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: repl long expression >8192 bytes"
+    echo "  Expected output to contain: 6000 and :ok"
+    echo "  Got:      $(echo "$result" | tr '\n' ' ' | head -c 200)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
