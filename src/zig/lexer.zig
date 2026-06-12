@@ -69,6 +69,16 @@ pub const Lexer = struct {
         return .{ .input = input, .pos = 0, .token_start = 0, .allocator = allocator };
     }
 
+    /// Return the 1-based line number at token_start.
+    pub fn currentLine(self: *const Lexer) usize {
+        var line: usize = 1;
+        var i: usize = 0;
+        while (i < self.token_start) : (i += 1) {
+            if (self.input[i] == '\n') line += 1;
+        }
+        return line;
+    }
+
     pub fn nextToken(self: *Lexer) anyerror!Token {
         self.skipWhitespace();
         self.skipComments();

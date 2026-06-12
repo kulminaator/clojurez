@@ -261,6 +261,43 @@ Each allocation, free, resize, and remap is logged with size, pointer address, a
 
 This is useful for verifying that `def` rebindings, `let` scopes, and function calls properly free unreachable values.
 
+### Parse Debug (`--parse-debug`)
+
+**STRONGLY RECOMMENDED** for diagnosing Clojure syntax errors. Use this before attempting to evaluate any `.clj` file.
+
+```bash
+./zig-out/bin/clojurez --parse-debug myfile.clj
+```
+
+This runs the file through the parser only (no evaluation, no library loading) and reports:
+- **Form nesting context**: Which form is currently being parsed and what contains it
+- **Open/Close events**: Every list, vector, map, and set open and close with line numbers
+- **Parse errors**: Exact line and error type for syntax issues
+- **Unmatched forms**: Any forms left open on the stack at the end
+
+**Output format:**
+```
+## PARSEDEBUG Line:10 InForm:top OpeningForm:list (defn)
+## PARSEDEBUG Line:10 InForm:defn OpeningForm:vector
+## PARSEDEBUG Line:10 InForm:defn ClosingForm:vector ()
+## PARSEDEBUG Line:12 InForm:defn ClosingForm:list (defn)
+
+## PARSEDEBUG All forms matched. Total: 24 forms.
+```
+
+**Fields:**
+- `Line:N` — Source line number (1-based)
+- `InForm:name` — The containing form's name (e.g., `defn`, `let`, `top` for root)
+- `OpeningForm:type (name)` — Form being opened: `list`, `vector`, `map`, `set`
+- `ClosingForm:type (name)` — Form being closed, with its original name
+
+**Common errors:**
+- `UnmatchedParenthesis` — Extra `)` with no matching `(`
+- `UnmatchedBracket` — Extra `]` with no matching `[`
+- `UnexpectedEof` — File ended while a form was still open
+- `UnexpectedToken` — Wrong closing delimiter (e.g., `]` where `)` expected)
+
+**Always use `--parse-debug` first** when a `.clj` file fails to load. It isolates syntax errors from runtime errors and shows exactly which form is malformed.
 ## Examples
 
 ```bash

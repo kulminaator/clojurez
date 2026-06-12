@@ -582,6 +582,12 @@ pub fn core_seq(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
         .map => coll.map_val.items.len,
         .set => coll.set_val.items.len,
         .queue => coll.queue_val.items.len,
+        .string => {
+            // For strings, seq returns the string itself (iterable via first/rest/nth)
+            // But only if non-empty
+            if (coll.str_val.len == 0) return Value.nilValue();
+            return try coll.clone(allocator);
+        },
         else => return Value.nilValue(),
     };
     if (len == 0) return Value.nilValue();

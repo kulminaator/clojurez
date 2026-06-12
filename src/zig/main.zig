@@ -8,6 +8,7 @@ const parser = @import("parser.zig");
 const eval = @import("eval.zig");
 const repl = @import("repl.zig");
 const core_clj = @import("namespaces/core/core_clj.zig");
+const regexp_clj = @import("namespaces/regexp/regexp_clj.zig");
 const debug_allocator = @import("debug_allocator.zig");
 const slab_allocator = @import("slab_allocator.zig");
 const gc_mod = @import("gc.zig");
@@ -127,15 +128,42 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // The Clojure wrappers in core.clj will shadow these with docstrings.
     try copyBuiltinsToNamespace(zc_env, clojure_core_env);
 
+    // Load embedded Clojure core library into clojure.core namespace.
+    // The defn wrappers shadow the raw builtins with docstrings.
+    try loadCoreLibrary(allocator, clojure_core_env);
+
+    // Check for --parse-debug early (before loading regexp library)
+    // so it can diagnose regexp.clj syntax errors without crashing.
+    {
+        var early_it = try std.process.Args.Iterator.initAllocator(init.args, allocator);
+        defer early_it.deinit();
+        _ = early_it.next(); // skip program name
+        while (true) {
+            const arg = early_it.next() orelse break;
+            if (std.mem.eql(u8, arg, "--parse-debug")) {
+                const filename = early_it.next() orelse {
+                    try writeStderr("Error: missing filename after --parse-debug\n");
+                    std.process.exit(1);
+                };
+                try runParseDebug(allocator, filename);
+                std.process.exit(0);
+            }
+        }
+    }
+
+    // Create zig.regexp virtual namespace — regexp engine in pure Clojure.
+    // Parent set to clojure.core so regexp code can use core functions.
+    const zr_env = try ns_mgr.createNamespace("zig.regexp");
+    zr_env.parent = clojure_core_env;
+
+    // Load embedded regexp library into zig.regexp namespace.
+    try loadRegexpLibrary(allocator, zr_env);
+
     // Set "user" namespace's parent to clojure.core so all functions are visible.
     // This mirrors real Clojure where user namespace refers to clojure.core by default.
     if (ns_mgr.getNamespace("user")) |user_env| {
         user_env.parent = clojure_core_env;
     }
-
-    // Load embedded Clojure core library into clojure.core namespace.
-    // The defn wrappers shadow the raw builtins with docstrings.
-    try loadCoreLibrary(allocator, clojure_core_env);
 
     // Switch back to user namespace after loading core.
     // core.clj starts with (ns clojure.core), so we need to restore user context.
@@ -249,6 +277,23 @@ fn loadCoreLibrary(allocator: Allocator, env: *Env) anyerror!void {
         var result = try eval.eval(allocator, allocator, form, env);
         result.deinit(allocator);
         // Silent: don't print results during core library loading
+    }
+}
+
+/// Load the embedded regexp library into zig.regexp namespace.
+fn loadRegexpLibrary(allocator: Allocator, env: *Env) anyerror!void {
+    const content = regexp_clj.regexp_clj_source;
+
+    var p = try parser.Parser.init(allocator, content);
+    defer p.deinit();
+
+    var forms = try p.parseAll();
+    defer forms.deinit(allocator);
+
+    for (forms.items) |form| {
+        var result = try eval.eval(allocator, allocator, form, env);
+        result.deinit(allocator);
+        // Silent: don't print results during regexp library loading
     }
 }
 
@@ -374,6 +419,68 @@ fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void 
         if (gc_mod.current_gc) |gc| gc.tryAutoCollect();
     }
 
+}
+
+var __num_buf: [20]u8 = undefined;
+
+fn allNum(n: usize) []const u8 {
+    return std.fmt.bufPrint(&__num_buf, "{d}", .{n}) catch "?";
+}
+
+fn allNumI32(n: i32) []const u8 {
+    return std.fmt.bufPrint(&__num_buf, "{d}", .{n}) catch "?";
+}
+
+/// Parse a file and print debug info for each form (for debugging syntax issues).
+fn runParseDebug(allocator: Allocator, filename: []const u8) anyerror!void {
+    const cwd = std.Io.Dir.cwd();
+    var file = try std.Io.Dir.openFile(cwd, std.Options.debug_io, filename, .{});
+    defer std.Io.File.close(file, std.Options.debug_io);
+
+    var reader = file.reader(std.Options.debug_io, &[_]u8{});
+    const content = try reader.interface.allocRemaining(allocator, std.Io.Limit.limited(1024 * 1024));
+    defer allocator.free(content);
+
+    var p = try parser.Parser.init(allocator, content);
+    defer p.deinit();
+    p.debug_mode = true;
+
+    var form_idx: usize = 0;
+    while (true) {
+        switch (p.current) {
+            .eof => break,
+            else => {},
+        }
+
+        _ = p.parse() catch |err| {
+            const line = p.lexer.currentLine();
+            std.debug.print("## PARSEDEBUG Line:{d} PARSE ERROR: {s}\n", .{ line, @errorName(err) });
+            break;
+        };
+
+        form_idx += 1;
+    }
+
+    if (p.debug_stack.items.len > 0) {
+        std.debug.print("\n## PARSEDEBUG UNMATCHED: {d} forms still open on stack\n", .{p.debug_stack.items.len});
+    } else {
+        std.debug.print("\n## PARSEDEBUG All forms matched. Total: {d} forms.\n", .{form_idx});
+    }
+}
+
+/// Binary search for line number given a byte offset.
+fn findLineNumber(line_starts: []const usize, offset: usize) usize {
+    var lo: usize = 0;
+    var hi: usize = line_starts.len;
+    while (lo < hi) {
+        const mid = (lo + hi) / 2;
+        if (offset < line_starts[mid]) {
+            hi = mid;
+        } else {
+            lo = mid + 1;
+        }
+    }
+    return lo; // 1-based line number
 }
 
 /// Run the -main function from a namespace.

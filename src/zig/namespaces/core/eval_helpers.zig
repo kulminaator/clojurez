@@ -147,7 +147,22 @@ pub fn callBuiltin(allocator: Allocator, f: Value, args_list: list.List, env: *V
             var f_mut = f;
             return f_mut.builtin_fn_val(&f_mut, args_list, env);
         },
-        else => return error.NotCallable,
+        .keyword => {
+            // Keyword as function: looks up the keyword in a map
+            if (args_list.items.len != 1) return error.ArityError;
+            const coll = args_list.items[0];
+            if (coll.type != .map) return Value.nilValue();
+            for (coll.map_val.items) |entry| {
+                if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, f.kw_val)) {
+                    return try entry.value.clone(allocator);
+                }
+            }
+            return Value.nilValue();
+        },
+        else => {
+            std.debug.print("NotCallable in eval_helpers: type={s}\n", .{@tagName(f.type)});
+            return error.NotCallable;
+        }
     }
 }
 
@@ -173,6 +188,7 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
                 const ns_mgr = eval_ns.findNsManager(env) orelse {
                     const val2 = env.get(form.sym_val);
                     if (val2) |v| return try v.clone(allocator);
+                    std.debug.print("Undefined symbol: '{s}'\n", .{form.sym_val});
                     return error.UndefinedSymbol;
                 };
                 const current_ns = ns_mgr.getCurrentNamespace();
@@ -180,14 +196,17 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
                 const target_env = ns_mgr.getNamespace(target_ns) orelse {
                     const val3 = env.get(form.sym_val);
                     if (val3) |v| return try v.clone(allocator);
+                    std.debug.print("Undefined symbol: '{s}'\n", .{form.sym_val});
                     return error.UndefinedSymbol;
                 };
                 const val4 = target_env.get(name);
                 if (val4) |v| return try v.clone(allocator);
-                return error.UndefinedSymbol;
+                std.debug.print("Undefined symbol: '{s}'\n", .{form.sym_val});
+                    return error.UndefinedSymbol;
             }
             if (env.get(form.sym_val)) |v| return try v.clone(allocator);
-            return error.UndefinedSymbol;
+            std.debug.print("Undefined symbol: '{s}'\n", .{form.sym_val});
+                    return error.UndefinedSymbol;
         },
         .list => {
             if (form.list_val.items.len == 0) return Value.listValue(list.empty());

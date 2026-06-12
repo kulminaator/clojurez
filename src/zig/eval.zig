@@ -76,6 +76,7 @@ pub fn evalRec(allocator: Allocator, arena_alloc: Allocator, form: Value, env: *
                 const ns_mgr = findNsManager(env) orelse {
                     const val2 = env.get(form.sym_val);
                     if (val2) |v| return try v.clone(arena_alloc);
+                    std.debug.print("Undefined symbol: '{s}'\n", .{form.sym_val});
                     return error.UndefinedSymbol;
                 };
                 // Look up alias in current namespace, or use the part before '/' as a direct namespace name
@@ -86,14 +87,17 @@ pub fn evalRec(allocator: Allocator, arena_alloc: Allocator, form: Value, env: *
                     // Target namespace doesn't exist, try direct lookup
                     const val3 = env.get(form.sym_val);
                     if (val3) |v| return try v.clone(arena_alloc);
+                    std.debug.print("Undefined symbol: '{s}'\n", .{form.sym_val});
                     return error.UndefinedSymbol;
                 };
                 const val4 = target_env.get(name);
                 if (val4) |v| return try v.clone(arena_alloc);
+                std.debug.print("Undefined symbol: '{s}'\n", .{form.sym_val});
                 return error.UndefinedSymbol;
             }
             const val = env.get(form.sym_val);
             if (val) |v| return try v.clone(arena_alloc);
+            std.debug.print("Undefined symbol: '{s}'\n", .{form.sym_val});
             return error.UndefinedSymbol;
         },
         .list => {
@@ -392,9 +396,10 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
             return try evalCond(allocator, arena_alloc, l.items[1..], env, depth + 1);
         }
 
-        // defn - define a named function (supports multi-arity)
+        // defn / defn- - define a named function (supports multi-arity)
         // (defn name docstring? ([params] body...)+)
-        if (std.mem.eql(u8, name, "defn")) {
+        // defn- is an alias for defn (convention for private functions)
+        if (std.mem.eql(u8, name, "defn") or std.mem.eql(u8, name, "defn-")) {
             if (l.items.len < 3) return error.ArityError;
             const fname = l.items[1];
             if (fname.type != .symbol) return error.TypeError;
@@ -1123,6 +1128,19 @@ pub fn call(allocator: Allocator, arena_alloc: Allocator, op: Value, args_list: 
             }
             return Value.nilValue();
         },
+        .keyword => {
+            // Keyword as function: looks up the keyword in a map
+            if (args.items.len != 1) return error.ArityError;
+            const coll = args.items[0];
+            if (coll.type != .map) return Value.nilValue();
+            // Look up the keyword in the map
+            for (coll.map_val.items) |entry| {
+                if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, op.kw_val)) {
+                    return try entry.value.clone(arena_alloc);
+                }
+            }
+            return Value.nilValue();
+        },
         .map => {
             // Map as function: returns value for key, or not-found if provided
             if (args.items.len < 1 or args.items.len > 2) return error.ArityError;
@@ -1143,7 +1161,10 @@ pub fn call(allocator: Allocator, arena_alloc: Allocator, op: Value, args_list: 
             if (args.items.len != 0) return error.ArityError;
             return try forceLazySeq(allocator, arena_alloc, op, env, depth);
         },
-        else => return error.NotCallable,
+        else => {
+            std.debug.print("NotCallable: tried to call value of type {s}\n", .{@tagName(op.type)});
+            return error.NotCallable;
+        }
     }
 }
 

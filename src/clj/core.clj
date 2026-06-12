@@ -182,9 +182,12 @@
 ;; ---- Map update ----
 
 (defn update
-  "Returns a map with the value at key updated by applying f to the current value."
-  [m k f]
-  (assoc m k (f (get m k))))
+  "Returns a map with the value at key updated by applying f to the current value.
+   With extra args, applies (apply f (get m k) args)."
+  ([m k f]
+   (assoc m k (f (get m k))))
+  ([m k f & args]
+   (assoc m k (apply f (get m k) args))))
 
 ;; ---- Map entry access ----
 

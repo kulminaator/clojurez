@@ -14,6 +14,16 @@ pub fn build(b: *std.Build) void {
     });
     copy_core.addFileInput(b.path("src/clj/core.clj"));
 
+    // Copy regexp.clj into zig package for @embedFile
+    // Source of truth: src/clj/zig/regexp.clj
+    // Destination: src/zig/namespaces/regexp/clj/regexp.clj (referenced by regexp_clj.zig)
+    const copy_regexp = b.addSystemCommand(&.{
+        "cp",
+        "src/clj/zig/regexp.clj",
+        "src/zig/namespaces/regexp/clj/regexp.clj",
+    });
+    copy_regexp.addFileInput(b.path("src/clj/zig/regexp.clj"));
+
     const src_path = b.path("src/zig/main.zig");
 
     // Build 3 variants into zig-out/bin/:
@@ -45,8 +55,9 @@ pub fn build(b: *std.Build) void {
             .root_module = module,
         });
 
-        // All variants depend on core.clj being copied first
+        // All variants depend on core.clj and regexp.clj being copied first
         exe.step.dependOn(&copy_core.step);
+        exe.step.dependOn(&copy_regexp.step);
 
 
         const install = b.addInstallArtifact(exe, .{});

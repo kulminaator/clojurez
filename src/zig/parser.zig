@@ -21,6 +21,15 @@ pub const Parser = struct {
     allocator: Allocator,
     // Fn shorthand mode: when true, % symbols are intercepted
     fn_shorthand_args: ?*FnShorthandArgs = null,
+    // Debug mode: track form nesting for --parse-debug
+    debug_mode: bool = false,
+    debug_stack: std.ArrayListUnmanaged(DebugForm) = .empty,
+
+    pub const DebugForm = struct {
+        form_type: []const u8, // "list", "vector", "map", "set"
+        name: []const u8, // first symbol name (e.g. "defn", "let")
+        open_line: usize,
+    };
 
     pub fn init(allocator: Allocator, input: []const u8) anyerror!Parser {
         var lexer = Lexer.init(allocator, input);
@@ -35,6 +44,44 @@ pub const Parser = struct {
 
     pub fn deinit(self: *Parser) void {
         self.current.deinit(self.allocator);
+        self.debug_stack.deinit(self.allocator);
+    }
+
+    fn debugOpenForm(self: *Parser, form_type: []const u8, name: []const u8) void {
+        if (!self.debug_mode) return;
+        const line = self.lexer.currentLine();
+        // Duplicate name so it survives token advancement
+        const name_dup = if (name.len > 0) self.allocator.dupe(u8, name) catch return else "";
+        // Print nesting context
+        std.debug.print("## PARSEDEBUG Line:{d} ", .{line});
+        if (self.debug_stack.items.len > 0) {
+            std.debug.print("InForm:{s} ", .{self.debug_stack.items[self.debug_stack.items.len - 1].name});
+        } else {
+            std.debug.print("InForm:top ", .{});
+        }
+        std.debug.print("OpeningForm:{s} ", .{form_type});
+        if (name.len > 0) std.debug.print("({s}) ", .{name});
+        std.debug.print("\n", .{});
+        self.debug_stack.append(self.allocator, .{ .form_type = form_type, .name = name_dup, .open_line = line }) catch {};
+    }
+
+    fn debugCloseForm(self: *Parser, form_type: []const u8) void {
+        if (!self.debug_mode) return;
+        const line = self.lexer.currentLine();
+        const name = if (self.debug_stack.items.len > 0) self.debug_stack.items[self.debug_stack.items.len - 1].name else "?";
+        std.debug.print("## PARSEDEBUG Line:{d} ", .{line});
+        if (self.debug_stack.items.len > 1) {
+            std.debug.print("InForm:{s} ", .{self.debug_stack.items[self.debug_stack.items.len - 2].name});
+        } else {
+            std.debug.print("InForm:top ", .{});
+        }
+        std.debug.print("ClosingForm:{s} ", .{form_type});
+        std.debug.print("({s}) ", .{name});
+        std.debug.print("\n", .{});
+        if (self.debug_stack.items.len > 0) {
+            const popped = self.debug_stack.pop() orelse return;
+            if (popped.name.len > 0) self.allocator.free(popped.name);
+        }
     }
 
     /// Return the number of bytes consumed from the input so far.
@@ -65,7 +112,7 @@ pub const Parser = struct {
         return results;
     }
 
-    fn advance(self: *Parser) anyerror!void {
+    pub fn advance(self: *Parser) anyerror!void {
         self.current.deinit(self.allocator);
         self.current = try self.lexer.nextToken();
     }
@@ -197,9 +244,18 @@ pub const Parser = struct {
         var items = list.empty();
         errdefer items.deinit(self.allocator);
 
+        // Get form name from first token (if it's a symbol)
+        var form_name: []const u8 = "";
+        switch (self.current) {
+            .symbol => |s| form_name = s,
+            else => {},
+        }
+        self.debugOpenForm("list", form_name);
+
         while (true) {
             switch (self.current) {
                 .close_paren => {
+                    self.debugCloseForm("list");
                     try self.advance();
                     return Value.listValue(items);
                 },
@@ -215,10 +271,12 @@ pub const Parser = struct {
         try self.advance(); // consume '['
         var items = vec.empty();
         errdefer items.deinit(self.allocator);
+        self.debugOpenForm("vector", "");
 
         while (true) {
             switch (self.current) {
                 .close_bracket => {
+                    self.debugCloseForm("vector");
                     try self.advance();
                     return Value.vectorValue(items);
                 },
@@ -244,10 +302,12 @@ pub const Parser = struct {
             }
             self.allocator.free(entries.items);
         }
+        self.debugOpenForm("map", "");
 
         while (true) {
             switch (self.current) {
                 .close_brace => {
+                    self.debugCloseForm("map");
                     try self.advance();
                     return Value.mapValue(entries);
                 },
@@ -273,10 +333,12 @@ pub const Parser = struct {
             }
             self.allocator.free(items.items);
         }
+        self.debugOpenForm("set", "");
 
         while (true) {
             switch (self.current) {
                 .close_brace => {
+                    self.debugCloseForm("set");
                     try self.advance();
                     return Value.setValue(items);
                 },
