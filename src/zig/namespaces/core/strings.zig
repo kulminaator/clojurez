@@ -3,6 +3,7 @@ const std = @import("std");
 const Value = @import("../../value.zig");
 const list = @import("../../list.zig");
 const Env = Value.Env;
+const helpers = @import("helpers.zig");
 const test_utils = @import("test_utils.zig");
 
 pub fn core_str(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
@@ -37,9 +38,48 @@ pub fn core_utf8_valid_q(self: *Value, args: list.List, _: *Env) anyerror!Value 
     return Value.boolValue(std.unicode.utf8ValidateSlice(args.items[0].str_val));
 }
 
+/// subs - returns the substring of s beginning at start inclusive, and ending
+/// at end (defaults to length of string), exclusive.
+/// Uses UTF-8 code point indices (consistent with nth on strings).
+pub fn core_subs(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len < 2 or args.items.len > 3) return error.ArityError;
+    if (args.items[0].type != .string) return error.TypeError;
+    const allocator = env_env.allocator;
+    const s = args.items[0].str_val;
+    const start = try helpers.toInt(args.items[1]);
+    if (start < 0) return error.IndexOutOfBounds;
+
+    const codepoint_count = Value.utf8CodepointCount(s);
+    var end: i64 = @as(i64, @intCast(codepoint_count));
+    if (args.items.len == 3) {
+        end = try helpers.toInt(args.items[2]);
+    }
+    if (end < start) return error.IndexOutOfBounds;
+    if (end > @as(i64, @intCast(codepoint_count))) end = @as(i64, @intCast(codepoint_count));
+
+    // Find the byte offset for start code point
+    var byte_start: usize = 0;
+    var i: i64 = 0;
+    while (i < start) : (i += 1) {
+        const cp_bytes = Value.utf8CodepointAt(s, @as(usize, @intCast(i))) orelse break;
+        byte_start += cp_bytes.len;
+    }
+    // Find the byte offset for end code point
+    var byte_end: usize = byte_start;
+    i = start;
+    while (i < end) : (i += 1) {
+        const cp_bytes = Value.utf8CodepointAt(s, @as(usize, @intCast(i))) orelse break;
+        byte_end += cp_bytes.len;
+    }
+
+    return Value.stringValue(allocator, s[byte_start..byte_end]);
+}
+
 pub fn registerStringFunctions(env: *Env) anyerror!void {
     try env.put("str", Value.builtinFnValue(core_str));
     try env.put("utf8-valid?", Value.builtinFnValue(core_utf8_valid_q));
+    try env.put("subs", Value.builtinFnValue(core_subs));
 }
 
 // ===== Unit Tests =====

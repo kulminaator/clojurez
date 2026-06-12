@@ -797,6 +797,12 @@
   [& args]
   (zig.core/apply zig.core/str args))
 
+(defn subs
+  "Returns the substring of s beginning at start inclusive, and ending
+   at end (defaults to length of string), exclusive."
+  ([s start] (zig.core/subs s start))
+  ([s start end] (zig.core/subs s start end)))
+
 (defn nano-time
   "Returns current instant's nanosecond time (monotonic clock).
    Useful for measuring elapsed time."
@@ -1042,6 +1048,13 @@
   "Returns a vector of the args, or converts a collection to a vector."
   [& args]
   (zig.core/apply zig.core/vec args))
+
+(defn subvec
+  "Returns a persistent vector of the items in vector from
+   start (inclusive) to end (exclusive). If end is not supplied,
+   defaults to (count vector)."
+  ([v start] (zig.core/subvec v start))
+  ([v start end] (zig.core/subvec v start end)))
 
 (defn concat
   "Returns a lazy sequence consisting of the items in each collection, in order."

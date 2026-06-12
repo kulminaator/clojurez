@@ -293,26 +293,198 @@ fn forceLazySeqGetResult(allocator: Allocator, lazy: *const Value) anyerror!Valu
 pub fn core_nth(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 2) return error.ArityError;
+    const allocator = env_env.allocator;
     const idx = try helpers.toInt(args.items[1]);
+    const not_found: ?Value = if (args.items.len >= 3) args.items[2] else null;
+
     switch (args.items[0].type) {
         .list => {
-            if (idx < 0 or @as(usize, @intCast(idx)) >= args.items[0].list_val.items.len) return Value.nilValue();
-            return try args.items[0].list_val.items[@as(usize, @intCast(idx))].clone(env_env.allocator);
+            if (idx < 0 or @as(usize, @intCast(idx)) >= args.items[0].list_val.items.len) {
+                if (not_found) |nf| return try nf.clone(allocator);
+                return Value.nilValue();
+            }
+            return try args.items[0].list_val.items[@as(usize, @intCast(idx))].clone(allocator);
         },
         .vector => {
-            if (idx < 0 or @as(usize, @intCast(idx)) >= args.items[0].vec_val.items.len) return Value.nilValue();
-            return try args.items[0].vec_val.items[@as(usize, @intCast(idx))].clone(env_env.allocator);
+            if (idx < 0 or @as(usize, @intCast(idx)) >= args.items[0].vec_val.items.len) {
+                if (not_found) |nf| return try nf.clone(allocator);
+                return Value.nilValue();
+            }
+            return try args.items[0].vec_val.items[@as(usize, @intCast(idx))].clone(allocator);
         },
         .string => {
             const s = args.items[0].str_val;
             const codepoint_count = Value.utf8CodepointCount(s);
-            if (idx < 0 or @as(usize, @intCast(idx)) >= codepoint_count) return Value.nilValue();
-            const cp_bytes = Value.utf8CodepointAt(s, @as(usize, @intCast(idx))) orelse return Value.nilValue();
-            const cp = std.unicode.utf8Decode(cp_bytes) catch return Value.nilValue();
+            if (idx < 0 or @as(usize, @intCast(idx)) >= codepoint_count) {
+                if (not_found) |nf| return try nf.clone(allocator);
+                return Value.nilValue();
+            }
+            const cp_bytes = Value.utf8CodepointAt(s, @as(usize, @intCast(idx))) orelse {
+                if (not_found) |nf| return try nf.clone(allocator);
+                return Value.nilValue();
+            };
+            const cp = std.unicode.utf8Decode(cp_bytes) catch {
+                if (not_found) |nf| return try nf.clone(allocator);
+                return Value.nilValue();
+            };
             return Value.charValue(cp);
+        },
+        .lazy_seq, .cons => {
+            // Iterate lazily — don't force the entire sequence
+            return nthOnSeq(allocator, args.items[0], idx, not_found);
         },
         else => return error.TypeError,
     }
+}
+
+/// Iterate through a sequence (lazy_seq or cons) to find the nth element.
+/// Only realizes elements up to the requested index.
+fn nthOnSeq(allocator: Allocator, val: Value, idx: i64, not_found: ?Value) anyerror!Value {
+    if (idx < 0) {
+        if (not_found) |nf| return try nf.clone(allocator);
+        return Value.nilValue();
+    }
+
+    var current = try val.clone(allocator);
+    errdefer current.deinit(allocator);
+
+    var i: i64 = 0;
+    while (i <= idx) {
+        // Get seq of current (handles lazy_seq forcing, cons pass-through, etc.)
+        const seqed = try getSeq(allocator, &current);
+        if (seqed.type == .nil) {
+            // Sequence ended before reaching index
+            if (not_found) |nf| return try nf.clone(allocator);
+            return Value.nilValue();
+        }
+        if (i == idx) {
+            // Got the element at idx
+            const first = try getFirst(allocator, seqed);
+            return first;
+        }
+        // Move to rest
+        const rest = try getRest(allocator, seqed);
+        current.deinit(allocator);
+        current = rest;
+        i += 1;
+    }
+    // Should not reach here
+    if (not_found) |nf| return try nf.clone(allocator);
+    return Value.nilValue();
+}
+
+/// Get the seq of a value (forces lazy_seq, passes through cons/list/vector).
+fn getSeq(allocator: Allocator, val: *Value) anyerror!Value {
+    if (val.type == .lazy_seq) {
+        return try forceLazySeqGetResult(allocator, val);
+    }
+    return try val.clone(allocator);
+}
+
+/// Get the first element of a seq value. Consumes the seq value.
+fn getFirst(allocator: Allocator, val: Value) anyerror!Value {
+    var v = val;
+    switch (v.type) {
+        .cons => {
+            const cdata = v.cons_val.?;
+            const head = try cdata.head.clone(allocator);
+            v.deinit(allocator);
+            return head;
+        },
+        .list => {
+            if (v.list_val.items.len == 0) {
+                v.deinit(allocator);
+                return Value.nilValue();
+            }
+            const first = try v.list_val.items[0].clone(allocator);
+            v.deinit(allocator);
+            return first;
+        },
+        .vector => {
+            if (v.vec_val.items.len == 0) {
+                v.deinit(allocator);
+                return Value.nilValue();
+            }
+            const first = try v.vec_val.items[0].clone(allocator);
+            v.deinit(allocator);
+            return first;
+        },
+        else => {
+            v.deinit(allocator);
+            return Value.nilValue();
+        },
+    }
+}
+
+/// Get the rest of a seq value. Consumes the seq value.
+fn getRest(allocator: Allocator, val: Value) anyerror!Value {
+    var v = val;
+    switch (v.type) {
+        .cons => {
+            const cdata = v.cons_val.?;
+            const tail = try cdata.tail.clone(allocator);
+            v.deinit(allocator);
+            return tail;
+        },
+        .list => {
+            if (v.list_val.items.len <= 1) {
+                v.deinit(allocator);
+                return Value.nilValue();
+            }
+            var result: list.List = .empty;
+            errdefer result.deinit(allocator);
+            var i: usize = 1;
+            while (i < v.list_val.items.len) : (i += 1) {
+                try result.append(allocator, try v.list_val.items[i].clone(allocator));
+            }
+            v.deinit(allocator);
+            return Value.listValue(result);
+        },
+        .vector => {
+            if (v.vec_val.items.len <= 1) {
+                v.deinit(allocator);
+                return Value.nilValue();
+            }
+            var result: list.List = .empty;
+            errdefer result.deinit(allocator);
+            var i: usize = 1;
+            while (i < v.vec_val.items.len) : (i += 1) {
+                try result.append(allocator, try v.vec_val.items[i].clone(allocator));
+            }
+            v.deinit(allocator);
+            return Value.listValue(result);
+        },
+        else => {
+            v.deinit(allocator);
+            return Value.nilValue();
+        },
+    }
+}
+
+/// subvec - returns a persistent vector of the items in vector from
+/// start (inclusive) to end (exclusive). If end is not supplied,
+/// defaults to (count vector).
+pub fn core_subvec(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len < 2 or args.items.len > 3) return error.ArityError;
+    const allocator = env_env.allocator;
+    if (args.items[0].type != .vector) return error.TypeError;
+    const v = args.items[0].vec_val;
+    const start = try helpers.toInt(args.items[1]);
+    var end: i64 = @as(i64, @intCast(v.items.len));
+    if (args.items.len == 3) {
+        end = try helpers.toInt(args.items[2]);
+    }
+    if (start < 0 or start > @as(i64, @intCast(v.items.len))) return error.IndexOutOfBounds;
+    if (end < start or end > @as(i64, @intCast(v.items.len))) return error.IndexOutOfBounds;
+
+    var result: vec.Vector = .empty;
+    errdefer result.deinit(allocator);
+    var i: usize = @as(usize, @intCast(start));
+    while (i < @as(usize, @intCast(end))) : (i += 1) {
+        try result.append(allocator, try v.items[i].clone(allocator));
+    }
+    return Value.vectorValue(result);
 }
 
 pub fn core_take(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
@@ -676,6 +848,7 @@ pub fn registerSequenceFunctions(env: *Env) anyerror!void {
     try env.put("seq", Value.builtinFnValue(core_seq));
     try env.put("range", Value.builtinFnValue(core_range));
     try env.put("cons", Value.builtinFnValue(core_cons));
+    try env.put("subvec", Value.builtinFnValue(core_subvec));
 }
 
 // ===== Unit Tests =====

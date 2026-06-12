@@ -601,8 +601,17 @@ pub fn core_distinct_q(_: *Value, args: list.List, _: *Env) anyerror!Value {
 pub fn core_drop(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
+    const allocator = env_env.allocator;
     const n = try toInt(args.items[0]);
     const coll = args.items[1];
+
+    // For lazy_seq and cons, return a lazy-seq that preserves laziness
+    // Mirrors Clojure: (lazy-seq (when (pos? n) (when-let [s (seq coll)]
+    //   (if (zero? (dec n)) s (drop (dec n) (rest s))))))
+    if (coll.type == .lazy_seq or coll.type == .cons) {
+        if (n <= 0) return try coll.clone(allocator);
+        return dropLazySeq(allocator, n, coll, env_env);
+    }
 
     var items: []const Value = undefined;
     var is_list: bool = false;
@@ -636,6 +645,108 @@ pub fn core_drop(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
         }
         return Value.vectorValue(result);
     }
+}
+
+/// Build a lazy-seq for (drop n coll) where coll is lazy_seq or cons.
+/// Uses a self-referencing thunk so recursive calls go through core_drop directly.
+fn dropLazySeq(allocator: Allocator, n: i64, coll: Value, env: *Env) anyerror!Value {
+    const thunk = try allocator.create(Value.LazySeqThunk);
+    thunk.* = .{
+        .params = list.empty(),
+        .body = list.empty(),
+        .env = try env.clone(allocator),
+    };
+    try thunk.env.put("n", Value.intValue(n));
+    try thunk.env.put("coll", try coll.clone(allocator));
+    // Self-reference: thunk calls core_drop directly
+    try thunk.env.put("__zig_drop", Value.builtinFnValue(core_drop));
+
+    // Build thunk body:
+    // (if (pos? n)
+    //   (let [s (seq coll)]
+    //     (if s
+    //       (if (zero? (dec n)) (rest s) (__zig_drop (dec n) (rest s)))
+    //       nil))
+    //   coll)
+    const a = allocator;
+    const sym_if = try Value.symValue(a, "if");
+    const sym_pos_q = try Value.symValue(a, "pos?");
+    const sym_n = try Value.symValue(a, "n");
+    const sym_coll = try Value.symValue(a, "coll");
+    const sym_let = try Value.symValue(a, "let");
+    const sym_s = try Value.symValue(a, "s");
+    const sym_seq = try Value.symValue(a, "seq");
+    const sym_zero_q = try Value.symValue(a, "zero?");
+    const sym_dec = try Value.symValue(a, "dec");
+    const sym_rest = try Value.symValue(a, "rest");
+    const sym_zig_drop = try Value.symValue(a, "__zig_drop");
+    const sym_nil = Value.nilValue();
+
+    // (pos? n)
+    var pos_call: list.List = .empty;
+    try pos_call.append(a, sym_pos_q);
+    try pos_call.append(a, sym_n);
+
+    // (seq coll)
+    var seq_call: list.List = .empty;
+    try seq_call.append(a, sym_seq);
+    try seq_call.append(a, sym_coll);
+
+    // [s (seq coll)]
+    var bindings: list.List = .empty;
+    try bindings.append(a, sym_s);
+    try bindings.append(a, Value.listValue(seq_call));
+
+    // (dec n)
+    var dec_call: list.List = .empty;
+    try dec_call.append(a, sym_dec);
+    try dec_call.append(a, sym_n);
+
+    // (zero? (dec n))
+    var zero_call: list.List = .empty;
+    try zero_call.append(a, sym_zero_q);
+    try zero_call.append(a, Value.listValue(dec_call));
+
+    // (rest s)
+    var rest_call: list.List = .empty;
+    try rest_call.append(a, sym_rest);
+    try rest_call.append(a, sym_s);
+
+    // (__zig_drop (dec n) (rest s))
+    var drop_call: list.List = .empty;
+    try drop_call.append(a, sym_zig_drop);
+    try drop_call.append(a, Value.listValue(dec_call));
+    try drop_call.append(a, Value.listValue(rest_call));
+
+    // (if (zero? (dec n)) (rest s) (__zig_drop (dec n) (rest s)))
+    var inner_if: list.List = .empty;
+    try inner_if.append(a, sym_if);
+    try inner_if.append(a, Value.listValue(zero_call));
+    try inner_if.append(a, Value.listValue(rest_call));
+    try inner_if.append(a, Value.listValue(drop_call));
+
+    // (if s (inner_if) nil)
+    var s_check: list.List = .empty;
+    try s_check.append(a, sym_if);
+    try s_check.append(a, sym_s);
+    try s_check.append(a, Value.listValue(inner_if));
+    try s_check.append(a, sym_nil);
+
+    // (let [s (seq coll)] (if s ... nil))
+    var let_form: list.List = .empty;
+    try let_form.append(a, sym_let);
+    try let_form.append(a, Value.listValue(bindings));
+    try let_form.append(a, Value.listValue(s_check));
+
+    // (if (pos? n) (let ...) coll)
+    var body: list.List = .empty;
+    try body.append(a, sym_if);
+    try body.append(a, Value.listValue(pos_call));
+    try body.append(a, Value.listValue(let_form));
+    try body.append(a, sym_coll);
+
+    thunk.body = body;
+    return Value.lazySeqValue(thunk);
 }
 
 // doall* - realizes a lazy sequence and returns the realized list

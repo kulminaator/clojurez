@@ -378,6 +378,8 @@ pub fn registerCoreFunctions(env: *Env) anyerror!void {
     try env.put("concat", Value.builtinFnValue(sequences.core_concat));
     try env.put("list", Value.builtinFnValue(sequences.core_list));
     try env.put("vec", Value.builtinFnValue(sequences.core_vec));
+    try env.put("subs", Value.builtinFnValue(strings.core_subs));
+    try env.put("subvec", Value.builtinFnValue(sequences.core_subvec));
 
     // defn is handled as a special form alias in the evaluator
 }
