@@ -17,26 +17,9 @@ const toInt = helpers.toInt;
 
 // Force a lazy_seq into a concrete list
 pub fn forceLazySeqToConcreteList(allocator: Allocator, val: Value) anyerror!list.List {
-    var forced = try forceValue(allocator, val);
+    var forced = try sequences_mod.forceLazySeqHelper(allocator, val);
     defer forced.deinit(allocator);
-    switch (forced.type) {
-        .list => return try list.clone(&forced.list_val, allocator),
-        .vector => {
-            var result: list.List = .empty;
-            errdefer result.deinit(allocator);
-            for (forced.vec_val.items) |item| {
-                try result.append(allocator, try item.clone(allocator));
-            }
-            return result;
-        },
-        .nil => return list.empty(),
-        else => {
-            var result: list.List = .empty;
-            errdefer result.deinit(allocator);
-            try result.append(allocator, try forced.clone(allocator));
-            return result;
-        },
-    }
+    return try list.clone(&forced.list_val, allocator);
 }
 
 // Force any lazy value (lazy_seq) into a concrete list
@@ -113,77 +96,15 @@ pub fn core_map(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
         else => return error.TypeError,
     }
 
-    // Build thunk body: (let [s (seq coll)] (if s (cons (f (first s)) (map f (rest s)))))
-    // All symbols and the body are allocated from the persistent allocator
-    const a = allocator;
-
-    // Symbols needed in the thunk body
-    const sym_let = try Value.symValue(a, "let");
-    const sym_s = try Value.symValue(a, "s");
-    const sym_seq = try Value.symValue(a, "seq");
-    const sym_coll = try Value.symValue(a, "coll");
-    const sym_if = try Value.symValue(a, "if");
-    const sym_cons = try Value.symValue(a, "cons");
-    const sym_f = try Value.symValue(a, "f");
-    const sym_first = try Value.symValue(a, "first");
-    const sym_map = try Value.symValue(a, "map");
-    const sym_rest = try Value.symValue(a, "rest");
-
-    // Build: (seq coll)
-    var seq_call: list.List = .empty;
-    try seq_call.append(a, sym_seq);
-    try seq_call.append(a, sym_coll);
-
-    // Build: [s (seq coll)]
-    var bindings: list.List = .empty;
-    try bindings.append(a, sym_s);
-    try bindings.append(a, Value.listValue(seq_call));
-
-    // Build: (f (first s))
-    var first_s_call: list.List = .empty;
-    try first_s_call.append(a, sym_first);
-    try first_s_call.append(a, sym_s);
-    var f_call: list.List = .empty;
-    try f_call.append(a, sym_f);
-    try f_call.append(a, Value.listValue(first_s_call));
-
-    // Build: (rest s)
-    var rest_call: list.List = .empty;
-    try rest_call.append(a, sym_rest);
-    try rest_call.append(a, sym_s);
-
-    // Build: (map f (rest s))
-    var map_call: list.List = .empty;
-    try map_call.append(a, sym_map);
-    try map_call.append(a, sym_f);
-    try map_call.append(a, Value.listValue(rest_call));
-
-    // Build: (cons (f (first s)) (map f (rest s)))
-    var cons_call: list.List = .empty;
-    try cons_call.append(a, sym_cons);
-    try cons_call.append(a, Value.listValue(f_call));
-    try cons_call.append(a, Value.listValue(map_call));
-
-    // Build: (if s (cons ...))
-    var if_form: list.List = .empty;
-    try if_form.append(a, sym_if);
-    try if_form.append(a, sym_s);
-    try if_form.append(a, Value.listValue(cons_call));
-
-    // Build: (let [s (seq coll)] (if s (cons ...)))
-    var body: list.List = .empty;
-    try body.append(a, sym_let);
-    try body.append(a, Value.listValue(bindings));
-    try body.append(a, Value.listValue(if_form));
-
-    // Create thunk with persistent allocator for body and cloned env
+    // Create thunk with custom handler — bypasses the Clojure evaluator
+    // for per-element processing. The handler does the map step directly in Zig.
     const thunk = try allocator.create(Value.LazySeqThunk);
     thunk.* = .{
         .params = list.empty(),
-        .body = body,
+        .body = list.empty(), // unused when custom_handler is set
         .env = try env_env.clone(allocator),
+        .custom_handler = Value.LazySeqHandler.map,
     };
-    // Bind f and coll in the thunk's environment
     try thunk.env.put("f", try f.clone(allocator));
     try thunk.env.put("coll", try coll.clone(allocator));
 
@@ -202,13 +123,24 @@ pub fn core_mapcat(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
     var i: usize = 1;
     while (i < args.items.len) : (i += 1) {
         const coll = args.items[i];
-        var items: []const Value = undefined;
+        // Force lazy_seq to concrete list
+        var items_list: list.List = .empty;
+        errdefer items_list.deinit(allocator);
         switch (coll.type) {
-            .list => items = coll.list_val.items,
-            .vector => items = coll.vec_val.items,
-            else => continue,
+            .list => items_list = try list.clone(&coll.list_val, allocator),
+            .vector => {
+                for (coll.vec_val.items) |item| {
+                    try items_list.append(allocator, try item.clone(allocator));
+                }
+            },
+            .lazy_seq => {
+                var forced = try sequences_mod.forceLazySeqHelper(allocator, try coll.clone(allocator));
+                defer forced.deinit(allocator);
+                items_list = try list.clone(&forced.list_val, allocator);
+            },
+            else => {},
         }
-        for (items) |item| {
+        for (items_list.items) |item| {
             var arg_list: list.List = .empty;
             errdefer arg_list.deinit(allocator);
             try arg_list.append(allocator, try item.clone(allocator));

@@ -21,12 +21,16 @@ fn forceAndAppend(allocator: Allocator, val: Value, target: *list.List) anyerror
 /// Force a lazy-seq to a realized list (recursively forces nested lazy_seqs)
 pub fn forceLazySeqHelper(allocator: Allocator, lazy: Value) anyerror!Value {
     if (lazy.lazy_seq_val.thunk) |thunk| {
-        const cloned_body = try list.clone(&thunk.body, allocator);
-        var thunk_env = try thunk.env.clone(allocator);
-
-        // Evaluate the thunk body (already wrapped in 'do') as a list
-        const body_val = Value.listValue(cloned_body);
-        const result = try eval_helpers.evalForm(allocator, body_val, &thunk_env);
+        // Use custom handler if available (bypasses Clojure evaluator)
+        var result: Value = undefined;
+        if (thunk.custom_handler) |handler| {
+            result = try forceLazySeqCustomHandler(allocator, handler, @constCast(&thunk.env));
+        } else {
+            const cloned_body = try list.clone(&thunk.body, allocator);
+            var thunk_env = try thunk.env.clone(allocator);
+            const body_val = Value.listValue(cloned_body);
+            result = try eval_helpers.evalForm(allocator, body_val, &thunk_env);
+        }
 
         // Convert to list, recursively forcing any nested lazy_seq elements
         var final_list: list.List = .empty;
@@ -44,9 +48,6 @@ pub fn forceLazySeqHelper(allocator: Allocator, lazy: Value) anyerror!Value {
             },
             .nil => {},
             .lazy_seq => {
-                // Force the lazy_seq and flatten its contents.
-                // This is safe now because seq no longer forces lazy-seqs,
-                // breaking the recursion chain.
                 var forced_inner = try forceLazySeqHelper(allocator, result);
                 defer forced_inner.deinit(allocator);
                 for (forced_inner.list_val.items) |item| {
@@ -54,7 +55,6 @@ pub fn forceLazySeqHelper(allocator: Allocator, lazy: Value) anyerror!Value {
                 }
             },
             .cons => {
-                // Walk the cons chain and flatten into the list
                 try flattenConsToList(allocator, result, &final_list);
             },
             else => {
@@ -67,6 +67,7 @@ pub fn forceLazySeqHelper(allocator: Allocator, lazy: Value) anyerror!Value {
 }
 
 /// Flatten a cons chain into a list, forcing nested lazy_seqs.
+/// Fully iterative — evaluates lazy_seq thunks inline to avoid stack overflow.
 fn flattenConsToList(allocator: Allocator, val: Value, target: *list.List) anyerror!void {
     var current = val;
     errdefer current.deinit(allocator);
@@ -75,8 +76,7 @@ fn flattenConsToList(allocator: Allocator, val: Value, target: *list.List) anyer
         switch (current.type) {
             .cons => {
                 const cdata = current.cons_val.?;
-                // Append the head as a single element.
-                // If head is a lazy_seq, force it but keep it as one element.
+                // Append the head
                 if (cdata.head.type == .lazy_seq) {
                     const head_forced = try forceLazySeqHelper(allocator, cdata.head);
                     try target.append(allocator, head_forced);
@@ -89,7 +89,6 @@ fn flattenConsToList(allocator: Allocator, val: Value, target: *list.List) anyer
                 current = tail;
             },
             .list => {
-                // Splice in the list elements
                 for (current.list_val.items) |item| {
                     try forceAndAppend(allocator, item, target);
                 }
@@ -97,16 +96,14 @@ fn flattenConsToList(allocator: Allocator, val: Value, target: *list.List) anyer
             },
             .nil => break,
             .lazy_seq => {
-                // Force the lazy_seq and flatten its contents
-                var forced = try forceLazySeqHelper(allocator, current);
-                defer forced.deinit(allocator);
-                for (forced.list_val.items) |item| {
-                    try target.append(allocator, try item.clone(allocator));
-                }
-                break;
+                // Evaluate the thunk inline — if it returns a cons, continue the loop.
+                // This avoids recursion that would blow the stack on long cons chains.
+                const next = try evalLazySeqThunk(allocator, current);
+                current.deinit(allocator);
+                current = next;
+                // Loop continues with the new value (cons, list, nil, or lazy_seq)
             },
             else => {
-                // Dotted pair — append as-is
                 try target.append(allocator, current);
                 current = Value.nilValue();
                 break;
@@ -114,6 +111,30 @@ fn flattenConsToList(allocator: Allocator, val: Value, target: *list.List) anyer
         }
     }
     current.deinit(allocator);
+}
+
+/// Evaluate a lazy-seq thunk and return the result value.
+/// Uses custom handler if available, otherwise evaluates through the Clojure evaluator.
+fn evalLazySeqThunk(allocator: Allocator, lazy: Value) anyerror!Value {
+    if (lazy.lazy_seq_val.thunk) |thunk| {
+        var result: Value = undefined;
+        if (thunk.custom_handler) |handler| {
+            result = try forceLazySeqCustomHandler(allocator, handler, @constCast(&thunk.env));
+        } else {
+            const cloned_body = try list.clone(&thunk.body, allocator);
+            var thunk_env = try thunk.env.clone(allocator);
+            const body_val = Value.listValue(cloned_body);
+            result = try eval_helpers.evalForm(allocator, body_val, &thunk_env);
+        }
+
+        // If the thunk returned a lazy_seq, force it (rare)
+        if (result.type == .lazy_seq) {
+            const forced = try forceLazySeqHelper(allocator, result);
+            return forced;
+        }
+        return result;
+    }
+    return Value.nilValue();
 }
 
 pub fn core_count(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
@@ -280,6 +301,11 @@ pub fn core_rest(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 /// Returns the direct result (cons, list, vector, nil, or lazy_seq).
 fn forceLazySeqGetResult(allocator: Allocator, lazy: *const Value) anyerror!Value {
     if (lazy.lazy_seq_val.thunk) |thunk| {
+        // Check for custom handler (bypasses Clojure evaluator)
+        if (thunk.custom_handler) |handler| {
+            return forceLazySeqCustomHandler(allocator, handler, @constCast(&thunk.env));
+        }
+
         const cloned_body = try list.clone(&thunk.body, allocator);
         var thunk_env = try thunk.env.clone(allocator);
 
@@ -288,6 +314,148 @@ fn forceLazySeqGetResult(allocator: Allocator, lazy: *const Value) anyerror!Valu
         return try eval_helpers.evalForm(allocator, body_val, &thunk_env);
     }
     return Value.listValue(list.empty());
+}
+
+/// Handle lazy-seq forcing for custom handlers (map, filter, etc.)
+/// These bypass the Clojure evaluator for per-element processing.
+fn forceLazySeqCustomHandler(allocator: Allocator, handler: Value.LazySeqHandler, env: *Env) anyerror!Value {
+    return switch (handler) {
+        .map => forceMapStep(allocator, env),
+    };
+}
+
+/// Execute one step of (map f coll) directly in Zig.
+/// Returns a cons cell: (cons (f first) (map f rest))
+/// or nil if the collection is empty.
+fn forceMapStep(allocator: Allocator, env: *Env) anyerror!Value {
+    // Get f and coll from the thunk environment
+    const f = env.get("f") orelse return error.RuntimeError;
+    const coll = env.get("coll") orelse return error.RuntimeError;
+
+    // Get seq of coll — clone it so we own it
+    var s = try getSeqValue(allocator, coll);
+    // Check if collection is empty
+    if (s.type == .nil) {
+        s.deinit(allocator);
+        return Value.nilValue();
+    }
+    if (s.type == .list and s.list_val.items.len == 0) {
+        s.deinit(allocator);
+        return Value.nilValue();
+    }
+    if (s.type == .vector and s.vec_val.items.len == 0) {
+        s.deinit(allocator);
+        return Value.nilValue();
+    }
+
+    // Get first element (does not consume s)
+    var first_val = try getFirstValue(allocator, s);
+    defer first_val.deinit(allocator);
+
+    // Apply f to first
+    var arg_list: list.List = .empty;
+    defer arg_list.deinit(allocator);
+    try arg_list.append(allocator, try first_val.clone(allocator));
+    const mapped = try eval_helpers.callBuiltin(allocator, f, arg_list, env);
+
+    // Get rest — this consumes s
+    var rest_val = try getRestValue(allocator, s);
+
+    // Create new lazy-seq for (map f rest)
+    const thunk = try allocator.create(Value.LazySeqThunk);
+    thunk.* = .{
+        .params = list.empty(),
+        .body = list.empty(),
+        .env = try env.clone(allocator),
+        .custom_handler = Value.LazySeqHandler.map,
+    };
+    // Update coll to rest
+    try thunk.env.put("coll", try rest_val.clone(allocator));
+    rest_val.deinit(allocator);
+
+    const tail = Value.lazySeqValue(thunk);
+
+    // Return cons(mapped, tail)
+    return Value.consValue(allocator, mapped, tail);
+}
+
+/// Get seq of a value (handles lazy_seq forcing, passes through others).
+/// Returns a value allocated from `allocator`.
+fn getSeqValue(allocator: Allocator, val: Value) anyerror!Value {
+    if (val.type == .lazy_seq) {
+        var v = try val.clone(allocator);
+        var result = try forceLazySeqGetResult(allocator, &v);
+        v.deinit(allocator);
+        // Clone result to our allocator (forceLazySeqGetResult may use different allocator)
+        const cloned = try result.clone(allocator);
+        result.deinit(allocator);
+        return cloned;
+    }
+    return try val.clone(allocator);
+}
+
+/// Get the first element of a seq value. Does not consume the value.
+fn getFirstValue(allocator: Allocator, val: Value) anyerror!Value {
+    switch (val.type) {
+        .cons => {
+            const cdata = val.cons_val.?;
+            return try cdata.head.clone(allocator);
+        },
+        .list => {
+            if (val.list_val.items.len == 0) return Value.nilValue();
+            return try val.list_val.items[0].clone(allocator);
+        },
+        .vector => {
+            if (val.vec_val.items.len == 0) return Value.nilValue();
+            return try val.vec_val.items[0].clone(allocator);
+        },
+        else => return Value.nilValue(),
+    }
+}
+
+/// Get the rest of a seq value. Consumes the input value.
+fn getRestValue(allocator: Allocator, val: Value) anyerror!Value {
+    var v = val;
+    switch (v.type) {
+        .cons => {
+            const cdata = v.cons_val.?;
+            const tail = try cdata.tail.clone(allocator);
+            v.deinit(allocator);
+            return tail;
+        },
+        .list => {
+            if (v.list_val.items.len <= 1) {
+                v.deinit(allocator);
+                return Value.nilValue();
+            }
+            var result: list.List = .empty;
+            errdefer result.deinit(allocator);
+            var i: usize = 1;
+            while (i < v.list_val.items.len) : (i += 1) {
+                try result.append(allocator, try v.list_val.items[i].clone(allocator));
+            }
+            v.deinit(allocator);
+            return Value.listValue(result);
+        },
+        .vector => {
+            if (v.vec_val.items.len <= 1) {
+                v.deinit(allocator);
+                return Value.nilValue();
+            }
+            var result: list.List = .empty;
+            errdefer result.deinit(allocator);
+            var i: usize = 1;
+            while (i < v.vec_val.items.len) : (i += 1) {
+                try result.append(allocator, try v.vec_val.items[i].clone(allocator));
+            }
+            v.deinit(allocator);
+            return Value.listValue(result);
+        },
+        else => {
+            v.deinit(allocator);
+            return Value.nilValue();
+        },
+    }
 }
 
 pub fn core_nth(self: *Value, args: list.List, env_env: *Env) anyerror!Value {

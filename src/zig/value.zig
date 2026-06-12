@@ -54,6 +54,14 @@ pub const LazySeqThunk = struct {
     params: list.List,
     body: list.List,
     env: Env,
+    // When set, the lazy-seq forcing code uses this custom handler
+    // instead of evaluating `body` through the Clojure evaluator.
+    // This avoids per-element evaluator overhead for map/filter/etc.
+    custom_handler: ?LazySeqHandler = null,
+};
+
+pub const LazySeqHandler = enum {
+    map,  // (map f coll) — apply f to each element of coll
 };
 
 // Ref-counted atom data for proper shared ownership
@@ -697,6 +705,7 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
                     .params = try list.clone(&thunk.params, allocator),
                     .body = try list.clone(&thunk.body, allocator),
                     .env = try thunk.env.clone(allocator),
+                    .custom_handler = thunk.custom_handler,
                 };
                 new_lazy.thunk = new_thunk;
             }
