@@ -319,3 +319,52 @@ pub fn evalInNs(allocator: Allocator, l: list.List, env: *Env, depth: usize) any
 
     return Value.nilValue();
 }
+
+// ---- Tests ----
+
+test "ns::isReferredName: empty list returns false" {
+    const referred: []const []const u8 = &[_][]const u8{};
+    try std.testing.expect(!isReferredName(referred, "anything"));
+}
+
+test "ns::isReferredName: finds matching name" {
+    const referred = [_][]const u8{ "alpha", "beta", "gamma" };
+    try std.testing.expect(isReferredName(referred[0..], "beta"));
+    try std.testing.expect(isReferredName(referred[0..], "alpha"));
+    try std.testing.expect(isReferredName(referred[0..], "gamma"));
+}
+
+test "ns::isReferredName: returns false for non-matching name" {
+    const referred = [_][]const u8{ "alpha", "beta" };
+    try std.testing.expect(!isReferredName(referred[0..], "gamma"));
+    try std.testing.expect(!isReferredName(referred[0..], "alphaX"));
+    try std.testing.expect(!isReferredName(referred[0..], ""));
+}
+
+test "ns::Env: referred_names init and deinit" {
+    const allocator = std.testing.allocator;
+    var env = Env.init(allocator);
+    defer env.deinit(allocator);
+    try std.testing.expect(env.referred_names.items.len == 0);
+
+    // Append a referred name and verify
+    const name = try allocator.dupe(u8, "test-fn");
+    try env.referred_names.append(allocator, name);
+    try std.testing.expect(env.referred_names.items.len == 1);
+    try std.testing.expect(std.mem.eql(u8, env.referred_names.items[0], "test-fn"));
+}
+
+test "ns::Env: clone preserves referred_names as empty" {
+    const allocator = std.testing.allocator;
+    var env = Env.init(allocator);
+    defer env.deinit(allocator);
+
+    // Add a referred name
+    const name = try allocator.dupe(u8, "referred-fn");
+    try env.referred_names.append(allocator, name);
+
+    // Clone — referred_names should be empty in the clone (shallow copy of entries only)
+    var cloned = try env.clone(allocator);
+    defer cloned.deinit(allocator);
+    try std.testing.expect(cloned.referred_names.items.len == 0);
+}
