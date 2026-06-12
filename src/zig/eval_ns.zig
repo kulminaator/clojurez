@@ -63,7 +63,7 @@ pub fn evalNs(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyer
 
         if (std.mem.eql(u8, clause_keyword.kw_val, "require")) {
             // Process :require clause
-            // Each item is a vector: [ns.name :as alias] or [ns.name :refer [fn1 fn2]]
+            // Each item is a vector: [ns.name :as alias :refer [fn1 fn2] :exclude [fn3] :rename {fn1 fn2}]
             var j: usize = 1;
             while (j < clause.list_val.items.len) : (j += 1) {
                 const req_item = clause.list_val.items[j];
@@ -75,8 +75,12 @@ pub fn evalNs(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyer
                 if (req_ns_sym.type != .symbol) continue;
                 const req_ns_name = req_ns_sym.sym_val;
 
-                // Parse :as and :refer from the require vector
+                // Parse :as, :refer, :exclude, :rename from the require vector
                 var alias: ?[]const u8 = null;
+                var refer_all: bool = false;
+                var refer_syms: ?[]const Value = null;
+                var exclude_syms: ?[]const Value = null;
+                var rename_map: ?Value.Map = null;
                 var k: usize = 1;
                 while (k < req_items.len) : (k += 1) {
                     if (req_items[k].type == .keyword) {
@@ -85,14 +89,33 @@ pub fn evalNs(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyer
                             if (req_items[k].type == .symbol) {
                                 alias = req_items[k].sym_val;
                             }
+                        } else if (std.mem.eql(u8, req_items[k].kw_val, "refer") and k + 1 < req_items.len) {
+                            k += 1;
+                            if (req_items[k].type == .keyword and std.mem.eql(u8, req_items[k].kw_val, "all")) {
+                                refer_all = true;
+                            } else if (req_items[k].type == .list) {
+                                refer_syms = req_items[k].list_val.items;
+                            } else if (req_items[k].type == .vector) {
+                                refer_syms = req_items[k].vec_val.items;
+                            }
+                        } else if (std.mem.eql(u8, req_items[k].kw_val, "exclude") and k + 1 < req_items.len) {
+                            k += 1;
+                            if (req_items[k].type == .list) {
+                                exclude_syms = req_items[k].list_val.items;
+                            } else if (req_items[k].type == .vector) {
+                                exclude_syms = req_items[k].vec_val.items;
+                            }
+                        } else if (std.mem.eql(u8, req_items[k].kw_val, "rename") and k + 1 < req_items.len) {
+                            k += 1;
+                            if (req_items[k].type == .map) {
+                                rename_map = req_items[k].map_val;
+                            }
                         }
-                        // Skip :refer for now (handled by alias resolution)
                     }
                 }
 
                 // Use alias if provided, otherwise use the last part of the namespace name as alias
                 const effective_alias = alias orelse blk: {
-                    // Default alias: last part of namespace name (e.g., "hello" from "hello.hello")
                     const ns_name_str = req_ns_name;
                     var last_dot: usize = 0;
                     var d: usize = 0;
@@ -107,6 +130,10 @@ pub fn evalNs(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyer
 
                 // Load the required namespace file from classpath
                 try loadNamespaceFile(allocator, ns_mgr, req_ns_name, env);
+
+                // Copy referenced vars from target namespace into current namespace (refer semantics)
+                const target_env = ns_mgr.getNamespace(req_ns_name) orelse continue;
+                try referVars(allocator, ns_env, target_env, refer_all, refer_syms, exclude_syms, rename_map);
             }
         }
     }
@@ -115,6 +142,91 @@ pub fn evalNs(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyer
     try ns_mgr.setCurrentNamespace(ns_name);
 
     return Value.nilValue();
+}
+
+/// Check if a name is in the referred-names list (linear scan, simple and reliable).
+fn isReferredName(referred: []const []const u8, name: []const u8) bool {
+    for (referred) |r| {
+        if (std.mem.eql(u8, r, name)) return true;
+    }
+    return false;
+}
+
+/// Copy referenced vars from source namespace into the target namespace.
+/// Matches original Clojure semantics: only copies OWNED vars (ns-interns),
+/// not vars that were themselves referred (ns-refers). This prevents
+/// transitive refers — if A refers B and B refers C, A does NOT get C's vars.
+fn referVars(
+    allocator: Allocator,
+    target_ns: *Env,
+    source_ns: *const Env,
+    refer_all: bool,
+    refer_syms: ?[]const Value,
+    exclude_syms: ?[]const Value,
+    rename_map: ?Value.Map,
+) anyerror!void {
+    var it = source_ns.entries.iterator();
+    while (it.next()) |entry| {
+        const sym_name = entry.key_ptr.*;
+        const sym_val = entry.value_ptr;
+
+        // Skip vars that were themselves referred into source_ns (not owned).
+        // Original Clojure only copies owned vars (ns-interns), not referred vars.
+        if (isReferredName(source_ns.referred_names.items, sym_name)) continue;
+
+        // Check :exclude
+        if (exclude_syms) |excl| {
+            var excluded = false;
+            for (excl) |ex| {
+                if (ex.type == .symbol and std.mem.eql(u8, ex.sym_val, sym_name)) {
+                    excluded = true;
+                    break;
+                }
+            }
+            if (excluded) continue;
+        }
+
+        // Check :refer list (if specified, only refer listed symbols)
+        if (refer_syms) |refs| {
+            if (!refer_all) {
+                var found = false;
+                for (refs) |r| {
+                    if (r.type == .symbol and std.mem.eql(u8, r.sym_val, sym_name)) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) continue;
+            }
+        } else if (!refer_all) {
+            // No :refer and no :refer :all — skip (alias handles qualified lookup)
+            continue;
+        }
+
+        // Determine the local name (check :rename map)
+        const local_name = blk: {
+            if (rename_map) |rmap| {
+                for (rmap.items) |me| {
+                    if (me.key.type == .symbol and std.mem.eql(u8, me.key.sym_val, sym_name)) {
+                        if (me.value.type == .symbol) {
+                            break :blk me.value.sym_val;
+                        }
+                        break;
+                    }
+                }
+            }
+            break :blk sym_name;
+        };
+
+        // Clone the value into the target namespace
+        const cloned = try sym_val.clone(allocator);
+        try target_ns.put(local_name, cloned);
+
+        // Mark as referred so transitive refers won't copy it further.
+        // Uses target_ns.allocator so the string lifetime matches the env.
+        const key_copy = try target_ns.allocator.dupe(u8, local_name);
+        try target_ns.referred_names.append(target_ns.allocator, key_copy);
+    }
 }
 
 // Load a namespace file from the classpath and evaluate it.

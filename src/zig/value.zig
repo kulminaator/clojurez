@@ -250,6 +250,10 @@ pub const Env = struct {
     parent: ?*Env = null,
     /// Pointer to namespace manager (only set on root env, inherited via parent chain)
     ns_manager: ?*NamespaceManager = null,
+    /// Names added via :refer (not owned by this namespace).
+    /// Prevents transitive refers — original Clojure only copies owned vars.
+    /// Uses ArrayList for simplicity (linear scan, avoids HashMap allocator issues).
+    referred_names: std.ArrayListUnmanaged([]const u8) = .empty,
 
     pub fn init(allocator: Allocator) Env {
         return .{
@@ -257,6 +261,7 @@ pub const Env = struct {
             .entries = .empty,
             .parent = null,
             .ns_manager = null,
+            .referred_names = .empty,
         };
     }
 
@@ -266,6 +271,10 @@ pub const Env = struct {
             entry.value_ptr.deinit(allocator);
         }
         self.entries.deinit(allocator);
+        for (self.referred_names.items) |name| {
+            allocator.free(name);
+        }
+        self.referred_names.deinit(allocator);
         _ = self.parent; // Don't deinit parent here; it's managed separately
         _ = self.ns_manager; // Don't deinit ns_manager here
     }
@@ -276,6 +285,7 @@ pub const Env = struct {
             .entries = .empty,
             .parent = self.parent,
             .ns_manager = self.ns_manager,
+            .referred_names = .empty,
         };
         var it = self.entries.iterator();
         while (it.next()) |entry| {

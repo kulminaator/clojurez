@@ -263,16 +263,20 @@ fn scanLazySeqThunk(thunk_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     if (thunk.body.items.len > 0) {
         ctx.gc.markRecursive(thunk.body.items.ptr, ctx);
     }
+    // Validate env entries before scanning — guard against false-positive size match
+    const entries = thunk.env.entries;
+    if (entries.entries.len > 10000) return; // sanity: unlikely to have this many
+    if (entries.entries.capacity > 0 and entries.entries.len > entries.entries.capacity) return;
     // Mark the thunk's env entries buffer
-    if (thunk.env.entries.entries.len > 0) {
-        ctx.gc.markRecursive(thunk.env.entries.entries.bytes, ctx);
+    if (entries.entries.len > 0) {
+        ctx.gc.markRecursive(entries.entries.bytes, ctx);
     }
     // Mark the thunk's env index_header (separate allocation)
-    if (thunk.env.entries.index_header) |header| {
+    if (entries.index_header) |header| {
         ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(header)), ctx);
     }
     // Scan the thunk's env values (they contain child pointers)
-    var it = thunk.env.entries.iterator();
+    var it = entries.iterator();
     while (it.next()) |entry| {
         scanValueChildrenDirect(entry.value_ptr, ctx);
     }
@@ -304,16 +308,20 @@ fn scanFnData(fndata_ptr: *anyopaque, ctx: *gc.ScanContext) void {
             }
         }
     }
+    // Validate env entries before scanning
+    const fn_entries = fndata.env.entries;
+    if (fn_entries.entries.len > 10000) return;
+    if (fn_entries.entries.capacity > 0 and fn_entries.entries.len > fn_entries.entries.capacity) return;
     // Mark the fn's env entries buffer
-    if (fndata.env.entries.entries.len > 0) {
-        ctx.gc.markRecursive(fndata.env.entries.entries.bytes, ctx);
+    if (fn_entries.entries.len > 0) {
+        ctx.gc.markRecursive(fn_entries.entries.bytes, ctx);
     }
     // Mark the fn's env index_header (separate allocation)
-    if (fndata.env.entries.index_header) |header| {
+    if (fn_entries.index_header) |header| {
         ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(header)), ctx);
     }
     // Scan the fn's env values (they contain child pointers)
-    var it = fndata.env.entries.iterator();
+    var it = fn_entries.iterator();
     while (it.next()) |entry| {
         scanValueChildrenDirect(entry.value_ptr, ctx);
     }

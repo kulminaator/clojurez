@@ -164,3 +164,84 @@ else
     echo "  Got:      $(echo "$result" | tr '\n' ' ' | head -c 300)"
     TEST_FAIL=$((TEST_FAIL + 1))
 fi
+
+# ============================================================
+# :refer semantics tests
+# ============================================================
+# Tests that :refer copies vars into the local namespace (original Clojure
+# behavior), not just via parent chain. Supports :refer [x y], :refer :all,
+# :exclude, :rename, and :as + :refer combined.
+
+echo ""
+echo "=== :refer Semantics Tests ==="
+
+# Test: :refer [specific-symbols] copies only listed vars
+# Uses REPL so errors are handled gracefully
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT bash -c "
+printf '(ns mylib)\n(defn alpha [] :alpha)\n(defn beta [] :beta)\n(ns myapp (:require [mylib :refer [alpha]]))\n(alpha)\n(println (mylib/beta))\nbeta\n(exit)\n' | $VM --repl 2>&1
+") || {
+    echo "FAIL: refer selective (timeout or error)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+}
+# alpha should work (referred), mylib/beta should work (via alias), beta alone should error
+if echo "$result" | grep -q ":alpha" && echo "$result" | grep -q ":beta" && echo "$result" | grep -qi "UndefinedSymbol"; then
+    echo "PASS: refer selective [:refer [alpha]]"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: refer selective [:refer [alpha]]"
+    echo "  Got: $(echo "$result" | tr '\n' ' ' | head -c 300)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
+
+# Test: :refer :all copies all vars
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT bash -c "
+printf '(ns mylib2)\n(defn x [] :x)\n(defn y [] :y)\n(ns myapp2 (:require [mylib2 :refer :all]))\n(x)\n(y)\n(exit)\n' | $VM --repl 2>&1
+") || {
+    echo "FAIL: refer :all (timeout or error)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+}
+if echo "$result" | grep -q ":x" && echo "$result" | grep -q ":y"; then
+    echo "PASS: refer :all"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: refer :all"
+    echo "  Got: $(echo "$result" | tr '\n' ' ' | head -c 300)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
+
+# Test: :refer :all with :exclude
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT bash -c "
+printf '(ns mylib3)\n(defn a [] :a)\n(defn b [] :b)\n(ns myapp3 (:require [mylib3 :refer :all :exclude [b]]))\n(a)\nb\n(exit)\n' | $VM --repl 2>&1
+") || {
+    echo "FAIL: refer :all :exclude (timeout or error)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+}
+# a should work, b should error (excluded)
+if echo "$result" | grep -q ":a" && echo "$result" | grep -qi "UndefinedSymbol"; then
+    echo "PASS: refer :all :exclude"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: refer :all :exclude"
+    echo "  Got: $(echo "$result" | tr '\n' ' ' | head -c 300)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
+
+# Test: :as + :refer combined (alias for qualified, refer for unqualified)
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT bash -c "
+printf '(ns mylib4)\n(defn hello [n] (str \"hi-\" n))\n(defn bye [n] (str \"bye-\" n))\n(ns myapp4 (:require [mylib4 :as m4 :refer [hello]]))\n(println (hello 1) (m4/bye 2))\n(exit)\n' | $VM --repl 2>&1
+") || {
+    echo "FAIL: refer + as combined (timeout or error)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+}
+if echo "$result" | grep -q "hi-1" && echo "$result" | grep -q "bye-2"; then
+    echo "PASS: refer + as combined"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: refer + as combined"
+    echo "  Got: $(echo "$result" | tr '\n' ' ' | head -c 300)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi

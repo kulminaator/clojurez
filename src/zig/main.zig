@@ -562,6 +562,17 @@ fn scanEnvEntriesDirect(env: *Env, gc_inst: *gc_mod.GC) void {
         // Scan the Value's child pointers
         gc_scan.scanValueChildrenDirect(entry.value_ptr, &ctx);
     }
+    // Mark referred_names list (strings added via :refer)
+    if (env.referred_names.items.len > 0) {
+        const items_ptr = @as(*anyopaque, @ptrCast(env.referred_names.items.ptr));
+        gc_inst.setObjectType(items_ptr, gc_mod.GCObjectType.unknown);
+        gc_inst.markRecursive(items_ptr, &ctx);
+        for (env.referred_names.items) |name| {
+            if (name.len > 0) {
+                gc_inst.markRecursive(@as(*anyopaque, @ptrCast(@constCast(name.ptr))), &ctx);
+            }
+        }
+    }
 }
 
 // Static pointers for root callback
