@@ -32,8 +32,10 @@ pub fn evalNs(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyer
 
     // Create or get the namespace
     const ns_env = try ns_mgr.createNamespace(ns_name);
-    // Set parent to clojure.core so core functions are visible
-    if (ns_env.parent == null) {
+    // Set parent to clojure.core so core functions are visible.
+    // Guard: don't set clojure.core's parent to itself (would create a cycle
+    // in env.get() causing infinite loops on undefined symbol lookups).
+    if (ns_env.parent == null and !std.mem.eql(u8, ns_name, "clojure.core")) {
         const clojure_core = ns_mgr.getNamespace("clojure.core");
         if (clojure_core) |core_env| {
             ns_env.parent = core_env;
@@ -180,8 +182,10 @@ pub fn evalInNs(allocator: Allocator, l: list.List, env: *Env, depth: usize) any
 
     // Create or get the namespace
     const ns_env = try ns_mgr.createNamespace(ns_name);
-    // Set parent to clojure.core so core functions are visible
-    if (ns_env.parent == null) {
+    // Set parent to clojure.core so core functions are visible.
+    // Guard: don't set clojure.core's parent to itself (would create a cycle
+    // in env.get() causing infinite loops on undefined symbol lookups).
+    if (ns_env.parent == null and !std.mem.eql(u8, ns_name, "clojure.core")) {
         const clojure_core = ns_mgr.getNamespace("clojure.core");
         if (clojure_core) |core_env| {
             ns_env.parent = core_env;

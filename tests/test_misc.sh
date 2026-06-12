@@ -133,3 +133,34 @@ else
     echo "  Got:      $(echo "$result" | tr '\n' ' ' | head -c 200)"
     TEST_FAIL=$((TEST_FAIL + 1))
 fi
+
+# ============================================================
+# Regression: namespace parent chain must not cycle
+# ============================================================
+# When (ns clojure.core) is evaluated, clojure.core's parent must NOT
+# be set to itself. If it is, env.get() loops forever on undefined symbols.
+# This test references an undefined symbol from a child namespace —
+# it must produce an error, NOT hang.
+
+echo ""
+echo "=== Namespace Parent Cycle Regression ==="
+
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT bash -c "printf '(ns mytest)\nundefined-symbol-xyz\n(println :done)\n(exit)\n' | $VM --repl 2>&1" ) || {
+    # Timeout (exit 124) means the cycle still exists and caused a hang
+    if [ $? -eq 124 ]; then
+        echo "FAIL: ns parent cycle: undefined symbol caused hang (cycle not fixed)"
+    else
+        echo "FAIL: ns parent cycle: timeout or error"
+    fi
+    TEST_FAIL=$((TEST_FAIL + 1))
+}
+# Must see the error AND :done (proving execution continued past the error)
+if echo "$result" | grep -qi "UndefinedSymbol\|Error" && echo "$result" | grep -q ":done"; then
+    echo "PASS: ns parent cycle: undefined symbol gives error, no hang"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: ns parent cycle: expected error + :done in output"
+    echo "  Got:      $(echo "$result" | tr '\n' ' ' | head -c 300)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
