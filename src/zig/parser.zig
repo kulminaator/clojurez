@@ -69,6 +69,7 @@ pub const Parser = struct {
         if (!self.debug_mode) return;
         const line = self.lexer.currentLine();
         const name = if (self.debug_stack.items.len > 0) self.debug_stack.items[self.debug_stack.items.len - 1].name else "?";
+        const open_line = if (self.debug_stack.items.len > 0) self.debug_stack.items[self.debug_stack.items.len - 1].open_line else 0;
         std.debug.print("## PARSEDEBUG Line:{d} ", .{line});
         if (self.debug_stack.items.len > 1) {
             std.debug.print("InForm:{s} ", .{self.debug_stack.items[self.debug_stack.items.len - 2].name});
@@ -77,6 +78,7 @@ pub const Parser = struct {
         }
         std.debug.print("ClosingForm:{s} ", .{form_type});
         std.debug.print("({s}) ", .{name});
+        std.debug.print("StartedFormLine:{d} ", .{open_line});
         std.debug.print("\n", .{});
         if (self.debug_stack.items.len > 0) {
             const popped = self.debug_stack.pop() orelse return;

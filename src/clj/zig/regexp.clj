@@ -3,6 +3,24 @@
 
 (ns zig.regexp)
 
+;; to avoid confusing parsers in tools, use these constants instead
+;; yeah i know it's dumb, but it works
+(def *OPENING-BRACKET* (first "("))
+(def *CLOSING-BRACKET* (first ")"))
+(def *DASH* (first "-"))
+(def *DOT* (first "."))
+(def *COMMA* (first ","))
+(def *OPENING-SQUARE-BRACKET* (first "["))
+(def *CLOSING-SQUARE-BRACKET* (first "]"))
+(def *OPENING-CURLY-BRACE* (first "{"))
+(def *CLOSING-CURLY-BRACE* (first "}"))
+(def *PIPE* (first "|"))
+(def *ASTERISK* (first "*"))
+(def *PLUS* (first "+"))
+(def *QUESTION-MARK* (first "?"))
+(def *BACKSLASH* (first "\\"))
+(def *CARET* (first "^"))
+
 ;; ============================================================
 ;; Regex Parser - converts regex string to AST
 ;; ============================================================
@@ -34,11 +52,11 @@
   (let [left (parse-concat ctx)
         left-ast (:ast left)]
     (loop [ctx left children [left-ast]]
-      (if (and (not (at-end? ctx)) (= (peek-char ctx) \|))
+      (if (and (not (at-end? ctx)) (= (peek-char ctx) *PIPE*))
         (let [ctx (consume-char ctx)
               right (parse-concat ctx)
               right-ast (:ast right)]
-          (recur ctx (conj children right-ast)))
+          (recur right (conj children right-ast)))
         (let [final-ast (if (> (count children) 1)
                           (make-ast :alt :children children)
                           (first children))]
@@ -48,7 +66,7 @@
   "Parse concatenation: star+"
   (loop [ctx ctx children []]
     (let [c (peek-char ctx)]
-      (if (or (at-end? ctx) (= c \|) (= c \)))
+      (if (or (at-end? ctx) (= c *PIPE*) (= c *CLOSING-BRACKET*))
         (let [final-ast (if (empty? children)
                           (make-ast :empty)
                           (if (= (count children) 1)
@@ -71,87 +89,73 @@
   (let [repeat-result (parse-repeat ctx)
         repeat-ast (:ast repeat-result)]
     (let [c (peek-char repeat-result)]
-      (cond
-        (= c \*)
+      (if (= c *ASTERISK*)
         (let [ctx (consume-char repeat-result)]
           (assoc ctx :ast (make-ast :star :child repeat-ast)))
-        (= c \+)
-        (let [ctx (consume-char repeat-result)]
-          (assoc ctx :ast (make-ast :plus :child repeat-ast)))
-        (= c \?)
-        (let [ctx (consume-char repeat-result)]
-          (assoc ctx :ast (make-ast :quest :child repeat-ast)))
-        :else
-        repeat-result))))
+        (if (= c *PLUS*)
+          (let [ctx (consume-char repeat-result)]
+            (assoc ctx :ast (make-ast :plus :child repeat-ast)))
+          (if (= c *QUESTION-MARK*)
+            (let [ctx (consume-char repeat-result)]
+              (assoc ctx :ast (make-ast :quest :child repeat-ast)))
+            repeat-result))))))
 
 (defn- parse-repeat [ctx]
   "Parse atom: '(' alt ')' | '[' class ']' | '.' | escaped | char"
   (let [c (peek-char ctx)]
-    (cond
-      (nil? c)
+    (if (nil? c)
       (assoc ctx :ast (make-ast :empty))
-
-      (= c \( )
-      (let [ctx (consume-char ctx)
-            alt-result (parse-alt ctx)
-            alt-ast (:ast alt-result)]
-        (if (= (peek-char alt-result) \)))
-          (let [ctx (consume-char alt-result)
-                gc (:gc ctx)]
-            (assoc ctx :ast (make-ast :group :child alt-ast :index gc)
-                   :gc (inc gc)))
-          (assoc alt-result :ast (make-ast :empty))))
-
-      (= c \[)
-      (let [ctx (consume-char ctx)]
-        (parse-char-class ctx))
-
-      (= c \.)
-      (let [ctx (consume-char ctx)]
-        (assoc ctx :ast (make-ast :dot)))
-
-      (= c \\)
-      (let [ctx (consume-char ctx)
-            ec (peek-char ctx)]
-        (if ec
-          (let [ctx (consume-char ctx)]
-            (assoc ctx :ast (make-ast :literal :char ec)))
-          (assoc ctx :ast (make-ast :empty))))
-
-      :else
-      (let [ctx (consume-char ctx)]
-        (assoc ctx :ast (make-ast :literal :char c)))))
+      (if (= c *OPENING-BRACKET* )
+        (let [ctx (consume-char ctx)
+              alt-result (parse-alt ctx)
+              alt-ast (:ast alt-result)]
+          (if (= (peek-char alt-result) *CLOSING-BRACKET*)
+            (let [ctx (consume-char alt-result)
+                  gc (:gc ctx)]
+              (assoc ctx :ast (make-ast :group :child alt-ast :index gc)
+                     :gc (inc gc)))
+            (assoc alt-result :ast (make-ast :empty))))
+        (if (= c *OPENING-SQUARE-BRACKET*)
+          (parse-char-class (consume-char ctx))
+          (if (= c *DOT*)
+            (let [ctx (consume-char ctx)]
+              (assoc ctx :ast (make-ast :dot)))
+            (if (= c *BACKSLASH*)
+              (let [ctx (consume-char ctx)
+                    ec (peek-char ctx)]
+                (if ec
+                  (let [ctx (consume-char ctx)]
+                    (assoc ctx :ast (make-ast :literal :char ec)))
+                  (assoc ctx :ast (make-ast :empty))))
+              (let [ctx (consume-char ctx)]
+                (assoc ctx :ast (make-ast :literal :char c))))))))))
 
 (defn- parse-char-class [ctx]
   "Parse character class: [ ('^')? char-ranges* ]"
   (let [c (peek-char ctx)
-        negated (if (= c \^) true false)
+        negated (if (= c *CARET*) true false)
         ctx (if negated (consume-char ctx) ctx)]
     (loop [ctx ctx chars #{}]
       (let [c (peek-char ctx)]
-        (cond
-          (nil? c)
+        (if (nil? c)
           (assoc ctx :ast (make-ast :char-class :chars chars :negated negated))
-
-          (= c \])
-          (let [ctx (consume-char ctx)]
-            (assoc ctx :ast (make-ast :char-class :chars chars :negated negated)))
-
-          :else
-          (let [ctx (consume-char ctx)
-                next-c (peek-char ctx)]
-            (if (and (= next-c \-)
-                     (not= (peek-char (assoc ctx :pos (inc (:pos ctx)))) \]))
-              ;; Character range c-d
-              (let [ctx (consume-char ctx)
-                    end-c (peek-char ctx)]
-                (if end-c
-                  (let [ctx (consume-char ctx)
-                        range-chars (set (map char (range (int c) (inc (int end-c)) 1)))]
-                    (recur ctx (into chars range-chars)))
-                  (recur ctx (conj chars c))))
-              ;; Single character
-              (recur ctx (conj chars c)))))))))
+          (if (= c *CLOSING-SQUARE-BRACKET*)
+            (let [ctx (consume-char ctx)]
+              (assoc ctx :ast (make-ast :char-class :chars chars :negated negated)))
+            (let [ctx (consume-char ctx)
+                  next-c (peek-char ctx)
+                  after-next (peek-char (assoc ctx :pos (inc (:pos ctx))))]
+              (if (and (= next-c *DASH*) (not= after-next *CLOSING-SQUARE-BRACKET*))
+                ;; Character range c-d
+                (let [ctx (consume-char ctx)
+                      end-c (peek-char ctx)]
+                  (if end-c
+                    (let [ctx (consume-char ctx)
+                          range-chars (set (into [] (map char (range (int c) (inc (int end-c)) 1))))]
+                      (recur ctx (into chars range-chars)))
+                    (recur ctx (conj chars c))))
+                ;; Single character
+                (recur ctx (conj chars c))))))))))
 
 ;; ============================================================
 ;; Thompson NFA Construction
@@ -172,103 +176,108 @@
     id))
 
 (defn- tb-merge-states [from to]
+  "Merge two NFA states. Updates BOTH states so any transition pointing
+  to either state reaches the combined transitions."
   (let [from-s (get @tb-states from)
-        to-s (get @tb-states to)]
-    (swap! tb-states assoc to
-           {:trans (merge (get from-s :trans {})
-                          (get to-s :trans {}))
-            :eps (into (get from-s :eps [])
-                       (get to-s :eps []))
-            :dot (or (get from-s :dot)
-                     (get to-s :dot))
-            :cc (or (get from-s :cc)
-                    (get to-s :cc))})))
+        to-s (get @tb-states to)
+        merged {:trans (merge (get from-s :trans {})
+                              (get to-s :trans {}))
+                :eps (into (get from-s :eps [])
+                           (get to-s :eps []))
+                :dot (or (get from-s :dot)
+                         (get to-s :dot))
+                :cc (or (get from-s :cc)
+                        (get to-s :cc))}]
+    (swap! tb-states assoc to merged)
+    (swap! tb-states assoc from merged)))
+
+(defn- tb-build-pairs [children]
+  "Build NFA pairs for all children eagerly (no lazy seq)."
+  (if (empty? children)
+    []
+    (let [first-pair (tb-build-node (first children))
+          rest-pairs (tb-build-pairs (rest children))]
+      (into [first-pair] rest-pairs))))
+
+(defn- tb-merge-concat-pairs [pairs i]
+  "Merge adjacent pairs in concat: connect accept of i to start of i+1."
+  (when (< i (dec (count pairs)))
+    (let [ai (second (nth pairs i))
+          si (first (nth pairs (inc i)))]
+      (tb-merge-states ai si)
+      (tb-merge-concat-pairs pairs (inc i)))))
+
+(defn- tb-alt-wire [s a children]
+  "Wire up alt: add eps from s to each child start, and from each child accept to a."
+  (when-let [child (first children)]
+    (let [[cs ca] (tb-build-node child)]
+      (swap! tb-states update s update :eps conj cs)
+      (swap! tb-states update ca update :eps conj a)
+      (tb-alt-wire s a (rest children)))))
 
 (defn- tb-build-node [node]
   (let [nt (:type node)]
-    (cond
-      (= nt :literal)
+    (if (= nt :literal)
       (let [s (tb-new-state)
             a (tb-new-state)
             c (:char node)]
         (swap! tb-states update s update :trans assoc c a)
         [s a])
-
-      (= nt :dot)
-      (let [s (tb-new-state)
-            a (tb-new-state)]
-        (swap! tb-states assoc s
-               (assoc (get @tb-states s) (= nt :dot) a))
-        [s a])
-
-      (= nt :concat)
-      (let [children (:children node)
-            pairs (vec (map tb-build-node children))
-            first-start (first (first pairs))
-            last-accept (second (last pairs))]
-        (loop [i 0]
-          (if (< i (dec (count pairs)))
-            (let [ai (second (nth pairs i))
-                  si (first (nth pairs (inc i)))]
-              (tb-merge-states ai si)
-              (recur (inc i)))
-            nil))
-        [first-start last-accept])
-
-      (= nt :alt)
-      (let [s (tb-new-state)
-            a (tb-new-state)
-            children (:children node)
-            pairs (vec (map tb-build-node children))]
-        (doseq [[cs _] pairs]
-          (swap! tb-states update s update :eps conj cs))
-        (doseq [[_ ca] pairs]
-          (swap! tb-states update ca update :eps conj a))
-        [s a])
-
-      (= nt :star)
-      (let [s (tb-new-state)
-            a (tb-new-state)
-            [cs ca] (tb-build-node (:child node))]
-        (swap! tb-states update s update :eps conj cs)
-        (swap! tb-states update s update :eps conj a)
-        (swap! tb-states update ca update :eps conj cs)
-        (swap! tb-states update ca update :eps conj a)
-        [s a])
-
-      (= nt :plus)
-      (let [[cs ca] (tb-build-node (:child node))]
-        (swap! tb-states update ca update :eps conj cs)
-        [cs ca])
-
-      (= nt :quest)
-      (let [s (tb-new-state)
-            a (tb-new-state)
-            [cs ca] (tb-build-node (:child node))]
-        (swap! tb-states update s update :eps conj cs)
-        (swap! tb-states update s update :eps conj a)
-        (swap! tb-states update ca update :eps conj a)
-        [s a])
-
-      (= nt :char-class)
-      (let [s (tb-new-state)
-            a (tb-new-state)
-            chars (:chars node)
-            negated (:negated node false)]
-        (swap! tb-states assoc s
-               (assoc (get @tb-states s) :cc {:chars chars :neg negated :target a}))
-        [s a])
-
-      (= nt :group)
-      (tb-build-node (:child node))
-
-      (= nt :empty)
-      (let [s (tb-new-state)]
-        [s s])
-
-      true  ;; default
-      (let [s (tb-new-state)]
-        [s s]))))
+      (if (= nt :dot)
+        (let [s (tb-new-state)
+              a (tb-new-state)]
+          (swap! tb-states assoc s
+                 (assoc (get @tb-states s) :dot a))
+          [s a])
+        (if (= nt :concat)
+          (let [children (:children node)
+                pairs (tb-build-pairs children)
+                first-start (first (first pairs))
+                last-accept (second (last pairs))]
+            (tb-merge-concat-pairs pairs 0)
+            [first-start last-accept])
+          (if (= nt :alt)
+            (let [s (tb-new-state)
+                  a (tb-new-state)
+                  children (:children node)]
+              (tb-alt-wire s a children)
+              [s a])
+            (if (= nt :star)
+              (let [s (tb-new-state)
+                    a (tb-new-state)
+                    [cs ca] (tb-build-node (:child node))]
+                (swap! tb-states update s update :eps conj cs)
+                (swap! tb-states update s update :eps conj a)
+                (swap! tb-states update ca update :eps conj cs)
+                (swap! tb-states update ca update :eps conj a)
+                [s a])
+              (if (= nt :plus)
+                (let [[cs ca] (tb-build-node (:child node))]
+                  (swap! tb-states update ca update :eps conj cs)
+                  [cs ca])
+                (if (= nt :quest)
+                  (let [s (tb-new-state)
+                        a (tb-new-state)
+                        [cs ca] (tb-build-node (:child node))]
+                    (swap! tb-states update s update :eps conj cs)
+                    (swap! tb-states update s update :eps conj a)
+                    (swap! tb-states update ca update :eps conj a)
+                    [s a])
+                  (if (= nt :char-class)
+                    (let [s (tb-new-state)
+                          a (tb-new-state)
+                          chars (:chars node)
+                          negated (get node :negated false)]
+                      (swap! tb-states assoc s
+                             (assoc (get @tb-states s) :cc {:chars chars :neg negated :target a}))
+                      [s a])
+                    (if (= nt :group)
+                      (tb-build-node (:child node))
+                      (if (= nt :empty)
+                        (let [s (tb-new-state)]
+                          [s s])
+                        (let [s (tb-new-state)]
+                          [s s])))))))))))))
 
 (defn- thompson-build [ast]
   "Build NFA from AST."
@@ -278,14 +287,15 @@
     {:start start
      :accept accept
      :states @tb-states}))
+
 ;; ============================================================
 ;; NFA Epsilon Closure
 ;; ============================================================
 
 (defn- epsilon-closure [states current-states]
   "Compute epsilon closure of a set of state IDs."
-  (loop [stack (vec current-states)
-         closure #{}]
+  (loop [stack (into [] current-states)
+         closure (set [])]
     (if (empty? stack)
       closure
       (let [state (first stack)
@@ -303,8 +313,8 @@
 
 (defn- nfa-next-states [states current-states ch]
   "Given current set of states and input char, return next set of states."
-  (loop [result #{}
-         remaining (vec current-states)]
+  (loop [result (set [])
+         remaining (into [] current-states)]
     (if (empty? remaining)
       result
       (let [state-id (first remaining)
@@ -321,7 +331,7 @@
                          (conj result dot-target)
                          result)
                 result (if cc
-                         (let [chars (get cc :chars #{})
+                         (let [chars (get cc :chars (set []))
                                neg (get cc :neg false)
                                in-class (contains? chars ch)
                                matches (if neg (not in-class) in-class)]
@@ -337,28 +347,28 @@
   (let [start-state (:start nfa)
         accept-state (:accept nfa)
         nfa-states (:states nfa)
-        chars (vec (seq s))]
-    (loop [current-states (epsilon-closure nfa-states #{start-state})
-           remaining chars]
-      (if (empty? remaining)
+        n (count s)]
+    (loop [current-states (epsilon-closure nfa-states (set [start-state]))
+           i 0]
+      (if (= i n)
         (contains? current-states accept-state)
-        (let [ch (first remaining)
+        (let [ch (nth s i)
               next-states (nfa-next-states nfa-states current-states ch)
               next-closure (epsilon-closure nfa-states next-states)]
           (if (empty? next-closure)
             false
-            (recur next-closure (rest remaining))))))))
+            (recur next-closure (inc i))))))))
 
 (defn- nfa-match-len [nfa s]
   "Find the longest match length of NFA against string s."
   (let [n (count s)]
     (loop [length 0 best 0]
-      (if (>= length n)
+      (if (> length n)
         best
-        (let [substring (apply str (take length s))]
+        (let [substring (subs s 0 length)]
           (if (nfa-match nfa substring)
             (recur (inc length) length)
-            best))))))
+            (recur (inc length) best)))))))
 
 ;; ============================================================
 ;; Public API
@@ -388,101 +398,88 @@
   "Find the first match of pattern in string.
    Returns the match string if found, nil otherwise."
   [pattern s]
-  (let [nfa (get-nfa pattern)]
+  (let [nfa (get-nfa pattern)
+        n (count s)]
     (loop [start 0]
-      (if (> start (count s))
+      (if (>= start n)
         nil
-        (let [remaining-chars (drop start (seq s))
-              remaining-str (apply str remaining-chars)]
-          (if (nfa-match nfa remaining-str)
-            (let [match-len (nfa-match-len nfa remaining-chars)]
-              (if (zero? match-len)
-                (recur (inc start))
-                (apply str (take match-len remaining-chars))))
-            (recur (inc start))))))))
+        (let [remaining-str (subs s start)
+              match-len (nfa-match-len nfa remaining-str)]
+          (if (zero? match-len)
+            (recur (inc start))
+            (subs s start (+ start match-len))))))))
 
 (defn re-seq
   "Return a sequence of successive non-overlapping matches of pattern in string."
   [pattern s]
-  (let [nfa (get-nfa pattern)]
+  (let [nfa (get-nfa pattern)
+        n (count s)]
     (loop [start 0
            matches []]
-      (if (> start (count s))
-        (vec (reverse matches))
-        (let [remaining-chars (drop start (seq s))
-              remaining-str (apply str remaining-chars)]
-          (if (nfa-match nfa remaining-str)
-            (let [match-len (nfa-match-len nfa remaining-chars)]
-              (if (zero? match-len)
-                (recur (inc start) (conj matches ""))
-                (let [match-str (apply str (take match-len remaining-chars))]
-                  (recur (+ start match-len) (conj matches match-str)))))
-            (recur (inc start) matches)))))))
+      (if (>= start n)
+        (vec matches)
+        (let [remaining-str (subs s start)
+              match-len (nfa-match-len nfa remaining-str)]
+          (if (zero? match-len)
+            (recur (inc start) matches)
+            (let [match-str (subs s start (+ start match-len))]
+              (recur (+ start match-len) (conj matches match-str)))))))))
 
 (defn re-split
   "Split string by regex pattern. Returns a vector of substrings."
   [pattern s]
   (let [nfa (get-nfa pattern)
-        all-chars (vec (seq s))
         n (count s)]
     (loop [start 0
+           last-end 0
            parts []]
-      (let [remaining-chars (subvec all-chars start)
-            remaining-str (apply str remaining-chars)]
-        (if (nfa-match nfa remaining-str)
-          (let [match-len (nfa-match-len nfa remaining-chars)]
-            (if (zero? match-len)
-              (recur (inc start) (conj parts (str (nth all-chars start))))
-              (let [before (apply str (subvec all-chars start (- (+ start match-len) start) 0))]
-                ;; Actually just collect the before part
-                (let [before-str (apply str (subvec all-chars start))]
-                  (recur (+ start match-len) (conj parts before-str))))))
-          (let [final-part (apply str remaining-chars)]
-            (vec (conj parts final-part))))))))
+      (if (>= start n)
+        (vec (conj parts (subs s last-end)))
+        (let [remaining-str (subs s start)
+              match-len (nfa-match-len nfa remaining-str)]
+          (if (zero? match-len)
+            (recur (inc start) last-end parts)
+            (let [before-str (subs s last-end start)]
+              (recur (+ start match-len)
+                     (+ start match-len)
+                     (conj parts before-str)))))))))
 
 (defn re-replace
   "Replace first match of pattern in string with replacement.
    replacement can be a string or a function of the match string."
   [pattern s replacement]
   (let [nfa (get-nfa pattern)
-        all-chars (vec (seq s))]
+        n (count s)]
     (loop [start 0]
-      (if (> start (count all-chars))
+      (if (>= start n)
         s
-        (let [remaining-chars (subvec all-chars start)
-              remaining-str (apply str remaining-chars)]
-          (if (nfa-match nfa remaining-str)
-            (let [match-len (nfa-match-len nfa remaining-chars)]
-              (if (zero? match-len)
-                (recur (inc start))
-                (let [before (apply str (subvec all-chars 0 start))
-                      after (apply str (subvec all-chars (+ start match-len)))
-                      match-str (apply str (subvec all-chars start (+ start match-len)))
-                      repl-str (if (fn? replacement)
-                                 (replacement match-str)
-                                 replacement)]
-                  (str before repl-str after))))
-            s))))))
+        (let [remaining-str (subs s start)
+              match-len (nfa-match-len nfa remaining-str)]
+          (if (zero? match-len)
+            (recur (inc start))
+            (let [before (subs s 0 start)
+                  after (subs s (+ start match-len))
+                  match-str (subs s start (+ start match-len))
+                  repl-str (if (fn? replacement)
+                             (replacement match-str)
+                             replacement)]
+              (str before repl-str after))))))))
 
 (defn re-replace-all
   "Replace all matches of pattern in string with replacement."
   [pattern s replacement]
   (let [nfa (get-nfa pattern)
-        all-chars (vec (seq s))]
+        n (count s)]
     (loop [start 0
            parts []]
-      (if (> start (count all-chars))
-        (let [remaining (apply str (subvec all-chars start))]
-          (apply str (conj parts remaining)))
-        (let [remaining-chars (subvec all-chars start)
-              remaining-str (apply str remaining-chars)]
-          (if (nfa-match nfa remaining-str)
-            (let [match-len (nfa-match-len nfa remaining-chars)]
-              (if (zero? match-len)
-                (recur (inc start) (conj parts (str (nth all-chars start))))
-                (let [match-str (apply str (subvec all-chars start (+ start match-len)))
-                      repl-str (if (fn? replacement)
-                                 (replacement match-str)
-                                 replacement)]
-                  (recur (+ start match-len) (conj parts repl-str)))))
-            (recur (inc start) (conj parts (str (nth all-chars start))))))))))
+      (if (>= start n)
+        (apply str (conj parts (subs s start)))
+        (let [remaining-str (subs s start)
+              match-len (nfa-match-len nfa remaining-str)]
+          (if (zero? match-len)
+            (recur (inc start) (conj parts (str (nth s start))))
+            (let [match-str (subs s start (+ start match-len))
+                  repl-str (if (fn? replacement)
+                             (replacement match-str)
+                             replacement)]
+              (recur (+ start match-len) (conj parts repl-str)))))))))
