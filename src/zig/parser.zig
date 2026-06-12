@@ -147,6 +147,13 @@ pub const Parser = struct {
                 try self.advance();
                 return val;
             },
+            .character => |c| {
+                const val = Value.charValue(c);
+                self.current.deinit(self.allocator);
+                self.current = .{ .eof = {} };
+                try self.advance();
+                return val;
+            },
             .number => |s| {
                 const val = try self.parseNumber(s);
                 self.current.deinit(self.allocator);
@@ -709,4 +716,60 @@ test "parser: fn shorthand two args" {
     try std.testing.expect(form.list_val.items[2].list_val.items.len == 3);
     try std.testing.expect(std.mem.eql(u8, form.list_val.items[2].list_val.items[1].sym_val, "%1"));
     try std.testing.expect(std.mem.eql(u8, form.list_val.items[2].list_val.items[2].sym_val, "%2"));
+}
+
+test "parser: char literal" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var p = try Parser.init(allocator, "\\A");
+    defer p.deinit();
+    var form = try p.parse();
+    defer form.deinit(allocator);
+    try std.testing.expect(form.type == .character);
+    try std.testing.expect(form.char_val == 'A');
+}
+
+test "parser: char newline" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var p = try Parser.init(allocator, "\\newline");
+    defer p.deinit();
+    var form = try p.parse();
+    defer form.deinit(allocator);
+    try std.testing.expect(form.type == .character);
+    try std.testing.expect(form.char_val == 10);
+}
+
+test "parser: char unicode escape" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var p = try Parser.init(allocator, "\\u0041");
+    defer p.deinit();
+    var form = try p.parse();
+    defer form.deinit(allocator);
+    try std.testing.expect(form.type == .character);
+    try std.testing.expect(form.char_val == 65);
+}
+
+test "parser: char in list" {
+    var arena = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    var p = try Parser.init(allocator, "(\\A \\B \\C)");
+    defer p.deinit();
+    var form = try p.parse();
+    defer form.deinit(allocator);
+    try std.testing.expect(form.type == .list);
+    try std.testing.expect(form.list_val.items.len == 3);
+    try std.testing.expect(form.list_val.items[0].type == .character);
+    try std.testing.expect(form.list_val.items[0].char_val == 'A');
+    try std.testing.expect(form.list_val.items[1].char_val == 'B');
+    try std.testing.expect(form.list_val.items[2].char_val == 'C');
 }

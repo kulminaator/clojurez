@@ -18,6 +18,7 @@ pub const Token = union(enum) {
     unquote_splicing: void,
     string: []const u8,
     number: []const u8,
+    character: u21, // A single Unicode code point
     symbol: []const u8,
     keyword: []const u8,
     queue_tag: void,
@@ -26,6 +27,7 @@ pub const Token = union(enum) {
     pub fn deinit(self: Token, allocator: Allocator) void {
         switch (self) {
             .string, .number, .symbol, .keyword, .fn_shorthand => |s| allocator.free(s),
+            .character => {},
             else => {},
         }
     }
@@ -48,6 +50,7 @@ pub const Token = union(enum) {
             .unquote_splicing => .{ .unquote_splicing = {} },
             .string => |s| .{ .string = try allocator.dupe(u8, s) },
             .number => |s| .{ .number = try allocator.dupe(u8, s) },
+            .character => |c| .{ .character = c },
             .symbol => |s| .{ .symbol = try allocator.dupe(u8, s) },
             .keyword => |s| .{ .keyword = try allocator.dupe(u8, s) },
             .queue_tag => .{ .queue_tag = {} },
@@ -96,6 +99,7 @@ pub const Lexer = struct {
             },
             '#' => return self.readDispatch(),
             '"' => return self.readString(),
+            '\\' => return self.readChar(),
             else => {
                 if (ch == ':' and self.pos + 1 < self.input.len and (std.ascii.isAlphanumeric(self.input[self.pos + 1]) or self.input[self.pos + 1] >= 0x80)) {
                     return self.readKeyword();
@@ -185,6 +189,91 @@ pub const Lexer = struct {
             self.pos += 1;
         }
         return error.UnterminatedString;
+    }
+
+    /// Read a character literal: \a, \newline, \space, \tab, \return, \formfeed, \uXXXX, \oNNN
+    fn readChar(self: *Lexer) anyerror!Token {
+        self.pos += 1; // skip '\\'
+        if (self.pos >= self.input.len) return error.EofWhileReadingChar;
+
+        // Check for named escapes
+        if (std.mem.startsWith(u8, self.input[self.pos..], "newline")) {
+            self.pos += 7;
+            return .{ .character = 10 };
+        }
+        if (std.mem.startsWith(u8, self.input[self.pos..], "tab")) {
+            self.pos += 3;
+            return .{ .character = 9 };
+        }
+        if (std.mem.startsWith(u8, self.input[self.pos..], "return")) {
+            self.pos += 6;
+            return .{ .character = 13 };
+        }
+        if (std.mem.startsWith(u8, self.input[self.pos..], "space")) {
+            self.pos += 5;
+            return .{ .character = 32 };
+        }
+        if (std.mem.startsWith(u8, self.input[self.pos..], "formfeed")) {
+            self.pos += 8;
+            return .{ .character = 12 };
+        }
+
+        // Check for unicode escape: \uXXXX
+        if (self.input[self.pos] == 'u') {
+            self.pos += 1; // skip 'u'
+            if (self.pos + 4 > self.input.len) return error.InvalidUnicodeChar;
+            var hex_str: [4]u8 = undefined;
+            var i: usize = 0;
+            while (i < 4) : (i += 1) {
+                if (!std.ascii.isHex(self.input[self.pos])) return error.InvalidUnicodeChar;
+                hex_str[i] = self.input[self.pos];
+                self.pos += 1;
+            }
+            const codepoint = std.fmt.parseInt(u21, &hex_str, 16) catch return error.InvalidUnicodeChar;
+            // Surrogate check: \uD800-\uDFFF are invalid
+            if (codepoint >= 0xD800 and codepoint <= 0xDFFF) return error.InvalidUnicodeChar;
+            return .{ .character = codepoint };
+        }
+
+        // Check for octal escape: \oNNN (only if followed by octal digits)
+        if (self.input[self.pos] == 'o' and
+            self.pos + 1 < self.input.len and
+            self.input[self.pos + 1] >= '0' and self.input[self.pos + 1] <= '7')
+        {
+            self.pos += 1; // skip 'o'
+            // Read 1-3 octal digits
+            var octal_val: u21 = 0;
+            var digit_count: usize = 0;
+            while (self.pos < self.input.len and digit_count < 3 and self.input[self.pos] >= '0' and self.input[self.pos] <= '7') {
+                octal_val = octal_val * 8 + (self.input[self.pos] - '0');
+                self.pos += 1;
+                digit_count += 1;
+            }
+            if (octal_val > 0o377) return error.OctalOutOfRange;
+            return .{ .character = octal_val };
+        }
+
+        // Single character literal: \a (or a multi-byte UTF-8 character)
+        const first_byte = self.input[self.pos];
+        if (first_byte < 0x80) {
+            // ASCII character
+            self.pos += 1;
+            return .{ .character = first_byte };
+        }
+        // Multi-byte UTF-8 character: read the full sequence and decode
+        const seq_len = std.unicode.utf8ByteSequenceLength(first_byte) catch {
+            // Invalid UTF-8 start byte - treat as single byte
+            self.pos += 1;
+            return .{ .character = first_byte };
+        };
+        if (self.pos + seq_len > self.input.len) return error.EofWhileReadingChar;
+        const cp = std.unicode.utf8Decode(self.input[self.pos .. self.pos + seq_len]) catch {
+            // Invalid UTF-8 sequence - read just the first byte
+            self.pos += 1;
+            return .{ .character = first_byte };
+        };
+        self.pos += seq_len;
+        return .{ .character = cp };
     }
 
     fn readKeyword(self: *Lexer) anyerror!Token {

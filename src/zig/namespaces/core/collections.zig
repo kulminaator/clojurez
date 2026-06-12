@@ -194,6 +194,15 @@ pub fn core_last(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
             if (coll.list_val.items.len == 0) return Value.nilValue();
             return try coll.list_val.items[coll.list_val.items.len - 1].clone(allocator);
         },
+        .string => {
+            const s = coll.str_val;
+            if (s.len == 0) return Value.nilValue();
+            // Get the last UTF-8 code point
+            const codepoint_count = Value.utf8CodepointCount(s);
+            const last_cp_bytes = Value.utf8CodepointAt(s, codepoint_count - 1) orelse return Value.nilValue();
+            const cp = std.unicode.utf8Decode(last_cp_bytes) catch return Value.nilValue();
+            return Value.charValue(cp);
+        },
         else => return error.TypeError,
     }
 }

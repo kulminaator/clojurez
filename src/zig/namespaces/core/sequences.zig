@@ -203,6 +203,14 @@ pub fn core_first(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
             const cdata = val.cons_val.?;
             return try cdata.head.clone(allocator);
         },
+        .string => {
+            const s = val.str_val;
+            if (s.len == 0) return Value.nilValue();
+            // Get the first UTF-8 code point as a char
+            const cp_bytes = Value.utf8CodepointAt(s, 0) orelse return Value.nilValue();
+            const cp = std.unicode.utf8Decode(cp_bytes) catch return Value.nilValue();
+            return Value.charValue(cp);
+        },
         else => return Value.nilValue(),
     }
 }
@@ -247,6 +255,21 @@ pub fn core_rest(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
             }
             return try cdata.tail.clone(allocator);
         },
+        .string => {
+            const s = val.str_val;
+            const codepoint_count = Value.utf8CodepointCount(s);
+            if (codepoint_count <= 1) return Value.listValue(list.empty());
+            // Convert remaining code points (from index 1) to a list of char values
+            var result: list.List = .empty;
+            errdefer result.deinit(allocator);
+            var idx: usize = 1;
+            while (idx < codepoint_count) : (idx += 1) {
+                const cp_bytes = Value.utf8CodepointAt(s, idx) orelse break;
+                const cp = std.unicode.utf8Decode(cp_bytes) catch break;
+                try result.append(allocator, Value.charValue(cp));
+            }
+            return Value.listValue(result);
+        },
         else => return Value.listValue(list.empty()),
     }
 }
@@ -284,8 +307,9 @@ pub fn core_nth(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
             const s = args.items[0].str_val;
             const codepoint_count = Value.utf8CodepointCount(s);
             if (idx < 0 or @as(usize, @intCast(idx)) >= codepoint_count) return Value.nilValue();
-            const cp = Value.utf8CodepointAt(s, @as(usize, @intCast(idx))) orelse return Value.nilValue();
-            return Value.stringValue(env_env.allocator, cp);
+            const cp_bytes = Value.utf8CodepointAt(s, @as(usize, @intCast(idx))) orelse return Value.nilValue();
+            const cp = std.unicode.utf8Decode(cp_bytes) catch return Value.nilValue();
+            return Value.charValue(cp);
         },
         else => return error.TypeError,
     }

@@ -17,6 +17,7 @@ pub const Type = enum {
     ratio,
     decimal,
     string,
+    character, // Char type: a single Unicode code point
     symbol,
     keyword,
     list,
@@ -72,6 +73,7 @@ float_val: f64 = 0.0,
 bigint_val: ?*BI.BigInt = null,
 ratio_val: ?*RatioMod.Ratio = null,
 decimal_val: ?*BD.BigDecimal = null,
+char_val: u21 = 0,
 str_val: []const u8 = "",
 sym_val: []const u8 = "",
 kw_val: []const u8 = "",
@@ -392,6 +394,10 @@ pub fn stringValue(allocator: Allocator, s: []const u8) anyerror!Self {
     return .{ .type = .string, .str_val = duped };
 }
 
+pub fn charValue(c: u21) Self {
+    return .{ .type = .character, .char_val = c };
+}
+
 /// Count the number of Unicode code points in a UTF-8 string.
 pub fn utf8CodepointCount(s: []const u8) usize {
     var count: usize = 0;
@@ -520,7 +526,7 @@ pub fn builtinFnValue(fn_ptr: BuiltinFn) Self {
 
 pub fn deinit(self: *Self, allocator: Allocator) void {
     switch (self.type) {
-        .nil, .bool, .integer, .float => {},
+        .nil, .bool, .integer, .float, .character => {},
         .bigint => {
             if (self.bigint_val) |ptr| {
                 ptr.deinit();
@@ -632,6 +638,7 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
             return nilValue();
         },
         .string => return stringValue(allocator, self.str_val),
+        .character => return charValue(self.char_val),
         .symbol => return symValue(allocator, self.sym_val),
         .keyword => return keywordValue(allocator, self.kw_val),
         .list => return listValue(try list.clone(&self.list_val, allocator)),
@@ -751,6 +758,7 @@ pub fn isTruthy(self: Self) bool {
     return switch (self.type) {
         .nil => false,
         .bool => self.bool_val,
+        .character => true,
         .atom => {
             if (self.atom_val) |data| return data.value.isTruthy();
             return false;
@@ -785,6 +793,7 @@ pub fn equals(self: Self, other: Self) bool {
             return false;
         },
         .string => return std.mem.eql(u8, self.str_val, other.str_val),
+        .character => return self.char_val == other.char_val,
         .symbol => return std.mem.eql(u8, self.sym_val, other.sym_val),
         .keyword => return std.mem.eql(u8, self.kw_val, other.kw_val),
         .list => {
@@ -942,6 +951,7 @@ pub fn fmt(self: Self, allocator: Allocator) anyerror![]const u8 {
             return allocator.dupe(u8, "0");
         },
         .string => try std.fmt.allocPrint(allocator, "\"{s}\"", .{self.str_val}),
+        .character => try charFmt(self.char_val, allocator),
         .symbol => allocator.dupe(u8, self.sym_val),
         .keyword => try std.fmt.allocPrint(allocator, ":{s}", .{self.kw_val}),
         .list => try list.fmt(self.list_val, allocator),
@@ -1090,6 +1100,31 @@ pub fn consFmt(data: *const ConsData, allocator: Allocator) anyerror![]const u8 
     }
 
     try buf.append(allocator, ')');
+    return buf.toOwnedSlice(allocator);
+}
+
+/// Format a character value as \x or \newline, \space, etc.
+fn charFmt(c: u21, allocator: Allocator) anyerror![]const u8 {
+    // Named escapes (same as Clojure)
+    if (c == 9) return allocator.dupe(u8, "\\tab");
+    if (c == 10) return allocator.dupe(u8, "\\newline");
+    if (c == 13) return allocator.dupe(u8, "\\return");
+    if (c == 32) return allocator.dupe(u8, "\\space");
+    if (c == 12) return allocator.dupe(u8, "\\formfeed");
+
+    // For printable ASCII, use \x
+    if (c < 128) {
+        const ch = @as(u8, @intCast(c));
+        return std.fmt.allocPrint(allocator, "\\{c}", .{ch});
+    }
+
+    // For Unicode characters, encode as UTF-8 and prepend \
+    var buf: std.ArrayList(u8) = .empty;
+    errdefer buf.deinit(allocator);
+    try buf.append(allocator, '\\');
+    var utf8_buf: [4]u8 = undefined;
+    const utf8_len = std.unicode.utf8Encode(c, &utf8_buf) catch return error.InvalidUnicode;
+    try buf.appendSlice(allocator, utf8_buf[0..utf8_len]);
     return buf.toOwnedSlice(allocator);
 }
 

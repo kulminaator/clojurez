@@ -106,7 +106,7 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
     // multiple of @sizeOf(Value)).
     const valid_types = [_]Value.Type{
         .nil, .bool, .integer, .float, .bigint, .ratio, .decimal,
-        .string, .symbol, .keyword,
+        .string, .character, .symbol, .keyword,
         .list, .vector, .map, .set, .queue, .function, .builtin_fn,
         .lazy_seq, .cons, .atom, .reduced,
     };
@@ -117,7 +117,7 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
     if (!is_valid) return; // silently skip corrupt values
 
     switch (val.type) {
-        .nil, .bool, .integer, .float, .builtin_fn => {},
+        .nil, .bool, .integer, .float, .character, .builtin_fn => {},
 
         .bigint => {
             if (val.bigint_val) |bi_ptr| {

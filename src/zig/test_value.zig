@@ -15,6 +15,7 @@ const bigIntValue = Value.bigIntValue;
 const ratioValue = Value.ratioValue;
 const decimalValue = Value.decimalValue;
 const stringValue = Value.stringValue;
+const charValue = Value.charValue;
 const symValue = Value.symValue;
 const keywordValue = Value.keywordValue;
 const listValue = Value.listValue;
@@ -605,4 +606,152 @@ test "value::Env::clone preserves parent" {
 
     try std.testing.expect(cloned.get("local").?.int_val == 2);
     try std.testing.expect(cloned.get("root").?.int_val == 1);
+}
+
+// ===== Character Type Tests =====
+
+test "value::charValue: creates ASCII char" {
+    const v = charValue('A');
+    try std.testing.expect(v.type == .character);
+    try std.testing.expect(v.char_val == 65);
+}
+
+test "value::charValue: creates zero char" {
+    const v = charValue(0);
+    try std.testing.expect(v.type == .character);
+    try std.testing.expect(v.char_val == 0);
+}
+
+test "value::charValue: creates unicode char" {
+    const v = charValue(0x00F6); // ö
+    try std.testing.expect(v.type == .character);
+    try std.testing.expect(v.char_val == 0x00F6);
+}
+
+test "value::charValue: creates emoji codepoint" {
+    const v = charValue(0x1F468); // 👨
+    try std.testing.expect(v.type == .character);
+    try std.testing.expect(v.char_val == 0x1F468);
+}
+
+test "value::charValue: deinit is no-op" {
+    const a = std.heap.page_allocator;
+    var v = charValue('A');
+    v.deinit(a); // should not crash or leak
+}
+
+test "value::equals: chars same" {
+    try std.testing.expect(charValue('A').equals(charValue('A')));
+    try std.testing.expect(charValue(0x00F6).equals(charValue(0x00F6)));
+    try std.testing.expect(charValue(0).equals(charValue(0)));
+}
+
+test "value::equals: chars different" {
+    try std.testing.expect(!charValue('A').equals(charValue('B')));
+    try std.testing.expect(!charValue(0x00F6).equals(charValue(0x00E4)));
+}
+
+test "value::equals: char vs other types" {
+    try std.testing.expect(!charValue('A').equals(intValue(65)));
+    try std.testing.expect(!charValue('A').equals(nilValue()));
+    try std.testing.expect(!charValue(0).equals(intValue(0)));
+}
+
+test "value::clone: char" {
+    const a = std.heap.page_allocator;
+    const v = charValue(0x1F468);
+    var c = try v.clone(a);
+    try std.testing.expect(c.type == .character);
+    try std.testing.expect(c.char_val == 0x1F468);
+    c.deinit(a);
+}
+
+test "value::isTruthy: char is truthy" {
+    try std.testing.expect(charValue('A').isTruthy());
+    try std.testing.expect(charValue(0).isTruthy()); // even null char is truthy
+    try std.testing.expect(charValue(0x1F468).isTruthy());
+}
+
+test "value::fmt: char ASCII" {
+    const a = std.heap.page_allocator;
+    const s = try charValue('A').fmt(a);
+    defer a.free(s);
+    try std.testing.expect(std.mem.eql(u8, s, "\\A"));
+}
+
+test "value::fmt: char lowercase" {
+    const a = std.heap.page_allocator;
+    const s = try charValue('a').fmt(a);
+    defer a.free(s);
+    try std.testing.expect(std.mem.eql(u8, s, "\\a"));
+}
+
+test "value::fmt: char newline" {
+    const a = std.heap.page_allocator;
+    const s = try charValue(10).fmt(a);
+    defer a.free(s);
+    try std.testing.expect(std.mem.eql(u8, s, "\\newline"));
+}
+
+test "value::fmt: char tab" {
+    const a = std.heap.page_allocator;
+    const s = try charValue(9).fmt(a);
+    defer a.free(s);
+    try std.testing.expect(std.mem.eql(u8, s, "\\tab"));
+}
+
+test "value::fmt: char space" {
+    const a = std.heap.page_allocator;
+    const s = try charValue(32).fmt(a);
+    defer a.free(s);
+    try std.testing.expect(std.mem.eql(u8, s, "\\space"));
+}
+
+test "value::fmt: char return" {
+    const a = std.heap.page_allocator;
+    const s = try charValue(13).fmt(a);
+    defer a.free(s);
+    try std.testing.expect(std.mem.eql(u8, s, "\\return"));
+}
+
+test "value::fmt: char formfeed" {
+    const a = std.heap.page_allocator;
+    const s = try charValue(12).fmt(a);
+    defer a.free(s);
+    try std.testing.expect(std.mem.eql(u8, s, "\\formfeed"));
+}
+
+test "value::fmt: char special punctuation" {
+    const a = std.heap.page_allocator;
+    const s = try charValue('!').fmt(a);
+    defer a.free(s);
+    try std.testing.expect(std.mem.eql(u8, s, "\\!"));
+}
+
+test "value::fmt: char unicode ö" {
+    const a = std.heap.page_allocator;
+    const s = try charValue(0x00F6).fmt(a); // ö
+    defer a.free(s);
+    // Should be \ö (backslash + UTF-8 bytes for ö)
+    try std.testing.expect(s.len == 3); // 1 backslash + 2 bytes for ö
+    try std.testing.expect(s[0] == '\\');
+}
+
+test "value::fmt: char emoji" {
+    const a = std.heap.page_allocator;
+    const s = try charValue(0x1F468).fmt(a); // 👨
+    defer a.free(s);
+    // Should be \👨 (backslash + 4 bytes for emoji)
+    try std.testing.expect(s.len == 5); // 1 backslash + 4 bytes for 👨
+    try std.testing.expect(s[0] == '\\');
+}
+
+test "value::fmt: char zero" {
+    const a = std.heap.page_allocator;
+    const s = try charValue(0).fmt(a);
+    defer a.free(s);
+    // Null char is printable ASCII range, formatted as \\0
+    try std.testing.expect(s.len == 2);
+    try std.testing.expect(s[0] == '\\');
+    try std.testing.expect(s[1] == 0);
 }

@@ -71,6 +71,48 @@ pub fn core_boolean_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
     return Value.boolValue(args.items[0].type == .bool);
 }
 
+/// Returns true if x is a character.
+/// Clojure: (char? x)
+pub fn core_char_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    return Value.boolValue(args.items[0].type == .character);
+}
+
+/// Coerce to char. Accepts a char (identity) or an integer (converts to char).
+/// Clojure: (char x)
+pub fn core_char(self: *Value, args: list.List, _: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const v = args.items[0];
+    return switch (v.type) {
+        .character => Value.charValue(v.char_val),
+        .integer => {
+            const i = v.int_val;
+            if (i < 0) return error.NegativeCharacter;
+            if (i > 0x10FFFF) return error.CharacterOutOfRange;
+            return Value.charValue(@as(u21, @intCast(i)));
+        },
+        .float => {
+            const f = v.float_val;
+            if (f < 0) return error.NegativeCharacter;
+            const i = @as(i64, @intFromFloat(f));
+            if (i > 0x10FFFF) return error.CharacterOutOfRange;
+            return Value.charValue(@as(u21, @intCast(i)));
+        },
+        .bigint => {
+            if (v.bigint_val) |ptr| {
+                const i64_val = ptr.toI64() orelse return error.CharacterOutOfRange;
+                if (i64_val < 0) return error.NegativeCharacter;
+                if (i64_val > 0x10FFFF) return error.CharacterOutOfRange;
+                return Value.charValue(@as(u21, @intCast(i64_val)));
+            }
+            return error.TypeError;
+        },
+        else => return error.TypeError,
+    };
+}
+
 pub fn core_fn_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
@@ -238,6 +280,7 @@ fn coerceToInt(v: Value, allocator: Allocator) ?i64 {
             }
             return null;
         },
+        .character => @as(i64, @intCast(v.char_val)),
         else => null,
     };
 }
@@ -448,6 +491,9 @@ pub fn registerTypePredicateFunctions(env: *Env) anyerror!void {
     try env.put("coll?", Value.builtinFnValue(core_coll_q));
     try env.put("sequential?", Value.builtinFnValue(core_sequential_q));
     try env.put("boolean?", Value.builtinFnValue(core_boolean_q));
+    // Character type predicate and coercion
+    try env.put("char?", Value.builtinFnValue(core_char_q));
+    try env.put("char", Value.builtinFnValue(core_char));
     // Numeric type predicates
     try env.put("integer?", Value.builtinFnValue(core_integer_q));
     try env.put("int?", Value.builtinFnValue(core_int_q));
@@ -788,5 +834,103 @@ test "type_predicates::core_integer_q: arity error" {
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{});
     try std.testing.expectError(error.ArityError, core_integer_q(testSelf(), args, &a));
+}
+
+// Character type tests
+
+test "type_predicates::char_q: char is char" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.charValue(65) });
+    var result = core_char_q(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.bool_val == true);
+}
+
+test "type_predicates::char_q: int is not char" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(65) });
+    var result = core_char_q(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.bool_val == false);
+}
+
+test "type_predicates::char_q: string is not char" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var s = try Value.stringValue(std.heap.page_allocator, "A");
+    defer s.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ s });
+    var result = core_char_q(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.bool_val == false);
+}
+
+test "type_predicates::char: int to char" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(65) });
+    var result = core_char(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .character);
+    try std.testing.expect(result.char_val == 65);
+}
+
+test "type_predicates::char: char identity" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.charValue(65) });
+    var result = core_char(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .character);
+    try std.testing.expect(result.char_val == 65);
+}
+
+test "type_predicates::char: float to char" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.floatValue(97.9) });
+    var result = core_char(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .character);
+    try std.testing.expect(result.char_val == 97);
+}
+
+test "type_predicates::char: negative int error" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(-1) });
+    try std.testing.expectError(error.NegativeCharacter, core_char(testSelf(), args, &a));
+}
+
+test "type_predicates::char: out of range error" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(0x110000) });
+    try std.testing.expectError(error.CharacterOutOfRange, core_char(testSelf(), args, &a));
+}
+
+test "type_predicates::char: string type error" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var s = try Value.stringValue(std.heap.page_allocator, "A");
+    defer s.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ s });
+    try std.testing.expectError(error.TypeError, core_char(testSelf(), args, &a));
+}
+
+test "type_predicates::char: arity error" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{});
+    try std.testing.expectError(error.ArityError, core_char(testSelf(), args, &a));
+}
+
+test "type_predicates::char_q: arity error" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{});
+    try std.testing.expectError(error.ArityError, core_char_q(testSelf(), args, &a));
 }
 

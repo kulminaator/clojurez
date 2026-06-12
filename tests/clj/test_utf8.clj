@@ -6,24 +6,24 @@
 ;; Estonian strings
 (check "utf8 estonian string" "jõeääreööbiku ülkskõiksus" "jõeääreööbiku ülkskõiksus")
 (check "utf8 estonian count" (count "jõeääreööbiku ülkskõiksus") 25)
-(check "utf8 estonian nth 0" (nth "jõeääreööbiku ülkskõiksus" 0) "j")
-(check "utf8 estonian nth 1" (nth "jõeääreööbiku ülkskõiksus" 1) "õ")
-(check "utf8 estonian nth 2" (nth "jõeääreööbiku ülkskõiksus" 2) "e")
+(check "utf8 estonian nth 0" (nth "jõeääreööbiku ülkskõiksus" 0) \j)
+(check "utf8 estonian nth 1" (nth "jõeääreööbiku ülkskõiksus" 1) \õ)
+(check "utf8 estonian nth 2" (nth "jõeääreööbiku ülkskõiksus" 2) \e)
 (check "utf8 estonian str concat" (str "jõeää" "reöö" "biku") "jõeääreööbiku")
 
 ;; Emoji
 (check "utf8 smiley string" "😀😃😄😁" "😀😃😄😁")
 (check "utf8 smiley count" (count "😀😃😄😁") 4)
-(check "utf8 smiley nth 0" (nth "😀😃😄😁" 0) "😀")
-(check "utf8 smiley nth 2" (nth "😀😃😄😁" 2) "😄")
+(check "utf8 smiley nth 0" (nth "😀😃😄😁" 0) \😀)
+(check "utf8 smiley nth 2" (nth "😀😃😄😁" 2) \😄)
 (check "utf8 mixed text emoji" (str "Hello " "😀" " World") "Hello 😀 World")
 (check "utf8 emoji count mixed" (count "Hi😀there") 8)
 
 ;; Japanese
 (check "utf8 japanese string" "古池や蛙飛び込む水の音" "古池や蛙飛び込む水の音")
 (check "utf8 japanese count" (count "古池や蛙飛び込む水の音") 11)
-(check "utf8 japanese nth 0" (nth "古池や蛙飛び込む水の音" 0) "古")
-(check "utf8 japanese nth 10" (nth "古池や蛙飛び込む水の音" 10) "音")
+(check "utf8 japanese nth 0" (nth "古池や蛙飛び込む水の音" 0) \古)
+(check "utf8 japanese nth 10" (nth "古池や蛙飛び込む水の音" 10) \音)
 
 ;; Unicode escape sequences
 (check "unicode escape basic" "\u0048\u0065\u006C\u006C\u006F" "Hello")
@@ -74,7 +74,7 @@
 
 ;; UTF-8 in function parameters
 (check "utf8 fn estonian" ((fn [s] (count s)) "jõä") 3)
-(check "utf8 fn emoji" ((fn [s] (nth s 1)) "😀😃😄") "😃")
+(check "utf8 fn emoji" ((fn [s] (nth s 1)) "😀😃😄") \😃)
 
 ;; UTF-8 keyword
 (check "utf8 keyword estonian" :jõä ':jõä)

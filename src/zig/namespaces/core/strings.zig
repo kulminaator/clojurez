@@ -11,6 +11,13 @@ pub fn core_str(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     errdefer buf.deinit(env_env.allocator);
 
     for (args.items) |arg| {
+        // Handle character type: convert code point to UTF-8 string
+        if (arg.type == .character) {
+            var utf8_buf: [4]u8 = undefined;
+            const utf8_len = std.unicode.utf8Encode(arg.char_val, &utf8_buf) catch return error.InvalidUnicode;
+            try buf.appendSlice(env_env.allocator, utf8_buf[0..utf8_len]);
+            continue;
+        }
         const s = try arg.fmt(env_env.allocator);
         defer env_env.allocator.free(s);
         // Strip quotes from string values
