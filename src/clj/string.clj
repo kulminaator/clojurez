@@ -129,6 +129,7 @@
   ([s re limit]
      (let [s-str (str s)
            all-matches (zig.core/re-find-all re s-str)
+           keep-all (neg? limit)
            has-limit (and limit (not (neg? limit)))]
        (if (empty? all-matches)
          [s-str]
@@ -145,9 +146,10 @@
                             (if (and has-limit (>= pc limit))
                               (conj parts (subs s-str last-end))
                               (recur (rest matches) (conj parts before) end)))))]
-           (if has-limit
-             (vec (take limit result))
-             (strip-trailing-empty (vec result))))))))
+           (cond
+             keep-all (vec result)
+             has-limit (vec (take limit result))
+             :else (strip-trailing-empty (vec result))))))))
 
 (defn split-lines
   "Splits s on newline or carriage return+newline. Trailing empty lines are not returned."

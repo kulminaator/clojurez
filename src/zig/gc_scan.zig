@@ -106,7 +106,7 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
     // multiple of @sizeOf(Value)).
     const valid_types = [_]Value.Type{
         .nil, .bool, .integer, .float, .bigint, .ratio, .decimal,
-        .string, .character, .symbol, .keyword,
+        .string, .regex, .character, .symbol, .keyword,
         .list, .vector, .map, .set, .queue, .function, .builtin_fn,
         .lazy_seq, .cons, .atom, .reduced,
     };
