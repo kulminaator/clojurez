@@ -589,18 +589,50 @@ pub fn nfaMatch(nfa: *const Nfa, s: []const u8, allocator: Allocator) anyerror!b
 }
 
 pub fn nfaMatchLen(nfa: *const Nfa, s: []const u8, allocator: Allocator) anyerror!usize {
-    const n = s.len;
+    // Single-pass NFA simulation: walk the string once, tracking the longest
+    // byte offset where the accept state is reachable in the closure.
+    var closure = try epsilonClosure(&nfa.states, &[_]usize{nfa.start}, allocator);
+    defer closure.deinit(allocator);
+
     var best: usize = 0;
 
-    var length: usize = 0;
-    while (length <= n) : (length += 1) {
-        // We need to match on code point boundaries, not byte boundaries
-        // For simplicity, try matching on byte prefix and check if it's valid UTF-8
-        if (length > 0 and !std.unicode.utf8ValidateSlice(s[0..length])) continue;
-
-        if (try nfaMatch(nfa, s[0..length], allocator)) {
-            best = length;
+    // If accept is reachable at position 0 (empty string match), record it
+    for (closure.items) |c| {
+        if (c == nfa.accept) {
+            best = 0;
+            break;
         }
+    }
+
+    var i: usize = 0;
+    while (i < s.len) {
+        // Decode next UTF-8 code point
+        const first_byte = s[i];
+        const byte_len = std.unicode.utf8ByteSequenceLength(first_byte) catch break;
+        if (i + byte_len > s.len) break;
+        const cp = std.unicode.utf8Decode(s[i .. i + byte_len]) catch break;
+
+        {
+            var next_states = try nfaNextStates(&nfa.states, closure.items, cp, allocator);
+            defer next_states.deinit(allocator);
+
+            if (next_states.items.len == 0) break;
+
+            var next_closure = try epsilonClosure(&nfa.states, next_states.items, allocator);
+            closure.deinit(allocator);
+            closure = next_closure;
+            next_closure = .empty;
+        }
+
+        // Check if accept is reachable in the current closure
+        for (closure.items) |c| {
+            if (c == nfa.accept) {
+                best = i + byte_len;
+                break;
+            }
+        }
+
+        i += byte_len;
     }
 
     return best;
