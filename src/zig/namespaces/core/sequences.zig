@@ -24,7 +24,7 @@ pub fn forceLazySeqHelper(allocator: Allocator, lazy: Value) anyerror!Value {
         // Use custom handler if available (bypasses Clojure evaluator)
         var result: Value = undefined;
         if (thunk.custom_handler) |handler| {
-            result = try forceLazySeqCustomHandler(allocator, handler, @constCast(&thunk.env));
+            result = try forceLazySeqCustomHandler(allocator, handler, @constCast(&thunk.env), thunk);
         } else {
             const cloned_body = try list.clone(&thunk.body, allocator);
             var thunk_env = try thunk.env.clone(allocator);
@@ -119,7 +119,7 @@ fn evalLazySeqThunk(allocator: Allocator, lazy: Value) anyerror!Value {
     if (lazy.lazy_seq_val.thunk) |thunk| {
         var result: Value = undefined;
         if (thunk.custom_handler) |handler| {
-            result = try forceLazySeqCustomHandler(allocator, handler, @constCast(&thunk.env));
+            result = try forceLazySeqCustomHandler(allocator, handler, @constCast(&thunk.env), thunk);
         } else {
             const cloned_body = try list.clone(&thunk.body, allocator);
             var thunk_env = try thunk.env.clone(allocator);
@@ -303,7 +303,7 @@ fn forceLazySeqGetResult(allocator: Allocator, lazy: *const Value) anyerror!Valu
     if (lazy.lazy_seq_val.thunk) |thunk| {
         // Check for custom handler (bypasses Clojure evaluator)
         if (thunk.custom_handler) |handler| {
-            return forceLazySeqCustomHandler(allocator, handler, @constCast(&thunk.env));
+            return forceLazySeqCustomHandler(allocator, handler, @constCast(&thunk.env), thunk);
         }
 
         const cloned_body = try list.clone(&thunk.body, allocator);
@@ -318,21 +318,86 @@ fn forceLazySeqGetResult(allocator: Allocator, lazy: *const Value) anyerror!Valu
 
 /// Handle lazy-seq forcing for custom handlers (map, filter, etc.)
 /// These bypass the Clojure evaluator for per-element processing.
-fn forceLazySeqCustomHandler(allocator: Allocator, handler: Value.LazySeqHandler, env: *Env) anyerror!Value {
+fn forceLazySeqCustomHandler(allocator: Allocator, handler: Value.LazySeqHandler, env: *Env, thunk: *const Value.LazySeqThunk) anyerror!Value {
     return switch (handler) {
-        .map => forceMapStep(allocator, env),
+        .map => forceMapStep(allocator, env, thunk),
     };
 }
 
 /// Execute one step of (map f coll) directly in Zig.
 /// Returns a cons cell: (cons (f first) (map f rest))
 /// or nil if the collection is empty.
-fn forceMapStep(allocator: Allocator, env: *Env) anyerror!Value {
-    // Get f and coll from the thunk environment
+///
+/// Two paths:
+/// - Concrete collections (list/vector): index-based iteration, no cloning.
+///   Uses shared_coll pointer — collection is never cloned.
+/// - Lazy collections (lazy_seq/cons): step-by-step, keeping the tail lazy.
+fn forceMapStep(allocator: Allocator, env: *Env, thunk: *const Value.LazySeqThunk) anyerror!Value {
     const f = env.get("f") orelse return error.RuntimeError;
-    const coll = env.get("coll") orelse return error.RuntimeError;
 
-    // Get seq of coll — clone it so we own it
+    // Get collection: from shared_coll pointer if available, else from env
+    var coll_ptr: *const Value = undefined;
+    if (thunk.shared_coll) |sc| {
+        coll_ptr = @ptrCast(@alignCast(sc));
+    } else {
+        // Root thunk: coll is stored in env
+        const coll_ref = env.entries.getPtr("coll") orelse return error.RuntimeError;
+        coll_ptr = coll_ref;
+    }
+
+    // Check if we have an index (concrete collection path)
+    if (env.get("idx")) |idx_val| {
+        return forceMapStepConcrete(allocator, f, coll_ptr, env, @as(usize, @intCast(idx_val.int_val)));
+    }
+
+    // Lazy collection path — step by step, keeping tail lazy
+    return forceMapStepLazy(allocator, f, coll_ptr.*, env);
+}
+
+/// Index-based iteration for concrete collections (list/vector).
+/// No cloning — just advance an integer index.
+/// Uses shared_coll pointer so the collection is never cloned.
+fn forceMapStepConcrete(allocator: Allocator, f: Value, coll: *const Value, env: *Env, idx: usize) anyerror!Value {
+    const items = switch (coll.*.type) {
+        .list => coll.*.list_val.items,
+        .vector => coll.*.vec_val.items,
+        else => return Value.nilValue(),
+    };
+
+    if (idx >= items.len) return Value.nilValue();
+
+    // Apply f to current element
+    var arg_list: list.List = .empty;
+    defer arg_list.deinit(allocator);
+    try arg_list.append(allocator, try items[idx].clone(allocator));
+    const mapped = try eval_helpers.callBuiltin(allocator, f, arg_list, env);
+
+    // Create next thunk — share the collection pointer, no clone!
+    const thunk = try allocator.create(Value.LazySeqThunk);
+    thunk.* = .{
+        .params = list.empty(),
+        .body = list.empty(),
+        .env = .{
+            .allocator = allocator,
+            .entries = .empty,
+            .parent = null,
+            .ns_manager = null,
+            .referred_names = .empty,
+        },
+        .custom_handler = Value.LazySeqHandler.map,
+        .shared_coll = coll, // shared pointer, no clone (*const Value → *const anyopaque)
+    };
+    try thunk.env.put("f", try f.clone(allocator));
+    try thunk.env.put("idx", Value.intValue(@as(i64, @intCast(idx + 1))));
+
+    const tail = Value.lazySeqValue(thunk);
+    return Value.consValue(allocator, mapped, tail);
+}
+
+/// Step-by-step iteration for lazy collections.
+/// Forces one step, keeps the tail lazy.
+fn forceMapStepLazy(allocator: Allocator, f: Value, coll: Value, env: *Env) anyerror!Value {
+    // Get seq of coll — forces one step for lazy_seq
     var s = try getSeqValue(allocator, coll);
     // Check if collection is empty
     if (s.type == .nil) {
@@ -359,23 +424,26 @@ fn forceMapStep(allocator: Allocator, env: *Env) anyerror!Value {
     const mapped = try eval_helpers.callBuiltin(allocator, f, arg_list, env);
 
     // Get rest — this consumes s
-    var rest_val = try getRestValue(allocator, s);
+    const rest_val = try getRestValue(allocator, s);
 
-    // Create new lazy-seq for (map f rest)
+    // Create next thunk with the remaining lazy tail
     const thunk = try allocator.create(Value.LazySeqThunk);
     thunk.* = .{
         .params = list.empty(),
         .body = list.empty(),
-        .env = try env.clone(allocator),
+        .env = .{
+            .allocator = allocator,
+            .entries = .empty,
+            .parent = null,
+            .ns_manager = null,
+            .referred_names = .empty,
+        },
         .custom_handler = Value.LazySeqHandler.map,
     };
-    // Update coll to rest
-    try thunk.env.put("coll", try rest_val.clone(allocator));
-    rest_val.deinit(allocator);
+    try thunk.env.put("f", try f.clone(allocator));
+    try thunk.env.put("coll", rest_val);
 
     const tail = Value.lazySeqValue(thunk);
-
-    // Return cons(mapped, tail)
     return Value.consValue(allocator, mapped, tail);
 }
 

@@ -97,16 +97,28 @@ pub fn core_map(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     }
 
     // Create thunk with custom handler — bypasses the Clojure evaluator
-    // for per-element processing. The handler does the map step directly in Zig.
+    // for per-element processing.
+    // Use a thin self-contained env — no parent chain, no cloning of namespace.
     const thunk = try allocator.create(Value.LazySeqThunk);
     thunk.* = .{
         .params = list.empty(),
-        .body = list.empty(), // unused when custom_handler is set
-        .env = try env_env.clone(allocator),
+        .body = list.empty(),
+        .env = .{
+            .allocator = allocator,
+            .entries = .empty,
+            .parent = null,
+            .ns_manager = null,
+            .referred_names = .empty,
+        },
         .custom_handler = Value.LazySeqHandler.map,
     };
     try thunk.env.put("f", try f.clone(allocator));
     try thunk.env.put("coll", try coll.clone(allocator));
+    // Only use index-based iteration for concrete collections.
+    // Lazy collections use step-by-step iteration to preserve laziness.
+    if (coll.type == .list or coll.type == .vector) {
+        try thunk.env.put("idx", Value.intValue(0));
+    }
 
     return Value.lazySeqValue(thunk);
 }

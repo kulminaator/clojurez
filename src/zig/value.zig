@@ -59,6 +59,11 @@ pub const LazySeqThunk = struct {
     // instead of evaluating `body` through the Clojure evaluator.
     // This avoids per-element evaluator overhead for map/filter/etc.
     custom_handler: ?LazySeqHandler = null,
+    // Shared collection pointer for map's index-based iteration.
+    // Points to the collection owned by the root thunk's env.
+    // Child thunks share this pointer — no cloning needed.
+    // Uses anyopaque since Value is not yet defined at this point.
+    shared_coll: ?*const anyopaque = null,
 };
 
 pub const LazySeqHandler = enum {
@@ -347,8 +352,10 @@ pub const Env = struct {
     pub fn get(self: *Env, name: []const u8) ?Self {
         var current: ?*Env = self;
         while (current) |env| {
-            const found = env.entries.get(name);
-            if (found) |val| return val;
+            if (env.entries.entries.len > 0) {
+                const found = env.entries.get(name);
+                if (found) |val| return val;
+            }
             current = env.parent;
         }
         return null;
@@ -726,6 +733,7 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
                     .body = try list.clone(&thunk.body, allocator),
                     .env = try thunk.env.clone(allocator),
                     .custom_handler = thunk.custom_handler,
+                    .shared_coll = thunk.shared_coll, // shared pointer, no clone (anyopaque)
                 };
                 new_lazy.thunk = new_thunk;
             }
