@@ -107,7 +107,7 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 - **Boolean:** `not`, `boolean`
 - **Predicates:** `nil?`, `some?`, `true?`, `false?`, `zero?`, `pos?`, `neg?`, `even?`, `odd?`, `number?`, `string?`, `list?`, `symbol?`, `keyword?`, `vector?`, `map?`, `queue?`, `set?`, `coll?`, `sequential?`, `fn?`, `empty?`, `not-empty`, `utf8-valid?`
 - **Sequence predicates:** `some`, `every?`, `not-any?`
-- **Strings:** `str`, `utf8-valid?`
+- **Strings:** `str`, `utf8-valid?`, `subs`
 - **I/O:** `print`, `println`, `read-line`, `spit`, `slurp`
 - **Maps:** `get`, `assoc`, `keys`, `vals`, `dissoc`, `merge`, `contains?`, `hash-map`, `zipmap`, `get-in`, `assoc-in`, `select-keys`
 - **Sets:** `set`, `set?`, `disj`, `contains?`, `union`, `intersection`, `difference`, `subset?`, `superset?`, `hash-set`
@@ -130,6 +130,42 @@ Many common functions are implemented in Clojure source, keeping the Zig VM lean
 - `hash-set` — create set from args
 - `when-not`, `when-some`, `when-let`, `when-first` (macros)
 - `if-let` (macro), `time` (macro), `doseq` (macro), `for` (macro)
+
+### clojure.string Namespace
+The `clojure.string` namespace provides string utility functions. Use with `:require` and `:as`:
+
+```clojure
+(ns my.namespace
+  (:require [clojure.string :as str]))
+```
+
+**Case conversion:**
+- `upper-case` — converts string to all upper-case
+- `lower-case` — converts string to all lower-case
+- `capitalize` — converts first character to upper-case, rest to lower-case
+
+**Whitespace trimming:**
+- `trim` — removes whitespace from both ends
+- `triml` — removes whitespace from the left
+- `trimr` — removes whitespace from the right
+- `trim-newline` — removes trailing `\n` or `\r` characters
+
+**Predicates:**
+- `blank?` — true if nil, empty, or whitespace only
+- `starts-with?` — true if string starts with substring
+- `ends-with?` — true if string ends with substring
+- `includes?` — true if string contains substring
+
+**String manipulation:**
+- `reverse` — reverses the string
+- `join` — joins collection elements with optional separator
+- `escape` — replaces characters using a mapping
+
+**Index operations:**
+- `index-of` — finds first index of substring/char (optionally from index)
+- `last-index-of` — finds last index of substring/char (optionally from index)
+
+**Note:** Regular expression functions (`replace`, `replace-first`, `split`, `split-lines`) are not yet implemented.
 
 ## Build
 
@@ -414,7 +450,9 @@ Output: `(0 1 1 2 3 5 8 13 21 34)`
 
 ```
 src/
-├── clj/              — Clojure source (core.clj, baked into binary at compile time)
+├── clj/
+│   ├── core.clj      — Clojure core library (baked into binary at compile time)
+│   └── string.clj    — clojure.string namespace (baked into binary at compile time)
 └── zig/
     ├── namespaces/
     │   └── core/     — Zig builtin implementations (arithmetic, comparison, maps, etc.)
@@ -492,6 +530,7 @@ See [GUIDELINES.md](GUIDELINES.md) for testing standards and detailed coverage r
 - Arithmetic (+, -, *, /, rem, mod, quot, rationalize) with bigint/ratio/decimal support
 - Comparison (=, !=, not=, ==, <, >, <=, >=, compare, identical?)
 - Boolean, type check, string, I/O functions (including `spit`/`slurp` for file I/O)
+- **clojure.string namespace** (upper-case, lower-case, capitalize, trim, triml, trimr, trim-newline, blank?, starts-with?, ends-with?, includes?, reverse, join, escape, index-of, last-index-of)
 - Map operations (get, assoc, keys, vals, dissoc, merge, contains?, hash-map, zipmap, get-in, assoc-in, select-keys)
 - Set operations (set, set?, disj, union, intersection, difference, subset?, superset?, hash-set)
 - Collection operations (conj, pop, last, reverse, range, peek, empty?, not-empty, seq, count, empty)
@@ -509,6 +548,7 @@ See [GUIDELINES.md](GUIDELINES.md) for testing standards and detailed coverage r
 - **Chunked sequences** (simpler sequence implementation)
 - **Full spec system** (no `s/def`, `s/valid?`, etc.)
 - **Protocol/multimethod system**
+- **clojure.string regex functions** (`replace`, `replace-first`, `split`, `split-lines` — regex variants not yet implemented)
 
 ## Design Philosophy
 

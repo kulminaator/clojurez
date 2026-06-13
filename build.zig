@@ -14,6 +14,16 @@ pub fn build(b: *std.Build) void {
     });
     copy_core.addFileInput(b.path("src/clj/core.clj"));
 
+    // Copy string.clj into zig package for @embedFile
+    // Source of truth: src/clj/string.clj
+    // Destination: src/zig/namespaces/core/clj/string.clj (referenced by string_clj.zig)
+    const copy_string = b.addSystemCommand(&.{
+        "cp",
+        "src/clj/string.clj",
+        "src/zig/namespaces/core/clj/string.clj",
+    });
+    copy_string.addFileInput(b.path("src/clj/string.clj"));
+
     const src_path = b.path("src/zig/main.zig");
 
     // Build 3 variants into zig-out/bin/:
@@ -45,8 +55,9 @@ pub fn build(b: *std.Build) void {
             .root_module = module,
         });
 
-        // All variants depend on core.clj being copied first
+        // All variants depend on core.clj and string.clj being copied first
         exe.step.dependOn(&copy_core.step);
+        exe.step.dependOn(&copy_string.step);
 
 
         const install = b.addInstallArtifact(exe, .{});

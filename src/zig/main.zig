@@ -8,6 +8,8 @@ const parser = @import("parser.zig");
 const eval = @import("eval.zig");
 const repl = @import("repl.zig");
 const core_clj = @import("namespaces/core/core_clj.zig");
+const string_clj = @import("namespaces/core/string_clj.zig");
+const strings = @import("namespaces/core/strings.zig");
 const regexp_api = @import("namespaces/regexp/api.zig");
 const debug_allocator = @import("debug_allocator.zig");
 const slab_allocator = @import("slab_allocator.zig");
@@ -131,6 +133,20 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // Load embedded Clojure core library into clojure.core namespace.
     // The defn wrappers shadow the raw builtins with docstrings.
     try loadCoreLibrary(allocator, clojure_core_env);
+
+    // Create clojure.string namespace — string utility functions.
+    // Parent set to clojure.core so string code can use core functions.
+    const cs_env = try ns_mgr.createNamespace("clojure.string");
+    cs_env.parent = clojure_core_env;
+    cs_env.ns_manager = ns_mgr;
+
+    // Register clojure.string built-in functions in zig.core (same pattern as other builtins).
+    // The Clojure wrappers in string.clj reference zig.core/upper-case etc.
+    try strings.registerStringNamespaceFunctions(zc_env);
+
+    // Load embedded Clojure string library into clojure.string namespace.
+    // The defn wrappers shadow the raw builtins with docstrings.
+    try loadStringLibrary(allocator, cs_env);
 
     // Check for --parse-debug early (before loading regexp library)
     // so it can diagnose regexp.clj syntax errors without crashing.
@@ -277,6 +293,23 @@ fn loadCoreLibrary(allocator: Allocator, env: *Env) anyerror!void {
         var result = try eval.eval(allocator, allocator, form, env);
         result.deinit(allocator);
         // Silent: don't print results during core library loading
+    }
+}
+
+/// Load the embedded Clojure string library silently (no output for defn names).
+fn loadStringLibrary(allocator: Allocator, env: *Env) anyerror!void {
+    const content = string_clj.string_clj_source;
+
+    var p = try parser.Parser.init(allocator, content);
+    defer p.deinit();
+
+    var forms = try p.parseAll();
+    defer forms.deinit(allocator);
+
+    for (forms.items) |form| {
+        var result = try eval.eval(allocator, allocator, form, env);
+        result.deinit(allocator);
+        // Silent: don't print results during string library loading
     }
 }
 
