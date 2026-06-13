@@ -110,6 +110,7 @@ pub const FnData = struct {
     arities: std.ArrayListUnmanaged(Arity) = .empty, // multi-arity support
     env: Env,
     is_macro: bool = false, // true if this is a macro (args passed unevaluated)
+    name: ?[]const u8 = null, // optional name for self-reference in recursive calls
 };
 
 /// Namespace manager: tracks all namespaces, current namespace, and aliases.
@@ -524,15 +525,24 @@ pub fn consValue(allocator: Allocator, head: Self, tail: Self) anyerror!Self {
 }
 
 pub fn fnValue(arities: std.ArrayListUnmanaged(Arity), env: Env, is_macro: bool) Self {
-    return .{ .type = .function, .fn_val = .{ .arities = arities, .env = env, .is_macro = is_macro } };
+    return fnValueNamed(arities, env, is_macro, null);
+}
+
+pub fn fnValueNamed(arities: std.ArrayListUnmanaged(Arity), env: Env, is_macro: bool, name: ?[]const u8) Self {
+    return .{ .type = .function, .fn_val = .{ .arities = arities, .env = env, .is_macro = is_macro, .name = name } };
 }
 
 /// Create a single-arity function (convenience wrapper)
 pub fn fnValueSingle(allocator: Allocator, params: list.List, body: list.List, env: Env, rest_name: ?[]const u8, is_macro: bool) anyerror!Self {
+    return fnValueSingleNamed(allocator, params, body, env, rest_name, is_macro, null);
+}
+
+/// Create a single-arity function with an optional name for self-reference
+pub fn fnValueSingleNamed(allocator: Allocator, params: list.List, body: list.List, env: Env, rest_name: ?[]const u8, is_macro: bool, name: ?[]const u8) anyerror!Self {
     var arities: std.ArrayListUnmanaged(Arity) = .empty;
     errdefer allocator.free(arities.items);
     try arities.append(allocator, Arity{ .params = params, .body = body, .rest_name = rest_name });
-    return fnValue(arities, env, is_macro);
+    return fnValueNamed(arities, env, is_macro, name);
 }
 
 pub fn builtinFnValue(fn_ptr: BuiltinFn) Self {
@@ -606,6 +616,7 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
             }
             allocator.free(self.fn_val.arities.items);
             self.fn_val.env.deinit(allocator);
+            if (self.fn_val.name) |n| allocator.free(n);
         },
         .builtin_fn => {},
         .cons => {
@@ -760,7 +771,9 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
                     .rest_name = cloned_rest,
                 });
             }
-            return fnValue(cloned_arities, try fnv.env.clone(allocator), fnv.is_macro);
+            var cloned_name: ?[]const u8 = null;
+            if (fnv.name) |n| cloned_name = try allocator.dupe(u8, n);
+            return fnValueNamed(cloned_arities, try fnv.env.clone(allocator), fnv.is_macro, cloned_name);
         },
         .builtin_fn => return builtinFnValue(self.builtin_fn_val),
         .reduced => {

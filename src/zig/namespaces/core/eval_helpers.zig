@@ -120,6 +120,12 @@ pub fn callBuiltin(allocator: Allocator, f: Value, args_list: list.List, env: *V
             }
             defer new_env.deinit(allocator);
 
+            // Bind function name for self-reference (e.g., (fn self [x] (self (dec x))))
+            if (fn_data.name) |fn_name| {
+                const fn_clone = try f.clone(allocator);
+                try new_env.put(fn_name, fn_clone);
+            }
+
             const min_args = arity.params.items.len;
             const has_rest = arity.rest_name != null;
 
@@ -313,10 +319,18 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
                 }
                 if (std.mem.eql(u8, first.sym_val, "fn")) {
                     if (form.list_val.items.len < 2) return error.ArityError;
-                    const params = form.list_val.items[1];
+                    var idx: usize = 1;
+                    // Skip optional name for self-reference
+                    var fn_name: ?[]const u8 = null;
+                    if (form.list_val.items[idx].type == .symbol) {
+                        fn_name = try allocator.dupe(u8, form.list_val.items[idx].sym_val);
+                        idx += 1;
+                    }
+                    if (idx >= form.list_val.items.len) return error.ArityError;
+                    const params = form.list_val.items[idx];
                     if (params.type != .list and params.type != .vector) return error.TypeError;
                     const params_list = if (params.type == .vector) try helpers.listFromVector(allocator, params.vec_val) else params.list_val;
-                    const body = if (form.list_val.items.len >= 3) form.list_val.items[2..] else &[_]Value{};
+                    const body = if (form.list_val.items.len >= idx + 1) form.list_val.items[idx + 1 ..] else &[_]Value{};
                     var body_list: list.List = .empty;
                     errdefer body_list.deinit(allocator);
                     try body_list.append(allocator, try Value.symValue(allocator, "do"));
@@ -326,7 +340,7 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
                     const cloned_params = try params_list.clone(allocator);
                     const cloned_body = try body_list.clone(allocator);
                     const fn_env = try env.clone(allocator);
-                    return try Value.fnValueSingle(allocator, cloned_params, cloned_body, fn_env, null, false);
+                    return try Value.fnValueSingleNamed(allocator, cloned_params, cloned_body, fn_env, null, false, fn_name);
                 }
                 if (std.mem.eql(u8, first.sym_val, "lazy-seq")) {
                     if (form.list_val.items.len < 2) return error.ArityError;
@@ -380,6 +394,131 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
             }
             return Value.vectorValue(new_vec);
         },
+        .cons => {
+            // Evaluate cons cell as a function call: (operator arg1 arg2 ... . tail)
+            // First, convert cons to list for uniform handling
+            var cons_list: list.List = .empty;
+            errdefer cons_list.deinit(allocator);
+            var c = form;
+            while (c.type == .cons) {
+                const cdata = c.cons_val.?;
+                try cons_list.append(allocator, try cdata.head.clone(allocator));
+                c = try cdata.tail.clone(allocator);
+            }
+            if (c.type == .list) {
+                // Splice the list elements (not append as single element)
+                for (c.list_val.items) |item| {
+                    try cons_list.append(allocator, try item.clone(allocator));
+                }
+            } else if (c.type != .nil) {
+                try cons_list.append(allocator, c);
+            }
+            // Now evaluate the list as a function call
+            if (cons_list.items.len == 0) {
+                return Value.listValue(list.empty());
+            }
+            const first = cons_list.items[0];
+            if (first.type == .symbol) {
+                // Re-create as a proper list for special form handling
+                var proper_list: list.List = .empty;
+                errdefer proper_list.deinit(allocator);
+                for (cons_list.items) |item| {
+                    try proper_list.append(allocator, item);
+                }
+                const list_val = Value.listValue(proper_list);
+                return try evalForm(allocator, list_val, env);
+            }
+            // Non-symbol operator: evaluate normally
+            var op = try evalForm(allocator, first, env);
+            defer op.deinit(allocator);
+            var args: list.List = .empty;
+            errdefer args.deinit(allocator);
+            for (cons_list.items[1..]) |arg| {
+                try args.append(allocator, try evalForm(allocator, arg, env));
+            }
+            return try callBuiltin(allocator, op, args, env);
+        },
         else => return try form.clone(allocator),
+    }
+}
+
+/// macroexpand-1: expand a macro call once, or return the form unchanged.
+/// Takes a single argument: the form to expand.
+pub fn core_macroexpand_1(self: *Value, args: list.List, env_env: *Value.Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const form = args.items[0];
+
+    // Only lists can be macro calls
+    if (form.type != .list or form.list_val.items.len == 0) {
+        return try form.clone(env_env.allocator);
+    }
+
+    const allocator = env_env.allocator;
+    const first = form.list_val.items[0];
+
+    // Resolve the operator
+    var op: Value = undefined;
+    if (first.type == .symbol) {
+        if (env_env.get(first.sym_val)) |v| {
+            op = try v.clone(allocator);
+        } else {
+            // Symbol not found - return form unchanged
+            return try form.clone(allocator);
+        }
+    } else {
+        // Not a symbol - return form unchanged
+        return try form.clone(allocator);
+    }
+    defer op.deinit(allocator);
+
+    // Check if operator is a macro
+    if (op.type == .function and op.fn_val.is_macro) {
+        // Macro: pass unevaluated arguments
+        var macro_args: list.List = .empty;
+        defer macro_args.deinit(allocator);
+        for (form.list_val.items[1..]) |arg| {
+            try macro_args.append(allocator, try arg.clone(allocator));
+        }
+        // Call the macro with unevaluated args and return the result WITHOUT evaluating
+        return try callBuiltin(allocator, op, macro_args, env_env);
+    }
+
+    // Not a macro - return form unchanged
+    return try form.clone(allocator);
+}
+
+/// macroexpand: repeatedly expand macros until no more expansion.
+/// Takes a single argument: the form to expand.
+pub fn core_macroexpand(self: *Value, args: list.List, env_env: *Value.Env) anyerror!Value {
+    if (args.items.len != 1) return error.ArityError;
+
+    var current = try args.items[0].clone(env_env.allocator);
+    errdefer current.deinit(env_env.allocator);
+
+    while (true) {
+        var call_args: list.List = .empty;
+        errdefer call_args.deinit(env_env.allocator);
+        try call_args.append(env_env.allocator, try current.clone(env_env.allocator));
+        const expanded = try core_macroexpand_1(self, call_args, env_env);
+        current.deinit(env_env.allocator);
+
+        // Check if anything changed by comparing
+        // If the expanded form is the same type and structure, stop
+        if (expanded.type != .list or expanded.list_val.items.len == 0) {
+            return expanded;
+        }
+        const exp_first = expanded.list_val.items[0];
+        if (exp_first.type != .symbol) {
+            return expanded;
+        }
+        // Check if the expanded first element is a macro
+        if (env_env.get(exp_first.sym_val)) |v| {
+            if (v.type == .function and v.fn_val.is_macro) {
+                current = expanded;
+                continue;
+            }
+        }
+        return expanded;
     }
 }

@@ -444,8 +444,10 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
         if (std.mem.eql(u8, name, "fn")) {
             if (l.items.len < 2) return error.ArityError;
             var idx: usize = 1;
-            // Skip optional name
+            // Skip optional name (and store it for self-reference)
+            var fn_name: ?Value = null;
             if (l.items[idx].type == .symbol) {
+                fn_name = l.items[idx];
                 idx += 1;
             }
             if (idx >= l.items.len) return error.ArityError;
@@ -464,7 +466,14 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
 
             // Clone env so the fn captures a stable copy of the environment
             const fn_env = try env.clone(arena_alloc);
-            const fn_val = Value.fnValue(arities, fn_env, false);
+
+            // Store optional name for self-reference (used by call to bind in call env)
+            var fn_name_str: ?[]const u8 = null;
+            if (fn_name) |name_sym| {
+                fn_name_str = try allocator.dupe(u8, name_sym.sym_val);
+            }
+
+            const fn_val = Value.fnValueNamed(arities, fn_env, false, fn_name_str);
             return fn_val;
         }
 
@@ -1086,6 +1095,12 @@ pub fn call(allocator: Allocator, arena_alloc: Allocator, op: Value, args_list: 
                 };
             }
             defer new_env.deinit(arena_alloc);
+
+            // Bind function name for self-reference (e.g., (fn self [x] (self (dec x))))
+            if (fn_data.name) |fn_name| {
+                const fn_clone = try op.clone(allocator);
+                try new_env.put(fn_name, fn_clone);
+            }
 
             const min_args = arity.params.items.len;
             const has_rest = arity.rest_name != null;

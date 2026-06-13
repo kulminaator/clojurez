@@ -383,6 +383,10 @@ pub fn registerCoreFunctions(env: *Env) anyerror!void {
     try env.put("subs", Value.builtinFnValue(strings.core_subs));
     try env.put("subvec", Value.builtinFnValue(sequences.core_subvec));
 
+    // Metaprogramming
+    try env.put("macroexpand-1", Value.builtinFnValue(eval_helpers.core_macroexpand_1));
+    try env.put("macroexpand", Value.builtinFnValue(eval_helpers.core_macroexpand));
+
     // defn is handled as a special form alias in the evaluator
 }
 

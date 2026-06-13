@@ -20,6 +20,14 @@ pub fn core_re_pattern(self: *Value, args: list.List, env: *Env) anyerror!Value 
     const arg = args.items[0];
     // If already a regex, return it as-is
     if (arg.type == .regex) return try arg.clone(env.allocator);
+    // If already a map with :pattern, return it as-is
+    if (arg.type == .map) {
+        for (arg.map_val.items) |entry| {
+            if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, "pattern")) {
+                return try arg.clone(env.allocator);
+            }
+        }
+    }
     if (arg.type != .string) return error.TypeError;
 
     const allocator = env.allocator;
@@ -29,7 +37,14 @@ pub fn core_re_pattern(self: *Value, args: list.List, env: *Env) anyerror!Value 
     var ast = try regexp.parseRegex(s, allocator);
     ast.deinit(allocator);
 
-    return Value.regexValue(allocator, s);
+    // Return a map with :pattern key (for compatibility with map? check)
+    var m: Value.Map = .empty;
+    errdefer m.deinit(allocator);
+    try m.append(allocator, .{
+        .key = try Value.keywordValue(allocator, "pattern"),
+        .value = try Value.stringValue(allocator, s),
+    });
+    return Value.mapValue(m);
 }
 
 // ============================================================
