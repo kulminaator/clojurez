@@ -285,6 +285,12 @@ fn scanLazySeqThunk(thunk_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     while (it.next()) |entry| {
         scanValueChildrenDirect(entry.value_ptr, ctx);
     }
+    // Mark shared_coll (separate GC allocation for concrete collection in map).
+    // This keeps the collection alive across GC cycles since it's a raw pointer
+    // that the GC wouldn't otherwise discover.
+    if (thunk.shared_coll) |sc| {
+        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(sc))), ctx);
+    }
 }
 
 /// Scan AtomData: { value: Value, ref_count: usize }.

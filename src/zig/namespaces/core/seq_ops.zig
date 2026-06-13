@@ -111,14 +111,25 @@ pub fn core_map(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
             .referred_names = .empty,
         },
         .custom_handler = Value.LazySeqHandler.map,
+        .shared_coll = null,
     };
     try thunk.env.put("f", try f.clone(allocator));
-    try thunk.env.put("coll", try coll.clone(allocator));
-    // Only use index-based iteration for concrete collections.
-    // Lazy collections use step-by-step iteration to preserve laziness.
+
+    // For concrete collections (list/vector), allocate the collection as a
+    // separate GC-tracked object so shared_coll points to stable memory that
+    // won't move if the env's HashMap resizes. The GC scan marks shared_coll
+    // to keep it alive.
+    const cloned_coll = try coll.clone(allocator);
     if (coll.type == .list or coll.type == .vector) {
+        const stable_coll = try allocator.create(Value);
+        stable_coll.* = cloned_coll;
+        thunk.shared_coll = stable_coll;
         try thunk.env.put("idx", Value.intValue(0));
+    } else {
+        // Lazy collections: store in env, shared_coll stays null
+        // forceMapStepLazy clones from env on each step.
     }
+    try thunk.env.put("coll", cloned_coll);
 
     return Value.lazySeqValue(thunk);
 }
