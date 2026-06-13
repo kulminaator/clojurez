@@ -17,6 +17,7 @@ pub const Token = union(enum) {
     unquote: void,
     unquote_splicing: void,
     string: []const u8,
+    regex: []const u8, // Regex literal: #"..."
     number: []const u8,
     character: u21, // A single Unicode code point
     symbol: []const u8,
@@ -26,7 +27,7 @@ pub const Token = union(enum) {
 
     pub fn deinit(self: Token, allocator: Allocator) void {
         switch (self) {
-            .string, .number, .symbol, .keyword, .fn_shorthand => |s| allocator.free(s),
+            .string, .regex, .number, .symbol, .keyword, .fn_shorthand => |s| allocator.free(s),
             .character => {},
             else => {},
         }
@@ -49,6 +50,7 @@ pub const Token = union(enum) {
             .unquote => .{ .unquote = {} },
             .unquote_splicing => .{ .unquote_splicing = {} },
             .string => |s| .{ .string = try allocator.dupe(u8, s) },
+            .regex => |s| .{ .regex = try allocator.dupe(u8, s) },
             .number => |s| .{ .number = try allocator.dupe(u8, s) },
             .character => |c| .{ .character = c },
             .symbol => |s| .{ .symbol = try allocator.dupe(u8, s) },
@@ -362,6 +364,71 @@ pub const Lexer = struct {
                 // #(body) — anonymous function shorthand
                 self.pos += 1; // skip '('
                 return self.readFnShorthand();
+            },
+            '"' => {
+                // #"..." — regex literal
+                // Read like a string but return as regex token
+                self.pos += 1; // skip opening quote
+                var buf: std.ArrayList(u8) = .empty;
+                errdefer buf.deinit(self.allocator);
+
+                while (self.pos < self.input.len) {
+                    const c = self.input[self.pos];
+                    if (c == '"') {
+                        self.pos += 1;
+                        return .{ .regex = try buf.toOwnedSlice(self.allocator) };
+                    }
+                    if (c == '\\') {
+                        self.pos += 1;
+                        if (self.pos >= self.input.len) {
+                            return error.UnterminatedRegex;
+                        }
+                        switch (self.input[self.pos]) {
+                            'n' => try buf.append(self.allocator, '\n'),
+                            't' => try buf.append(self.allocator, '\t'),
+                            'r' => try buf.append(self.allocator, '\r'),
+                            '\\' => try buf.append(self.allocator, '\\'),
+                            '"' => try buf.append(self.allocator, '"'),
+                            'u' => {
+                                // \uXXXX or \u{XXXXXX} - Unicode escape
+                                self.pos += 1;
+                                var codepoint: u21 = 0;
+                                if (self.pos < self.input.len and self.input[self.pos] == '{') {
+                                    self.pos += 1; // skip '{'
+                                    var hex_buf: std.ArrayList(u8) = .empty;
+                                    defer hex_buf.deinit(self.allocator);
+                                    while (self.pos < self.input.len and self.input[self.pos] != '}') {
+                                        if (!std.ascii.isHex(self.input[self.pos])) return error.InvalidUnicodeEscape;
+                                        try hex_buf.append(self.allocator, self.input[self.pos]);
+                                        self.pos += 1;
+                                    }
+                                    if (self.pos >= self.input.len) return error.InvalidUnicodeEscape;
+                                    self.pos += 1; // skip '}'
+                                    codepoint = std.fmt.parseInt(u21, hex_buf.items, 16) catch return error.InvalidUnicodeEscape;
+                                } else {
+                                    if (self.pos + 4 > self.input.len) return error.InvalidUnicodeEscape;
+                                    var hex_str: [4]u8 = undefined;
+                                    var j: usize = 0;
+                                    while (j < 4) : (j += 1) {
+                                        if (!std.ascii.isHex(self.input[self.pos])) return error.InvalidUnicodeEscape;
+                                        hex_str[j] = self.input[self.pos];
+                                        self.pos += 1;
+                                    }
+                                    codepoint = std.fmt.parseInt(u21, &hex_str, 16) catch return error.InvalidUnicodeEscape;
+                                }
+                                var utf8_buf: [4]u8 = undefined;
+                                const utf8_len = std.unicode.utf8Encode(codepoint, &utf8_buf) catch return error.InvalidUnicodeEscape;
+                                try buf.appendSlice(self.allocator, utf8_buf[0..utf8_len]);
+                                continue;
+                            },
+                            else => |ec| try buf.append(self.allocator, ec),
+                        }
+                    } else {
+                        try buf.append(self.allocator, c);
+                    }
+                    self.pos += 1;
+                }
+                return error.UnterminatedRegex;
             },
             else => {
                 // Check for #queue(...)

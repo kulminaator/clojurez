@@ -1,17 +1,17 @@
-// Public API functions for zig.regexp
-// These functions are registered as built-in functions in the zig.regexp namespace.
-
+// clojure.core regex functions
+// Wraps zig.regexp engine for use from clojure.core namespace.
+// Registered in zig.core namespace.
 const std = @import("std");
 const Value = @import("../../value.zig");
 const list = @import("../../list.zig");
 const vec = @import("../../vector.zig");
 const eval_mod = @import("../../eval.zig");
-const regexp = @import("regexp.zig");
+const regexp = @import("../regexp/regexp.zig");
 const Env = Value.Env;
 const Allocator = std.mem.Allocator;
 
 // ============================================================
-// Public API: re-pattern
+// re-pattern: Create a regex pattern from a string
 // ============================================================
 
 pub fn core_re_pattern(self: *Value, args: list.List, env: *Env) anyerror!Value {
@@ -25,7 +25,7 @@ pub fn core_re_pattern(self: *Value, args: list.List, env: *Env) anyerror!Value 
     const allocator = env.allocator;
     const s = arg.str_val;
 
-    // Validate the pattern by parsing it (we store the string and re-parse on use)
+    // Validate the pattern by parsing it
     var ast = try regexp.parseRegex(s, allocator);
     ast.deinit(allocator);
 
@@ -33,7 +33,7 @@ pub fn core_re_pattern(self: *Value, args: list.List, env: *Env) anyerror!Value 
 }
 
 // ============================================================
-// Public API: re-matches (full string match)
+// re-matches: Full string match (returns match string or nil)
 // ============================================================
 
 pub fn core_re_matches(self: *Value, args: list.List, env: *Env) anyerror!Value {
@@ -45,7 +45,6 @@ pub fn core_re_matches(self: *Value, args: list.List, env: *Env) anyerror!Value 
 
     const allocator = env.allocator;
     var nfa = try getNfaFromPattern(allocator, pattern);
-    defer nfa.deinit(allocator);
 
     if (try regexp.nfaMatch(&nfa, s.str_val, allocator)) {
         return try Value.stringValue(allocator, s.str_val);
@@ -54,7 +53,7 @@ pub fn core_re_matches(self: *Value, args: list.List, env: *Env) anyerror!Value 
 }
 
 // ============================================================
-// Public API: re-find (find first match)
+// re-find: Find first match in string
 // ============================================================
 
 pub fn core_re_find(self: *Value, args: list.List, env: *Env) anyerror!Value {
@@ -66,7 +65,6 @@ pub fn core_re_find(self: *Value, args: list.List, env: *Env) anyerror!Value {
 
     const allocator = env.allocator;
     var nfa = try getNfaFromPattern(allocator, pattern);
-    defer nfa.deinit(allocator);
 
     const str = s.str_val;
     const n = Value.utf8CodepointCount(str);
@@ -84,7 +82,7 @@ pub fn core_re_find(self: *Value, args: list.List, env: *Env) anyerror!Value {
 }
 
 // ============================================================
-// Public API: re-seq (sequence of all matches)
+// re-seq: All matches as a vector
 // ============================================================
 
 pub fn core_re_seq(self: *Value, args: list.List, env: *Env) anyerror!Value {
@@ -96,7 +94,6 @@ pub fn core_re_seq(self: *Value, args: list.List, env: *Env) anyerror!Value {
 
     const allocator = env.allocator;
     var nfa = try getNfaFromPattern(allocator, pattern);
-    defer nfa.deinit(allocator);
 
     const str = s.str_val;
     const n = Value.utf8CodepointCount(str);
@@ -113,7 +110,6 @@ pub fn core_re_seq(self: *Value, args: list.List, env: *Env) anyerror!Value {
         if (match_len > 0) {
             const match_str = remaining[0..match_len];
             try matches.append(allocator, try Value.stringValue(allocator, match_str));
-            // Advance past the match (by byte length / code point count)
             const cp_count = Value.utf8CodepointCount(match_str);
             start += cp_count;
         } else {
@@ -121,7 +117,6 @@ pub fn core_re_seq(self: *Value, args: list.List, env: *Env) anyerror!Value {
         }
     }
 
-    // Convert to vector
     var v = vec.Vector.empty;
     errdefer v.deinit(allocator);
     for (matches.items) |m| {
@@ -131,10 +126,11 @@ pub fn core_re_seq(self: *Value, args: list.List, env: *Env) anyerror!Value {
 }
 
 // ============================================================
-// Public API: re-split
+// re-find-with-index: Find first match with position info
+// Returns [match-string, start-index, end-index] or nil
 // ============================================================
 
-pub fn core_re_split(self: *Value, args: list.List, env: *Env) anyerror!Value {
+pub fn core_re_find_with_index(self: *Value, args: list.List, env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const pattern = args.items[0];
@@ -143,56 +139,6 @@ pub fn core_re_split(self: *Value, args: list.List, env: *Env) anyerror!Value {
 
     const allocator = env.allocator;
     var nfa = try getNfaFromPattern(allocator, pattern);
-    defer nfa.deinit(allocator);
-
-    const str = s.str_val;
-    const n = Value.utf8CodepointCount(str);
-    var parts = std.ArrayListUnmanaged(Value).empty;
-    errdefer {
-        for (parts.items) |*p| p.deinit(allocator);
-        parts.deinit(allocator);
-    }
-
-    var start: usize = 0;
-    var last_end: usize = 0;
-    while (start < n) : (start += 1) {
-        const remaining = regexp.substringFrom(str, start);
-        const match_len = try regexp.nfaMatchLen(&nfa, remaining, allocator);
-        if (match_len > 0) {
-            const before_str = regexp.substringRange(str, last_end, start);
-            try parts.append(allocator, try Value.stringValue(allocator, before_str));
-            last_end = start + Value.utf8CodepointCount(remaining[0..match_len]);
-            start = last_end - 1; // -1 because loop increments
-        }
-    }
-    // Add final part
-    const final_str = regexp.substringFrom(str, last_end);
-    try parts.append(allocator, try Value.stringValue(allocator, final_str));
-
-    // Convert to vector
-    var v = vec.Vector.empty;
-    errdefer v.deinit(allocator);
-    for (parts.items) |p| {
-        try v.append(allocator, p);
-    }
-    return Value.vectorValue(v);
-}
-
-// ============================================================
-// Public API: re-replace (first match only)
-// ============================================================
-
-pub fn core_re_replace(self: *Value, args: list.List, env: *Env) anyerror!Value {
-    _ = self;
-    if (args.items.len != 3) return error.ArityError;
-    const pattern = args.items[0];
-    const s = args.items[1];
-    const replacement = args.items[2];
-    if (s.type != .string) return error.TypeError;
-
-    const allocator = env.allocator;
-    var nfa = try getNfaFromPattern(allocator, pattern);
-    defer nfa.deinit(allocator);
 
     const str = s.str_val;
     const n = Value.utf8CodepointCount(str);
@@ -203,56 +149,40 @@ pub fn core_re_replace(self: *Value, args: list.List, env: *Env) anyerror!Value 
         const match_len = try regexp.nfaMatchLen(&nfa, remaining, allocator);
         if (match_len > 0) {
             const match_str = remaining[0..match_len];
-            const after = remaining[match_len..];
-
-            // Get replacement string
-            var repl_str: []const u8 = undefined;
-            if (replacement.type == .function or replacement.type == .builtin_fn) {
-                var match_val = try Value.stringValue(allocator, match_str);
-                defer match_val.deinit(allocator);
-                var call_args = list.List.empty;
-                errdefer call_args.deinit(allocator);
-                try call_args.append(allocator, match_val);
-                var call_result = try callBuiltin(allocator, replacement, call_args, env);
-                defer call_result.deinit(allocator);
-                repl_str = try getReplacementString(allocator, call_result);
-            } else {
-                repl_str = try getReplacementString(allocator, replacement);
-            }
-
-            var buf: std.ArrayList(u8) = .empty;
-            errdefer buf.deinit(allocator);
-            try buf.appendSlice(allocator, regexp.substringRange(str, 0, start));
-            try buf.appendSlice(allocator, repl_str);
-            try buf.appendSlice(allocator, after);
-
-            return try Value.stringValue(allocator, try buf.toOwnedSlice(allocator));
+            const match_cp_count = Value.utf8CodepointCount(match_str);
+            var result = vec.Vector.empty;
+            errdefer result.deinit(allocator);
+            try result.append(allocator, try Value.stringValue(allocator, match_str));
+            try result.append(allocator, Value.intValue(@intCast(start)));
+            try result.append(allocator, Value.intValue(@intCast(start + match_cp_count)));
+            return Value.vectorValue(result);
         }
     }
-    return try Value.stringValue(allocator, str);
+    return Value.nilValue();
 }
 
 // ============================================================
-// Public API: re-replace-all
+// re-find-all: Find all matches with position info
+// Returns vector of [match-string, start-index, end-index]
 // ============================================================
 
-pub fn core_re_replace_all(self: *Value, args: list.List, env: *Env) anyerror!Value {
+pub fn core_re_find_all(self: *Value, args: list.List, env: *Env) anyerror!Value {
     _ = self;
-    if (args.items.len != 3) return error.ArityError;
+    if (args.items.len != 2) return error.ArityError;
     const pattern = args.items[0];
     const s = args.items[1];
-    const replacement = args.items[2];
     if (s.type != .string) return error.TypeError;
 
     const allocator = env.allocator;
     var nfa = try getNfaFromPattern(allocator, pattern);
-    defer nfa.deinit(allocator);
 
     const str = s.str_val;
     const n = Value.utf8CodepointCount(str);
-
-    var buf: std.ArrayList(u8) = .empty;
-    errdefer buf.deinit(allocator);
+    var results = std.ArrayListUnmanaged(Value).empty;
+    errdefer {
+        for (results.items) |*m| m.deinit(allocator);
+        results.deinit(allocator);
+    }
 
     var start: usize = 0;
     while (start < n) {
@@ -260,31 +190,25 @@ pub fn core_re_replace_all(self: *Value, args: list.List, env: *Env) anyerror!Va
         const match_len = try regexp.nfaMatchLen(&nfa, remaining, allocator);
         if (match_len > 0) {
             const match_str = remaining[0..match_len];
-
-            // Get replacement string
-            var repl_str: []const u8 = undefined;
-            if (replacement.type == .function or replacement.type == .builtin_fn) {
-                var match_val = try Value.stringValue(allocator, match_str);
-                defer match_val.deinit(allocator);
-                var call_args = list.List.empty;
-                errdefer call_args.deinit(allocator);
-                try call_args.append(allocator, match_val);
-                var call_result = try callBuiltin(allocator, replacement, call_args, env);
-                defer call_result.deinit(allocator);
-                repl_str = try getReplacementString(allocator, call_result);
-            } else {
-                repl_str = try getReplacementString(allocator, replacement);
-            }
-            try buf.appendSlice(allocator, repl_str);
-
-            start += Value.utf8CodepointCount(match_str);
+            const match_cp_count = Value.utf8CodepointCount(match_str);
+            var entry = vec.Vector.empty;
+            errdefer entry.deinit(allocator);
+            try entry.append(allocator, try Value.stringValue(allocator, match_str));
+            try entry.append(allocator, Value.intValue(@intCast(start)));
+            try entry.append(allocator, Value.intValue(@intCast(start + match_cp_count)));
+            try results.append(allocator, Value.vectorValue(entry));
+            start += match_cp_count;
         } else {
-            try buf.appendSlice(allocator, regexp.codepointBytes(str, start));
             start += 1;
         }
     }
 
-    return try Value.stringValue(allocator, try buf.toOwnedSlice(allocator));
+    var v = vec.Vector.empty;
+    errdefer v.deinit(allocator);
+    for (results.items) |m| {
+        try v.append(allocator, m);
+    }
+    return Value.vectorValue(v);
 }
 
 // ============================================================
@@ -295,29 +219,11 @@ fn getNfaFromPattern(allocator: Allocator, pattern: Value) anyerror!regexp.Nfa {
     const s = try regexp.extractPatternString(pattern);
     var ast = try regexp.parseRegex(s, allocator);
     defer ast.deinit(allocator);
-    const nfa = try regexp.thompsonBuild(ast, allocator);
-    return nfa;
+    return regexp.thompsonBuild(ast, allocator);
 }
 
 // ============================================================
-// Helper: get replacement string from a Value
-// ============================================================
-
-fn getReplacementString(allocator: Allocator, v: Value) anyerror![]const u8 {
-    if (v.type == .string) return v.str_val;
-    return v.fmt(allocator);
-}
-
-// ============================================================
-// Helper: call a builtin or function value
-// ============================================================
-
-fn callBuiltin(allocator: Allocator, op: Value, args: list.List, env: *Env) anyerror!Value {
-    return eval_mod.call(allocator, allocator, op, args, env, 0);
-}
-
-// ============================================================
-// Register all regexp functions in the zig.regexp namespace
+// Register regex functions in zig.core namespace
 // ============================================================
 
 pub fn registerRegexpFunctions(env: *Env) anyerror!void {
@@ -325,7 +231,6 @@ pub fn registerRegexpFunctions(env: *Env) anyerror!void {
     try env.put("re-matches", Value.builtinFnValue(core_re_matches));
     try env.put("re-find", Value.builtinFnValue(core_re_find));
     try env.put("re-seq", Value.builtinFnValue(core_re_seq));
-    try env.put("re-split", Value.builtinFnValue(core_re_split));
-    try env.put("re-replace", Value.builtinFnValue(core_re_replace));
-    try env.put("re-replace-all", Value.builtinFnValue(core_re_replace_all));
+    try env.put("re-find-with-index", Value.builtinFnValue(core_re_find_with_index));
+    try env.put("re-find-all", Value.builtinFnValue(core_re_find_all));
 }

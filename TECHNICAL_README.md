@@ -310,6 +310,7 @@ This runs the file through the parser only (no evaluation, no library loading) a
 - **Open/Close events**: Every list, vector, map, and set open and close with line numbers
 - **Parse errors**: Exact line and error type for syntax issues
 - **Unmatched forms**: Any forms left open on the stack at the end
+- **Function ends**: Pay attention that after every defn or defmacro at the root level of the file the debug tool should show a return to top level!
 
 **Output format:**
 ```

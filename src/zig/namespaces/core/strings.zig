@@ -322,12 +322,16 @@ pub fn str_trim_newline(self: *Value, args: list.List, env_env: *Env) anyerror!V
 
     // Find last non-newline byte (we operate on bytes since \n and \r are single-byte)
     var end: usize = s.len;
+    var found_non_newline = false;
     while (end > 0) {
         end -= 1;
-        if (s[end] != '\n' and s[end] != '\r') break;
+        if (s[end] != '\n' and s[end] != '\r') {
+            found_non_newline = true;
+            break;
+        }
     }
 
-    // end is the index of the last non-newline byte; include it
+    if (!found_non_newline) return Value.stringValue(allocator, "");
     return Value.stringValue(allocator, s[0 .. end + 1]);
 }
 
@@ -364,21 +368,33 @@ pub fn str_index_of(self: *Value, args: list.List, env_env: *Env) anyerror!Value
     if (s_arg.type != .string) return error.TypeError;
     const s = s_arg.str_val;
 
-    const from_index: usize = if (args.items.len == 3) @as(usize, @intCast(try helpers.toInt(args.items[2]))) else 0;
+    const codepoint_count = Value.utf8CodepointCount(s);
+
+    // Handle from_index as i64 to support negative values (clamped to 0)
+    var from_index: i64 = 0;
+    if (args.items.len == 3) {
+        from_index = try helpers.toInt(args.items[2]);
+        if (from_index < 0) from_index = 0;
+    }
+
+    // Clamp from_index to codepoint count
+    const from_index_clamped: usize = if (from_index > @as(i64, @intCast(codepoint_count)))
+        codepoint_count
+    else
+        @as(usize, @intCast(from_index));
 
     // Search for substring
     if (args.items[1].type == .string) {
         const needle = args.items[1].str_val;
-        if (needle.len == 0) return Value.intValue(0);
+        // Empty needle: return from_index clamped to codepoint count
+        if (needle.len == 0) return Value.intValue(@as(i64, @intCast(from_index_clamped)));
 
         // Find byte offset from from_index code points
         var byte_from: usize = 0;
-        if (from_index > 0) {
-            var i: usize = 0;
-            while (i < from_index and i < Value.utf8CodepointCount(s)) : (i += 1) {
-                const cp_bytes = Value.utf8CodepointAt(s, i) orelse break;
-                byte_from += cp_bytes.len;
-            }
+        var i: usize = 0;
+        while (i < from_index_clamped) : (i += 1) {
+            const cp_bytes = Value.utf8CodepointAt(s, i) orelse break;
+            byte_from += cp_bytes.len;
         }
 
         const remaining = s[byte_from..];
@@ -403,12 +419,10 @@ pub fn str_index_of(self: *Value, args: list.List, env_env: *Env) anyerror!Value
         const needle_len = std.unicode.utf8Encode(ch, &utf8_needle) catch return error.InvalidUnicode;
 
         var byte_from: usize = 0;
-        if (from_index > 0) {
-            var i: usize = 0;
-            while (i < from_index and i < Value.utf8CodepointCount(s)) : (i += 1) {
-                const cp_bytes = Value.utf8CodepointAt(s, i) orelse break;
-                byte_from += cp_bytes.len;
-            }
+        var i: usize = 0;
+        while (i < from_index_clamped) : (i += 1) {
+            const cp_bytes = Value.utf8CodepointAt(s, i) orelse break;
+            byte_from += cp_bytes.len;
         }
 
         const remaining = s[byte_from..];
@@ -439,27 +453,55 @@ pub fn str_last_index_of(self: *Value, args: list.List, env_env: *Env) anyerror!
     const s = s_arg.str_val;
 
     const codepoint_count = Value.utf8CodepointCount(s);
-    const from_index: usize = if (args.items.len == 3) @as(usize, @intCast(try helpers.toInt(args.items[2]))) else codepoint_count;
+
+    // Handle from_index as i64 to support negative values (return nil)
+    var from_index: i64 = @as(i64, @intCast(codepoint_count));
+    if (args.items.len == 3) {
+        from_index = try helpers.toInt(args.items[2]);
+        if (from_index < 0) return Value.nilValue();
+    }
+
+    // Clamp from_index to codepoint count for search boundary
+    const from_index_clamped: usize = if (from_index > @as(i64, @intCast(codepoint_count)))
+        codepoint_count
+    else
+        @as(usize, @intCast(from_index));
+
+    // Compute byte position of from_index_clamped
+    var byte_from: usize = 0;
+    var i: usize = 0;
+    while (i < from_index_clamped) : (i += 1) {
+        const cp_bytes = Value.utf8CodepointAt(s, i) orelse break;
+        byte_from += cp_bytes.len;
+    }
 
     // Search for substring
     if (args.items[1].type == .string) {
         const needle = args.items[1].str_val;
-        if (needle.len == 0) return Value.intValue(@as(i64, @intCast(codepoint_count)));
+        if (needle.len == 0) return Value.intValue(@as(i64, @intCast(from_index_clamped)));
 
-        // Find byte offset from from_index code points
-        var byte_from: usize = 0;
-        var i: usize = 0;
-        while (i < from_index and i < codepoint_count) : (i += 1) {
-            const cp_bytes = Value.utf8CodepointAt(s, i) orelse break;
-            byte_from += cp_bytes.len;
+        // Find last occurrence where start byte <= byte_from.
+        // We scan forward to find all matches with start <= byte_from.
+        var best_byte: ?usize = null;
+        var search_pos: usize = 0;
+        while (search_pos <= byte_from) {
+            const remaining = s[search_pos..];
+            if (std.mem.indexOf(u8, remaining, needle)) |idx| {
+                const match_byte = search_pos + idx;
+                if (match_byte <= byte_from) {
+                    best_byte = match_byte;
+                    search_pos = match_byte + 1;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
         }
-
-        const search_in = s[0..byte_from];
-        if (std.mem.lastIndexOf(u8, search_in, needle)) |idx| {
-            // Convert byte offset to code point index
+        if (best_byte) |best| {
             var cp_idx: usize = 0;
             var byte_pos: usize = 0;
-            while (byte_pos < idx) {
+            while (byte_pos < best) {
                 const cp_bytes = Value.utf8CodepointAt(s, cp_idx) orelse break;
                 byte_pos += cp_bytes.len;
                 cp_idx += 1;
@@ -474,18 +516,26 @@ pub fn str_last_index_of(self: *Value, args: list.List, env_env: *Env) anyerror!
         var utf8_needle: [4]u8 = undefined;
         const needle_len = std.unicode.utf8Encode(ch, &utf8_needle) catch return error.InvalidUnicode;
 
-        var byte_from: usize = 0;
-        var j: usize = 0;
-        while (j < from_index and j < codepoint_count) : (j += 1) {
-            const cp_bytes = Value.utf8CodepointAt(s, j) orelse break;
-            byte_from += cp_bytes.len;
+        var best_byte: ?usize = null;
+        var search_pos: usize = 0;
+        while (search_pos <= byte_from) {
+            const remaining = s[search_pos..];
+            if (std.mem.indexOf(u8, remaining, utf8_needle[0..needle_len])) |idx| {
+                const match_byte = search_pos + idx;
+                if (match_byte <= byte_from) {
+                    best_byte = match_byte;
+                    search_pos = match_byte + 1;
+                } else {
+                    break;
+                }
+            } else {
+                break;
+            }
         }
-
-        const search_in = s[0..byte_from];
-        if (std.mem.lastIndexOf(u8, search_in, utf8_needle[0..needle_len])) |idx| {
+        if (best_byte) |best| {
             var cp_idx: usize = 0;
             var byte_pos: usize = 0;
-            while (byte_pos < idx) {
+            while (byte_pos < best) {
                 const cp_bytes = Value.utf8CodepointAt(s, cp_idx) orelse break;
                 byte_pos += cp_bytes.len;
                 cp_idx += 1;

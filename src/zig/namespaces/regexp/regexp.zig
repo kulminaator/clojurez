@@ -567,15 +567,17 @@ pub fn nfaMatch(nfa: *const Nfa, s: []const u8, allocator: Allocator) anyerror!b
         if (i + byte_len > s.len) break;
         const cp = std.unicode.utf8Decode(s[i .. i + byte_len]) catch break;
 
-        var next_states = try nfaNextStates(&nfa.states, closure.items, cp, allocator);
-        defer next_states.deinit(allocator);
+        {
+            var next_states = try nfaNextStates(&nfa.states, closure.items, cp, allocator);
+            defer next_states.deinit(allocator);
 
-        if (next_states.items.len == 0) return false;
+            if (next_states.items.len == 0) return false;
 
-        var next_closure = try epsilonClosure(&nfa.states, next_states.items, allocator);
-        closure.deinit(allocator);
-        closure = next_closure;
-        next_closure = .empty;
+            var next_closure = try epsilonClosure(&nfa.states, next_states.items, allocator);
+            closure.deinit(allocator);
+            closure = next_closure;
+            next_closure = .empty;
+        }
 
         i += byte_len;
     }
@@ -611,7 +613,9 @@ pub fn nfaMatchLen(nfa: *const Nfa, s: []const u8, allocator: Allocator) anyerro
 pub fn extractPatternString(pattern: Value) anyerror![]const u8 {
     return switch (pattern.type) {
         .string => pattern.str_val,
+        .regex => pattern.re_pattern,
         .map => {
+            // Legacy support: old {:pattern "..."} map format
             for (pattern.map_val.items) |entry| {
                 if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, "pattern")) {
                     if (entry.value.type == .string) {

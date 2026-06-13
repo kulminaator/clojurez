@@ -196,6 +196,13 @@ pub const Parser = struct {
                 try self.advance();
                 return val;
             },
+            .regex => |s| {
+                const val = try Value.regexValue(self.allocator, s);
+                self.current.deinit(self.allocator);
+                self.current = .{ .eof = {} };
+                try self.advance();
+                return val;
+            },
             .character => |c| {
                 const val = Value.charValue(c);
                 self.current.deinit(self.allocator);

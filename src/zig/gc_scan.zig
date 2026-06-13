@@ -160,6 +160,11 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
                 ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(val.str_val.ptr))), ctx);
             }
         },
+        .regex => {
+            if (val.re_pattern.len > 0) {
+                ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(val.re_pattern.ptr))), ctx);
+            }
+        },
         .symbol => {
             if (val.sym_val.len > 0) {
                 ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(val.sym_val.ptr))), ctx);

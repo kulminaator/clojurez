@@ -23,6 +23,7 @@ const bitwise = @import("bitwise.zig");
 const random = @import("random.zig");
 const gc_builtins = @import("gc.zig");
 const eval_helpers = @import("eval_helpers.zig");
+const regexp_core = @import("regexp.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -354,6 +355,7 @@ pub fn registerCoreFunctions(env: *Env) anyerror!void {
     try bitwise.registerBitwiseFunctions(env);
     try random.registerRandomFunctions(env);
     try gc_builtins.registerGCFunctions(env);
+    try regexp_core.registerRegexpFunctions(env);
 
     // Collection predicates (kept here)
     try env.put("empty?", Value.builtinFnValue(core_empty_q));

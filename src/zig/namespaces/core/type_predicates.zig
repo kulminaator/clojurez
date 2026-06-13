@@ -33,6 +33,12 @@ pub fn core_string_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
     return Value.boolValue(args.items[0].type == .string);
 }
 
+pub fn core_regex_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    return Value.boolValue(args.items[0].type == .regex);
+}
+
 pub fn core_list_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
@@ -87,6 +93,16 @@ pub fn core_char(self: *Value, args: list.List, _: *Env) anyerror!Value {
     const v = args.items[0];
     return switch (v.type) {
         .character => Value.charValue(v.char_val),
+        .string => {
+            // Extract the first code point from the string
+            const s = v.str_val;
+            if (s.len == 0) return error.EmptyString;
+            const view = std.unicode.Utf8View.init(s) catch return error.InvalidUtf8;
+            var it = view.iterator();
+            const first_cp = it.nextCodepoint() orelse return error.EmptyString;
+            if (first_cp > 0x10FFFF) return error.CharacterOutOfRange;
+            return Value.charValue(@as(u21, @intCast(first_cp)));
+        },
         .integer => {
             const i = v.int_val;
             if (i < 0) return error.NegativeCharacter;
@@ -479,6 +495,7 @@ pub fn registerTypePredicateFunctions(env: *Env) anyerror!void {
     try env.put("nil?", Value.builtinFnValue(core_nil_q));
     try env.put("number?", Value.builtinFnValue(core_number_q));
     try env.put("string?", Value.builtinFnValue(core_string_q));
+    try env.put("regex?", Value.builtinFnValue(core_regex_q));
     try env.put("list?", Value.builtinFnValue(core_list_q));
     try env.put("symbol?", Value.builtinFnValue(core_symbol_q));
     try env.put("keyword?", Value.builtinFnValue(core_keyword_q));
@@ -911,13 +928,15 @@ test "type_predicates::char: out of range error" {
     try std.testing.expectError(error.CharacterOutOfRange, core_char(testSelf(), args, &a));
 }
 
-test "type_predicates::char: string type error" {
+test "type_predicates::char: string to char" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try Value.stringValue(std.heap.page_allocator, "A");
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
-    try std.testing.expectError(error.TypeError, core_char(testSelf(), args, &a));
+    const result = core_char(testSelf(), args, &a) catch unreachable;
+    try std.testing.expect(result.type == .character);
+    try std.testing.expect(result.char_val == 'A');
 }
 
 test "type_predicates::char: arity error" {

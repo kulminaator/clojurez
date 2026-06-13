@@ -17,6 +17,7 @@ pub const Type = enum {
     ratio,
     decimal,
     string,
+    regex,     // Regex pattern: #"..."
     character, // Char type: a single Unicode code point
     symbol,
     keyword,
@@ -83,6 +84,7 @@ ratio_val: ?*RatioMod.Ratio = null,
 decimal_val: ?*BD.BigDecimal = null,
 char_val: u21 = 0,
 str_val: []const u8 = "",
+re_pattern: []const u8 = "", // regex pattern string
 sym_val: []const u8 = "",
 kw_val: []const u8 = "",
 list_val: list.List = list.List.empty,
@@ -402,6 +404,11 @@ pub fn stringValue(allocator: Allocator, s: []const u8) anyerror!Self {
     return .{ .type = .string, .str_val = duped };
 }
 
+pub fn regexValue(allocator: Allocator, s: []const u8) anyerror!Self {
+    const duped = try allocator.dupe(u8, s);
+    return .{ .type = .regex, .re_pattern = duped };
+}
+
 pub fn charValue(c: u21) Self {
     return .{ .type = .character, .char_val = c };
 }
@@ -554,6 +561,7 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
             }
         },
         .string => allocator.free(self.str_val),
+        .regex => allocator.free(self.re_pattern),
         .symbol => allocator.free(self.sym_val),
         .keyword => allocator.free(self.kw_val),
         .list => self.list_val.deinit(allocator),
@@ -646,6 +654,7 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
             return nilValue();
         },
         .string => return stringValue(allocator, self.str_val),
+        .regex => return regexValue(allocator, self.re_pattern),
         .character => return charValue(self.char_val),
         .symbol => return symValue(allocator, self.sym_val),
         .keyword => return keywordValue(allocator, self.kw_val),
@@ -802,6 +811,7 @@ pub fn equals(self: Self, other: Self) bool {
             return false;
         },
         .string => return std.mem.eql(u8, self.str_val, other.str_val),
+        .regex => return std.mem.eql(u8, self.re_pattern, other.re_pattern),
         .character => return self.char_val == other.char_val,
         .symbol => return std.mem.eql(u8, self.sym_val, other.sym_val),
         .keyword => return std.mem.eql(u8, self.kw_val, other.kw_val),
@@ -960,6 +970,7 @@ pub fn fmt(self: Self, allocator: Allocator) anyerror![]const u8 {
             return allocator.dupe(u8, "0");
         },
         .string => try std.fmt.allocPrint(allocator, "\"{s}\"", .{self.str_val}),
+        .regex => try std.fmt.allocPrint(allocator, "#\"{s}\"", .{self.re_pattern}),
         .character => try charFmt(self.char_val, allocator),
         .symbol => allocator.dupe(u8, self.sym_val),
         .keyword => try std.fmt.allocPrint(allocator, ":{s}", .{self.kw_val}),

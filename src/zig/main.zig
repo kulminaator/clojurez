@@ -68,6 +68,23 @@ fn fullyRealizeLazySeq(allocator: Allocator, val: Value) anyerror!Value {
 }
 
 pub fn main(init: std.process.Init.Minimal) anyerror!void {
+    // --parse-debug: handle BEFORE any VM initialization.
+    // Needs only a simple allocator — no GC, no namespaces, no library loading.
+    {
+        var args_it = std.process.Args.Iterator.initAllocator(init.args, std.heap.page_allocator) catch unreachable;
+        _ = args_it.next(); // skip program name
+        while (args_it.next()) |arg| {
+            if (std.mem.eql(u8, arg, "--parse-debug")) {
+                const filename = args_it.next() orelse {
+                    std.debug.print("Error: missing filename after --parse-debug\n", .{});
+                    std.process.exit(1);
+                };
+                _ = runParseDebug(std.heap.page_allocator, filename) catch {};
+                std.process.exit(0);
+            }
+        }
+    }
+
     // Memory trace: toggle with CLJVM_MEM_TRACE=1 (stderr) or CLJVM_MEM_TRACE=file:path
     // The tracing condition is evaluated once at startup. When disabled, log_fn is null
     // so every alloc/free has zero overhead beyond the wrapped allocator call.
@@ -147,25 +164,6 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // Load embedded Clojure string library into clojure.string namespace.
     // The defn wrappers shadow the raw builtins with docstrings.
     try loadStringLibrary(allocator, cs_env);
-
-    // Check for --parse-debug early (before loading regexp library)
-    // so it can diagnose regexp.clj syntax errors without crashing.
-    {
-        var early_it = try std.process.Args.Iterator.initAllocator(init.args, allocator);
-        defer early_it.deinit();
-        _ = early_it.next(); // skip program name
-        while (true) {
-            const arg = early_it.next() orelse break;
-            if (std.mem.eql(u8, arg, "--parse-debug")) {
-                const filename = early_it.next() orelse {
-                    try writeStderr("Error: missing filename after --parse-debug\n");
-                    std.process.exit(1);
-                };
-                try runParseDebug(allocator, filename);
-                std.process.exit(0);
-            }
-        }
-    }
 
     // Create zig.regexp virtual namespace — regexp engine in pure Zig.
     // Parent set to clojure.core so regexp code can use core functions.

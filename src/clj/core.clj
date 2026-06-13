@@ -334,10 +334,10 @@
   (let [form (nth bindings 0)
         tst (nth bindings 1)]
     (list 'let
-          (list '__temp tst)
-          (list 'if (list 'nil? '__temp)
+          (list form tst)
+          (list 'if (list 'nil? form)
                 nil
-                (concat (list 'let (list form '__temp)) body)))))
+                (cons 'do body)))))
 
 (defmacro if-let
   "bindings => binding-form test
@@ -348,10 +348,8 @@
   (let [form (nth bindings 0)
         tst (nth bindings 1)]
     (list 'let
-          (list '__temp tst)
-          (list 'if '__temp
-                (concat (list 'let (list form '__temp)) (list then))
-                else))))
+          (list form tst)
+          (list 'if form then else))))
 
 (defmacro when-let
   "bindings => binding-form test
@@ -361,9 +359,8 @@
   (let [form (nth bindings 0)
         tst (nth bindings 1)]
     (list 'let
-          (list '__when_let_temp tst)
-          (list 'when '__when_let_temp
-                (concat (list 'let (list form '__when_let_temp)) body)))))
+          (list form tst)
+          (list 'when form (cons 'do body)))))
 
 (defmacro time
   "Evaluates expr and prints the time it took. Returns the value of expr."
@@ -1001,6 +998,11 @@
   [x]
   (zig.core/string? x))
 
+(defn regex?
+  "Returns true if x is a regex pattern."
+  [x]
+  (zig.core/regex? x))
+
 (defn utf8-valid?
   "Returns true if the string is valid UTF-8."
   [s]
@@ -1507,4 +1509,28 @@
   "Returns a lazy sequence of the non-nil results of (f i x)."
   [f coll]
   (zig.core/keep-indexed f coll))
+
+;; ---- Regular expressions ----
+
+(defn re-pattern
+  "Returns a regex pattern from a string. If s is already a regex, returns it."
+  [s]
+  (zig.core/re-pattern s))
+
+(defn re-matches
+  "Returns the match, if any, of string to pattern using full string matching.
+   Returns the matched string or nil."
+  [re s]
+  (zig.core/re-matches re s))
+
+(defn re-find
+  "Returns the first match, if any, of string to pattern.
+   Returns the matched string or nil."
+  [re s]
+  (zig.core/re-find re s))
+
+(defn re-seq
+  "Returns a vector of successive matches of pattern in string."
+  [re s]
+  (zig.core/re-seq re s))
 
