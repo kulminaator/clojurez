@@ -655,6 +655,21 @@ pub const GC = struct {
     }
 };
 
+/// Check if GC sweeping is enabled via CLJVM_GC_SWEEP env var.
+/// Called exactly once at startup. Returns true (sweep enabled) by default.
+/// Set CLJVM_GC_SWEEP=0 or CLJVM_GC_SWEEP=false to disable sweeping.
+/// Disabling sweep is useful for debugging memory issues — unreachable
+/// objects accumulate instead of being freed, making it easier to
+/// identify what is (or isn't) being reached by the mark phase.
+pub fn isGcSweepEnabled(environ: std.process.Environ) bool {
+    var map = std.process.Environ.createMap(environ, std.heap.page_allocator) catch return true;
+    defer map.deinit();
+    const val = map.get("CLJVM_GC_SWEEP") orelse return true; // default: enabled
+    if (val.len == 0) return true;
+    if (std.mem.eql(u8, val, "0") or std.mem.eql(u8, val, "false")) return false;
+    return true;
+}
+
 // ============================================================
 // Test object type and scan function (for standalone testing)
 // ============================================================

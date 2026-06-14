@@ -277,8 +277,25 @@ Core functions (`inc`, `dec`, `into`, `even?`, `odd?`, `cons`, `update`, etc.) a
 Remember these important key principles:
 - All of our clojurez memory is managed by our mark and sweep GC.
 - If we build new structures we must assure GC can track these.
-- If we run into memory issues like corruption or confusing pointers - do not hesistate, just disable GC sweeping first via code and verify if the issue disappears. 
+- If we run into memory issues like corruption or confusing pointers - do not hesistate, just disable GC sweeping first via code and verify if the issue disappears.
 - If troubles do not disappear then the issue was not with GC sweeps.
+
+### GC Sweep Control
+
+The GC's sweep phase can be disabled at startup via the `CLJVM_GC_SWEEP` environment variable. Sweeping is enabled by default.
+
+**Disable GC sweeping:**
+```bash
+CLJVM_GC_SWEEP=0 ./zig-out/bin/clojurez -e '(+ 1 2 3)'
+```
+
+When sweeping is disabled, the GC still runs its mark phase (marking all reachable objects from roots) but never frees unreachable blocks. This is useful for debugging memory issues:
+
+- **Suspected GC bug**: If you see crashes or corrupted pointers, disable sweeping with `CLJVM_GC_SWEEP=0`. If the problem disappears, the issue was likely caused by the GC freeing objects that were still in use.
+- **Memory leak investigation**: With sweeping disabled, unreachable objects accumulate. By comparing GC stats before and after, you can identify which objects are (or aren't) being reached by the mark phase.
+- **Pointer debugging**: Objects that should be reachable but are being swept can be identified by running with sweep disabled and inspecting the mark phase output (enable with `CLJVM_GC_VERBOSE=1` or set `gc_instance.verbose = true` in code).
+
+To re-enable sweeping, simply omit the variable or set `CLJVM_GC_SWEEP=1`.
 
 ### Memory Tracing
  

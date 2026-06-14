@@ -99,7 +99,8 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     var gc_instance = gc_mod.GC.init(slab.allocator());
     defer gc_instance.deinit();
     // GC is the sole allocator — no arena in use.
-    gc_instance.setSweepEnabled(true);
+    // Sweep can be disabled at startup via CLJVM_GC_SWEEP=0 for debugging.
+    gc_instance.setSweepEnabled(gc_mod.isGcSweepEnabled(init.environ));
     gc_instance.setAutoGC(gc_scan.valueScanFn);
     gc_mod.current_gc = &gc_instance;
 
