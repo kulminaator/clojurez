@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-test-ubuntu:
+    uses: ./.github/workflows/build-test.yml
+    with:
+      os: ubuntu-latest
+      optimize: ReleaseSafe
+
+  build-test-macos:
+    uses: ./.github/workflows/build-test.yml
+    with:
+      os: macos-latest
+      optimize: ReleaseSafe
+
+  build-test-windows:
+    uses: ./.github/workflows/build-test.yml
+    with:
+      os: windows-latest
+      optimize: ReleaseSafe
+
+  release:
+    name: Create GitHub Release
+    needs: [build-test-ubuntu, build-test-macos, build-test-windows]
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            suffix: linux
+            ext: ''
+          - os: macos-latest
+            suffix: macos
+            ext: ''
+          - os: windows-latest
+            suffix: windows
+            ext: '.exe'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Build release binaries
+        run: zig build -Doptimize=ReleaseSafe
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          files: zig-out/bin/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
