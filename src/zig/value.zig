@@ -527,7 +527,13 @@ pub fn lazySeqValue(thunk: ?*LazySeqThunk) Self {
 pub fn consValue(allocator: Allocator, head: Self, tail: Self) anyerror!Self {
     const data = try allocator.create(ConsData);
     errdefer allocator.destroy(data);
-    data.* = .{ .head = head, .tail = tail, .allocator = allocator };
+    data.* = .{ .head = head, .tail = tail, .allocator = allocator, .ref_count = 1 };
+    return .{ .type = .cons, .cons_val = data };
+}
+
+/// Create a cons cell value that shares an existing ConsData (increments ref count).
+pub fn consValueShared(data: *ConsData) Self {
+    data.ref_count += 1;
     return .{ .type = .cons, .cons_val = data };
 }
 
@@ -628,10 +634,13 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
         .builtin_fn => {},
         .cons => {
             if (self.cons_val) |data| {
-                const a = data.allocator;
-                data.head.deinit(a);
-                data.tail.deinit(a);
-                a.destroy(data);
+                data.ref_count -= 1;
+                if (data.ref_count == 0) {
+                    const a = data.allocator;
+                    data.head.deinit(a);
+                    data.tail.deinit(a);
+                    a.destroy(data);
+                }
             }
         },
         .atom => {
@@ -741,11 +750,8 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
         },
         .cons => {
             if (self.cons_val) |data| {
-                return consValue(
-                    allocator,
-                    try data.head.clone(allocator),
-                    try data.tail.clone(allocator),
-                );
+                // Cons cells are immutable — share via reference counting, no deep clone needed.
+                return consValueShared(data);
             }
             return nilValue();
         },
@@ -1175,6 +1181,7 @@ pub const ConsData = struct {
     head: Self,
     tail: Self,
     allocator: Allocator,
+    ref_count: usize = 1, // reference counting for safe sharing of immutable cons cells
 };
 
 // Unit tests are in test_value.zig
