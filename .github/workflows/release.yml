@@ -53,6 +53,14 @@ jobs:
       - name: Build release binaries
         run: zig build -Doptimize=ReleaseSafe
 
+      - name: Rename binaries for platform
+        shell: bash
+        run: |
+          cd zig-out/bin
+          for f in *; do
+            mv "$f" "${f}-${{ matrix.suffix }}${{ matrix.ext }}"
+          done
+
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
@@ -61,3 +69,4 @@ jobs:
           files: zig-out/bin/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
