@@ -32,6 +32,7 @@ const test_eval_ns = @import("eval_ns.zig");
 const test_eval_thread = @import("eval_thread.zig");
 const test_repl = @import("repl.zig");
 const test_regexp = @import("namespaces/regexp/regexp.zig");
+const test_persistent_hash_map = @import("persistent_hash_map.zig");
 
 // Suppress unused import warnings
 comptime {
@@ -66,4 +67,5 @@ comptime {
     _ = test_eval_thread;
     _ = test_repl;
     _ = test_regexp;
+    _ = test_persistent_hash_map;
 }
