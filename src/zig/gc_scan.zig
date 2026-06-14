@@ -90,10 +90,16 @@ fn scanEnvEntries(bytes_ptr: *anyopaque, ctx: *gc.ScanContext, total_size: usize
     const keys_padded: usize = std.math.divCeil(usize, keys_raw, value_align) catch value_align * count;
 
     const bytes: [*]const u8 = @ptrCast(@alignCast(bytes_ptr));
+    const keys_ptr: [*]const []const u8 = @ptrCast(@alignCast(bytes));
     const values_ptr: [*]const Value = @ptrCast(@alignCast(bytes + keys_padded));
 
     var i: usize = 0;
     while (i < count) : (i += 1) {
+        // Mark the key string data (heap-allocated string pointed to by the slice)
+        if (keys_ptr[i].len > 0) {
+            ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(keys_ptr[i].ptr))), ctx);
+        }
+        // Mark the value's children
         scanValueChildrenDirect(&values_ptr[i], ctx);
     }
 }
@@ -222,12 +228,21 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
                 }
             }
             // Mark the fn's env entries buffer
-            if (val.fn_val.env.entries.entries.len > 0) {
-                ctx.gc.markRecursive(val.fn_val.env.entries.entries.bytes, ctx);
+            const fn_entries = val.fn_val.env.entries;
+            if (fn_entries.entries.len > 0) {
+                ctx.gc.markRecursive(fn_entries.entries.bytes, ctx);
             }
             // Also mark the env's index_header
-            if (val.fn_val.env.entries.index_header) |header| {
+            if (fn_entries.index_header) |header| {
                 ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(header)), ctx);
+            }
+            // Mark key strings and scan values in the fn's env entries
+            var fn_it = fn_entries.iterator();
+            while (fn_it.next()) |entry| {
+                if (entry.key_ptr.*.len > 0) {
+                    ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(entry.key_ptr.*.ptr))), ctx);
+                }
+                scanValueChildrenDirect(entry.value_ptr, ctx);
             }
         },
 
@@ -280,9 +295,12 @@ fn scanLazySeqThunk(thunk_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     if (entries.index_header) |header| {
         ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(header)), ctx);
     }
-    // Scan the thunk's env values (they contain child pointers)
+    // Scan the thunk's env values and mark key strings
     var it = entries.iterator();
     while (it.next()) |entry| {
+        if (entry.key_ptr.*.len > 0) {
+            ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(entry.key_ptr.*.ptr))), ctx);
+        }
         scanValueChildrenDirect(entry.value_ptr, ctx);
     }
     // Mark shared_coll (separate GC allocation for concrete collection in map).
@@ -331,9 +349,12 @@ fn scanFnData(fndata_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     if (fn_entries.index_header) |header| {
         ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(header)), ctx);
     }
-    // Scan the fn's env values (they contain child pointers)
+    // Scan the fn's env values and mark key strings
     var it = fn_entries.iterator();
     while (it.next()) |entry| {
+        if (entry.key_ptr.*.len > 0) {
+            ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(entry.key_ptr.*.ptr))), ctx);
+        }
         scanValueChildrenDirect(entry.value_ptr, ctx);
     }
 }

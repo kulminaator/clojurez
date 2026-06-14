@@ -10,6 +10,7 @@ const sequences = @import("namespaces/core/sequences.zig");
 const eval_thread = @import("eval_thread.zig");
 const eval_macro = @import("eval_macro.zig");
 const eval_ns = @import("eval_ns.zig");
+const protocols = @import("namespaces/core/protocols.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -515,6 +516,35 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
             // Bind in current namespace's env if namespace manager is available
             try bindInCurrentNamespace(env, macro_name.sym_val, persistent_macro);
             return try macro_name.clone(arena_alloc);
+        }
+
+        // defprotocol - define a protocol
+        // (defprotocol name docstring? options? (method [params]... docstring?)+)
+        if (std.mem.eql(u8, name, "defprotocol")) {
+            return try protocols.evalDefProtocol(allocator, arena_alloc, l, env, depth + 1);
+        }
+
+        // extend - add protocol implementations for a type
+        // (extend atype protocol mmap & more...)
+        // atype is unevaluated (a keyword like :string)
+        // protocol and mmap are evaluated
+        if (std.mem.eql(u8, name, "extend")) {
+            if (l.items.len < 4) return error.ArityError;
+            // Build evaluated arg list: atype (unevaluated), then evaluated pairs
+            var ext_args: list.List = .empty;
+            errdefer ext_args.deinit(arena_alloc);
+            try ext_args.append(arena_alloc, try l.items[1].clone(arena_alloc)); // atype (unevaluated)
+            var ei: usize = 2;
+            while (ei < l.items.len) : (ei += 1) {
+                try ext_args.append(arena_alloc, try evalRec(allocator, arena_alloc, l.items[ei], env, depth + 1));
+            }
+            return try protocols.evalExtend(allocator, arena_alloc, ext_args, env, depth + 1);
+        }
+
+        // extend-type - convenience form for extend with inline method definitions
+        // (extend-type atype protocol (method [params] body...)+ & more...)
+        if (std.mem.eql(u8, name, "extend-type")) {
+            return try protocols.evalExtendType(allocator, arena_alloc, l, env, depth + 1);
         }
 
         // do - evaluate a sequence of forms
@@ -1124,6 +1154,21 @@ pub fn call(allocator: Allocator, arena_alloc: Allocator, op: Value, args_list: 
             } else if (has_rest) {
                 // No extra args: bind empty list to rest parameter
                 try new_env.put(arity.rest_name.?, Value.listValue(.empty));
+            }
+
+            // Check for protocol dispatch marker
+            if (arity.body.items.len >= 1 and
+                arity.body.items[0].type == .symbol and
+                std.mem.eql(u8, arity.body.items[0].sym_val, "__protocol_dispatch__"))
+            {
+                // Protocol dispatch: call the dispatcher with all args
+                return try protocols.dispatchProtocolMethod(
+                    allocator,
+                    arena_alloc,
+                    args,
+                    &new_env,
+                    depth,
+                );
             }
 
             // Evaluate the function body

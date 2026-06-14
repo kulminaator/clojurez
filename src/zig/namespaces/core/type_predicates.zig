@@ -491,6 +491,40 @@ pub fn core_short(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return Value.intValue(@as(i64, @intCast(signed_b16)));
 }
 
+/// Returns a keyword representing the runtime type of x.
+/// Clojure: (type x)
+/// E.g. (type "hello") => :string, (type 42) => :integer, (type nil) => :nil
+pub fn core_type(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const type_name = switch (args.items[0].type) {
+        .nil => "nil",
+        .bool => "bool",
+        .integer => "integer",
+        .float => "float",
+        .bigint => "bigint",
+        .ratio => "ratio",
+        .decimal => "decimal",
+        .string => "string",
+        .regex => "regex",
+        .character => "character",
+        .symbol => "symbol",
+        .keyword => "keyword",
+        .list => "list",
+        .vector => "vector",
+        .map => "map",
+        .set => "set",
+        .queue => "queue",
+        .atom => "atom",
+        .function => "function",
+        .builtin_fn => "builtin_fn",
+        .lazy_seq => "lazy_seq",
+        .cons => "cons",
+        .reduced => "reduced",
+    };
+    return try Value.keywordValue(env_env.allocator, type_name);
+}
+
 pub fn registerTypePredicateFunctions(env: *Env) anyerror!void {
     try env.put("nil?", Value.builtinFnValue(core_nil_q));
     try env.put("number?", Value.builtinFnValue(core_number_q));
@@ -528,6 +562,8 @@ pub fn registerTypePredicateFunctions(env: *Env) anyerror!void {
     try env.put("short", Value.builtinFnValue(core_short));
     // Type constructors
     try env.put("keyword", Value.builtinFnValue(core_keyword));
+    // Type introspection
+    try env.put("type", Value.builtinFnValue(core_type));
 }
 
 // ===== Unit Tests =====
@@ -951,5 +987,66 @@ test "type_predicates::char_q: arity error" {
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{});
     try std.testing.expectError(error.ArityError, core_char_q(testSelf(), args, &a));
+}
+
+test "type_predicates::type: returns :string for string" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.stringValue(std.heap.page_allocator, "hello") catch unreachable });
+    var result = core_type(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .keyword);
+    try std.testing.expect(std.mem.eql(u8, result.kw_val, "string"));
+}
+
+test "type_predicates::type: returns :integer for integer" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.intValue(42) });
+    var result = core_type(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .keyword);
+    try std.testing.expect(std.mem.eql(u8, result.kw_val, "integer"));
+}
+
+test "type_predicates::type: returns :nil for nil" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.nilValue() });
+    var result = core_type(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .keyword);
+    try std.testing.expect(std.mem.eql(u8, result.kw_val, "nil"));
+}
+
+test "type_predicates::type: returns :bool for true" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{ Value.boolValue(true) });
+    var result = core_type(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .keyword);
+    try std.testing.expect(std.mem.eql(u8, result.kw_val, "bool"));
+}
+
+test "type_predicates::type: returns :map for map" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    var m: Value.Map = .empty;
+    const alloc = std.heap.page_allocator;
+    try m.append(alloc, .{ .key = Value.keywordValue(alloc, "a") catch unreachable, .value = Value.intValue(1) });
+    const map_val = Value.mapValue(m);
+    const args = makeArgs(&[_]Value{ map_val });
+    var result = core_type(testSelf(), args, &a) catch unreachable;
+    defer result.deinit(std.heap.page_allocator);
+    try std.testing.expect(result.type == .keyword);
+    try std.testing.expect(std.mem.eql(u8, result.kw_val, "map"));
+}
+
+test "type_predicates::type: arity error" {
+    var a = testEnv();
+    defer a.deinit(std.heap.page_allocator);
+    const args = makeArgs(&[_]Value{});
+    try std.testing.expectError(error.ArityError, core_type(testSelf(), args, &a));
 }
 

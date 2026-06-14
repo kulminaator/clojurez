@@ -1534,3 +1534,7 @@
   [re s]
   (zig.core/re-seq re s))
 
+
+;; ---- Protocol support ----
+;; extend-type is implemented as a special form in Zig (protocols.zig)
+;; quasiquote is now available in macro expansion (eval_helpers.zig)

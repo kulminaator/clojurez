@@ -5,6 +5,7 @@ const list = @import("../../list.zig");
 const vec = @import("../../vector.zig");
 const helpers = @import("helpers.zig");
 const eval_ns = @import("../../eval_ns.zig");
+const eval_macro = @import("../../eval_macro.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -221,6 +222,10 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
                 if (std.mem.eql(u8, first.sym_val, "quote")) {
                     if (form.list_val.items.len != 2) return error.ArityError;
                     return try form.list_val.items[1].clone(allocator);
+                }
+                if (std.mem.eql(u8, first.sym_val, "quasiquote")) {
+                    if (form.list_val.items.len != 2) return error.ArityError;
+                    return try eval_macro.unquoteProcess(allocator, allocator, form.list_val.items[1], env, 0);
                 }
                 if (std.mem.eql(u8, first.sym_val, "do")) {
                     var result: Value = Value.nilValue();
