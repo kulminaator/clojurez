@@ -58,7 +58,7 @@ jobs:
         run: |
           cd zig-out/bin
           for f in *; do
-            mv "$f" "${f}-${{ matrix.suffix }}${{ matrix.ext }}"
+            mv "$f" "${{ matrix.suffix }}-$f"
           done
 
       - name: Upload release assets
