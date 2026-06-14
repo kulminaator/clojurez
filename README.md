@@ -10,6 +10,10 @@ Build the project:
 zig build
 ```
 
+Alternatively, if you don't want to build from source - you can also download the latest release from Github 
+Link: [https://github.com/kulminaator/clojurez/releases](https://github.com/kulminaator/clojurez/releases)
+
+
 The binary is placed at `zig-out/bin/clojurez`.
 
 ### Evaluate an expression

@@ -28,6 +28,8 @@ jobs:
     name: Create GitHub Release
     needs: [build-test-ubuntu, build-test-macos, build-test-windows]
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
