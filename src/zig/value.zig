@@ -7,6 +7,8 @@ const vec = @import("vector.zig");
 const BI = @import("big_int.zig");
 const RatioMod = @import("ratio.zig");
 const BD = @import("big_decimal.zig");
+const phm = @import("persistent_hash_map.zig");
+const gc_mod = @import("gc.zig");
 
 pub const Type = enum {
     nil,
@@ -32,6 +34,7 @@ pub const Type = enum {
     cons,    // Cons cell: (head . tail) — tail is any sequence value
     atom,
     reduced, // Wrapper for early reduction termination
+    wrapped, // Raw pointer wrapper — stores a usize pointer in wrapped_val
 };
 
 pub const MapEntry = struct {
@@ -103,6 +106,7 @@ lazy_seq_val: LazySeq = .{},
 cons_val: ?*ConsData = null,
 atom_val: ?*AtomData = null,
 reduced_val: ?*Self = null, // wrapped value for early reduction
+wrapped_val: usize = 0,     // raw pointer stored as usize (for PersistentHashMap pointer values)
 
 // Single arity: one [params] + body forms + optional rest param
 pub const Arity = struct {
@@ -118,24 +122,44 @@ pub const FnData = struct {
     name: ?[]const u8 = null, // optional name for self-reference in recursive calls
 };
 
+/// Wrap a raw pointer into a Value for storage in PersistentHashMap.
+/// The wrapped Value is cheap to clone (just copies the usize).
+pub fn wrapPtr(T: type, ptr: T) Self {
+    return .{ .type = .wrapped, .wrapped_val = @intFromPtr(ptr) };
+}
+
+/// Unwrap a raw pointer from a Value. Caller must ensure type is .wrapped.
+pub fn unwrapPtr(T: type, self: Self) T {
+    return @ptrFromInt(self.wrapped_val);
+}
+
+/// Create a symbol Value for use as a PersistentHashMap key (non-owned string).
+fn symKey(s: []const u8) Self {
+    return .{ .type = .symbol, .sym_val = s };
+}
+
 /// Namespace manager: tracks all namespaces, current namespace, and aliases.
 /// Only the root env holds a non-null pointer to this.
+/// Uses PersistentHashMap (HAMT) for namespaces and aliases — immutable,
+/// structural sharing, no deep-clone headaches.
 pub const NamespaceManager = struct {
     allocator: Allocator,
-    /// Maps namespace name → Env pointer for that namespace
-    namespaces: std.StringArrayHashMapUnmanaged(*Env) = .empty,
+    /// Maps namespace name → Env pointer (stored as Value.wrapped)
+    namespaces: phm.PersistentHashMap = phm.PersistentHashMap.empty(),
     /// Current namespace name (owned string)
     current_ns: []const u8 = undefined,
-    /// Maps namespace name → (alias name → target namespace name)
-    aliases: std.StringArrayHashMapUnmanaged(NamespaceAliases) = .empty,
+    /// Maps composite key "ns_name/alias_name" → target namespace name (stored as Value.wrapped pointer to owned string)
+    aliases: phm.PersistentHashMap = phm.PersistentHashMap.empty(),
     /// Classpath directories for loading .clj files
     classpath: std.ArrayListUnmanaged([]const u8) = .empty,
-
-    const NamespaceAliases = std.StringArrayHashMapUnmanaged([]const u8);
 
     pub fn init(allocator: Allocator) anyerror!*NamespaceManager {
         const mgr = try allocator.create(NamespaceManager);
         mgr.* = .{ .allocator = allocator };
+        // Register with GC for proper scanning
+        if (gc_mod.current_gc) |gc_inst| {
+            gc_inst.setObjectType(@as(*anyopaque, @ptrCast(mgr)), gc_mod.GCObjectType.namespace_manager);
+        }
         // Heap-allocate initial namespace name so setCurrentNamespace/deinit can free it.
         mgr.current_ns = try allocator.dupe(u8, "user");
         // Create default "user" namespace
@@ -145,17 +169,15 @@ pub const NamespaceManager = struct {
 
     pub fn deinit(self: *NamespaceManager) void {
         const allocator = self.allocator;
-        // Free namespace envs (but don't deinit their entries — they're managed by caller)
-        self.namespaces.deinit(allocator);
-        // Free alias maps
-        var ait = self.aliases.iterator();
-        while (ait.next()) |entry| {
-            var nit = entry.value_ptr.iterator();
-            while (nit.next()) |nentry| {
-                allocator.free(nentry.key_ptr.*);
-            }
-            entry.value_ptr.deinit(allocator);
+        // Free Env structs pointed to by namespace entries (but not their entries — managed by caller)
+        var ns_it = self.namespaces.entryIterator();
+        while (ns_it.next()) |entry| {
+            const env_ptr: *Env = unwrapPtr(*Env, entry.val);
+            env_ptr.deinit(allocator);
+            allocator.destroy(env_ptr);
         }
+        self.namespaces.deinit(allocator);
+        // Aliases store target strings as Value.string — deinit handles freeing them
         self.aliases.deinit(allocator);
         // Free classpath entries
         for (self.classpath.items) |dir| {
@@ -169,19 +191,30 @@ pub const NamespaceManager = struct {
     /// Create a namespace (or return existing). Returns the namespace's Env.
     pub fn createNamespace(self: *NamespaceManager, name: []const u8) anyerror!*Env {
         // Check if already exists
-        if (self.namespaces.get(name)) |existing| return existing;
+        const key = symKey(name);
+        if (self.namespaces.find(key)) |existing_val| {
+            return unwrapPtr(*Env, existing_val);
+        }
 
         // Create new env with parent = null (will be set by caller to root env)
         const ns_env = try self.allocator.create(Env);
         ns_env.* = Env.init(self.allocator);
+        // Register with GC for proper scanning
+        if (gc_mod.current_gc) |gc_inst| {
+            gc_inst.setObjectType(@as(*anyopaque, @ptrCast(ns_env)), gc_mod.GCObjectType.env);
+        }
         // ns_env.parent is set by caller
-        try self.namespaces.put(self.allocator, try self.allocator.dupe(u8, name), ns_env);
+        const wrapped = wrapPtr(*Env, ns_env);
+        self.namespaces = try self.namespaces.mapAssoc(self.allocator, key, wrapped);
         return ns_env;
     }
 
     /// Get the Env for a namespace (must already exist).
     pub fn getNamespace(self: *NamespaceManager, name: []const u8) ?*Env {
-        return self.namespaces.get(name);
+        const key = symKey(name);
+        const found = self.namespaces.find(key);
+        if (found) |val| return unwrapPtr(*Env, val);
+        return null;
     }
 
     /// Set the current namespace.
@@ -197,23 +230,41 @@ pub const NamespaceManager = struct {
     }
 
     /// Register an alias in a namespace: alias_name → target_ns_name
+    /// Uses composite key "ns_name/alias_name" for flat storage.
+    /// Target stored as Value.string (owned by the PersistentHashMap).
     pub fn addAlias(self: *NamespaceManager, ns_name: []const u8, alias: []const u8, target: []const u8) anyerror!void {
-        var alias_map = self.aliases.getPtr(ns_name);
-        if (alias_map == null) {
-            // Create a new alias map and store it
-            var new_map: NamespaceAliases = .empty;
-            try new_map.put(self.allocator, try self.allocator.dupe(u8, alias), try self.allocator.dupe(u8, target));
-            try self.aliases.put(self.allocator, try self.allocator.dupe(u8, ns_name), new_map);
-            return;
-        }
-        const owned_target = try self.allocator.dupe(u8, target);
-        try alias_map.?.put(self.allocator, try self.allocator.dupe(u8, alias), owned_target);
+        // Build composite key: "ns_name/alias_name"
+        var key_buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer key_buf.deinit(self.allocator);
+        try key_buf.appendSlice(self.allocator, ns_name);
+        try key_buf.append(self.allocator, '/');
+        try key_buf.appendSlice(self.allocator, alias);
+        const composite_key = key_buf.items;
+
+        // Store target as Value.string (PersistentHashMap owns it)
+        const key = symKey(composite_key);
+        const target_val = try stringValue(self.allocator, target);
+        self.aliases = try self.aliases.mapAssoc(self.allocator, key, target_val);
     }
 
     /// Resolve an alias in a namespace. Returns the target namespace name, or null.
     pub fn resolveAlias(self: *const NamespaceManager, ns_name: []const u8, alias: []const u8) ?[]const u8 {
-        const alias_map = self.aliases.get(ns_name) orelse return null;
-        return alias_map.get(alias);
+        // Build composite key: "ns_name/alias_name" — use stack buffer
+        var key_buf: [256]u8 = undefined;
+        const ns_len = ns_name.len;
+        const alias_len = alias.len;
+        if (ns_len + 1 + alias_len >= key_buf.len) return null; // safety guard
+        @memcpy(key_buf[0..ns_len], ns_name);
+        key_buf[ns_len] = '/';
+        @memcpy(key_buf[ns_len + 1 .. ns_len + 1 + alias_len], alias);
+        const composite_key = key_buf[0 .. ns_len + 1 + alias_len];
+
+        const key = symKey(composite_key);
+        const found = self.aliases.find(key);
+        if (found) |val| {
+            if (val.type == .string) return val.str_val;
+        }
+        return null;
     }
 
     /// Add a directory to the classpath.
@@ -659,6 +710,7 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
                 allocator.destroy(data);
             }
         },
+        .wrapped => {}, // raw pointer, no ownership
     }
 }
 
@@ -790,6 +842,7 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
             return fnValueNamed(cloned_arities, try fnv.env.clone(allocator), fnv.is_macro, cloned_name);
         },
         .builtin_fn => return builtinFnValue(self.builtin_fn_val),
+        .wrapped => return .{ .type = .wrapped, .wrapped_val = self.wrapped_val }, // cheap pointer copy
         .reduced => {
             if (self.reduced_val) |data| {
                 return reducedValue(allocator, data.*);
@@ -905,6 +958,7 @@ pub fn equals(self: Self, other: Self) bool {
             }
             return false;
         },
+        .wrapped => return self.wrapped_val == other.wrapped_val,
         else => return false,
     }
 }
@@ -1029,6 +1083,7 @@ pub fn fmt(self: Self, allocator: Allocator) anyerror![]const u8 {
             }
             return allocator.dupe(u8, "#reduced(nil)");
         },
+        .wrapped => try std.fmt.allocPrint(allocator, "#ptr({X})", .{self.wrapped_val}),
     };
 }
 

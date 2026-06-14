@@ -3,6 +3,7 @@
 const std = @import("std");
 const gc = @import("gc.zig");
 const Value = @import("value.zig");
+const phm = @import("persistent_hash_map.zig");
 
 /// Main scan function — dispatched by the GC for each marked block.
 pub fn valueScanFn(obj: *anyopaque, ctx: *gc.ScanContext) void {
@@ -18,6 +19,11 @@ pub fn valueScanFn(obj: *anyopaque, ctx: *gc.ScanContext) void {
         .atom_data => scanAtomData(obj, ctx),
         .fn_data => scanFnData(obj, ctx),
         .cons_data => scanConsData(obj, ctx),
+        .hash_map_node => phm.scanHashMapNode(obj, ctx),
+        .hash_map_kvp_array => scanKvpArray(obj, ctx, header.size),
+        .hash_map_sub_nodes => scanSubNodesArray(obj, ctx, header.size),
+        .env => scanEnv(obj, ctx),
+        .namespace_manager => scanNamespaceManager(obj, ctx),
     }
 }
 
@@ -114,7 +120,7 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         .nil, .bool, .integer, .float, .bigint, .ratio, .decimal,
         .string, .regex, .character, .symbol, .keyword,
         .list, .vector, .map, .set, .queue, .function, .builtin_fn,
-        .lazy_seq, .cons, .atom, .reduced,
+        .lazy_seq, .cons, .atom, .reduced, .wrapped,
     };
     var is_valid = false;
     for (valid_types) |vt| {
@@ -123,7 +129,7 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
     if (!is_valid) return; // silently skip corrupt values
 
     switch (val.type) {
-        .nil, .bool, .integer, .float, .character, .builtin_fn => {},
+        .nil, .bool, .integer, .float, .character, .builtin_fn, .wrapped => {},
 
         .bigint => {
             if (val.bigint_val) |bi_ptr| {
@@ -364,4 +370,102 @@ fn scanConsData(data_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     const data: *Value.ConsData = @ptrCast(@alignCast(data_ptr));
     scanValueChildrenDirect(&data.head, ctx);
     scanValueChildrenDirect(&data.tail, ctx);
+}
+
+/// Scan Kvp array: array of { key: Value, val: Value }.
+/// Kvp is the same layout as two consecutive Values.
+fn scanKvpArray(items_ptr: *anyopaque, ctx: *gc.ScanContext, total_size: usize) void {
+    const kvp_size = @sizeOf(phm.Kvp);
+    const count = total_size / kvp_size;
+    const kvp_ptr: [*]phm.Kvp = @ptrCast(@alignCast(items_ptr));
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        scanValueChildrenDirect(&kvp_ptr[i].key, ctx);
+        scanValueChildrenDirect(&kvp_ptr[i].val, ctx);
+        // Mark wrapped pointers (e.g., *Env stored in NamespaceManager)
+        if (kvp_ptr[i].val.type == .wrapped and kvp_ptr[i].val.wrapped_val != 0) {
+            const ptr = @as(*anyopaque, @ptrFromInt(kvp_ptr[i].val.wrapped_val));
+            ctx.gc.markRecursive(ptr, ctx);
+        }
+    }
+}
+
+/// Scan sub-nodes array: array of ?*Node.
+fn scanSubNodesArray(items_ptr: *anyopaque, ctx: *gc.ScanContext, total_size: usize) void {
+    const ptr_size = @sizeOf(?*phm.Node);
+    const count = total_size / ptr_size;
+    const node_ptr: [*](?*phm.Node) = @ptrCast(@alignCast(items_ptr));
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        if (node_ptr[i]) |sub| {
+            ctx.gc.markRecursive(sub, ctx);
+        }
+    }
+}
+
+/// Scan an Env struct: entries (StringArrayHashMapUnmanaged), parent, ns_manager, referred_names.
+fn scanEnv(env_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const env: *Value.Env = @ptrCast(@alignCast(env_ptr));
+
+    // Mark the entries buffer (MultiArrayList bytes)
+    if (env.entries.entries.len > 0) {
+        const bytes_ptr = @as(*anyopaque, @ptrCast(env.entries.entries.bytes));
+        ctx.gc.markRecursive(bytes_ptr, ctx);
+    }
+    // Mark the index_header (separate allocation)
+    if (env.entries.index_header) |header| {
+        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(header)), ctx);
+    }
+    // Scan values and mark key strings in entries
+    var it = env.entries.iterator();
+    while (it.next()) |entry| {
+        if (entry.key_ptr.*.len > 0) {
+            ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(entry.key_ptr.*.ptr))), ctx);
+        }
+        scanValueChildrenDirect(entry.value_ptr, ctx);
+    }
+    // Mark referred_names list buffer and strings
+    if (env.referred_names.items.len > 0) {
+        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(env.referred_names.items.ptr)), ctx);
+        for (env.referred_names.items) |name| {
+            if (name.len > 0) {
+                ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(name.ptr))), ctx);
+            }
+        }
+    }
+    // Mark parent env pointer
+    if (env.parent) |parent| {
+        ctx.gc.markRecursive(parent, ctx);
+    }
+    // Mark ns_manager pointer
+    if (env.ns_manager) |ns_mgr| {
+        ctx.gc.markRecursive(ns_mgr, ctx);
+    }
+}
+
+/// Scan a NamespaceManager struct.
+fn scanNamespaceManager(ns_mgr_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const ns_mgr: *Value.NamespaceManager = @ptrCast(@alignCast(ns_mgr_ptr));
+
+    // Mark current_ns string
+    if (ns_mgr.current_ns.len > 0) {
+        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(ns_mgr.current_ns.ptr))), ctx);
+    }
+    // Mark namespaces PersistentHashMap root node
+    if (ns_mgr.namespaces.root) |root| {
+        ctx.gc.markRecursive(root, ctx);
+    }
+    // Mark aliases PersistentHashMap root node
+    if (ns_mgr.aliases.root) |root| {
+        ctx.gc.markRecursive(root, ctx);
+    }
+    // Mark classpath buffer and strings
+    if (ns_mgr.classpath.items.len > 0) {
+        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(ns_mgr.classpath.items.ptr)), ctx);
+        for (ns_mgr.classpath.items) |dir| {
+            if (dir.len > 0) {
+                ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(dir.ptr))), ctx);
+            }
+        }
+    }
 }

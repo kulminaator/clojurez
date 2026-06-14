@@ -45,6 +45,7 @@ pub fn typeKeyword(v: Value) []const u8 {
         .lazy_seq => "lazy_seq",
         .cons => "cons",
         .reduced => "reduced",
+        .wrapped => "wrapped",
     };
 }
 
@@ -515,14 +516,19 @@ pub fn evalExtend(
         // Find the namespace that contains this protocol
         var proto_ns_env: ?*Env = null;
         var proto_ns_name: []const u8 = undefined;
-        var it = ns_mgr.namespaces.iterator();
+        var it = ns_mgr.namespaces.entryIterator();
         while (it.next()) |ns_entry| {
-            const ns_env_ptr = ns_entry.value_ptr.*;
-            if (ns_env_ptr.get(proto_name)) |found| {
-                _ = found;
-                proto_ns_env = ns_env_ptr;
-                proto_ns_name = ns_entry.key_ptr.*;
-                break;
+            // ns_entry.key is Value.symbol (namespace name), ns_entry.val is Value.wrapped (*Env)
+            if (ns_entry.val.type == .wrapped) {
+                const ns_env_ptr: *Env = Value.unwrapPtr(*Env, ns_entry.val);
+                if (ns_env_ptr.get(proto_name)) |found| {
+                    _ = found;
+                    proto_ns_env = ns_env_ptr;
+                    if (ns_entry.key.type == .symbol) {
+                        proto_ns_name = ns_entry.key.sym_val;
+                    }
+                    break;
+                }
             }
         }
         if (proto_ns_env == null) {

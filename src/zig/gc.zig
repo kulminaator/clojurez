@@ -38,12 +38,17 @@ pub const GCObjectType = enum(u8) {
     value_array = 1, // array of Value objects (list items, vector items, etc.)
     map_entries = 2, // array of MapEntry { key: Value, value: Value }
     set_items = 3,   // array of Value objects (set items)
+    env = 13,       // Env struct (namespace environment)
+    namespace_manager = 14, // NamespaceManager struct
     queue_items = 4, // array of Value objects (queue items)
     env_entries = 5, // array of StringArrayHashMap Entry{ key: []u8, value: Value }
     lazy_seq_thunk = 6, // LazySeqThunk { params: list.List, body: list.List, env: Env }
     atom_data = 7,  // AtomData { value: Value, ref_count: usize }
     fn_data = 8,    // FnData { arities: ArrayListUnmanaged(Arity), env: Env }
     cons_data = 9,  // ConsData { head: Value, tail: Value, allocator: Allocator }
+    hash_map_node = 10, // PersistentHashMap HAMT node (Node union)
+    hash_map_kvp_array = 11, // array of Kvp { key: Value, val: Value } in HAMT
+    hash_map_sub_nodes = 12, // array of ?*Node (sub-node pointers in HAMT)
 };
 
 const Header = struct {

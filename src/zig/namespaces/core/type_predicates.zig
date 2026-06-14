@@ -521,6 +521,7 @@ pub fn core_type(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
         .lazy_seq => "lazy_seq",
         .cons => "cons",
         .reduced => "reduced",
+        .wrapped => "wrapped",
     };
     return try Value.keywordValue(env_env.allocator, type_name);
 }

@@ -272,6 +272,27 @@ Core functions (`inc`, `dec`, `into`, `even?`, `odd?`, `cons`, `update`, etc.) a
 - Therefor, if we need to add something in front of a sequence or after a list - we do not clone the list, it's perfectly safe to make a new "shallow object" that just says (here in the beginning we have this new immutable thing and in the tail we have a reference to that immutable list that we had before). Avoid unnecessary cloning and duplication of data.
 - If you need to use tree like structures, branch agrssively (4 or 8 leaves per node), don't make just binary trees (to make lookups cheaper).
 
+### PersistentHashMap (`src/zig/persistent_hash_map.zig`)
+Our map implementation uses a Hash Array Mapped Trie (HAMT), the same algorithm as Clojure's `PersistentHashMap`.
+It is a 32-way branching trie where each level consumes 5 bits of the key's hash code, giving O(log₃₂ n) lookups, inserts, and deletes.
+Three node types handle different densities: `BitmapIndexedNode` (sparse, ≤16 entries with a bitmap), `ArrayNode` (dense, fixed 32 slots),
+and `HashCollisionNode` (all keys share the same full hash). All nodes are immutable — `assoc` and `without` return new maps
+via path copying, sharing unchanged subtrees with the original. Nil keys are handled separately via a `has_null` flag.
+The `valueHash(Value) i32` function computes hash codes for all Clojure value types, matching Clojure's `hasheq` semantics.
+This eliminates the deep-clone headaches of the previous `ArrayListUnmanaged(MapEntry)` approach: mutations are purely functional
+(`new_map = old_map.assoc(key, val)`) with no in-place modification, no clone-vs-deep-clone decisions, and structural sharing
+for memory efficiency. The GC tracks nodes via `scanHashMapNode` for proper mark-and-sweep collection.
+
+### PersistentStringHashMap (`src/zig/persistent_string_hash_map.zig`)
+A string-keyed variant of PersistentHashMap for VM infrastructure that works with `[]const u8` keys instead of `Value` keys.
+It wraps PersistentHashMap internally by converting string keys to `Value.symbol`, reusing all proven HAMT logic without duplication.
+Provides `StringHashMap` (for `[]u8 → Value` maps like `Env.entries`) and `PersistentStringHashMap(T)` (generic, for any value type).
+Pointer types use `IdentityWrap(T)` to provide no-op `clone`/`deinit` methods. This is the target replacement for all
+`StringArrayHashMapUnmanaged` usages across the codebase: `Env.entries`, `NamespaceManager.namespaces`, `NamespaceManager.aliases`,
+and `NamespaceAliases`. Migration changes the pattern from `map.put(key, val)` (in-place mutation) to
+`map = try map.assoc(allocator, key, val)` (returns new immutable map), eliminating allocator corruption bugs
+and the clone-vs-deep-clone decisions that plagued the previous HashMap-based implementations.
+
 ### Memory management & Garbage collector (GC)
 
 Remember these important key principles:

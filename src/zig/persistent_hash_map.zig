@@ -22,6 +22,56 @@ const gc = @import("gc.zig");
 const list = @import("list.zig");
 
 // ============================================================
+// GC-aware allocation helpers
+// ============================================================
+
+/// Allocate a Node and register it with the GC as hash_map_node.
+fn newNode(allocator: Allocator, data: Node) *Node {
+    const node = allocator.create(Node) catch @panic("OOM");
+    node.* = data;
+    if (gc.current_gc) |gc_inst| {
+        gc_inst.setObjectType(@as(*anyopaque, @ptrCast(node)), gc.GCObjectType.hash_map_node);
+    }
+    return node;
+}
+
+/// Allocate a Kvp array and register it with the GC.
+fn newKvpArray(allocator: Allocator, items: []const Kvp) []Kvp {
+    const arr = allocator.dupe(Kvp, items) catch @panic("OOM");
+    if (gc.current_gc) |gc_inst| {
+        gc_inst.setObjectType(@as(*anyopaque, @ptrCast(arr.ptr)), gc.GCObjectType.hash_map_kvp_array);
+    }
+    return arr;
+}
+
+/// Allocate a sub_nodes array and register it with the GC.
+fn newSubNodesArray(allocator: Allocator, items: []const (?*Node)) []?*Node {
+    const arr = allocator.dupe(?*Node, items) catch @panic("OOM");
+    if (gc.current_gc) |gc_inst| {
+        gc_inst.setObjectType(@as(*anyopaque, @ptrCast(arr.ptr)), gc.GCObjectType.hash_map_sub_nodes);
+    }
+    return arr;
+}
+
+/// Allocate a Kvp array of given length and register it with the GC.
+fn newKvpArrayLen(allocator: Allocator, len: usize) []Kvp {
+    const arr = allocator.alloc(Kvp, len) catch @panic("OOM");
+    if (gc.current_gc) |gc_inst| {
+        gc_inst.setObjectType(@as(*anyopaque, @ptrCast(arr.ptr)), gc.GCObjectType.hash_map_kvp_array);
+    }
+    return arr;
+}
+
+/// Allocate a sub_nodes array of given length and register it with the GC.
+fn newSubNodesArrayLen(allocator: Allocator, len: usize) []?*Node {
+    const arr = allocator.alloc(?*Node, len) catch @panic("OOM");
+    if (gc.current_gc) |gc_inst| {
+        gc_inst.setObjectType(@as(*anyopaque, @ptrCast(arr.ptr)), gc.GCObjectType.hash_map_sub_nodes);
+    }
+    return arr;
+}
+
+// ============================================================
 // Hash code computation for Value types
 // Mirrors Clojure's hasheq behavior
 // ============================================================
@@ -62,6 +112,7 @@ pub fn valueHash(val: Value) i32 {
         .lazy_seq => hashIdentity(),
         .cons => hashIdentity(),
         .atom => hashIdentity(),
+        .wrapped => @as(i32, @intCast(val.wrapped_val)),
         .reduced => {
             if (val.reduced_val) |data| return valueHash(data.*);
             return 0;
@@ -84,7 +135,8 @@ fn hashFloat(v: f64) i32 {
 fn hashString(s: []const u8) i32 {
     var h: i32 = 0;
     for (s) |c| {
-        h = 31 * h + @as(i32, @intCast(c));
+        const result = @mulWithOverflow(h, 31);
+        h = result[0] + @as(i32, @intCast(c));
     }
     return h ^ @as(i32, @intCast(s.len));
 }
@@ -138,7 +190,8 @@ const SHIFT_BITS: u5 = 5;
 /// Extract 5-bit chunk of hash at given shift level.
 fn mask(hash: i32, shift: u5) usize {
     const uhash: u32 = @bitCast(hash);
-    return @as(usize, @intCast((uhash >> shift) & 0x1F));
+    const result = @as(usize, @intCast((uhash >> shift) & 0x1F));
+    return result;
 }
 
 /// Compute bitmap bit position from hash and shift.
@@ -195,6 +248,8 @@ const BitmapIndexedNode = struct {
 
     pub fn findLeaf(self: *const BitmapIndexedNode, shift: u5, hash: i32, key: Value) ?Value {
         const bit = bitpos(hash, shift);
+        if (key.type == .symbol) {
+        }
         if ((self.bitmap & bit) == 0) return null;
 
         const idx = indexBelow(self.bitmap, bit);
@@ -204,6 +259,8 @@ const BitmapIndexedNode = struct {
             return nodeFindLeaf(self.sub_nodes[idx].?, shift + SHIFT_BITS, hash, key);
         }
         if (kvp.key.equals(key)) return kvp.val;
+        if (key.type == .symbol) {
+        }
         return null;
     }
 
@@ -307,15 +364,23 @@ const BitmapIndexedNode = struct {
     }
 
     fn cloneNode(self: *const BitmapIndexedNode, allocator: Allocator) *Node {
-        const node = allocator.create(Node) catch @panic("OOM");
-        node.* = Node{
+        // Deep clone to avoid sharing Value pointers with the original.
+        var new_kvs = newKvpArrayLen(allocator, self.array.len);
+        var i: usize = 0;
+        while (i < self.array.len) : (i += 1) {
+            new_kvs[i] = .{
+                .key = self.array[i].key.clone(allocator) catch @panic("OOM"),
+                .val = self.array[i].val.clone(allocator) catch @panic("OOM"),
+            };
+        }
+        const new_subs = newSubNodesArray(allocator, self.sub_nodes);
+        return newNode(allocator, Node{
             .bitmap_indexed = BitmapIndexedNode{
                 .bitmap = self.bitmap,
-                .array = self.array,
-                .sub_nodes = self.sub_nodes,
+                .array = new_kvs,
+                .sub_nodes = new_subs,
             },
-        };
-        return node;
+        });
     }
 
     fn deinitNode(self: *BitmapIndexedNode, allocator: Allocator) void {
@@ -409,23 +474,21 @@ const ArrayNode = struct {
     }
 
     fn cloneNode(self: *const ArrayNode, allocator: Allocator) *Node {
-        const node = allocator.create(Node) catch @panic("OOM");
-        node.* = Node{
+        // Struct copy shares child node pointers (structural sharing for sub-nodes).
+        // This is safe because ArrayNode.deinitNode does NOT deinit children.
+        return newNode(allocator, Node{
             .array = ArrayNode{
                 .count = self.count,
                 .nodes = self.nodes,
             },
-        };
-        return node;
+        });
     }
 
     fn deinitNode(self: *ArrayNode, allocator: Allocator) void {
-        var i: usize = 0;
-        while (i < 32) : (i += 1) {
-            if (self.nodes[i]) |node| {
-                deinitNodePtr(node, allocator);
-            }
-        }
+        _ = self;
+        _ = allocator;
+        // Don't deinit children — they're shared across nodes via path copying.
+        // The GC tracks all nodes and frees them when unreachable.
     }
 };
 
@@ -496,14 +559,21 @@ const HashCollisionNode = struct {
     }
 
     fn cloneNode(self: *const HashCollisionNode, allocator: Allocator) *Node {
-        const node = allocator.create(Node) catch @panic("OOM");
-        node.* = Node{
+        // Deep clone kvs to avoid sharing Value pointers.
+        var new_kvs = newKvpArrayLen(allocator, self.kvs.len);
+        var i: usize = 0;
+        while (i < self.kvs.len) : (i += 1) {
+            new_kvs[i] = .{
+                .key = self.kvs[i].key.clone(allocator) catch @panic("OOM"),
+                .val = self.kvs[i].val.clone(allocator) catch @panic("OOM"),
+            };
+        }
+        return newNode(allocator, Node{
             .hash_collision = HashCollisionNode{
                 .hash = self.hash,
-                .kvs = self.kvs,
+                .kvs = new_kvs,
             },
-        };
-        return node;
+        });
     }
 
     fn deinitNode(self: *HashCollisionNode, allocator: Allocator) void {
@@ -629,7 +699,8 @@ pub const PersistentHashMap = struct {
         }
         if (self.root == null) return null;
         const h = valueHash(key);
-        return nodeFindLeaf(self.root.?, 0, h, key);
+        const result = nodeFindLeaf(self.root.?, 0, h, key);
+        return result;
     }
 
     /// Look up a value by key, returning default if not found.
@@ -803,7 +874,7 @@ pub const PersistentHashMap = struct {
         }
     };
 
-    fn entryIterator(self: PersistentHashMap) EntryIterator {
+    pub fn entryIterator(self: PersistentHashMap) EntryIterator {
         return EntryIterator{ .map = self };
     }
 };
@@ -908,15 +979,13 @@ fn createBitmapLeaf(allocator: Allocator, shift: u5, hash: i32, key: Value, val:
     var kvs: [1]Kvp = .{ .{ .key = cloned_key, .val = cloned_val } };
     var subs: [1]?*Node = .{null};
 
-    const node = allocator.create(Node) catch @panic("OOM");
-    node.* = Node{
+    return newNode(allocator, Node{
         .bitmap_indexed = BitmapIndexedNode{
             .bitmap = bit,
-            .array = try allocator.dupe(Kvp, &kvs),
-            .sub_nodes = try allocator.dupe(?*Node, &subs),
+            .array = newKvpArray(allocator, &kvs),
+            .sub_nodes = newSubNodesArray(allocator, &subs),
         },
-    };
-    return node;
+    });
 }
 
 /// Create a sub-node to handle two keys that collide at this level.
@@ -928,14 +997,12 @@ fn createSubNode(allocator: Allocator, shift: u5, key1: Value, val1: Value, hash
             .{ .key = try key1.clone(allocator), .val = try val1.clone(allocator) },
             .{ .key = try key2.clone(allocator), .val = try val2.clone(allocator) },
         };
-        const node = allocator.create(Node) catch @panic("OOM");
-        node.* = Node{
+        return newNode(allocator, Node{
             .hash_collision = HashCollisionNode{
                 .hash = hash1,
-                .kvs = try allocator.dupe(Kvp, &kvs),
+                .kvs = newKvpArray(allocator, &kvs),
             },
-        };
-        return node;
+        });
     }
 
     var bitmap: u32 = 0;
@@ -958,99 +1025,125 @@ fn createSubNode(allocator: Allocator, shift: u5, key1: Value, val1: Value, hash
         kvs[1] = .{ .key = try key1.clone(allocator), .val = try val1.clone(allocator) };
     }
 
-    const node = allocator.create(Node) catch @panic("OOM");
-    node.* = Node{
+    return newNode(allocator, Node{
         .bitmap_indexed = BitmapIndexedNode{
             .bitmap = bitmap,
-            .array = try allocator.dupe(Kvp, &kvs),
-            .sub_nodes = try allocator.dupe(?*Node, &subs),
+            .array = newKvpArray(allocator, &kvs),
+            .sub_nodes = newSubNodesArray(allocator, &subs),
         },
-    };
-    return node;
+    });
 }
 
 /// Create a new BitmapIndexedNode with a value updated at index.
 fn createBitmapWithValue(allocator: Allocator, src: *const BitmapIndexedNode, idx: usize, new_val: Value) anyerror!*Node {
-    var new_kvs = try allocator.dupe(Kvp, src.array);
-    errdefer allocator.free(new_kvs);
+    // Deep clone all Kvp entries to avoid sharing Value pointers with src.
+    const new_len = src.array.len;
+    var new_kvs = newKvpArrayLen(allocator, new_len);
+    errdefer { for (new_kvs) |*kvp| { kvp.key.deinit(allocator); kvp.val.deinit(allocator); } allocator.free(new_kvs); }
+    _ = newSubNodesArray(allocator, src.sub_nodes); // register with GC
 
-    new_kvs[idx].val.deinit(allocator);
-    new_kvs[idx].val = try new_val.clone(allocator);
+    var i: usize = 0;
+    while (i < new_len) : (i += 1) {
+        if (i == idx) {
+            new_kvs[i] = .{
+                .key = try src.array[i].key.clone(allocator),
+                .val = try new_val.clone(allocator),
+            };
+        } else {
+            new_kvs[i] = .{
+                .key = try src.array[i].key.clone(allocator),
+                .val = try src.array[i].val.clone(allocator),
+            };
+        }
+    }
 
-    const node = allocator.create(Node) catch @panic("OOM");
-    node.* = Node{
+    return newNode(allocator, Node{
         .bitmap_indexed = BitmapIndexedNode{
             .bitmap = src.bitmap,
             .array = new_kvs,
-            .sub_nodes = try allocator.dupe(?*Node, src.sub_nodes),
+            .sub_nodes = newSubNodesArray(allocator, src.sub_nodes),
         },
-    };
-    return node;
+    });
 }
 
 /// Create a new BitmapIndexedNode with a sub-node at index.
 fn createBitmapWithSub(allocator: Allocator, src: *const BitmapIndexedNode, idx: usize, new_sub: *Node) anyerror!*Node {
-    var new_kvs = try allocator.dupe(Kvp, src.array);
+    // Deep clone all Kvp entries (shallow dupe would share Value pointers,
+    // causing double-free when the old node is deinit'd).
+    const new_len = src.array.len;
+    var new_kvs = newKvpArrayLen(allocator, new_len);
     errdefer allocator.free(new_kvs);
-
-    new_kvs[idx].key.deinit(allocator);
-    new_kvs[idx].val.deinit(allocator);
-    new_kvs[idx] = .{ .key = Value.nilValue(), .val = Value.nilValue() };
-
-    var new_subs = try allocator.dupe(?*Node, src.sub_nodes);
+    var new_subs = newSubNodesArrayLen(allocator, new_len);
     errdefer allocator.free(new_subs);
-    if (src.sub_nodes[idx]) |old_sub| deinitNodePtr(old_sub, allocator);
-    new_subs[idx] = new_sub;
 
-    const node = allocator.create(Node) catch @panic("OOM");
-    node.* = Node{
+    var i: usize = 0;
+    while (i < new_len) : (i += 1) {
+        if (i == idx) {
+            // Replace with nil key (marks this slot as holding a sub-node)
+            new_kvs[i] = .{ .key = Value.nilValue(), .val = Value.nilValue() };
+            new_subs[i] = new_sub;
+            if (src.sub_nodes[i]) |old_sub| deinitNodePtr(old_sub, allocator);
+        } else {
+            // Deep clone the Kvp
+            new_kvs[i] = .{
+                .key = try src.array[i].key.clone(allocator),
+                .val = try src.array[i].val.clone(allocator),
+            };
+            new_subs[i] = src.sub_nodes[i];
+        }
+    }
+
+    return newNode(allocator, Node{
         .bitmap_indexed = BitmapIndexedNode{
             .bitmap = src.bitmap,
             .array = new_kvs,
             .sub_nodes = new_subs,
         },
-    };
-    return node;
+    });
 }
 
 /// Create a new BitmapIndexedNode with a leaf inserted at index.
 fn createBitmapWithLeaf(allocator: Allocator, src: *const BitmapIndexedNode, insert_idx: usize, bit: u32, key: Value, val: Value) anyerror!*Node {
     const new_len = src.array.len + 1;
-    var new_kvs = try allocator.alloc(Kvp, new_len);
-    errdefer allocator.free(new_kvs);
-    var new_subs = try allocator.alloc(?*Node, new_len);
+    var new_kvs = newKvpArrayLen(allocator, new_len);
+    errdefer { for (new_kvs) |*kvp| { kvp.key.deinit(allocator); kvp.val.deinit(allocator); } allocator.free(new_kvs); }
+    var new_subs = newSubNodesArrayLen(allocator, new_len);
     errdefer allocator.free(new_subs);
 
     var i: usize = 0;
     while (i < insert_idx) : (i += 1) {
-        new_kvs[i] = src.array[i];
+        new_kvs[i] = .{
+            .key = try src.array[i].key.clone(allocator),
+            .val = try src.array[i].val.clone(allocator),
+        };
         new_subs[i] = src.sub_nodes[i];
     }
     new_kvs[insert_idx] = .{ .key = try key.clone(allocator), .val = try val.clone(allocator) };
     new_subs[insert_idx] = null;
     var j: usize = insert_idx + 1;
     while (i < src.array.len) : ({ i += 1; j += 1; }) {
-        new_kvs[j] = src.array[i];
+        new_kvs[j] = .{
+            .key = try src.array[i].key.clone(allocator),
+            .val = try src.array[i].val.clone(allocator),
+        };
         new_subs[j] = src.sub_nodes[i];
     }
 
-    const node = allocator.create(Node) catch @panic("OOM");
-    node.* = Node{
+    return newNode(allocator, Node{
         .bitmap_indexed = BitmapIndexedNode{
             .bitmap = src.bitmap | bit,
             .array = new_kvs,
             .sub_nodes = new_subs,
         },
-    };
-    return node;
+    });
 }
 
 /// Create a new BitmapIndexedNode with an entry removed at index.
 fn createBitmapWithout(allocator: Allocator, src: *const BitmapIndexedNode, remove_idx: usize) anyerror!*Node {
     const new_len = src.array.len - 1;
-    var new_kvs = try allocator.alloc(Kvp, new_len);
-    errdefer allocator.free(new_kvs);
-    var new_subs = try allocator.alloc(?*Node, new_len);
+    var new_kvs = newKvpArrayLen(allocator, new_len);
+    errdefer { for (new_kvs) |*kvp| { kvp.key.deinit(allocator); kvp.val.deinit(allocator); } allocator.free(new_kvs); }
+    var new_subs = newSubNodesArrayLen(allocator, new_len);
     errdefer allocator.free(new_subs);
 
     var i: usize = 0;
@@ -1062,7 +1155,12 @@ fn createBitmapWithout(allocator: Allocator, src: *const BitmapIndexedNode, remo
             if (src.sub_nodes[i]) |sub| deinitNodePtr(sub, allocator);
             continue;
         }
-        new_kvs[j] = src.array[i];
+        // Deep clone Kvp to avoid sharing Value pointers with src.
+        new_kvs[j] = .{
+            .key = try src.array[i].key.clone(allocator),
+            .val = try src.array[i].val.clone(allocator),
+        };
+        // Sub-node pointers are shared (both old and new trees reference the same immutable sub-nodes).
         new_subs[j] = src.sub_nodes[i];
         j += 1;
     }
@@ -1081,27 +1179,23 @@ fn createBitmapWithout(allocator: Allocator, src: *const BitmapIndexedNode, remo
         }
     }
 
-    const node = allocator.create(Node) catch @panic("OOM");
-    node.* = Node{
+    return newNode(allocator, Node{
         .bitmap_indexed = BitmapIndexedNode{
             .bitmap = new_bitmap,
             .array = new_kvs,
             .sub_nodes = new_subs,
         },
-    };
-    return node;
+    });
 }
 
 /// Create an ArrayNode from a pointer to a 32-element array.
 fn createArrayNode(allocator: Allocator, count: usize, nodes: *[32]?*Node) *Node {
-    const node = allocator.create(Node) catch @panic("OOM");
-    node.* = Node{
+    return newNode(allocator, Node{
         .array = ArrayNode{
             .count = count,
             .nodes = nodes.*,
         },
-    };
-    return node;
+    });
 }
 
 /// Create a BitmapIndexedNode wrapping a HashCollisionNode as a sub-node.
@@ -1109,24 +1203,21 @@ fn createBitmapWithCollisionSub(allocator: Allocator, bit: u32, collision: *cons
     var kvs: [1]Kvp = .{ .{ .key = Value.nilValue(), .val = Value.nilValue() } };
     var subs: [1]?*Node = undefined;
 
-    const coll_node = allocator.create(Node) catch @panic("OOM");
-    coll_node.* = Node{
+    const coll_node = newNode(allocator, Node{
         .hash_collision = HashCollisionNode{
             .hash = collision.hash,
             .kvs = collision.kvs,
         },
-    };
+    });
     subs[0] = coll_node;
 
-    const node = allocator.create(Node) catch @panic("OOM");
-    node.* = Node{
+    return newNode(allocator, Node{
         .bitmap_indexed = BitmapIndexedNode{
             .bitmap = bit,
-            .array = allocator.dupe(Kvp, &kvs) catch @panic("OOM"),
-            .sub_nodes = allocator.dupe(?*Node, &subs) catch @panic("OOM"),
+            .array = newKvpArray(allocator, &kvs),
+            .sub_nodes = newSubNodesArray(allocator, &subs),
         },
-    };
-    return node;
+    });
 }
 
 /// Upgrade a BitmapIndexedNode to ArrayNode and add a new entry.
@@ -1258,62 +1349,79 @@ fn packToBitmap(allocator: Allocator, src: *const ArrayNode, empty_idx: usize) a
         }
     }
 
-    const node = allocator.create(Node) catch @panic("OOM");
-    node.* = Node{
+    // Register arrays with GC before transferring ownership
+    if (gc.current_gc) |gc_inst| {
+        gc_inst.setObjectType(@as(*anyopaque, @ptrCast(kvs.items.ptr)), gc.GCObjectType.hash_map_kvp_array);
+        gc_inst.setObjectType(@as(*anyopaque, @ptrCast(subs.items.ptr)), gc.GCObjectType.hash_map_sub_nodes);
+    }
+
+    return newNode(allocator, Node{
         .bitmap_indexed = BitmapIndexedNode{
             .bitmap = bitmap,
             .array = kvs.items,
             .sub_nodes = subs.items,
         },
-    };
-    return node;
+    });
 }
 
 /// Create a HashCollisionNode with a value updated at index.
 fn createCollisionNodeWithValue(allocator: Allocator, src: *const HashCollisionNode, idx: usize, new_val: Value) anyerror!*Node {
-    var new_kvs = try allocator.dupe(Kvp, src.kvs);
-    errdefer allocator.free(new_kvs);
+    // Deep clone all Kvp entries to avoid sharing Value pointers with src.
+    const new_len = src.kvs.len;
+    var new_kvs = newKvpArrayLen(allocator, new_len);
+    errdefer { for (new_kvs) |*kvp| { kvp.key.deinit(allocator); kvp.val.deinit(allocator); } allocator.free(new_kvs); }
 
-    new_kvs[idx].val.deinit(allocator);
-    new_kvs[idx].val = try new_val.clone(allocator);
+    var i: usize = 0;
+    while (i < new_len) : (i += 1) {
+        if (i == idx) {
+            new_kvs[i] = .{
+                .key = try src.kvs[i].key.clone(allocator),
+                .val = try new_val.clone(allocator),
+            };
+        } else {
+            new_kvs[i] = .{
+                .key = try src.kvs[i].key.clone(allocator),
+                .val = try src.kvs[i].val.clone(allocator),
+            };
+        }
+    }
 
-    const node = allocator.create(Node) catch @panic("OOM");
-    node.* = Node{
+    return newNode(allocator, Node{
         .hash_collision = HashCollisionNode{
             .hash = src.hash,
             .kvs = new_kvs,
         },
-    };
-    return node;
+    });
 }
 
 /// Create a HashCollisionNode with a new entry appended.
 fn createCollisionNodeAppend(allocator: Allocator, src: *const HashCollisionNode, key: Value, val: Value) anyerror!*Node {
     const new_len = src.kvs.len + 1;
-    var new_kvs = try allocator.alloc(Kvp, new_len);
-    errdefer allocator.free(new_kvs);
+    var new_kvs = newKvpArrayLen(allocator, new_len);
+    errdefer { for (new_kvs) |*kvp| { kvp.key.deinit(allocator); kvp.val.deinit(allocator); } allocator.free(new_kvs); }
 
     var i: usize = 0;
     while (i < src.kvs.len) : (i += 1) {
-        new_kvs[i] = src.kvs[i];
+        new_kvs[i] = .{
+            .key = try src.kvs[i].key.clone(allocator),
+            .val = try src.kvs[i].val.clone(allocator),
+        };
     }
     new_kvs[new_len - 1] = .{ .key = try key.clone(allocator), .val = try val.clone(allocator) };
 
-    const node = allocator.create(Node) catch @panic("OOM");
-    node.* = Node{
+    return newNode(allocator, Node{
         .hash_collision = HashCollisionNode{
             .hash = src.hash,
             .kvs = new_kvs,
         },
-    };
-    return node;
+    });
 }
 
 /// Create a HashCollisionNode with an entry removed at index.
 fn createCollisionNodeWithout(allocator: Allocator, src: *const HashCollisionNode, remove_idx: usize) anyerror!*Node {
     const new_len = src.kvs.len - 1;
-    var new_kvs = try allocator.alloc(Kvp, new_len);
-    errdefer allocator.free(new_kvs);
+    var new_kvs = newKvpArrayLen(allocator, new_len);
+    errdefer { for (new_kvs) |*kvp| { kvp.key.deinit(allocator); kvp.val.deinit(allocator); } allocator.free(new_kvs); }
 
     var j: usize = 0;
     var i: usize = 0;
@@ -1323,18 +1431,20 @@ fn createCollisionNodeWithout(allocator: Allocator, src: *const HashCollisionNod
             src.kvs[i].val.deinit(allocator);
             continue;
         }
-        new_kvs[j] = src.kvs[i];
+        // Deep clone to avoid sharing Value pointers with src.
+        new_kvs[j] = .{
+            .key = try src.kvs[i].key.clone(allocator),
+            .val = try src.kvs[i].val.clone(allocator),
+        };
         j += 1;
     }
 
-    const node = allocator.create(Node) catch @panic("OOM");
-    node.* = Node{
+    return newNode(allocator, Node{
         .hash_collision = HashCollisionNode{
             .hash = src.hash,
             .kvs = new_kvs,
         },
-    };
-    return node;
+    });
 }
 
 // ============================================================
@@ -1346,10 +1456,23 @@ pub fn scanHashMapNode(node_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     const node: *Node = @ptrCast(@alignCast(node_ptr));
     switch (node.*) {
         .bitmap_indexed => |*bnode| {
+            // Mark the Kvp array buffer itself so it survives sweeps
+            if (bnode.array.len > 0) {
+                ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(bnode.array.ptr))), ctx);
+            }
+            // Mark the sub_nodes array buffer itself
+            if (bnode.sub_nodes.len > 0) {
+                ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(bnode.sub_nodes.ptr))), ctx);
+            }
             for (bnode.array) |kvp| {
                 if (kvp.key.type != .nil) {
-                    ctx.gc.markRecursive(&kvp.key, ctx);
-                    ctx.gc.markRecursive(&kvp.val, ctx);
+                    ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(&kvp.key))), ctx);
+                    ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(&kvp.val))), ctx);
+                    // Mark wrapped pointers (e.g., *Env stored in NamespaceManager)
+                    if (kvp.val.type == .wrapped and kvp.val.wrapped_val != 0) {
+                        const ptr = @as(*anyopaque, @ptrFromInt(kvp.val.wrapped_val));
+                        ctx.gc.markRecursive(ptr, ctx);
+                    }
                 }
             }
             for (bnode.sub_nodes) |sub| {
@@ -1365,9 +1488,18 @@ pub fn scanHashMapNode(node_ptr: *anyopaque, ctx: *gc.ScanContext) void {
             }
         },
         .hash_collision => |*hnode| {
+            // Mark the Kvp array buffer itself so it survives sweeps
+            if (hnode.kvs.len > 0) {
+                ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(hnode.kvs.ptr))), ctx);
+            }
             for (hnode.kvs) |kvp| {
-                ctx.gc.markRecursive(&kvp.key, ctx);
-                ctx.gc.markRecursive(&kvp.val, ctx);
+                ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(&kvp.key))), ctx);
+                ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(&kvp.val))), ctx);
+                // Mark wrapped pointers
+                if (kvp.val.type == .wrapped and kvp.val.wrapped_val != 0) {
+                    const ptr = @as(*anyopaque, @ptrFromInt(kvp.val.wrapped_val));
+                    ctx.gc.markRecursive(ptr, ctx);
+                }
             }
         },
     }
@@ -1705,3 +1837,5 @@ test "persistent_hash_map::entry iterator with nil key" {
 
     // m.deinit(a); // skip deinit for standalone test (shallow copy in path copying)
 }
+
+
