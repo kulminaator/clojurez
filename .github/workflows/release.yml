@@ -7,19 +7,19 @@ on:
 
 jobs:
   build-test-ubuntu:
-    uses: ./.github/workflows/build-test.yml
+    uses: ./.github/workflows/build-test-base.yml
     with:
       os: ubuntu-latest
       optimize: ReleaseSafe
 
   build-test-macos:
-    uses: ./.github/workflows/build-test.yml
+    uses: ./.github/workflows/build-test-base.yml
     with:
       os: macos-latest
       optimize: ReleaseSafe
 
   build-test-windows:
-    uses: ./.github/workflows/build-test.yml
+    uses: ./.github/workflows/build-test-base.yml
     with:
       os: windows-latest
       optimize: ReleaseSafe
