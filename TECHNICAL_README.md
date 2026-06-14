@@ -267,8 +267,21 @@ Core functions (`inc`, `dec`, `into`, `even?`, `odd?`, `cons`, `update`, etc.) a
 ./zig-out/bin/clojurez -e '(into [] (list 1 2 3))'  ;; => [1 2 3]
 ```
 
-### Memory Tracing
+### Clojure data structures design principles
+- Our data structures are persistent and immutable.
+- Therefor, if we need to add something in front of a sequence or after a list - we do not clone the list, it's perfectly safe to make a new "shallow object" that just says (here in the beginning we have this new immutable thing and in the tail we have a reference to that immutable list that we had before). Avoid unnecessary cloning and duplication of data.
+- If you need to use tree like structures, branch agrssively (4 or 8 leaves per node), don't make just binary trees (to make lookups cheaper).
 
+### Memory management & Garbage collector (GC)
+
+Remember these important key principles:
+- All of our clojurez memory is managed by our mark and sweep GC.
+- If we build new structures we must assure GC can track these.
+- If we run into memory issues like corruption or confusing pointers - do not hesistate, just disable GC sweeping first via code and verify if the issue disappears. 
+- If troubles do not disappear then the issue was not with GC sweeps.
+
+### Memory Tracing
+ 
 The VM includes a built-in memory trace allocator for debugging memory issues. Toggle it via the `CLJVM_MEM_TRACE` environment variable. Off by default with zero overhead.
 
 **Trace to stderr:**
@@ -558,4 +571,4 @@ See [GUIDELINES.md](GUIDELINES.md) for testing standards and detailed coverage r
 - **Small steps:** Incremental development with tests after every change
 - **10s timeout:** All tests complete within 10 seconds
 - **80%+ coverage:** Target minimum line coverage
-- **GC-managed memory:** All Clojure runtime values managed by garbage collector
+- **GC-managed memory:** All Clojure runtime values managed by garbage collector. 
