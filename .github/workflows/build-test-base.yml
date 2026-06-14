@@ -1,0 +1,36 @@
+name: Build and Test (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      os:
+        required: true
+        type: string
+      optimize:
+        required: false
+        type: string
+        default: ''
+
+jobs:
+  build-test:
+    name: Build & Test (${{ inputs.os }})
+    runs-on: ${{ inputs.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Zig
+        uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+      - name: Build
+        run: zig build ${{ inputs.optimize != '' && format('-Doptimize={0}', inputs.optimize) || '' }}
+      - name: Make test script executable (Unix)
+        if: runner.os != 'Windows'
+        run: chmod +x run_tests.sh
+      - name: Set TMPDIR
+        run: echo "TMPDIR=$RUNNER_TEMP" >> $GITHUB_ENV
+      - name: Run zig tests
+        run: zig test -fsingle-threaded src/zig/all_tests.zig
+      - name: Run full test suite (Bash)
+        shell: bash
+        run: ./run_tests.sh

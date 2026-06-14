@@ -1,52 +1,23 @@
 name: Build and Test
 
-#FORCE_JAVASCRIPT_ACTIONS_TO_NODE24=true
-
-
 on:
   push:
     branches: [ "main" ]
   pull_request:
 
 jobs:
-  build-test:
-    name: Build & Test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
+  build-test-ubuntu:
+    uses: ./.github/workflows/build-test-base.yml
+    with:
+      os: ubuntu-latest
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+  build-test-macos:
+    uses: ./.github/workflows/build-test-base.yml
+    with:
+      os: macos-latest
 
-      - name: Install Zig
-        uses: mlugg/setup-zig@v2
-        with:
-          version: 0.16.0
-
-      - name: Build
-        run: zig build 
-        #should we add this there Doptimize=ReleaseSafe ?
-
-      - name: Make test script executable (Unix)
-        if: runner.os != 'Windows'
-        run: chmod +x run_tests.sh
-
-      - name: Set TMPDIR
-        run: echo "TMPDIR=$RUNNER_TEMP" >> $GITHUB_ENV
-
-      - name: Run zig tests
-        run: zig test -fsingle-threaded src/zig/all_tests.zig
-
-      - name: Run full test suite (Bash)
-        shell: bash
-        run: ./run_tests.sh
-
-      - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: zig-build-${{ matrix.os }}
-          path: zig-out/bin/
+  build-test-windows:
+    uses: ./.github/workflows/build-test-base.yml
+    with:
+      os: windows-latest
 
