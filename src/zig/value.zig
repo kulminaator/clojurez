@@ -1088,6 +1088,28 @@ pub fn equals(self: Self, other: Self) bool {
             return false;
         },
         .wrapped => return self.wrapped_val == other.wrapped_val,
+        .record => {
+            const a = &self.record_val;
+            const b = &other.record_val;
+            // Must have same type name
+            if (!std.mem.eql(u8, a.type_name, b.type_name)) return false;
+            // Must have same number of fields
+            if (a.fields.items.len != b.fields.items.len) return false;
+            // Compare field values
+            for (a.fields.items) |a_entry| {
+                const b_val = mapLookup(b.fields, a_entry.key);
+                if (b_val == null or !a_entry.value.equals(b_val.?)) return false;
+            }
+            // Must have same number of extmap entries
+            if (a.extmap.items.len != b.extmap.items.len) return false;
+            // Compare extmap values
+            for (a.extmap.items) |a_entry| {
+                const b_val = mapLookup(b.extmap, a_entry.key);
+                if (b_val == null or !a_entry.value.equals(b_val.?)) return false;
+            }
+            // Metadata is NOT compared for equality (matches Clojure behavior)
+            return true;
+        },
         else => return false,
     }
 }

@@ -1282,14 +1282,26 @@ pub fn call(allocator: Allocator, arena_alloc: Allocator, op: Value, args_list: 
             return Value.nilValue();
         },
         .keyword => {
-            // Keyword as function: looks up the keyword in a map
+            // Keyword as function: looks up the keyword in a map or record
             if (args.items.len != 1) return error.ArityError;
             const coll = args.items[0];
-            if (coll.type != .map) return Value.nilValue();
-            // Look up the keyword in the map
-            for (coll.map_val.items) |entry| {
-                if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, op.kw_val)) {
-                    return try entry.value.clone(arena_alloc);
+            if (coll.type == .map) {
+                for (coll.map_val.items) |entry| {
+                    if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, op.kw_val)) {
+                        return try entry.value.clone(arena_alloc);
+                    }
+                }
+            } else if (coll.type == .record) {
+                // Look up in fields first, then extmap
+                for (coll.record_val.fields.items) |entry| {
+                    if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, op.kw_val)) {
+                        return try entry.value.clone(arena_alloc);
+                    }
+                }
+                for (coll.record_val.extmap.items) |entry| {
+                    if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, op.kw_val)) {
+                        return try entry.value.clone(arena_alloc);
+                    }
                 }
             }
             return Value.nilValue();
@@ -1299,6 +1311,26 @@ pub fn call(allocator: Allocator, arena_alloc: Allocator, op: Value, args_list: 
             if (args.items.len < 1 or args.items.len > 2) return error.ArityError;
             const key = args.items[0];
             for (op.map_val.items) |entry| {
+                if (entry.key.equals(key)) {
+                    return try entry.value.clone(arena_alloc);
+                }
+            }
+            // Return not-found value if provided
+            if (args.items.len == 2) {
+                return try args.items[1].clone(arena_alloc);
+            }
+            return Value.nilValue();
+        },
+        .record => {
+            // Record as function: returns value for key (fields first, then extmap)
+            if (args.items.len < 1 or args.items.len > 2) return error.ArityError;
+            const key = args.items[0];
+            for (op.record_val.fields.items) |entry| {
+                if (entry.key.equals(key)) {
+                    return try entry.value.clone(arena_alloc);
+                }
+            }
+            for (op.record_val.extmap.items) |entry| {
                 if (entry.key.equals(key)) {
                     return try entry.value.clone(arena_alloc);
                 }

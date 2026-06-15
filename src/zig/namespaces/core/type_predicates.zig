@@ -147,6 +147,12 @@ pub fn core_map_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
     return Value.boolValue(args.items[0].type == .map);
 }
 
+pub fn core_record_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    return Value.boolValue(args.items[0].type == .record);
+}
+
 pub fn core_queue_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
@@ -527,6 +533,73 @@ pub fn core_type(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return try Value.keywordValue(env_env.allocator, type_name);
 }
 
+/// Returns the metadata of x, or nil if it has none.
+/// For records, returns the record's meta map.
+pub fn core_meta(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const allocator = env_env.allocator;
+    const val = args.items[0];
+
+    if (val.type == .record) {
+        if (val.record_val.meta) |m| {
+            // Clone and return the meta map
+            const cloned = try Value.cloneMap(allocator, m);
+            return Value.mapValue(cloned);
+        }
+        return Value.nilValue();
+    }
+    // For other types, return nil
+    return Value.nilValue();
+}
+
+/// Returns a copy of x with metadata m attached.
+/// For records, creates a new record with updated meta.
+/// For other types, returns x unchanged (metadata not supported).
+pub fn core_with_meta(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 2) return error.ArityError;
+    const allocator = env_env.allocator;
+    const val = args.items[0];
+    const new_meta = args.items[1];
+
+    if (val.type == .record) {
+        const rd = &val.record_val;
+        const new_meta_map = if (new_meta.type == .map)
+            try Value.cloneMap(allocator, new_meta.map_val)
+        else
+            null;
+        errdefer {
+            if (new_meta_map) |m| {
+                for (m.items) |*entry| {
+                    entry.key.deinit(allocator);
+                    entry.value.deinit(allocator);
+                }
+                allocator.free(m.items);
+            }
+        }
+        const cloned_fields = try Value.cloneMap(allocator, rd.fields);
+        const cloned_extmap = try Value.cloneMap(allocator, rd.extmap);
+        const cloned_type_name = try allocator.dupe(u8, rd.type_name);
+        errdefer {
+            for (cloned_fields.items) |*entry| {
+                entry.key.deinit(allocator);
+                entry.value.deinit(allocator);
+            }
+            allocator.free(cloned_fields.items);
+            for (cloned_extmap.items) |*entry| {
+                entry.key.deinit(allocator);
+                entry.value.deinit(allocator);
+            }
+            allocator.free(cloned_extmap.items);
+            allocator.free(cloned_type_name);
+        }
+        return try Value.recordValue(allocator, cloned_type_name, cloned_fields, cloned_extmap, new_meta_map);
+    }
+    // For other types, return a clone of the original value
+    return try val.clone(allocator);
+}
+
 pub fn registerTypePredicateFunctions(env: *Env) anyerror!void {
     try env.put("nil?", Value.builtinFnValue(core_nil_q));
     try env.put("number?", Value.builtinFnValue(core_number_q));
@@ -540,6 +613,7 @@ pub fn registerTypePredicateFunctions(env: *Env) anyerror!void {
     try env.put("fn?", Value.builtinFnValue(core_fn_q));
     try env.put("vector?", Value.builtinFnValue(core_vector_q));
     try env.put("map?", Value.builtinFnValue(core_map_q));
+    try env.put("record?", Value.builtinFnValue(core_record_q));
     try env.put("queue?", Value.builtinFnValue(core_queue_q));
     try env.put("coll?", Value.builtinFnValue(core_coll_q));
     try env.put("sequential?", Value.builtinFnValue(core_sequential_q));
@@ -566,6 +640,9 @@ pub fn registerTypePredicateFunctions(env: *Env) anyerror!void {
     try env.put("keyword", Value.builtinFnValue(core_keyword));
     // Type introspection
     try env.put("type", Value.builtinFnValue(core_type));
+    // Metadata
+    try env.put("meta", Value.builtinFnValue(core_meta));
+    try env.put("with-meta", Value.builtinFnValue(core_with_meta));
 }
 
 // ===== Unit Tests =====

@@ -6,6 +6,7 @@ const vec = @import("../../vector.zig");
 const Env = Value.Env;
 const phm = @import("../../persistent_hash_map.zig");
 const eval = @import("../../eval.zig");
+const protocols = @import("protocols.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -311,6 +312,133 @@ pub fn buildMapFactory(
     return result;
 }
 
+/// Process a protocol spec in a defrecord form.
+/// Evaluates the protocol symbol, builds method functions, and calls extend.
+fn processRecordProtocolSpec(
+    allocator: Allocator,
+    arena_alloc: Allocator,
+    env: *Env,
+    depth: usize,
+    proto_sym: Value,
+    l: *const list.List,
+    method_indices: []const usize,
+    full_type_name: []const u8,
+) anyerror!Value {
+
+    // Evaluate the protocol symbol to get the protocol value
+    var proto_val = try eval.evalRec(allocator, arena_alloc, proto_sym, env, depth + 1);
+    defer proto_val.deinit(arena_alloc);
+
+    // Validate it's a protocol (has :sigs key)
+    var sigs_kw = try Value.keywordValue(allocator, "sigs");
+    defer sigs_kw.deinit(allocator);
+    if (getMapEntry(proto_val, sigs_kw) == null) {
+        return makeErrorStr(allocator, "defrecord: {s} is not a protocol", .{proto_sym.sym_val});
+    }
+
+    // Build method map: group method definitions by name, build multi-arity fns
+    var mmap: Value.Map = .empty;
+    errdefer {
+        for (mmap.items) |*entry| {
+            entry.key.deinit(allocator);
+            entry.value.deinit(allocator);
+        }
+        allocator.free(mmap.items);
+    }
+
+    // Collect unique method names (preserving order)
+    var unique_names: std.ArrayListUnmanaged([]const u8) = .empty;
+    errdefer {
+        for (unique_names.items) |n| allocator.free(n);
+        allocator.free(unique_names.items);
+    }
+
+    for (method_indices) |mi| {
+        const mdef = l.items[mi];
+        if (mdef.type != .list or mdef.list_val.items.len < 2) {
+            return makeErrorStr(allocator, "defrecord: method definition must be a list with at least a name and params", .{});
+        }
+        const mname_sym = mdef.list_val.items[0];
+        if (mname_sym.type != .symbol) {
+            return makeErrorStr(allocator, "defrecord: method name must be a symbol", .{});
+        }
+        const mname = mname_sym.sym_val;
+
+        // Add to unique names if not already present
+        var found = false;
+        for (unique_names.items) |existing| {
+            if (std.mem.eql(u8, existing, mname)) {
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            try unique_names.append(allocator, try allocator.dupe(u8, mname));
+        }
+    }
+
+    // For each unique method name, build a multi-arity fn
+    for (unique_names.items) |mname| {
+        // fn form: (fn arity1 arity2 ...) where arity = ([params] body...)
+        var fn_form: list.List = .empty;
+        defer fn_form.deinit(arena_alloc);
+        try fn_form.append(arena_alloc, try Value.symValue(allocator, "fn"));
+
+        for (method_indices) |mi| {
+            const mdef = l.items[mi];
+            const mname_sym = mdef.list_val.items[0];
+            if (mname_sym.type != .symbol) continue;
+            if (!std.mem.eql(u8, mname_sym.sym_val, mname)) continue;
+
+            // items[1:] of the method def: [params] body...
+            // Build arity form: ([params] body...)
+            var arity_form: list.List = .empty;
+            defer arity_form.deinit(arena_alloc);
+            const def_items = mdef.list_val.items[1..];
+            for (def_items) |item| {
+                try arity_form.append(arena_alloc, try item.clone(arena_alloc));
+            }
+            try fn_form.append(arena_alloc, Value.listValue(arity_form));
+            arity_form = .empty;
+        }
+
+        // Evaluate to get a function value
+        var fn_val = try eval.evalRec(allocator, arena_alloc, Value.listValue(fn_form), env, depth + 1);
+        fn_form = .empty;
+        const persistent_fn = try fn_val.clone(allocator);
+        fn_val.deinit(arena_alloc);
+
+        try mmap.append(allocator, .{
+            .key = try Value.keywordValue(allocator, mname),
+            .value = persistent_fn,
+        });
+    }
+
+    // Build the dispatch type keyword: :ns.RecordName
+    var atype = try Value.keywordValue(allocator, full_type_name);
+    defer atype.deinit(allocator);
+
+    // Build extend args: (extend atype protocol mmap)
+    var extend_args: list.List = .empty;
+    defer extend_args.deinit(arena_alloc);
+    try extend_args.append(arena_alloc, atype);
+    try extend_args.append(arena_alloc, proto_val);
+    try extend_args.append(arena_alloc, Value.mapValue(mmap));
+    mmap = .empty;
+
+    // Call evalExtend
+    return protocols.evalExtend(allocator, arena_alloc, extend_args, env, depth);
+}
+
+/// Look up a key in a map, returning the value or null.
+fn getMapEntry(m: Value, key: Value) ?Value {
+    if (m.type != .map) return null;
+    for (m.map_val.items) |entry| {
+        if (entry.key.equals(key)) return entry.value;
+    }
+    return null;
+}
+
 /// Evaluate a (defrecord name [fields*] options* specs*) form.
 /// Creates a record type descriptor and stores it in the current namespace.
 /// Returns the record name symbol.
@@ -321,9 +449,6 @@ pub fn evalDefRecord(
     env: *Env,
     depth: usize,
 ) anyerror!Value {
-    _ = arena_alloc;
-    _ = depth;
-
     // (defrecord name [fields*] options* specs*)
     if (l.items.len < 3) {
         return makeErrorStr(allocator, "defrecord: usage is (defrecord name [fields*] options* specs*)", .{});
@@ -412,7 +537,7 @@ pub fn evalDefRecord(
     const map_fn_name = try std.fmt.allocPrint(allocator, "map->{s}", .{record_name});
     try eval.bindInCurrentNamespace(env, map_fn_name, persistent_map);
 
-    // Parse and skip options* and specs* (protocol implementation handled in Phase 9).
+    // Parse options* and specs* (protocol implementations).
     var idx: usize = 3;
     while (idx < l.items.len) {
         const item = l.items[idx];
@@ -420,10 +545,30 @@ pub fn evalDefRecord(
             // Skip option keyword + value pair
             if (idx + 1 < l.items.len) idx += 2 else break;
         } else if (item.type == .symbol) {
-            // Protocol name — skip it and its method definitions
+            // Protocol name — collect method definitions
+            const proto_sym = item;
             idx += 1;
+
+            // Collect method definition indices for this protocol
+            var method_indices: std.ArrayListUnmanaged(usize) = .empty;
+            defer allocator.free(method_indices.items);
             while (idx < l.items.len and l.items[idx].type == .list) {
+                try method_indices.append(allocator, idx);
                 idx += 1;
+            }
+
+            // If we have method definitions, extend the protocol
+            if (method_indices.items.len > 0) {
+                _ = processRecordProtocolSpec(
+                    allocator,
+                    arena_alloc,
+                    env,
+                    depth,
+                    proto_sym,
+                    &l,
+                    method_indices.items,
+                    full_name,
+                ) catch {};
             }
         } else {
             break;
