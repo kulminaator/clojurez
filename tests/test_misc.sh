@@ -99,7 +99,6 @@ else
     echo "FAIL: repl long expression >4096 bytes"
     echo "  Expected output to contain: 3000 and :ok"
     echo "  Got:      $(echo "$result" | tr '\n' ' ' | head -c 200)"
-    echo $result
     TEST_FAIL=$((TEST_FAIL + 1))
 fi
 
