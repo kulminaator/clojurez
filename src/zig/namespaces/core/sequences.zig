@@ -4,6 +4,7 @@ const Value = @import("../../value.zig");
 const list = @import("../../list.zig");
 const vec = @import("../../vector.zig");
 const Env = Value.Env;
+const phm = @import("../../persistent_hash_map.zig");
 const eval_helpers = @import("eval_helpers.zig");
 const helpers = @import("helpers.zig");
 const test_utils = @import("test_utils.zig");
@@ -341,7 +342,7 @@ fn forceMapStep(allocator: Allocator, env: *Env, thunk: *const Value.LazySeqThun
         coll_ptr = @ptrCast(@alignCast(sc));
     } else {
         // Root thunk: coll is stored in env
-        const coll_ref = env.entries.getPtr("coll") orelse return error.RuntimeError;
+        const coll_ref = env.getPtr("coll") orelse return error.RuntimeError;
         coll_ptr = coll_ref;
     }
 
@@ -379,7 +380,7 @@ fn forceMapStepConcrete(allocator: Allocator, f: Value, coll: *const Value, env:
         .body = list.empty(),
         .env = .{
             .allocator = allocator,
-            .entries = .empty,
+            .entries = phm.PersistentHashMap.empty(),
             .parent = null,
             .ns_manager = null,
             .referred_names = .empty,
@@ -433,7 +434,7 @@ fn forceMapStepLazy(allocator: Allocator, f: Value, coll: Value, env: *Env) anye
         .body = list.empty(),
         .env = .{
             .allocator = allocator,
-            .entries = .empty,
+            .entries = phm.PersistentHashMap.empty(),
             .parent = null,
             .ns_manager = null,
             .referred_names = .empty,

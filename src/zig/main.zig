@@ -266,13 +266,15 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
 /// Copy all builtin_fn values from the root env into a target namespace env.
 /// builtinFnValue clones are cheap (just a function pointer, no heap data).
 fn copyBuiltinsToNamespace(root_env: *Env, target_env: *Env) anyerror!void {
-    var it = root_env.entries.iterator();
+    var it = root_env.entries.entryIterator();
     while (it.next()) |entry| {
-        if (entry.value_ptr.type == .builtin_fn) {
+        if (entry.val.type == .builtin_fn) {
             // Skip zig-only functions that should not leak into clojure.core
-            if (std.mem.eql(u8, entry.key_ptr.*, "temp-dir")) continue;
+            if (entry.key.type == .symbol and std.mem.eql(u8, entry.key.sym_val, "temp-dir")) continue;
             // builtinFnValue is just a function pointer — clone is trivial
-            try target_env.put(entry.key_ptr.*, Value.builtinFnValue(entry.value_ptr.builtin_fn_val));
+            if (entry.key.type == .symbol) {
+                try target_env.put(entry.key.sym_val, Value.builtinFnValue(entry.val.builtin_fn_val));
+            }
         }
     }
 }
@@ -616,25 +618,9 @@ fn gcRootCallback(gc_inst: *gc_mod.GC) void {
 /// Scan all Values in an env's entries and mark their child pointers.
 fn scanEnvEntriesDirect(env: *Env, gc_inst: *gc_mod.GC) void {
     var ctx = gc_mod.ScanContext{ .gc = gc_inst, .scan_fn = gc_scan.valueScanFn };
-    // Mark the entries buffer itself (MultiArrayList bytes)
-    if (env.entries.entries.len > 0) {
-        const bytes_ptr = @as(*anyopaque, @ptrCast(env.entries.entries.bytes));
-        gc_inst.setObjectType(bytes_ptr, gc_mod.GCObjectType.unknown);
-        gc_inst.markRecursive(bytes_ptr, &ctx);
-    }
-    // Mark the index_header (separate allocation for the hash index array)
-    if (env.entries.index_header) |header| {
-        gc_inst.setObjectType(@as(*anyopaque, @ptrCast(header)), gc_mod.GCObjectType.unknown);
-        gc_inst.markRecursive(@as(*anyopaque, @ptrCast(header)), &ctx);
-    }
-    var it = env.entries.iterator();
-    while (it.next()) |entry| {
-        // Mark the key string data
-        if (entry.key_ptr.*.len > 0) {
-            gc_inst.markRecursive(@as(*anyopaque, @ptrCast(@constCast(entry.key_ptr.*.ptr))), &ctx);
-        }
-        // Scan the Value's child pointers
-        gc_scan.scanValueChildrenDirect(entry.value_ptr, &ctx);
+    // Mark the HAMT root node (triggers recursive scanning)
+    if (env.entries.root) |root| {
+        gc_inst.markRecursive(root, &ctx);
     }
     // Mark referred_names list (strings added via :refer)
     if (env.referred_names.items.len > 0) {

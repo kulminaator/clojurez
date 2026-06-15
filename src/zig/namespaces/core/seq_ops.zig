@@ -5,6 +5,7 @@ const Value = @import("../../value.zig");
 const list = @import("../../list.zig");
 const vec = @import("../../vector.zig");
 const Env = Value.Env;
+const phm = @import("../../persistent_hash_map.zig");
 const helpers = @import("helpers.zig");
 const eval_helpers = @import("eval_helpers.zig");
 const arithmetic = @import("arithmetic.zig");
@@ -105,7 +106,7 @@ pub fn core_map(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
         .body = list.empty(),
         .env = .{
             .allocator = allocator,
-            .entries = .empty,
+            .entries = phm.PersistentHashMap.empty(),
             .parent = null,
             .ns_manager = null,
             .referred_names = .empty,

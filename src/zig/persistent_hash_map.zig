@@ -181,6 +181,18 @@ fn hashBigInt(bi: anytype) i32 {
 }
 
 // ============================================================
+// Node findPtr dispatch (forward declaration for node types)
+// ============================================================
+
+pub fn nodeFindPtr(node: *Node, shift: u5, hash: i32, key: Value) ?*const Value {
+    switch (node.*) {
+        .bitmap_indexed => |*n| return n.findPtr(shift, hash, key),
+        .array => |*n| return n.findPtr(shift, hash, key),
+        .hash_collision => |*n| return n.findPtr(hash, key),
+    }
+}
+
+// ============================================================
 // Node types
 // ============================================================
 
@@ -261,6 +273,18 @@ const BitmapIndexedNode = struct {
         if (kvp.key.equals(key)) return kvp.val;
         if (key.type == .symbol) {
         }
+        return null;
+    }
+
+    pub fn findPtr(self: *const BitmapIndexedNode, shift: u5, hash: i32, key: Value) ?*const Value {
+        const bit = bitpos(hash, shift);
+        if ((self.bitmap & bit) == 0) return null;
+        const idx = indexBelow(self.bitmap, bit);
+        const kvp = &self.array[idx];
+        if (kvp.key.type == .nil) {
+            return nodeFindPtr(self.sub_nodes[idx].?, shift + SHIFT_BITS, hash, key);
+        }
+        if (kvp.key.equals(key)) return &kvp.val;
         return null;
     }
 
@@ -404,6 +428,12 @@ const ArrayNode = struct {
         return nodeFindLeaf(self.nodes[idx].?, shift + SHIFT_BITS, hash, key);
     }
 
+    pub fn findPtr(self: *const ArrayNode, shift: u5, hash: i32, key: Value) ?*const Value {
+        const idx = mask(hash, shift);
+        if (self.nodes[idx] == null) return null;
+        return nodeFindPtr(self.nodes[idx].?, shift + SHIFT_BITS, hash, key);
+    }
+
     pub fn doAssoc(self: *const ArrayNode, allocator: Allocator, shift: u5, hash: i32, key: Value, val: Value, addedLeaf: *LeafFlag) anyerror!*Node {
         const idx = mask(hash, shift);
         const existing = self.nodes[idx];
@@ -502,6 +532,15 @@ const HashCollisionNode = struct {
         var i: usize = 0;
         while (i < self.kvs.len) : (i += 1) {
             if (self.kvs[i].key.equals(key)) return self.kvs[i].val;
+        }
+        return null;
+    }
+
+    pub fn findPtr(self: *const HashCollisionNode, hash: i32, key: Value) ?*const Value {
+        _ = hash;
+        var i: usize = 0;
+        while (i < self.kvs.len) : (i += 1) {
+            if (self.kvs[i].key.equals(key)) return &self.kvs[i].val;
         }
         return null;
     }
@@ -708,6 +747,18 @@ pub const PersistentHashMap = struct {
         const result = self.find(key);
         if (result) |v| return v;
         return default_val;
+    }
+
+    /// Look up a value by key, returning a pointer to the stored Value.
+    /// The pointer is valid as long as the HAMT node containing it is alive.
+    pub fn findPtr(self: PersistentHashMap, key: Value) ?*const Value {
+        if (key.type == .nil) {
+            if (self.has_null) return &self.null_value;
+            return null;
+        }
+        if (self.root == null) return null;
+        const h = valueHash(key);
+        return nodeFindPtr(self.root.?, 0, h, key);
     }
 
     /// Associate a key-value pair. Returns a new PersistentHashMap.
@@ -1448,8 +1499,25 @@ fn createCollisionNodeWithout(allocator: Allocator, src: *const HashCollisionNod
 }
 
 // ============================================================
-// GC integration
+// Memoization cache: string → Value(symbol) for HAMT keys
 // ============================================================
+
+var sym_cache: std.StringArrayHashMapUnmanaged(Value) = .empty;
+
+/// Create or retrieve a memoized Value(symbol) for the given string.
+/// The returned Value owns a duplicated copy of the string.
+pub fn sym(s: []const u8) Value {
+    if (sym_cache.get(s)) |cached| {
+        return cached;
+    }
+    const allocator = std.heap.page_allocator;
+    const owned = allocator.dupe(u8, s) catch return Value{ .type = .symbol, .sym_val = s };
+    const val = Value{ .type = .symbol, .sym_val = owned };
+    sym_cache.put(allocator, s, val) catch unreachable;
+    return val;
+}
+
+/// Scan function for hash map nodes. Called by gc_scan.zig.
 
 /// Scan function for hash map nodes. Called by gc_scan.zig.
 pub fn scanHashMapNode(node_ptr: *anyopaque, ctx: *gc.ScanContext) void {

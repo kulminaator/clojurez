@@ -3,6 +3,7 @@ const std = @import("std");
 const Value = @import("../../value.zig");
 const list = @import("../../list.zig");
 const Env = Value.Env;
+const phm = @import("../../persistent_hash_map.zig");
 const eval = @import("../../eval.zig");
 const eval_helpers = @import("eval_helpers.zig");
 
@@ -416,7 +417,7 @@ pub fn evalDefProtocol(
         // Build closure env with protocol reference info
         var dispatch_env: Env = .{
             .allocator = allocator,
-            .entries = .empty,
+            .entries = phm.PersistentHashMap.empty(),
             .parent = env,
             .ns_manager = null,
         };
@@ -454,7 +455,7 @@ pub fn evalDefProtocol(
             .rest_name = rest_name,
         });
 
-        var fn_val = Value.fnValue(arities, dispatch_env, false);
+        var fn_val = try Value.fnValue(allocator, arities, dispatch_env, false);
         const persistent_fn = try fn_val.clone(allocator);
         fn_val.deinit(allocator);
 

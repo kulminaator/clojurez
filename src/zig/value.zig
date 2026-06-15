@@ -100,7 +100,7 @@ vec_val: vec.Vector = vec.Vector.empty,
 map_val: Map = .empty,
 set_val: Set = .empty,
 queue_val: Queue = .empty,
-fn_val: FnData = .{ .arities = .empty, .env = undefined },
+fn_val: FnData = .{ .arities = .empty, .env = undefined, .is_macro = false, .name = null },
 builtin_fn_val: BuiltinFn = undefined,
 lazy_seq_val: LazySeq = .{},
 cons_val: ?*ConsData = null,
@@ -117,7 +117,7 @@ pub const Arity = struct {
 
 pub const FnData = struct {
     arities: std.ArrayListUnmanaged(Arity) = .empty, // multi-arity support
-    env: Env,
+    env: *Env, // heap-allocated to break circular type dependency
     is_macro: bool = false, // true if this is a macro (args passed unevaluated)
     name: ?[]const u8 = null, // optional name for self-reference in recursive calls
 };
@@ -315,7 +315,7 @@ pub const NamespaceManager = struct {
 
 pub const Env = struct {
     allocator: Allocator,
-    entries: std.StringArrayHashMapUnmanaged(Self) = .empty,
+    entries: phm.PersistentHashMap = phm.PersistentHashMap.empty(),
     parent: ?*Env = null,
     /// Pointer to namespace manager (only set on root env, inherited via parent chain)
     ns_manager: ?*NamespaceManager = null,
@@ -327,7 +327,7 @@ pub const Env = struct {
     pub fn init(allocator: Allocator) Env {
         return .{
             .allocator = allocator,
-            .entries = .empty,
+            .entries = phm.PersistentHashMap.empty(),
             .parent = null,
             .ns_manager = null,
             .referred_names = .empty,
@@ -335,11 +335,11 @@ pub const Env = struct {
     }
 
     pub fn deinit(self: *Env, allocator: Allocator) void {
-        var it = self.entries.iterator();
-        while (it.next()) |entry| {
-            entry.value_ptr.deinit(allocator);
-        }
-        self.entries.deinit(allocator);
+        // HAMT nodes are GC-tracked; don't explicitly deinit entries.
+        // Reset to avoid dangling pointers if deinit is called multiple times.
+        self.entries.root = null;
+        self.entries.count = 0;
+        self.entries.has_null = false;
         for (self.referred_names.items) |name| {
             allocator.free(name);
         }
@@ -349,62 +349,41 @@ pub const Env = struct {
     }
 
     pub fn clone(self: *const Env, allocator: Allocator) anyerror!Env {
-        var new_env: Env = .{
+        // Structural sharing: just copy the PersistentHashMap struct.
+        // The underlying HAMT nodes are shared between old and new env.
+        return .{
             .allocator = allocator,
-            .entries = .empty,
+            .entries = self.entries,
             .parent = self.parent,
             .ns_manager = self.ns_manager,
             .referred_names = .empty,
         };
-        var it = self.entries.iterator();
-        while (it.next()) |entry| {
-            const cloned_val = try entry.value_ptr.clone(allocator);
-            try new_env.entries.put(allocator, entry.key_ptr.*, cloned_val);
-        }
-        return new_env;
     }
 
     pub fn put(self: *Env, name: []const u8, value: Self) anyerror!void {
-        // Uses self.allocator for all allocations.
-        // StringArrayHashMapUnmanaged stores key POINTERS (not copies),
-        // so we must dupe the key to self.allocator to ensure it outlives
-        // any temporary arena where the original may have been allocated.
         const allocator = self.allocator;
-
-        // Deinit old value if key exists
-        const existing = self.entries.getPtr(name);
-        if (existing) |old_val| {
-            old_val.deinit(allocator);
-        }
-
-        // Dupe key to main allocator (StringArrayHashMap stores pointers)
-        const owned_key = try allocator.dupe(u8, name);
-        errdefer allocator.free(owned_key);
-
-        if (existing) |_| {
-            // Key exists: update value in-place, replace key pointer
-            // Find the entry by iterating
-            var it = self.entries.iterator();
-            while (it.next()) |entry| {
-                if (std.mem.eql(u8, entry.key_ptr.*, name)) {
-                    // Note: old key string is leaked here. The GC will handle it.
-                    // Freeing it corrupts the HashMap's internal hash index state.
-                    entry.key_ptr.* = owned_key;
-                    entry.value_ptr.* = value;
-                    return;
-                }
-            }
-            // Should not reach here, but fall through to put as fallback
-        }
-
-        try self.entries.put(allocator, owned_key, value);
+        // mapAssoc returns a new immutable map with structural sharing.
+        // The HAMT clones the value internally.
+        const key = phm.sym(name);
+        const new_entries = try self.entries.mapAssoc(allocator, key, value);
+        // Don't deinit old entries — HAMT nodes are GC-tracked.
+        // Other envs might share nodes via structural sharing (clone).
+        // The GC will free unreachable HAMT nodes during collection.
+        // Reset old entries to avoid double-free if deinit is called later.
+        self.entries.root = null;
+        self.entries.count = 0;
+        self.entries.has_null = false;
+        self.entries = new_entries;
+        // mapAssoc cloned the value into the HAMT, so deinit the original.
+        var val = value;
+        val.deinit(allocator);
     }
 
     pub fn get(self: *Env, name: []const u8) ?Self {
         var current: ?*Env = self;
         while (current) |env| {
-            if (env.entries.entries.len > 0) {
-                const found = env.entries.get(name);
+            if (!env.entries.isEmpty()) {
+                const found = env.entries.find(phm.sym(name));
                 if (found) |val| return val;
             }
             current = env.parent;
@@ -415,10 +394,17 @@ pub const Env = struct {
     pub fn has(self: *Env, name: []const u8) bool {
         var current: ?*Env = self;
         while (current) |env| {
-            if (env.entries.contains(name)) return true;
+            if (env.entries.containsKey(phm.sym(name))) return true;
             current = env.parent;
         }
         return false;
+    }
+
+    /// Return a pointer to the Value stored under the given key.
+    /// The pointer is valid as long as the HAMT node containing it is alive.
+    /// Returns null if the key is not found.
+    pub fn getPtr(self: *Env, name: []const u8) ?*const Self {
+        return self.entries.findPtr(phm.sym(name));
     }
 };
 
@@ -588,12 +574,15 @@ pub fn consValueShared(data: *ConsData) Self {
     return .{ .type = .cons, .cons_val = data };
 }
 
-pub fn fnValue(arities: std.ArrayListUnmanaged(Arity), env: Env, is_macro: bool) Self {
-    return fnValueNamed(arities, env, is_macro, null);
+pub fn fnValue(allocator: Allocator, arities: std.ArrayListUnmanaged(Arity), env: Env, is_macro: bool) anyerror!Self {
+    return fnValueNamed(allocator, arities, env, is_macro, null);
 }
 
-pub fn fnValueNamed(arities: std.ArrayListUnmanaged(Arity), env: Env, is_macro: bool, name: ?[]const u8) Self {
-    return .{ .type = .function, .fn_val = .{ .arities = arities, .env = env, .is_macro = is_macro, .name = name } };
+pub fn fnValueNamed(allocator: Allocator, arities: std.ArrayListUnmanaged(Arity), env: Env, is_macro: bool, name: ?[]const u8) anyerror!Self {
+    const env_ptr = try allocator.create(Env);
+    errdefer allocator.destroy(env_ptr);
+    env_ptr.* = env;
+    return .{ .type = .function, .fn_val = .{ .arities = arities, .env = env_ptr, .is_macro = is_macro, .name = name } };
 }
 
 /// Create a single-arity function (convenience wrapper)
@@ -606,7 +595,7 @@ pub fn fnValueSingleNamed(allocator: Allocator, params: list.List, body: list.Li
     var arities: std.ArrayListUnmanaged(Arity) = .empty;
     errdefer allocator.free(arities.items);
     try arities.append(allocator, Arity{ .params = params, .body = body, .rest_name = rest_name });
-    return fnValueNamed(arities, env, is_macro, name);
+    return fnValueNamed(allocator, arities, env, is_macro, name);
 }
 
 pub fn builtinFnValue(fn_ptr: BuiltinFn) Self {
@@ -680,6 +669,7 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
             }
             allocator.free(self.fn_val.arities.items);
             self.fn_val.env.deinit(allocator);
+            allocator.destroy(self.fn_val.env);
             if (self.fn_val.name) |n| allocator.free(n);
         },
         .builtin_fn => {},
@@ -839,7 +829,7 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
             }
             var cloned_name: ?[]const u8 = null;
             if (fnv.name) |n| cloned_name = try allocator.dupe(u8, n);
-            return fnValueNamed(cloned_arities, try fnv.env.clone(allocator), fnv.is_macro, cloned_name);
+            return fnValueNamed(allocator, cloned_arities, try fnv.env.clone(allocator), fnv.is_macro, cloned_name);
         },
         .builtin_fn => return builtinFnValue(self.builtin_fn_val),
         .wrapped => return .{ .type = .wrapped, .wrapped_val = self.wrapped_val }, // cheap pointer copy

@@ -12,29 +12,8 @@ const Allocator = std.mem.Allocator;
 const Value = @import("value.zig");
 const phm = @import("persistent_hash_map.zig");
 
-// ============================================================
-// Memoization cache: string → Value(symbol) for HAMT keys
-// Avoids creating duplicate Value objects for the same string key.
-// Single-threaded (no mutex needed). Cache lives for program lifetime.
-// ============================================================
-
-var sym_cache: std.StringArrayHashMapUnmanaged(Value) = .empty;
-
-/// Create or retrieve a memoized Value(symbol) for the given string.
-/// The returned Value owns a duplicated copy of the string.
-/// Subsequent calls with equal string content return the same cached Value.
-pub fn sym(s: []const u8) Value {
-    if (sym_cache.get(s)) |cached| {
-        return cached;
-    }
-
-    const allocator = std.heap.page_allocator;
-    const owned = allocator.dupe(u8, s) catch return Value{ .type = .symbol, .sym_val = s };
-    const val = Value{ .type = .symbol, .sym_val = owned };
-    // Store key pointer directly (cache lives for program lifetime, strings never freed)
-    sym_cache.put(allocator, s, val) catch unreachable;
-    return val;
-}
+// Re-export sym from persistent_hash_map.zig
+pub const sym = phm.sym;
 
 // ============================================================
 // Wrapper: convert string keys to Value.symbol for the underlying HAMT

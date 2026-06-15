@@ -83,31 +83,11 @@ fn scanMapEntries(entries_ptr: *anyopaque, ctx: *gc.ScanContext, total_size: usi
 }
 
 /// Scan StringArrayHashMapUnmanaged(Value) MultiArrayList bytes buffer.
+/// (kept for backward compatibility — no longer used for Env entries)
 fn scanEnvEntries(bytes_ptr: *anyopaque, ctx: *gc.ScanContext, total_size: usize) void {
-    const key_size = @sizeOf([]const u8);
-    const value_size = @sizeOf(Value);
-
-    const entry_total = key_size + value_size;
-    const count = total_size / entry_total;
-
-    // Compute offset to value array (after all keys, with alignment)
-    const keys_raw = key_size * count;
-    const value_align = @alignOf(Value);
-    const keys_padded: usize = std.math.divCeil(usize, keys_raw, value_align) catch value_align * count;
-
-    const bytes: [*]const u8 = @ptrCast(@alignCast(bytes_ptr));
-    const keys_ptr: [*]const []const u8 = @ptrCast(@alignCast(bytes));
-    const values_ptr: [*]const Value = @ptrCast(@alignCast(bytes + keys_padded));
-
-    var i: usize = 0;
-    while (i < count) : (i += 1) {
-        // Mark the key string data (heap-allocated string pointed to by the slice)
-        if (keys_ptr[i].len > 0) {
-            ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(keys_ptr[i].ptr))), ctx);
-        }
-        // Mark the value's children
-        scanValueChildrenDirect(&values_ptr[i], ctx);
-    }
+    _ = bytes_ptr;
+    _ = ctx;
+    _ = total_size;
 }
 
 /// Scan a single Value's child heap pointers and mark them.
@@ -233,22 +213,19 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
                     }
                 }
             }
-            // Mark the fn's env entries buffer
-            const fn_entries = val.fn_val.env.entries;
-            if (fn_entries.entries.len > 0) {
-                ctx.gc.markRecursive(fn_entries.entries.bytes, ctx);
+            // Mark the fn's env struct itself (heap-allocated *Env)
+            const fn_env = val.fn_val.env;
+            ctx.gc.markRecursive(fn_env, ctx);
+            // Mark the fn's env HAMT root node (triggers recursive scanning)
+            if (fn_env.entries.root) |root| {
+                ctx.gc.markRecursive(root, ctx);
             }
-            // Also mark the env's index_header
-            if (fn_entries.index_header) |header| {
-                ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(header)), ctx);
+            // Also mark the env's parent and ns_manager
+            if (fn_env.parent) |parent| {
+                ctx.gc.markRecursive(parent, ctx);
             }
-            // Mark key strings and scan values in the fn's env entries
-            var fn_it = fn_entries.iterator();
-            while (fn_it.next()) |entry| {
-                if (entry.key_ptr.*.len > 0) {
-                    ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(entry.key_ptr.*.ptr))), ctx);
-                }
-                scanValueChildrenDirect(entry.value_ptr, ctx);
+            if (fn_env.ns_manager) |ns_mgr| {
+                ctx.gc.markRecursive(ns_mgr, ctx);
             }
         },
 
@@ -289,25 +266,16 @@ fn scanLazySeqThunk(thunk_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     if (thunk.body.items.len > 0) {
         ctx.gc.markRecursive(thunk.body.items.ptr, ctx);
     }
-    // Validate env entries before scanning — guard against false-positive size match
-    const entries = thunk.env.entries;
-    if (entries.entries.len > 10000) return; // sanity: unlikely to have this many
-    if (entries.entries.capacity > 0 and entries.entries.len > entries.entries.capacity) return;
-    // Mark the thunk's env entries buffer
-    if (entries.entries.len > 0) {
-        ctx.gc.markRecursive(entries.entries.bytes, ctx);
+    // Mark the thunk's env HAMT root node (triggers recursive scanning)
+    if (thunk.env.entries.root) |root| {
+        ctx.gc.markRecursive(root, ctx);
     }
-    // Mark the thunk's env index_header (separate allocation)
-    if (entries.index_header) |header| {
-        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(header)), ctx);
+    // Mark the thunk's env parent and ns_manager
+    if (thunk.env.parent) |parent| {
+        ctx.gc.markRecursive(parent, ctx);
     }
-    // Scan the thunk's env values and mark key strings
-    var it = entries.iterator();
-    while (it.next()) |entry| {
-        if (entry.key_ptr.*.len > 0) {
-            ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(entry.key_ptr.*.ptr))), ctx);
-        }
-        scanValueChildrenDirect(entry.value_ptr, ctx);
+    if (thunk.env.ns_manager) |ns_mgr| {
+        ctx.gc.markRecursive(ns_mgr, ctx);
     }
     // Mark shared_coll (separate GC allocation for concrete collection in map).
     // This keeps the collection alive across GC cycles since it's a raw pointer
@@ -323,7 +291,7 @@ fn scanAtomData(data_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     scanValueChildrenDirect(&data.value, ctx);
 }
 
-/// Scan FnData: { arities: ArrayListUnmanaged(Arity), env: Env }.
+/// Scan FnData: { arities: ArrayListUnmanaged(Arity), env: *Env }.
 fn scanFnData(fndata_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     const fndata: *Value.FnData = @ptrCast(@alignCast(fndata_ptr));
     if (fndata.arities.items.len > 0) {
@@ -343,25 +311,19 @@ fn scanFnData(fndata_ptr: *anyopaque, ctx: *gc.ScanContext) void {
             }
         }
     }
-    // Validate env entries before scanning
-    const fn_entries = fndata.env.entries;
-    if (fn_entries.entries.len > 10000) return;
-    if (fn_entries.entries.capacity > 0 and fn_entries.entries.len > fn_entries.entries.capacity) return;
-    // Mark the fn's env entries buffer
-    if (fn_entries.entries.len > 0) {
-        ctx.gc.markRecursive(fn_entries.entries.bytes, ctx);
+    // Mark the fn's env struct itself (heap-allocated *Env)
+    const fn_env = fndata.env;
+    ctx.gc.markRecursive(fn_env, ctx);
+    // Mark the fn's env HAMT root node (triggers recursive scanning)
+    if (fn_env.entries.root) |root| {
+        ctx.gc.markRecursive(root, ctx);
     }
-    // Mark the fn's env index_header (separate allocation)
-    if (fn_entries.index_header) |header| {
-        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(header)), ctx);
+    // Mark the fn's env parent and ns_manager
+    if (fn_env.parent) |parent| {
+        ctx.gc.markRecursive(parent, ctx);
     }
-    // Scan the fn's env values and mark key strings
-    var it = fn_entries.iterator();
-    while (it.next()) |entry| {
-        if (entry.key_ptr.*.len > 0) {
-            ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(entry.key_ptr.*.ptr))), ctx);
-        }
-        scanValueChildrenDirect(entry.value_ptr, ctx);
+    if (fn_env.ns_manager) |ns_mgr| {
+        ctx.gc.markRecursive(ns_mgr, ctx);
     }
 }
 
@@ -403,26 +365,13 @@ fn scanSubNodesArray(items_ptr: *anyopaque, ctx: *gc.ScanContext, total_size: us
     }
 }
 
-/// Scan an Env struct: entries (StringArrayHashMapUnmanaged), parent, ns_manager, referred_names.
+/// Scan an Env struct: entries (PersistentHashMap), parent, ns_manager, referred_names.
 fn scanEnv(env_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     const env: *Value.Env = @ptrCast(@alignCast(env_ptr));
 
-    // Mark the entries buffer (MultiArrayList bytes)
-    if (env.entries.entries.len > 0) {
-        const bytes_ptr = @as(*anyopaque, @ptrCast(env.entries.entries.bytes));
-        ctx.gc.markRecursive(bytes_ptr, ctx);
-    }
-    // Mark the index_header (separate allocation)
-    if (env.entries.index_header) |header| {
-        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(header)), ctx);
-    }
-    // Scan values and mark key strings in entries
-    var it = env.entries.iterator();
-    while (it.next()) |entry| {
-        if (entry.key_ptr.*.len > 0) {
-            ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(entry.key_ptr.*.ptr))), ctx);
-        }
-        scanValueChildrenDirect(entry.value_ptr, ctx);
+    // Mark the HAMT root node (triggers recursive scanning of all nodes)
+    if (env.entries.root) |root| {
+        ctx.gc.markRecursive(root, ctx);
     }
     // Mark referred_names list buffer and strings
     if (env.referred_names.items.len > 0) {

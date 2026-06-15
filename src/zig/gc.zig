@@ -104,6 +104,10 @@ pub const GC = struct {
     // Optional callback that registers dynamic roots at collect time.
     // Useful for roots that change address (e.g., HashMap entries after resize).
     root_fn: ?RootFn = null,
+    // Temporary roots stack: push/pop HAMT root pointers from stack-allocated Env structs.
+    // These are in-use pointers the GC can't discover through normal scanning.
+    // Marked during collect() to prevent sweeping of in-flight HAMT nodes.
+    temp_roots: std.ArrayListUnmanaged(*anyopaque) = .empty,
 
     // Debug flags
     sweep_enabled: bool = true,
@@ -439,6 +443,20 @@ pub const GC = struct {
         }
     }
 
+    /// Push a temporary root pointer onto the stack.
+    /// Used to protect HAMT nodes reachable from stack-allocated Env structs.
+    /// Must be paired with popTempRoot (use defer for safety).
+    pub fn pushTempRoot(self: *Self, root: *anyopaque) void {
+        self.temp_roots.append(self.wrapped, root) catch {};
+    }
+
+    /// Pop the most recent temporary root from the stack.
+    pub fn popTempRoot(self: *Self) void {
+        if (self.temp_roots.items.len > 0) {
+            _ = self.temp_roots.pop();
+        }
+    }
+
     /// Full mark-and-sweep collection cycle.
     pub fn collect(self: *Self, scan_fn: ScanFn) void {
         // Advance generation: blocks allocated in the new generation
@@ -462,6 +480,11 @@ pub const GC = struct {
         // Phase 2: Mark from static roots
         var ctx = ScanContext{ .gc = self, .scan_fn = scan_fn };
         for (self.roots.items) |root| {
+            self.markRecursive(root, &ctx);
+        }
+
+        // Phase 2.5: Mark from temporary roots (HAMT nodes from stack-allocated Env structs)
+        for (self.temp_roots.items) |root| {
             self.markRecursive(root, &ctx);
         }
 

@@ -3,6 +3,7 @@ const std = @import("std");
 const Value = @import("../../value.zig");
 const list = @import("../../list.zig");
 const vec = @import("../../vector.zig");
+const phm = @import("../../persistent_hash_map.zig");
 const helpers = @import("helpers.zig");
 const eval_ns = @import("../../eval_ns.zig");
 const eval_macro = @import("../../eval_macro.zig");
@@ -108,13 +109,13 @@ pub fn callBuiltin(allocator: Allocator, f: Value, args_list: list.List, env: *V
             // Optimization: if function env has no local entries, skip clone
             // and create a thin wrapper pointing to the parent
             var new_env: Value.Env = undefined;
-            const has_locals = fn_data.env.entries.entries.len > 0;
+            const has_locals = !fn_data.env.entries.isEmpty();
             if (has_locals) {
                 new_env = try fn_data.env.clone(allocator);
             } else {
                 new_env = .{
                     .allocator = allocator,
-                    .entries = .empty,
+                    .entries = phm.PersistentHashMap.empty(),
                     .parent = fn_data.env.parent,
                     .ns_manager = null,
                 };

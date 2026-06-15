@@ -3,6 +3,7 @@ const Value = @import("value.zig");
 const list = @import("list.zig");
 const vec = @import("vector.zig");
 const Env = Value.Env;
+const phm = @import("persistent_hash_map.zig");
 const parser = @import("parser.zig");
 const eval_helpers = @import("namespaces/core/eval_helpers.zig");
 const helpers = @import("namespaces/core/helpers.zig");
@@ -11,8 +12,32 @@ const eval_thread = @import("eval_thread.zig");
 const eval_macro = @import("eval_macro.zig");
 const eval_ns = @import("eval_ns.zig");
 const protocols = @import("namespaces/core/protocols.zig");
+const gc_mod = @import("gc.zig");
 
 const Allocator = std.mem.Allocator;
+
+/// Push the HAMT root from an Env as a temporary GC root.
+/// Returns a Guard struct that pops the root on deinit (use `defer guard.deinit()`).
+/// This protects HAMT nodes reachable from stack-allocated Env structs.
+const TempRootGuard = struct {
+    gc: ?*gc_mod.GC,
+
+    pub fn deinit(self: TempRootGuard) void {
+        if (self.gc) |gc_inst| {
+            gc_inst.popTempRoot();
+        }
+    }
+};
+
+fn pushEnvTempRoot(env: *const Env) TempRootGuard {
+    if (gc_mod.current_gc) |gc_inst| {
+        if (env.entries.root) |root| {
+            gc_inst.pushTempRoot(root);
+            return TempRootGuard{ .gc = gc_inst };
+        }
+    }
+    return TempRootGuard{ .gc = null };
+}
 
 // Re-export findNsManager for use by main.zig and other modules
 pub const findNsManager = eval_ns.findNsManager;
@@ -427,11 +452,11 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
             // including the function itself (for recursion)
             const fn_env: Env = .{
                 .allocator = allocator,
-                .entries = .empty,
+                .entries = phm.PersistentHashMap.empty(),
                 .parent = env,
                 .ns_manager = null,
             };
-            var fn_val = Value.fnValue(arities, fn_env, false);
+            var fn_val = try Value.fnValue(allocator, arities, fn_env, false);
             // Clone to main allocator before storing in persistent env
             const persistent_fn = try fn_val.clone(allocator);
             fn_val.deinit(arena_alloc);
@@ -474,7 +499,7 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
                 fn_name_str = try allocator.dupe(u8, name_sym.sym_val);
             }
 
-            const fn_val = Value.fnValueNamed(arities, fn_env, false, fn_name_str);
+            const fn_val = try Value.fnValueNamed(allocator, arities, fn_env, false, fn_name_str);
             return fn_val;
         }
 
@@ -505,11 +530,11 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
 
             const fn_env: Env = .{
                 .allocator = allocator,
-                .entries = .empty,
+                .entries = phm.PersistentHashMap.empty(),
                 .parent = env,
                 .ns_manager = null,
             };
-            var macro_fn = Value.fnValue(arities, fn_env, true);
+            var macro_fn = try Value.fnValue(allocator, arities, fn_env, true);
             // Clone to main allocator before storing in persistent env
             const persistent_macro = try macro_fn.clone(allocator);
             macro_fn.deinit(arena_alloc);
@@ -662,6 +687,7 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
             if (bindings.type != .vector) return error.TypeError;
             var new_env = try env.clone(arena_alloc);
             defer new_env.deinit(arena_alloc);
+            defer pushEnvTempRoot(&new_env).deinit();
 
             var i: usize = 0;
             while (i < bindings.vec_val.items.len) : (i += 2) {
@@ -850,6 +876,7 @@ fn evalLet(allocator: Allocator, arena_alloc: Allocator, bindings: Value, body: 
 
     var new_env = try env.clone(arena_alloc);
     defer new_env.deinit(arena_alloc);
+    defer pushEnvTempRoot(&new_env).deinit();
 
     const items = switch (bindings.type) {
         .list => bindings.list_val.items,
@@ -879,11 +906,12 @@ fn evalLetFn(allocator: Allocator, arena_alloc: Allocator, bindings: Value, body
     // Create new env first so all functions can reference each other
     var new_env: Env = .{
         .allocator = allocator,
-        .entries = .empty,
+        .entries = phm.PersistentHashMap.empty(),
         .parent = env,
         .ns_manager = null,
     };
     defer new_env.deinit(arena_alloc);
+    defer pushEnvTempRoot(&new_env).deinit();
 
     // Parse each function definition: (name [params] body...)
     for (bind_items) |binding| {
@@ -940,11 +968,11 @@ fn evalLetFn(allocator: Allocator, arena_alloc: Allocator, bindings: Value, body
         // Create fn with new_env as closure (for mutual recursion)
         const fn_env: Env = .{
             .allocator = allocator,
-            .entries = .empty,
+            .entries = phm.PersistentHashMap.empty(),
             .parent = &new_env,
             .ns_manager = null,
         };
-        var fn_val = Value.fnValue(arities, fn_env, false);
+        var fn_val = try Value.fnValue(allocator, arities, fn_env, false);
         const persistent_fn = try fn_val.clone(allocator);
         fn_val.deinit(arena_alloc);
 
@@ -1041,6 +1069,7 @@ fn evalLoop(allocator: Allocator, arena_alloc: Allocator, bindings: Value, body:
     // Initialize environment with initial binding values
     var new_env = try env.clone(arena_alloc);
     defer new_env.deinit(arena_alloc);
+    defer pushEnvTempRoot(&new_env).deinit();
 
     i = 0;
     while (i < bind_items.len) : (i += 2) {
@@ -1114,17 +1143,18 @@ pub fn call(allocator: Allocator, arena_alloc: Allocator, op: Value, args_list: 
 
             // Optimization: skip env clone if no local entries
             var new_env: Env = undefined;
-            if (fn_data.env.entries.entries.len > 0) {
+            if (!fn_data.env.entries.isEmpty()) {
                 new_env = try fn_data.env.clone(arena_alloc);
             } else {
                 new_env = .{
                     .allocator = allocator,
-                    .entries = .empty,
+                    .entries = phm.PersistentHashMap.empty(),
                     .parent = fn_data.env.parent,
                     .ns_manager = null,
                 };
             }
             defer new_env.deinit(arena_alloc);
+            defer pushEnvTempRoot(&new_env).deinit();
 
             // Bind function name for self-reference (e.g., (fn self [x] (self (dec x))))
             if (fn_data.name) |fn_name| {

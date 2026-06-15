@@ -165,10 +165,10 @@ fn referVars(
     exclude_syms: ?[]const Value,
     rename_map: ?Value.Map,
 ) anyerror!void {
-    var it = source_ns.entries.iterator();
+    var it = source_ns.entries.entryIterator();
     while (it.next()) |entry| {
-        const sym_name = entry.key_ptr.*;
-        const sym_val = entry.value_ptr;
+        const sym_name = if (entry.key.type == .symbol) entry.key.sym_val else continue;
+        const sym_val = entry.val;
 
         // Skip vars that were themselves referred into source_ns (not owned).
         // Original Clojure only copies owned vars (ns-interns), not referred vars.
@@ -221,6 +221,9 @@ fn referVars(
         // Clone the value into the target namespace
         const cloned = try sym_val.clone(allocator);
         try target_ns.put(local_name, cloned);
+        // entry.val is a copy from the iterator; deinit to avoid leak
+        var sv = sym_val;
+        sv.deinit(allocator);
 
         // Mark as referred so transitive refers won't copy it further.
         // Uses target_ns.allocator so the string lifetime matches the env.
