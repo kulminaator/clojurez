@@ -233,3 +233,88 @@ else
     echo "  Got: $(echo "$result" | tr '\n' ' ' | head -c 300)"
     TEST_FAIL=$((TEST_FAIL + 1))
 fi
+
+# ============================================================
+# CLJVM_DEBUG environment variable tests
+# Verifies that the debug logging infrastructure works end-to-end.
+# ============================================================
+
+echo ""
+echo "=== Debug Output (CLJVM_DEBUG) Tests ==="
+
+# Test 1: CLJVM_DEBUG=1 produces startup/shutdown debug messages on stderr
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$(CLJVM_DEBUG=1 $TOOL_TIMEOUT $TIMEOUT $VM -e '(+ 1 2)' 2>&1) || {
+    echo "FAIL: debug output CLJVM_DEBUG=1 (timeout or error)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+}
+if echo "$result" | grep -q "clojurez starting" && echo "$result" | grep -q "clojurez shutting down"; then
+    echo "PASS: debug output CLJVM_DEBUG=1 shows startup/shutdown"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: debug output CLJVM_DEBUG=1 missing startup/shutdown"
+    echo "  Got: $(echo "$result" | tr '\n' ' ' | head -c 300)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
+
+# Test 2: CLJVM_DEBUG=startup shows only the startup category
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$(CLJVM_DEBUG=startup $TOOL_TIMEOUT $TIMEOUT $VM -e '(+ 1 2)' 2>&1) || {
+    echo "FAIL: debug output CLJVM_DEBUG=startup (timeout or error)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+}
+# Should see both startup messages since both use the "startup" category
+startup_count=$(echo "$result" | grep -c "clojurez")
+if [ "$startup_count" -ge 2 ]; then
+    echo "PASS: debug output CLJVM_DEBUG=startup shows startup category"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: debug output CLJVM_DEBUG=startup missing messages"
+    echo "  Got: $(echo "$result" | tr '\n' ' ' | head -c 300)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
+
+# Test 3: CLJVM_DEBUG=gc should NOT show startup messages (different category)
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$(CLJVM_DEBUG=gc $TOOL_TIMEOUT $TIMEOUT $VM -e '(+ 1 2)' 2>&1) || {
+    echo "FAIL: debug output CLJVM_DEBUG=gc (timeout or error)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+}
+if ! echo "$result" | grep -q "clojurez starting"; then
+    echo "PASS: debug output CLJVM_DEBUG=gc filters out startup category"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: debug output CLJVM_DEBUG=gc should not show startup messages"
+    echo "  Got: $(echo "$result" | tr '\n' ' ' | head -c 300)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
+
+# Test 4: No CLJVM_DEBUG should produce no debug output
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$(unset CLJVM_DEBUG && $TOOL_TIMEOUT $TIMEOUT $VM -e '(+ 1 2)' 2>&1) || {
+    echo "FAIL: debug output no env var (timeout or error)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+}
+if ! echo "$result" | grep -q "clojurez starting"; then
+    echo "PASS: debug output disabled by default (no CLJVM_DEBUG)"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: debug output should be disabled without CLJVM_DEBUG"
+    echo "  Got: $(echo "$result" | tr '\n' ' ' | head -c 300)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
+
+# Test 5: CLJVM_DEBUG=1 does not crash (regression for the dangling pointer bug)
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$(CLJVM_DEBUG=1 $TOOL_TIMEOUT $TIMEOUT $VM -e '(doall (map (fn [x] (* x 2)) (list 1 2 3)))' 2>&1) || {
+    echo "FAIL: debug output CLJVM_DEBUG=1 crash regression (timeout or error)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+}
+if echo "$result" | grep -q "clojurez starting"; then
+    echo "PASS: debug output CLJVM_DEBUG=1 no crash on map (regression)"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: debug output CLJVM_DEBUG=1 crash regression"
+    echo "  Got: $(echo "$result" | tr '\n' ' ' | head -c 300)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi

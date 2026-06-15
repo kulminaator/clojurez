@@ -88,6 +88,7 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
 
     // Debug output: toggle with CLJVM_DEBUG=1 (all) or CLJVM_DEBUG=gc,eval (categories)
     debug.init(init.environ);
+    debug.log("startup", "clojurez starting", .{});
 
     // Memory trace: toggle with CLJVM_MEM_TRACE=1 (stderr) or CLJVM_MEM_TRACE=file:path
     // The tracing condition is evaluated once at startup. When disabled, log_fn is null
@@ -265,6 +266,7 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
         // Collect after function returns so local vars are out of scope
         if (gc_mod.current_gc) |gc| gc.collect(gc_scan.valueScanFn);
     }
+    debug.log("startup", "clojurez shutting down", .{});
 }
 
 /// Copy all builtin_fn values from the root env into a target namespace env.
