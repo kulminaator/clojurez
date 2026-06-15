@@ -397,8 +397,10 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
         // if - conditional
         if (std.mem.eql(u8, name, "if")) {
             if (l.items.len < 2 or l.items.len > 4) return error.ArityError;
-            const cond = try evalRec(allocator, arena_alloc, l.items[1], env, depth + 1);
-            if (cond.isTruthy()) {
+            var cond = try evalRec(allocator, arena_alloc, l.items[1], env, depth + 1);
+            const truthy = cond.isTruthy();
+            cond.deinit(arena_alloc);
+            if (truthy) {
                 if (l.items.len >= 3) return try evalRec(allocator, arena_alloc, l.items[2], env, depth + 1);
                 return Value.nilValue();
             } else {
@@ -410,9 +412,18 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
         // when - (when test body...)
         if (std.mem.eql(u8, name, "when")) {
             if (l.items.len < 2) return error.ArityError;
-            const cond = try evalRec(allocator, arena_alloc, l.items[1], env, depth + 1);
-            if (cond.isTruthy()) {
-                return try evalDo(allocator, arena_alloc, l.items[2..], env, depth + 1);
+            var cond = try evalRec(allocator, arena_alloc, l.items[1], env, depth + 1);
+            const truthy = cond.isTruthy();
+            cond.deinit(arena_alloc);
+            if (truthy) {
+                var do_result: Value = Value.nilValue();
+                errdefer do_result.deinit(arena_alloc);
+                for (l.items[2..]) |form| {
+                    do_result.deinit(arena_alloc);
+                    do_result = Value.nilValue();
+                    do_result = try evalRec(allocator, arena_alloc, form, env, depth + 1);
+                }
+                return do_result;
             }
             return Value.nilValue();
         }
@@ -574,7 +585,14 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
 
         // do - evaluate a sequence of forms
         if (std.mem.eql(u8, name, "do")) {
-            return try evalDo(allocator, arena_alloc, l.items[1..], env, depth + 1);
+            var do_result: Value = Value.nilValue();
+            errdefer do_result.deinit(arena_alloc);
+            for (l.items[1..]) |form| {
+                do_result.deinit(arena_alloc);
+                do_result = Value.nilValue();
+                do_result = try evalRec(allocator, arena_alloc, form, env, depth + 1);
+            }
+            return do_result;
         }
 
         // set! - modify a var
@@ -673,8 +691,9 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
         // and - short-circuit and
         if (std.mem.eql(u8, name, "and")) {
             for (l.items[1..]) |form_item| {
-                const val = try evalRec(allocator, arena_alloc, form_item, env, depth + 1);
+                var val = try evalRec(allocator, arena_alloc, form_item, env, depth + 1);
                 if (!val.isTruthy()) return val;
+                val.deinit(arena_alloc);
             }
             return Value.boolValue(true);
         }
@@ -696,7 +715,14 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
                 const val = try evalRec(allocator, arena_alloc, bindings.vec_val.items[i + 1], env, depth + 1);
                 try new_env.put(sym.sym_val, val);
             }
-            return try evalDo(allocator, arena_alloc, l.items[2..], &new_env, depth + 1);
+            var do_result: Value = Value.nilValue();
+            errdefer do_result.deinit(arena_alloc);
+            for (l.items[2..]) |form| {
+                do_result.deinit(arena_alloc);
+                do_result = Value.nilValue();
+                do_result = try evalRec(allocator, arena_alloc, form, &new_env, depth + 1);
+            }
+            return do_result;
         }
 
         // ->> thread-last macro
@@ -823,8 +849,13 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
         }
     }
 
+    // Non-special-form: evaluate as function call
+    return try evalFunctionCall(allocator, arena_alloc, l, env, depth + 1);
+}
+
+fn evalFunctionCall(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
     // Evaluate the operator
-    var op = try evalRec(allocator, arena_alloc, first, env, depth + 1);
+    var op = try evalRec(allocator, arena_alloc, l.items[0], env, depth);
     defer op.deinit(arena_alloc);
 
     // Check if operator is a macro
@@ -836,9 +867,9 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
             try macro_args.append(arena_alloc, try arg.clone(arena_alloc));
         }
         // Call the macro with unevaluated args
-        var expanded = try call(allocator, arena_alloc, op, macro_args, env, depth + 1);
+        var expanded = try call(allocator, arena_alloc, op, macro_args, env, depth);
         // Evaluate the expanded form
-        const result = try evalRec(allocator, arena_alloc, expanded, env, depth + 1);
+        const result = try evalRec(allocator, arena_alloc, expanded, env, depth);
         expanded.deinit(arena_alloc);
         return result;
     }
@@ -847,7 +878,7 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
     var args: list.List = .empty;
     errdefer args.deinit(arena_alloc);
     for (l.items[1..]) |arg| {
-        try args.append(arena_alloc, try evalRec(allocator, arena_alloc, arg, env, depth + 1));
+        try args.append(arena_alloc, try evalRec(allocator, arena_alloc, arg, env, depth));
     }
 
     // Transfer ownership of args to call (call will deinit it).
@@ -856,27 +887,20 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
     args = list.List.empty;
 
     // Call the function
-    return try call(allocator, arena_alloc, op, transferred, env, depth + 1);
-}
-
-fn evalDo(allocator: Allocator, arena_alloc: Allocator, forms: []const Value, env: *Env, depth: usize) anyerror!Value {
-    var result: Value = Value.nilValue();
-    errdefer result.deinit(arena_alloc);
-
-    for (forms) |form| {
-        result.deinit(arena_alloc);
-        result = Value.nilValue();
-        result = try evalRec(allocator, arena_alloc, form, env, depth);
-    }
-    return result;
+    return try call(allocator, arena_alloc, op, transferred, env, depth);
 }
 
 fn evalLet(allocator: Allocator, arena_alloc: Allocator, bindings: Value, body: []const Value, env: *Env, depth: usize) anyerror!Value {
     if (bindings.type != .list and bindings.type != .vector) return error.TypeError;
 
-    var new_env = try env.clone(arena_alloc);
+    // Heap-allocate Env to reduce C stack pressure during deep recursion.
+    // Env is ~416 bytes; keeping it on the stack in debug mode causes overflow.
+    const new_env = try allocator.create(Env);
+    errdefer allocator.destroy(new_env);
+    new_env.* = try env.clone(arena_alloc);
     defer new_env.deinit(arena_alloc);
-    defer pushEnvTempRoot(&new_env).deinit();
+    defer pushEnvTempRoot(new_env).deinit();
+    defer allocator.destroy(new_env);
 
     const items = switch (bindings.type) {
         .list => bindings.list_val.items,
@@ -888,12 +912,19 @@ fn evalLet(allocator: Allocator, arena_alloc: Allocator, bindings: Value, body: 
     while (i < items.len) : (i += 2) {
         const sym = items[i];
         // Evaluate binding value in new_env so later bindings can reference earlier ones
-        const val = try evalRec(allocator, arena_alloc, items[i + 1], &new_env, depth);
+        const val = try evalRec(allocator, arena_alloc, items[i + 1], new_env, depth);
         // Bind using destructuring if sym is a vector pattern
-        try bindPattern(allocator, arena_alloc, sym, val, &new_env, depth);
+        try bindPattern(allocator, arena_alloc, sym, val, new_env, depth);
     }
 
-    return try evalDo(allocator, arena_alloc, body, &new_env, depth);
+    var do_result: Value = Value.nilValue();
+    errdefer do_result.deinit(arena_alloc);
+    for (body) |form| {
+        do_result.deinit(arena_alloc);
+        do_result = Value.nilValue();
+        do_result = try evalRec(allocator, arena_alloc, form, new_env, depth);
+    }
+    return do_result;
 }
 
 fn evalLetFn(allocator: Allocator, arena_alloc: Allocator, bindings: Value, body: []const Value, env: *Env, depth: usize) anyerror!Value {
@@ -980,7 +1011,14 @@ fn evalLetFn(allocator: Allocator, arena_alloc: Allocator, bindings: Value, body
         try new_env.put(fname.sym_val, persistent_fn);
     }
 
-    return try evalDo(allocator, arena_alloc, body, &new_env, depth);
+    var do_result: Value = Value.nilValue();
+    errdefer do_result.deinit(arena_alloc);
+    for (body) |form| {
+        do_result.deinit(arena_alloc);
+        do_result = Value.nilValue();
+        do_result = try evalRec(allocator, arena_alloc, form, &new_env, depth);
+    }
+    return do_result;
 }
 
 /// Bind a value to a pattern. Supports simple symbols and vector destructuring with & rest.
@@ -1035,11 +1073,13 @@ fn evalCond(allocator: Allocator, arena_alloc: Allocator, clauses: []const Value
             return try evalRec(allocator, arena_alloc, clauses[i + 1], env, depth);
         }
 
-        const result = try evalRec(allocator, arena_alloc, cond, env, depth);
+        var result = try evalRec(allocator, arena_alloc, cond, env, depth);
         if (result.isTruthy()) {
             if (i + 1 >= clauses.len) return error.ArityError;
+            result.deinit(arena_alloc);
             return try evalRec(allocator, arena_alloc, clauses[i + 1], env, depth);
         }
+        result.deinit(arena_alloc);
     }
     return Value.nilValue();
 }
@@ -1083,7 +1123,13 @@ fn evalLoop(allocator: Allocator, arena_alloc: Allocator, bindings: Value, body:
     while (true) {
         if (loop_depth > MAX_RECURSION) return error.RecursionLimit;
 
-        var result = try evalDo(allocator, arena_alloc, body, &new_env, loop_depth);
+        var result: Value = Value.nilValue();
+        errdefer result.deinit(arena_alloc);
+        for (body) |form| {
+            result.deinit(arena_alloc);
+            result = Value.nilValue();
+            result = try evalRec(allocator, arena_alloc, form, &new_env, loop_depth);
+        }
 
         // Check for recur marker: list starting with __recur__ symbol
         if (result.type == .list and result.list_val.items.len > 0 and
@@ -1141,12 +1187,15 @@ pub fn call(allocator: Allocator, arena_alloc: Allocator, op: Value, args_list: 
             if (matched_arity == null) return error.ArityError;
             const arity = matched_arity.?;
 
+            // Heap-allocate Env to reduce C stack pressure during deep recursion.
+            // Env is ~416 bytes; keeping it on the stack in debug mode causes overflow.
+            const new_env = try allocator.create(Env);
+            errdefer allocator.destroy(new_env);
             // Optimization: skip env clone if no local entries
-            var new_env: Env = undefined;
             if (!fn_data.env.entries.isEmpty()) {
-                new_env = try fn_data.env.clone(arena_alloc);
+                new_env.* = try fn_data.env.clone(arena_alloc);
             } else {
-                new_env = .{
+                new_env.* = .{
                     .allocator = allocator,
                     .entries = phm.PersistentHashMap.empty(),
                     .parent = fn_data.env.parent,
@@ -1154,7 +1203,8 @@ pub fn call(allocator: Allocator, arena_alloc: Allocator, op: Value, args_list: 
                 };
             }
             defer new_env.deinit(arena_alloc);
-            defer pushEnvTempRoot(&new_env).deinit();
+            defer pushEnvTempRoot(new_env).deinit();
+            defer allocator.destroy(new_env);
 
             // Bind function name for self-reference (e.g., (fn self [x] (self (dec x))))
             if (fn_data.name) |fn_name| {
@@ -1169,7 +1219,7 @@ pub fn call(allocator: Allocator, arena_alloc: Allocator, op: Value, args_list: 
             var j: usize = 0;
             while (j < arity.params.items.len) : (j += 1) {
                 const param = arity.params.items[j];
-                try bindParam(allocator, arena_alloc, param, args.items[j], &new_env);
+                try bindParam(allocator, arena_alloc, param, args.items[j], new_env);
             }
 
             // Bind rest parameter to remaining args as a list
@@ -1196,13 +1246,13 @@ pub fn call(allocator: Allocator, arena_alloc: Allocator, op: Value, args_list: 
                     allocator,
                     arena_alloc,
                     args,
-                    &new_env,
+                    new_env,
                     depth,
                 );
             }
 
             // Evaluate the function body
-            return try evalRec(allocator, arena_alloc, Value.listValue(arity.body), &new_env, depth);
+            return try evalRec(allocator, arena_alloc, Value.listValue(arity.body), new_env, depth);
         },
         .builtin_fn => {
             var op_mut = op;

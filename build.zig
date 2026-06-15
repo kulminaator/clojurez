@@ -55,6 +55,13 @@ pub fn build(b: *std.Build) void {
             .root_module = module,
         });
 
+        // Debug builds have ~25KB stack frame per function call due to safety checks.
+        // Each Clojure recursive call invokes ~27 Zig functions = ~675KB per recursion level.
+        // Default 8MB only supports ~12 levels. 64MB supports ~95 levels which is reasonable.
+        if (v.opt == .Debug) {
+            exe.stack_size = 1024 * 1024 * 64; // 64MB for debug
+        }
+
         // All variants depend on core.clj and string.clj being copied first
         exe.step.dependOn(&copy_core.step);
         exe.step.dependOn(&copy_string.step);
