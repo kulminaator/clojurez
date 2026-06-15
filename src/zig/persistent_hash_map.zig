@@ -1506,14 +1506,18 @@ var sym_cache: std.StringArrayHashMapUnmanaged(Value) = .empty;
 
 /// Create or retrieve a memoized Value(symbol) for the given string.
 /// The returned Value owns a duplicated copy of the string.
+/// Keys in sym_cache are duplicated via page_allocator to avoid
+/// dangling pointers when the original string is GC-allocated.
 pub fn sym(s: []const u8) Value {
     if (sym_cache.get(s)) |cached| {
         return cached;
     }
     const allocator = std.heap.page_allocator;
+    // Duplicate the key string so sym_cache owns it (original may be GC-allocated)
+    const key_copy = allocator.dupe(u8, s) catch return Value{ .type = .symbol, .sym_val = s };
     const owned = allocator.dupe(u8, s) catch return Value{ .type = .symbol, .sym_val = s };
     const val = Value{ .type = .symbol, .sym_val = owned };
-    sym_cache.put(allocator, s, val) catch unreachable;
+    sym_cache.put(allocator, key_copy, val) catch { allocator.free(key_copy); return val; };
     return val;
 }
 
