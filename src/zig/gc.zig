@@ -504,6 +504,16 @@ pub const GC = struct {
             .{ self.block_count, self.current_allocated });
     }
 
+    /// Mark a single object as reachable without scanning its children.
+    /// Use this for raw buffers (e.g., REPL input history) that contain
+    /// no child Value pointers and should simply survive sweeps.
+    pub fn mark(self: *Self, ptr: ?*anyopaque) void {
+        if (ptr == null) return;
+        const real_ptr: *anyopaque = ptr.?;
+        const header = self.findHeader(real_ptr) orelse return;
+        header.marked = true;
+    }
+
     /// Mark a single object and recursively mark its children via the scan function.
     pub fn markRecursive(self: *Self, ptr: ?*anyopaque, ctx: *ScanContext) void {
         if (ptr == null) return;

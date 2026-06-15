@@ -35,6 +35,14 @@ fn scanUnknownBlock(obj: *anyopaque, ctx: *gc.ScanContext, size: usize) void {
     const atom_size = @sizeOf(Value.AtomData);
     const thunk_size = @sizeOf(Value.LazySeqThunk);
 
+    // Safety check: never scan the REPL history buffer as Value objects.
+    // It contains raw source text bytes, not Value structs.
+    const gc_mod = @import("gc.zig");
+    if (gc_mod.repl_history_buffer.len > 0 and
+        @as(*anyopaque, @ptrCast(@constCast(gc_mod.repl_history_buffer.ptr))) == obj) {
+        return;
+    }
+
     if (size == value_size) {
         const val: *const Value = @ptrCast(@alignCast(obj));
         scanValueChildrenDirect(val, ctx);

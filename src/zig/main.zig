@@ -609,14 +609,12 @@ fn gcRootCallback(gc_inst: *gc_mod.GC) void {
         }
     }
     // Mark REPL input history buffer so it survives sweeps.
+    // Use mark() NOT markRecursive() — the buffer contains raw source text bytes,
+    // not Value objects. Scanning them as Values causes crashes when raw bytes
+    // are interpreted as Value pointers.
     if (gc_mod.repl_history_buffer.len > 0) {
-        gc_inst.setObjectType(
+        gc_inst.mark(
             @as(*anyopaque, @ptrCast(@constCast(gc_mod.repl_history_buffer.ptr))),
-            gc_mod.GCObjectType.unknown,
-        );
-        gc_inst.markRecursive(
-            @as(*anyopaque, @ptrCast(@constCast(gc_mod.repl_history_buffer.ptr))),
-            &ctx,
         );
     }
 }
