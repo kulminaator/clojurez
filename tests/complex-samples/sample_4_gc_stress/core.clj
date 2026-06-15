@@ -9,6 +9,8 @@
 ;; Only directional checks are used (no hardcoded byte thresholds)
 ;; so the test is robust across different builds and platforms.
 
+;; This test is expected to fail if GC is turned off.
+
 ;; Build a large string to stress the allocator.
 (defn build-heavy [n]
   (reduce str (range 1 n)))
