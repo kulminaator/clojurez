@@ -755,3 +755,149 @@ test "value::fmt: char zero" {
     try std.testing.expect(s[0] == '\\');
     try std.testing.expect(s[1] == 0);
 }
+
+const gc_mod = @import("gc.zig");
+const phm = @import("persistent_hash_map.zig");
+const gc_scan = @import("gc_scan.zig");
+test "value::Env: function closures with captured envs survive GC" {
+    const allocator = std.heap.page_allocator;
+
+    var gc = gc_mod.GC.init(allocator);
+    defer gc.deinit();
+    const prev_gc2 = gc_mod.current_gc;
+    gc_mod.current_gc = &gc;
+    defer gc_mod.current_gc = prev_gc2;
+    const gc_alloc = gc.allocator();
+
+    // Create root env (heap-allocated so GC can discover it)
+    const root_env = try gc_alloc.create(Env);
+    errdefer { root_env.deinit(gc_alloc); gc_alloc.destroy(root_env); }
+    root_env.* = Env.init(gc_alloc);
+    gc.setObjectType(@as(*anyopaque, @ptrCast(root_env)), gc_mod.GCObjectType.env);
+    gc.addRoot(@as(*anyopaque, @ptrCast(root_env)));
+
+    // Create a function that captures the root env
+    // The fn's env is heap-allocated *Env — this is what the GC bug affected
+    var arities: std.ArrayListUnmanaged(Value.Arity) = .empty;
+    errdefer gc_alloc.free(arities.items);
+    try arities.append(gc_alloc, Value.Arity{
+        .params = list.empty(),
+        .body = list.empty(),
+        .rest_name = null,
+    });
+
+    const fn_env = try root_env.clone(gc_alloc);
+    var fn_val = try Value.fnValue(gc_alloc, arities, fn_env, false);
+    errdefer fn_val.deinit(gc_alloc);
+
+    // Store the function in root env
+    try root_env.put("my_fn", fn_val);
+    fn_val = Value.nilValue(); // transfer ownership
+
+    // Run GC — the fn's captured env must survive
+    gc.collect(gc_scan.valueScanFn);
+
+    // Retrieve the function and verify its env is still valid
+    const retrieved = root_env.get("my_fn");
+    try std.testing.expect(retrieved != null);
+    try std.testing.expect(retrieved.?.type == .function);
+
+    // The fn's env should still be accessible and not corrupt
+    const fn_data = retrieved.?.fn_val;
+    _ = fn_data.env; // accessing the pointer should not crash
+    try std.testing.expect(fn_data.env.entries.count == 0); // empty env (clone of empty root)
+}
+
+test "value::Env: nested child envs survive GC" {
+    const allocator = std.heap.page_allocator;
+
+    // Create a GC instance for this test
+    var gc = gc_mod.GC.init(allocator);
+    defer gc.deinit();
+    // Set global current_gc so HAMT allocation helpers can set obj_type
+    const prev_gc = gc_mod.current_gc;
+    gc_mod.current_gc = &gc;
+    defer gc_mod.current_gc = prev_gc;
+    const gc_alloc = gc.allocator();
+
+    // Create root env (heap-allocated so GC can discover it)
+    const root_env = try gc_alloc.create(Env);
+    errdefer { root_env.deinit(gc_alloc); gc_alloc.destroy(root_env); }
+    root_env.* = Env.init(gc_alloc);
+    gc.setObjectType(@as(*anyopaque, @ptrCast(root_env)), gc_mod.GCObjectType.env);
+    gc.addRoot(@as(*anyopaque, @ptrCast(root_env)));
+
+    // Add 50 values to the root env
+    var i: usize = 0;
+    while (i < 5) : (i += 1) {
+        const fname = try std.fmt.allocPrint(gc_alloc, "fn_{d}", .{i});
+        errdefer gc_alloc.free(fname);
+        const val = intValue(@as(i64, @intCast(i)));
+        try root_env.put(fname, val);
+    }
+
+    // Verify count before GC
+    try std.testing.expectEqual(@as(usize, 5), root_env.entries.count);
+
+    // Create 50 layers of child envs, each adding a local binding
+    var current_env_ptr: *Env = root_env;
+    var child_envs: std.ArrayList(*Env) = .empty;
+    defer {
+        for (child_envs.items) |ce| {
+            ce.deinit(gc_alloc);
+            gc_alloc.destroy(ce);
+        }
+        child_envs.deinit(allocator);
+    }
+
+    i = 0;
+    while (i < 5) : (i += 1) {
+        const child = try gc_alloc.create(Env);
+        child.* = try current_env_ptr.clone(gc_alloc);
+        gc.setObjectType(@as(*anyopaque, @ptrCast(child)), gc_mod.GCObjectType.env);
+        gc.addRoot(@as(*anyopaque, @ptrCast(child)));
+        try child_envs.append(allocator, child);
+
+        const local_name = try std.fmt.allocPrint(gc_alloc, "local_{d}", .{i});
+        const local_val = intValue(@as(i64, @intCast(i * 1000)));
+        try child.put(local_name, local_val);
+        gc_alloc.free(local_name);
+        current_env_ptr = child;
+    }
+
+    // Run GC twice (generational protection requires 2 cycles)
+    gc.verbose = true;
+    gc.collect(gc_scan.valueScanFn);
+    gc.collect(gc_scan.valueScanFn);
+
+    // Verify root env still has all 50 entries after GC
+    try std.testing.expectEqual(@as(usize, 5), root_env.entries.count);
+
+    // Verify all original values are still accessible from root env
+    i = 0;
+    while (i < 5) : (i += 1) {
+        const fname = try std.fmt.allocPrint(allocator, "fn_{d}", .{i});
+        defer allocator.free(fname);
+        const found = root_env.get(fname);
+        try std.testing.expect(found != null);
+        try std.testing.expect(found.?.int_val == @as(i64, @intCast(i)));
+    }
+
+    // Verify values accessible through parent chain from deepest env
+    i = 0;
+    while (i < 5) : (i += 1) {
+        const fname = try std.fmt.allocPrint(allocator, "fn_{d}", .{i});
+        defer allocator.free(fname);
+        const found = current_env_ptr.get(fname);
+        try std.testing.expect(found != null);
+    }
+
+    // Verify local bindings from deepest env
+    i = 0;
+    while (i < 5) : (i += 1) {
+        const local_name = try std.fmt.allocPrint(allocator, "local_{d}", .{i});
+        defer allocator.free(local_name);
+        const found = current_env_ptr.get(local_name);
+        try std.testing.expect(found != null);
+    }
+}

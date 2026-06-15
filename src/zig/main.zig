@@ -13,6 +13,7 @@ const strings = @import("namespaces/core/strings.zig");
 const regexp_api = @import("namespaces/regexp/api.zig");
 const debug_allocator = @import("debug_allocator.zig");
 const slab_allocator = @import("slab_allocator.zig");
+const debug = @import("debug.zig");
 const gc_mod = @import("gc.zig");
 const gc_scan = @import("gc_scan.zig");
 const sequences = @import("namespaces/core/sequences.zig");
@@ -84,6 +85,9 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
             }
         }
     }
+
+    // Debug output: toggle with CLJVM_DEBUG=1 (all) or CLJVM_DEBUG=gc,eval (categories)
+    debug.init(init.environ);
 
     // Memory trace: toggle with CLJVM_MEM_TRACE=1 (stderr) or CLJVM_MEM_TRACE=file:path
     // The tracing condition is evaluated once at startup. When disabled, log_fn is null

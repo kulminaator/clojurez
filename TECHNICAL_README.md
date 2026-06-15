@@ -348,6 +348,37 @@ Each allocation, free, resize, and remap is logged with size, pointer address, a
 
 This is useful for verifying that `def` rebindings, `let` scopes, and function calls properly free unreachable values.
 
+### Debug Output (`CLJVM_DEBUG`)
+
+The VM includes a conditional debug output system via the `CLJVM_DEBUG` environment variable. Off by default with zero overhead when disabled.
+
+**Enable all debug output:**
+```bash
+CLJVM_DEBUG=1 ./zig-out/bin/clojurez -e '(+ 1 2 3)'
+```
+
+**Enable specific categories (comma-separated):**
+```bash
+CLJVM_DEBUG=gc,eval ./zig-out/bin/clojurez -e '(+ 1 2 3)'
+```
+
+**Supported values:**
+- `1`, `true`, `all` — enable all debug categories
+- `gc` — garbage collection debug output
+- `eval` — evaluator debug output
+- Any comma-separated combination of category names
+
+**Usage in code:**
+```zig
+const debug = @import("debug.zig");
+debug.log("gc", "collected {} bytes", .{bytes_collected});
+debug.dbg("generic message {}", .{value});
+```
+
+Debug output is written to stderr. The environment variable is read once at startup; debug calls have zero overhead when the category is disabled (no format string evaluation).
+
+This is useful for diagnosing GC issues, evaluator state, and HAMT (persistent hash map) behavior during development.
+
 ### Parse Debug (`--parse-debug`)
 
 **STRONGLY RECOMMENDED** for diagnosing Clojure syntax errors. Use this before attempting to evaluate any `.clj` file.

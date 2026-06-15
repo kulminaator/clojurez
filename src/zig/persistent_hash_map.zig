@@ -184,7 +184,7 @@ fn hashBigInt(bi: anytype) i32 {
 // Node findPtr dispatch (forward declaration for node types)
 // ============================================================
 
-pub fn nodeFindPtr(node: *Node, shift: u5, hash: i32, key: Value) ?*const Value {
+pub fn nodeFindPtr(node: *Node, shift: u6, hash: i32, key: Value) ?*const Value {
     switch (node.*) {
         .bitmap_indexed => |*n| return n.findPtr(shift, hash, key),
         .array => |*n| return n.findPtr(shift, hash, key),
@@ -197,17 +197,24 @@ pub fn nodeFindPtr(node: *Node, shift: u5, hash: i32, key: Value) ?*const Value 
 // ============================================================
 
 /// 5 bits per level, 32-way branching
-const SHIFT_BITS: u5 = 5;
+const SHIFT_BITS: u6 = 5;
+
+/// Maximum useful shift for a 32-bit hash with 5-bit chunks.
+/// At shift=25 we've consumed bits 0-29 (30 bits). The remaining 2 bits
+/// aren't enough for another useful level.
+const MAX_SHIFT: u6 = 25;
 
 /// Extract 5-bit chunk of hash at given shift level.
-fn mask(hash: i32, shift: u5) usize {
+fn mask(hash: i32, shift: u6) usize {
     const uhash: u32 = @bitCast(hash);
-    const result = @as(usize, @intCast((uhash >> shift) & 0x1F));
+    if (shift >= 32) return 0;
+    const shift_u5: u5 = @intCast(shift);
+    const result = @as(usize, @intCast((uhash >> shift_u5) & 0x1F));
     return result;
 }
 
 /// Compute bitmap bit position from hash and shift.
-fn bitpos(hash: i32, shift: u5) u32 {
+fn bitpos(hash: i32, shift: u6) u32 {
     const m: u5 = @intCast(mask(hash, shift));
     return @as(u32, 1) << @as(u5, m);
 }
@@ -258,10 +265,8 @@ const BitmapIndexedNode = struct {
     /// Parallel array: sub_nodes[i] is non-null when array[i].key.type == .nil.
     sub_nodes: []?*Node,
 
-    pub fn findLeaf(self: *const BitmapIndexedNode, shift: u5, hash: i32, key: Value) ?Value {
+    pub fn findLeaf(self: *const BitmapIndexedNode, shift: u6, hash: i32, key: Value) ?Value {
         const bit = bitpos(hash, shift);
-        if (key.type == .symbol) {
-        }
         if ((self.bitmap & bit) == 0) return null;
 
         const idx = indexBelow(self.bitmap, bit);
@@ -271,12 +276,10 @@ const BitmapIndexedNode = struct {
             return nodeFindLeaf(self.sub_nodes[idx].?, shift + SHIFT_BITS, hash, key);
         }
         if (kvp.key.equals(key)) return kvp.val;
-        if (key.type == .symbol) {
-        }
         return null;
     }
 
-    pub fn findPtr(self: *const BitmapIndexedNode, shift: u5, hash: i32, key: Value) ?*const Value {
+    pub fn findPtr(self: *const BitmapIndexedNode, shift: u6, hash: i32, key: Value) ?*const Value {
         const bit = bitpos(hash, shift);
         if ((self.bitmap & bit) == 0) return null;
         const idx = indexBelow(self.bitmap, bit);
@@ -288,7 +291,7 @@ const BitmapIndexedNode = struct {
         return null;
     }
 
-    pub fn doAssoc(self: *const BitmapIndexedNode, allocator: Allocator, shift: u5, hash: i32, key: Value, val: Value, addedLeaf: *LeafFlag) anyerror!*Node {
+    pub fn doAssoc(self: *const BitmapIndexedNode, allocator: Allocator, shift: u6, hash: i32, key: Value, val: Value, addedLeaf: *LeafFlag) anyerror!*Node {
         const bit = bitpos(hash, shift);
         const exists = (self.bitmap & bit) != 0;
 
@@ -325,7 +328,7 @@ const BitmapIndexedNode = struct {
         }
     }
 
-    pub fn doWithout(self: *const BitmapIndexedNode, allocator: Allocator, shift: u5, hash: i32, key: Value, removedLeaf: *LeafFlag) anyerror!?*Node {
+    pub fn doWithout(self: *const BitmapIndexedNode, allocator: Allocator, shift: u6, hash: i32, key: Value, removedLeaf: *LeafFlag) anyerror!?*Node {
         const bit = bitpos(hash, shift);
         if ((self.bitmap & bit) == 0) return self.cloneNode(allocator);
 
@@ -422,19 +425,19 @@ const ArrayNode = struct {
     count: usize,
     nodes: [32]?*Node,
 
-    pub fn findLeaf(self: *const ArrayNode, shift: u5, hash: i32, key: Value) ?Value {
+    pub fn findLeaf(self: *const ArrayNode, shift: u6, hash: i32, key: Value) ?Value {
         const idx = mask(hash, shift);
         if (self.nodes[idx] == null) return null;
         return nodeFindLeaf(self.nodes[idx].?, shift + SHIFT_BITS, hash, key);
     }
 
-    pub fn findPtr(self: *const ArrayNode, shift: u5, hash: i32, key: Value) ?*const Value {
+    pub fn findPtr(self: *const ArrayNode, shift: u6, hash: i32, key: Value) ?*const Value {
         const idx = mask(hash, shift);
         if (self.nodes[idx] == null) return null;
         return nodeFindPtr(self.nodes[idx].?, shift + SHIFT_BITS, hash, key);
     }
 
-    pub fn doAssoc(self: *const ArrayNode, allocator: Allocator, shift: u5, hash: i32, key: Value, val: Value, addedLeaf: *LeafFlag) anyerror!*Node {
+    pub fn doAssoc(self: *const ArrayNode, allocator: Allocator, shift: u6, hash: i32, key: Value, val: Value, addedLeaf: *LeafFlag) anyerror!*Node {
         const idx = mask(hash, shift);
         const existing = self.nodes[idx];
 
@@ -453,7 +456,7 @@ const ArrayNode = struct {
         return createArrayNode(allocator, self.count, &new_nodes);
     }
 
-    pub fn doWithout(self: *const ArrayNode, allocator: Allocator, shift: u5, hash: i32, key: Value, removedLeaf: *LeafFlag) anyerror!?*Node {
+    pub fn doWithout(self: *const ArrayNode, allocator: Allocator, shift: u6, hash: i32, key: Value, removedLeaf: *LeafFlag) anyerror!?*Node {
         const idx = mask(hash, shift);
         const existing = self.nodes[idx];
 
@@ -545,8 +548,8 @@ const HashCollisionNode = struct {
         return null;
     }
 
-    pub fn doAssoc(self: *const HashCollisionNode, allocator: Allocator, shift: u5, hash: i32, key: Value, val: Value, addedLeaf: *LeafFlag) anyerror!*Node {
-        if (hash == self.hash) {
+    pub fn doAssoc(self: *const HashCollisionNode, allocator: Allocator, shift: u6, hash: i32, key: Value, val: Value, addedLeaf: *LeafFlag) anyerror!*Node {
+        if (hash == self.hash or shift >= MAX_SHIFT) {
             var i: usize = 0;
             while (i < self.kvs.len) : (i += 1) {
                 if (self.kvs[i].key.equals(key)) {
@@ -564,7 +567,7 @@ const HashCollisionNode = struct {
         return nodeAssoc(bitmap_node, allocator, shift, hash, key, val, addedLeaf);
     }
 
-    pub fn doWithout(self: *const HashCollisionNode, allocator: Allocator, shift: u5, hash: i32, key: Value, removedLeaf: *LeafFlag) anyerror!?*Node {
+    pub fn doWithout(self: *const HashCollisionNode, allocator: Allocator, shift: u6, hash: i32, key: Value, removedLeaf: *LeafFlag) anyerror!?*Node {
         _ = shift;
         _ = hash;
         var i: usize = 0;
@@ -632,7 +635,7 @@ pub const Node = union(NodeTag) {
 };
 
 // Standalone dispatch functions for Node union
-pub fn nodeFindLeaf(node: *Node, shift: u5, hash: i32, key: Value) ?Value {
+pub fn nodeFindLeaf(node: *Node, shift: u6, hash: i32, key: Value) ?Value {
     switch (node.*) {
         .bitmap_indexed => |*n| return n.findLeaf(shift, hash, key),
         .array => |*n| return n.findLeaf(shift, hash, key),
@@ -640,7 +643,7 @@ pub fn nodeFindLeaf(node: *Node, shift: u5, hash: i32, key: Value) ?Value {
     }
 }
 
-pub fn nodeAssoc(node: *Node, allocator: Allocator, shift: u5, hash: i32, key: Value, val: Value, addedLeaf: *LeafFlag) anyerror!*Node {
+pub fn nodeAssoc(node: *Node, allocator: Allocator, shift: u6, hash: i32, key: Value, val: Value, addedLeaf: *LeafFlag) anyerror!*Node {
     switch (node.*) {
         .bitmap_indexed => |*n| return n.doAssoc(allocator, shift, hash, key, val, addedLeaf),
         .array => |*n| return n.doAssoc(allocator, shift, hash, key, val, addedLeaf),
@@ -648,7 +651,7 @@ pub fn nodeAssoc(node: *Node, allocator: Allocator, shift: u5, hash: i32, key: V
     }
 }
 
-pub fn nodeWithout(node: *Node, allocator: Allocator, shift: u5, hash: i32, key: Value, removedLeaf: *LeafFlag) anyerror!?*Node {
+pub fn nodeWithout(node: *Node, allocator: Allocator, shift: u6, hash: i32, key: Value, removedLeaf: *LeafFlag) anyerror!?*Node {
     switch (node.*) {
         .bitmap_indexed => |*n| return n.doWithout(allocator, shift, hash, key, removedLeaf),
         .array => |*n| return n.doWithout(allocator, shift, hash, key, removedLeaf),
@@ -1021,7 +1024,7 @@ fn getPhase(node: *const Node) NodePhase {
 // ============================================================
 
 /// Create a BitmapIndexedNode with a single leaf entry.
-fn createBitmapLeaf(allocator: Allocator, shift: u5, hash: i32, key: Value, val: Value, addedLeaf: *LeafFlag) anyerror!*Node {
+fn createBitmapLeaf(allocator: Allocator, shift: u6, hash: i32, key: Value, val: Value, addedLeaf: *LeafFlag) anyerror!*Node {
     const bit = bitpos(hash, shift);
     addedLeaf.set(true);
 
@@ -1040,7 +1043,7 @@ fn createBitmapLeaf(allocator: Allocator, shift: u5, hash: i32, key: Value, val:
 }
 
 /// Create a sub-node to handle two keys that collide at this level.
-fn createSubNode(allocator: Allocator, shift: u5, key1: Value, val1: Value, hash2: i32, key2: Value, val2: Value, addedLeaf: *LeafFlag) anyerror!*Node {
+fn createSubNode(allocator: Allocator, shift: u6, key1: Value, val1: Value, hash2: i32, key2: Value, val2: Value, addedLeaf: *LeafFlag) anyerror!*Node {
     const hash1 = valueHash(key1);
     if (hash1 == hash2) {
         addedLeaf.set(true);
@@ -1061,6 +1064,39 @@ fn createSubNode(allocator: Allocator, shift: u5, key1: Value, val1: Value, hash
     const bit2 = bitpos(hash2, shift);
     bitmap |= bit1;
     bitmap |= bit2;
+
+    // If both keys also collide at this shift level, recurse deeper.
+    // This can happen when two keys share the same 5-bit chunk at
+    // consecutive levels. We need to go deeper until they separate.
+    // If we've exhausted all 32 bits (shift >= 32), fall back to
+    // a HashCollisionNode since the keys have identical hashes.
+    if (bit1 == bit2) {
+        if (shift >= MAX_SHIFT) {
+            // Can't go deeper — treat as hash collision
+            var kvs: [2]Kvp = .{
+                .{ .key = try key1.clone(allocator), .val = try val1.clone(allocator) },
+                .{ .key = try key2.clone(allocator), .val = try val2.clone(allocator) },
+            };
+            return newNode(allocator, Node{
+                .hash_collision = HashCollisionNode{
+                    .hash = hash1,
+                    .kvs = newKvpArray(allocator, &kvs),
+                },
+            });
+        }
+        // Recurse to create the deeper sub-node, then wrap it in a
+        // BitmapIndexedNode at the current shift level.
+        const deeper_sub = createSubNode(allocator, shift + SHIFT_BITS, key1, val1, hash2, key2, val2, addedLeaf) catch @panic("OOM");
+        var kvs: [1]Kvp = .{ .{ .key = Value.nilValue(), .val = Value.nilValue() } };
+        var subs: [1]?*Node = .{deeper_sub};
+        return newNode(allocator, Node{
+            .bitmap_indexed = BitmapIndexedNode{
+                .bitmap = bit1, // Only one bit set (the shared slot)
+                .array = newKvpArray(allocator, &kvs),
+                .sub_nodes = newSubNodesArray(allocator, &subs),
+            },
+        });
+    }
 
     const idx1 = indexBelow(bitmap, bit1);
     const idx2 = indexBelow(bitmap, bit2);
@@ -1133,7 +1169,8 @@ fn createBitmapWithSub(allocator: Allocator, src: *const BitmapIndexedNode, idx:
             // Replace with nil key (marks this slot as holding a sub-node)
             new_kvs[i] = .{ .key = Value.nilValue(), .val = Value.nilValue() };
             new_subs[i] = new_sub;
-            if (src.sub_nodes[i]) |old_sub| deinitNodePtr(old_sub, allocator);
+            // DON'T deinit old_sub here - it's still referenced by the old HAMT
+            // via structural sharing. The GC will free it when unreachable.
         } else {
             // Deep clone the Kvp
             new_kvs[i] = .{
@@ -1201,9 +1238,8 @@ fn createBitmapWithout(allocator: Allocator, src: *const BitmapIndexedNode, remo
     var j: usize = 0;
     while (i < src.array.len) : (i += 1) {
         if (i == remove_idx) {
-            src.array[i].key.deinit(allocator);
-            src.array[i].val.deinit(allocator);
-            if (src.sub_nodes[i]) |sub| deinitNodePtr(sub, allocator);
+            // DON'T deinit here - the removed entry is still referenced by the old HAMT
+            // via structural sharing. The GC will free it when unreachable.
             continue;
         }
         // Deep clone Kvp to avoid sharing Value pointers with src.
@@ -1272,7 +1308,7 @@ fn createBitmapWithCollisionSub(allocator: Allocator, bit: u32, collision: *cons
 }
 
 /// Upgrade a BitmapIndexedNode to ArrayNode and add a new entry.
-fn upgradeToArrayAndAssoc(allocator: Allocator, src: *const BitmapIndexedNode, shift: u5, hash: i32, key: Value, val: Value, addedLeaf: *LeafFlag) anyerror!*Node {
+fn upgradeToArrayAndAssoc(allocator: Allocator, src: *const BitmapIndexedNode, shift: u6, hash: i32, key: Value, val: Value, addedLeaf: *LeafFlag) anyerror!*Node {
     var nodes: [32]?*Node = .{null} ** 32;
     var count: usize = 0;
 
@@ -1310,13 +1346,22 @@ fn upgradeToArrayAndAssoc(allocator: Allocator, src: *const BitmapIndexedNode, s
 }
 
 /// Get the array slot index for a sub-node at a given shift level.
-fn getSubNodeSlot(sub: *const Node, shift: u5) usize {
+fn getSubNodeSlot(sub: *const Node, shift: u6) usize {
     switch (sub.*) {
         .bitmap_indexed => |*bnode| {
-            var b: u32 = 1;
-            var s: usize = 0;
-            while (b != 0 and s < 32) : ({ b <<= 1; s += 1; }) {
-                if ((bnode.bitmap & b) != 0) return s;
+            // Find the first leaf entry and use its hash to determine the slot.
+            // All entries in this sub-node share the same parent-level slot.
+            var j: usize = 0;
+            while (j < bnode.array.len) : (j += 1) {
+                if (bnode.array[j].key.type != .nil) {
+                    return mask(valueHash(bnode.array[j].key), shift);
+                }
+            }
+            // All entries are sub-nodes; recurse into the first one.
+            if (bnode.sub_nodes.len > 0) {
+                if (bnode.sub_nodes[0]) |sub2| {
+                    return getSubNodeSlot(sub2, shift);
+                }
             }
             return 0;
         },
@@ -1334,7 +1379,7 @@ fn getSubNodeSlot(sub: *const Node, shift: u5) usize {
 }
 
 /// Merge two nodes at the same level.
-fn mergeIntoSlot(allocator: Allocator, target: *Node, source: *Node, shift: u5, addedLeaf: *LeafFlag) anyerror!*Node {
+fn mergeIntoSlot(allocator: Allocator, target: *Node, source: *Node, shift: u6, addedLeaf: *LeafFlag) anyerror!*Node {
     switch (source.*) {
         .bitmap_indexed => |*bnode| {
             var result = target;
@@ -1478,8 +1523,8 @@ fn createCollisionNodeWithout(allocator: Allocator, src: *const HashCollisionNod
     var i: usize = 0;
     while (i < src.kvs.len) : (i += 1) {
         if (i == remove_idx) {
-            src.kvs[i].key.deinit(allocator);
-            src.kvs[i].val.deinit(allocator);
+            // DON'T deinit here - the removed entry is still referenced by the old HAMT
+            // via structural sharing. The GC will free it when unreachable.
             continue;
         }
         // Deep clone to avoid sharing Value pointers with src.
@@ -1908,6 +1953,163 @@ test "persistent_hash_map::entry iterator with nil key" {
     try std.testing.expect(count == 2);
 
     // m.deinit(a); // skip deinit for standalone test (shallow copy in path copying)
+}
+
+test "persistent_hash_map::upgradeToArrayAndAssoc preserves entries" {
+    const a = std.heap.page_allocator;
+    var m = PersistentHashMap.empty();
+
+    // Insert 22 entries (up to and including ">" which previously killed "plus")
+    const test_names = [_][]const u8{
+        "plus", "minus", "mult", "div", "mod", "rem", "quot",
+        "rationalize", "numerator", "denominator", "num", "denom",
+        "+", "-", "*", "/",
+        "=", "!=", "not=", "==", "<", ">",
+    };
+
+    var i: usize = 0;
+    while (i < test_names.len) : (i += 1) {
+        const key = sym(test_names[i]);
+        const val = Value.intValue(@as(i64, @intCast(i)));
+        m = try m.mapAssoc(a, key, val);
+    }
+
+    try std.testing.expectEqual(test_names.len, m.mapCount());
+
+    // Verify every entry can be found
+    i = 0;
+    while (i < test_names.len) : (i += 1) {
+        const key = sym(test_names[i]);
+        const found = m.find(key);
+        try std.testing.expect(found != null);
+        try std.testing.expectEqual(@as(i64, @intCast(i)), found.?.int_val);
+    }
+}
+
+test "persistent_hash_map::string symbol keys stress test" {
+    const a = std.heap.page_allocator;
+    var m = PersistentHashMap.empty();
+
+    // These are the actual builtin function names registered in zig.core
+    const names = [_][]const u8{
+        "plus", "minus", "mult", "div", "mod", "rem", "quot",
+        "rationalize", "numerator", "denominator", "num", "denom",
+        "+", "-", "*", "/",
+        "=", "!=", "not=", "==", "<", ">", "<=", ">=", "compare",
+        "not", "boolean", "identical?",
+        "nil?", "some?", "true?", "false?", "zero?", "pos?", "neg?",
+        "even?", "odd?", "number?", "string?", "list?", "symbol?",
+        "keyword?", "vector?", "map?", "queue?", "set?", "coll?",
+        "sequential?", "fn?", "empty?", "not-empty", "utf8-valid?",
+        "str", "subs", "re-find", "re-matcher", "re-groups", "re-seq",
+        "re-pattern", "re-matches", "re-quote-replacement",
+        "count", "first", "rest", "nth", "concat", "list", "vec",
+        "subvec", "next", "nthnext", "last", "reverse", "flatten",
+        "distinct?", "iterate", "map", "mapcat", "take", "take-while",
+        "take-last", "drop", "drop-last", "drop-while", "partition",
+        "cycle", "repeat", "replicate", "split-at", "split-with",
+        "reduce", "into", "filter", "remove", "every?", "some",
+        "not-any?", "sort", "sort-by", "shuffle", "interpose",
+        "interleave",
+        "get", "assoc", "keys", "vals", "dissoc", "merge",
+        "contains?", "hash-map", "zipmap", "get-in", "assoc-in",
+        "select-keys",
+        "set", "disj", "union", "intersection", "difference",
+        "subset?", "superset?", "hash-set",
+        "conj", "pop", "range", "peek", "seq", "empty",
+        "atom", "swap!", "reset!", "deref",
+        "print", "println", "read-line", "spit", "slurp",
+        "apply", "trampoline", "if-not", "partial", "comp",
+        "fnil", "juxt",
+        "macroexpand-1", "macroexpand",
+        "rand", "rand-int", "rand-nth",
+        "bit-and", "bit-or", "bit-xor", "bit-not", "bit-and-not",
+        "bit-clear", "bit-flip", "bit-set", "bit-test", "bit-shift-left",
+        "bit-shift-right",
+        "gc-stats", "gc-sweep", "gc-enable", "gc-disable",
+        "nano-time", "var", "binding", "temp-dir",
+    };
+
+    // Register all names
+    var i: usize = 0;
+    while (i < names.len) : (i += 1) {
+        const key = sym(names[i]);
+        const val = Value.intValue(@as(i64, @intCast(i)));
+        m = try m.mapAssoc(a, key, val);
+    }
+
+    try std.testing.expectEqual(names.len, m.mapCount());
+
+    // Verify every entry can be found
+    i = 0;
+    while (i < names.len) : (i += 1) {
+        const key = sym(names[i]);
+        const found = m.find(key);
+        try std.testing.expect(found != null);
+        try std.testing.expectEqual(@as(i64, @intCast(i)), found.?.int_val);
+    }
+
+    // Verify entry iterator returns all entries
+    var it = m.entryIterator();
+    var count: usize = 0;
+    while (it.next()) |_| {
+        count += 1;
+    }
+    try std.testing.expectEqual(names.len, count);
+}
+
+test "persistent_hash_map::env clone and put stress" {
+    const a = std.heap.page_allocator;
+    var env1: Value.Env = Value.Env.init(a);
+
+    // Register many entries
+    const names = [_][]const u8{
+        "+", "-", "*", "/", "<", ">", "<=", ">=", "=", "!=",
+        "nil?", "true?", "false?", "not", "boolean",
+        "list", "vec", "count", "first", "rest", "nth",
+        "str", "subs", "print", "println",
+        "get", "assoc", "keys", "vals", "dissoc", "merge",
+        "conj", "pop", "seq", "empty", "peek",
+        "atom", "swap!", "reset!", "deref",
+    };
+
+    var i: usize = 0;
+    while (i < names.len) : (i += 1) {
+        try env1.put(names[i], Value.intValue(@as(i64, @intCast(i))));
+    }
+
+    // Verify all entries in env1
+    i = 0;
+    while (i < names.len) : (i += 1) {
+        const found = env1.get(names[i]);
+        try std.testing.expect(found != null);
+        try std.testing.expectEqual(@as(i64, @intCast(i)), found.?.int_val);
+    }
+
+    // Clone env1 and add more entries to the clone
+    var env2 = try env1.clone(a);
+    try env2.put("extra1", Value.intValue(999));
+    try env2.put("extra2", Value.intValue(888));
+
+    // Verify env1 is unchanged (structural sharing)
+    i = 0;
+    while (i < names.len) : (i += 1) {
+        const found = env1.get(names[i]);
+        try std.testing.expect(found != null);
+        try std.testing.expectEqual(@as(i64, @intCast(i)), found.?.int_val);
+    }
+    try std.testing.expect(env1.get("extra1") == null);
+    try std.testing.expect(env1.get("extra2") == null);
+
+    // Verify env2 has all entries from env1 plus extras
+    i = 0;
+    while (i < names.len) : (i += 1) {
+        const found = env2.get(names[i]);
+        try std.testing.expect(found != null);
+        try std.testing.expectEqual(@as(i64, @intCast(i)), found.?.int_val);
+    }
+    try std.testing.expectEqual(@as(i64, 999), env2.get("extra1").?.int_val);
+    try std.testing.expectEqual(@as(i64, 888), env2.get("extra2").?.int_val);
 }
 
 
