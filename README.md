@@ -53,6 +53,8 @@ For full details — features, API, testing, and project structure — see [TECH
 - **Big number support** — BigInt, Ratio, and BigDecimal with arbitrary precision
 - **Macros** — full macro expansion with `defmacro`
 - **Namespaces** — `ns` declarations with `:require` and `:as` aliases
+- **Protocols** — `defprotocol`, `extend`, `extend-type`, `extend-protocol`, `satisfies?`
+- **Records** — `defrecord` with factory functions, map-like operations, and protocol support
 - **Lazy sequences** — `lazy-seq`, `map`, `filter`, `take`, `drop`, etc.
 - **UTF-8** — full Unicode support in strings, symbols, and keywords
 

@@ -21,6 +21,7 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 - Atoms (`(atom 5)`)
 - Lazy sequences (`(lazy-seq ...)`)
 - Cons cells (`(cons 1 (list 2 3))`)
+- **Records** — named data types with fixed fields (`defrecord Person [name age]`)
 
 ### Garbage Collection
 - **Mark-and-sweep GC** — automatic memory management for all runtime values
@@ -67,6 +68,9 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 - `deref` / `@` — get the value of a var
 - `lazy-seq` — create a lazy sequence
 - `ns` — namespace declaration (with `:require` and `:as` support)
+- `defrecord` — define a named record type with fixed fields
+- `defprotocol` — define a protocol (interface)
+- `extend` / `extend-type` / `extend-protocol` — implement protocols for types
 
 ### Threading Macros
 - `->` — thread-first: inserts value as second argument
@@ -119,6 +123,8 @@ A minimalistic Clojure virtual machine written in Zig. Supports core data types,
 - **Metaprogramming:** `gensym`
 - **Time:** `nano-time`
 - **Atoms:** `atom`, `swap!`, `reset!`
+- **Protocols:** `defprotocol`, `extend`, `extend-type`, `extend-protocol`, `satisfies?`, `extends?`, `extenders`
+- **Records:** `defrecord`, `record?`, `type`, `meta`, `with-meta`
 
 ### Clojure Core Library
 Many common functions are implemented in Clojure source, keeping the Zig VM lean:
@@ -166,6 +172,63 @@ The `clojure.string` namespace provides string utility functions. Use with `:req
 - `last-index-of` — finds last index of substring/char (optionally from index)
 
 **Note:** Regular expression functions (`replace`, `replace-first`, `split`, `split-lines`) are not yet implemented.
+
+### Protocols and Records
+
+**Protocols** define a set of methods that types can implement:
+
+```clojure
+(defprotocol Greetable
+  (greet [this]))
+
+(extend-type :string Greetable
+  (greet [this] (str "Hello, " this)))
+
+(greet "Alice")  ;; => "Hello, Alice"
+(satisfies? Greetable "Alice")  ;; => true
+```
+
+**Records** are named data types with a fixed set of fields. They behave like maps
+but with type identity, factory functions, and protocol support:
+
+```clojure
+(defrecord Person [name age]
+  Greetable
+    (greet [this] (str "Hi, I'm " name)))
+
+;; Factory functions
+(def p1 (->Person "Alice" 30))
+(def p2 (map->Person {:name "Bob" :age 25}))
+
+;; Map-like operations
+(get p1 :name)           ;; => "Alice"
+(assoc p1 :age 31)       ;; => new record with updated age
+(assoc p1 :city "NYC")   ;; => new record with extmap {:city "NYC"}
+(dissoc p1 :name)        ;; => {:age 30} (plain map — field dissoc demotes)
+(contains? p1 :name)     ;; => true
+
+;; Type and equality
+(type p1)                ;; => :user.Person
+(record? p1)             ;; => true
+(= (->Person "Alice" 30) (->Person "Alice" 30))  ;; => true
+
+;; Metadata
+(meta (with-meta p1 {:role "admin"}))  ;; => {:role "admin"}
+
+;; Protocol dispatch uses record type keyword (:user.Person)
+(greet p1)               ;; => "Hi, I'm Alice"
+```
+
+**Key design decisions:**
+- Records are a dedicated `Value.Type` (`.record`) with fields map, extension map, and optional metadata
+- Fields are stored as a map (keyword → value) for dynamic lookup by keyword
+- `assoc` on a non-field key adds to the extension map (record is never demoted)
+- `dissoc` on a defined field returns a plain map (matches Clojure behavior)
+- Protocol dispatch uses the record type keyword (e.g., `:user.Person`) as the dispatch key
+- Factory functions `->Name` and `map->Name` are created at `defrecord` evaluation time
+- Field names are accessible directly in protocol method bodies (e.g., `(greet [this] (str name))`)
+- Records are callable as functions: `(record :key)` and `(record :key "default")`
+- Keywords are callable on records: `(:key record)`
 
 ## Build
 
@@ -514,6 +577,19 @@ This runs the file through the parser only (no evaluation, no library loading) a
 ;; File I/O
 (spit "hello.txt" "Hello, World!")  ;; => nil
 (slurp "hello.txt")                  ;; => "Hello, World!"
+
+;; Protocols
+(defprotocol Greetable (greet [this]))
+(extend-type :string Greetable (greet [this] (str "Hello, " this)))
+(greet "Alice")  ;; => "Hello, Alice"
+
+;; Records
+(defrecord Person [name age]
+  Greetable
+    (greet [this] (str "Hi, I'm " name)))
+(->Person "Alice" 30)           ;; => #user.Person{:name "Alice" :age 30}
+(get (->Person "Alice" 30) :name)  ;; => "Alice"
+(greet (->Person "Bob" 25))     ;; => "Hi, I'm Bob"
 ```
 
 ## Samples
@@ -621,6 +697,8 @@ See [GUIDELINES.md](GUIDELINES.md) for testing standards and detailed coverage r
 - Atoms (atom, swap!, reset!)
 - Time functions (nano-time)
 - Clojure core library bootstrapped from `.clj` files
+- **Protocols** (`defprotocol`, `extend`, `extend-type`, `extend-protocol`, `satisfies?`, `extends?`, `extenders`, multi-arity methods)
+- **Records** (`defrecord`, `->Name`, `map->Name`, `record?`, field access via `get`/keyword, `assoc`/`dissoc`/`merge`/`into`/`conj`, metadata, equality, type-based protocol dispatch)
 
 ## What's Missing
 
@@ -630,7 +708,7 @@ See [GUIDELINES.md](GUIDELINES.md) for testing standards and detailed coverage r
 - **JIT compilation** (we are a parsing/interpreting VM)
 - **Chunked sequences** (simpler sequence implementation)
 - **Full spec system** (no `s/def`, `s/valid?`, etc.)
-- **Protocol/multimethod system**
+- **Multimethods** (`defmulti`, `defmethod`)
 - **clojure.string regex functions** (`replace`, `replace-first`, `split`, `split-lines` — regex variants not yet implemented)
 
 ## Design Philosophy

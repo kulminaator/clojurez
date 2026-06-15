@@ -164,7 +164,7 @@ pub fn core_coll_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
     if (args.items.len != 1) return error.ArityError;
     const coll = args.items[0];
     return Value.boolValue(switch (coll.type) {
-        .list, .vector, .map, .set, .queue => true,
+        .list, .vector, .map, .set, .queue, .record => true,
         else => false,
     });
 }

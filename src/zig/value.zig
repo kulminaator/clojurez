@@ -121,6 +121,24 @@ pub fn recordValue(
         }
         allocator.free(owned_name);
     }
+    // Mark fields/extmap/meta buffers so GC scans the Value objects inside
+    if (fields.items.len > 0) {
+        if (gc_mod.current_gc) |gc| {
+            gc.setObjectType(@as(*anyopaque, @ptrCast(fields.items.ptr)), gc_mod.GCObjectType.map_entries);
+        }
+    }
+    if (extmap.items.len > 0) {
+        if (gc_mod.current_gc) |gc| {
+            gc.setObjectType(@as(*anyopaque, @ptrCast(extmap.items.ptr)), gc_mod.GCObjectType.map_entries);
+        }
+    }
+    if (owned_meta) |om| {
+        if (om.items.len > 0) {
+            if (gc_mod.current_gc) |gc| {
+                gc.setObjectType(@as(*anyopaque, @ptrCast(om.items.ptr)), gc_mod.GCObjectType.map_entries);
+            }
+        }
+    }
     return .{
         .type = .record,
         .record_val = .{
@@ -149,6 +167,12 @@ pub fn cloneMap(allocator: Allocator, src: Map) anyerror!Map {
             .key = try entry.key.clone(allocator),
             .value = try entry.value.clone(allocator),
         });
+    }
+    // Mark the cloned buffer as map_entries so GC scans Value objects inside
+    if (dst.items.len > 0) {
+        if (gc_mod.current_gc) |gc| {
+            gc.setObjectType(@as(*anyopaque, @ptrCast(dst.items.ptr)), gc_mod.GCObjectType.map_entries);
+        }
     }
     return dst;
 }

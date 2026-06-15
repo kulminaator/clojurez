@@ -248,6 +248,19 @@ pub fn core_reduce(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
         .vector => items = coll.vec_val.items,
         .set => items = coll.set_val.items,
         .queue => items = coll.queue_val.items,
+        .map => {
+            // Convert map to list of [key value] pairs (same as seq)
+            var pairs: list.List = .empty;
+            errdefer pairs.deinit(env_env.allocator);
+            for (coll.map_val.items) |entry| {
+                var pair: vec.Vector = .empty;
+                try pair.append(env_env.allocator, try entry.key.clone(env_env.allocator));
+                try pair.append(env_env.allocator, try entry.value.clone(env_env.allocator));
+                try pairs.append(env_env.allocator, Value.vectorValue(pair));
+            }
+            items = pairs.items;
+            owned_items = pairs;
+        },
         .record => {
             // Convert record to list of [key value] pairs (same as seq)
             var pairs: list.List = .empty;

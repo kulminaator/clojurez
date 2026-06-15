@@ -257,8 +257,8 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         },
 
         .record => {
-            // Scan the RecordData struct so GC can find all child pointers
-            ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(&val.record_val))), ctx);
+            // Scan the RecordData directly (it's embedded in the Value, not a separate GC block)
+            scanRecordData(@as(*anyopaque, @ptrCast(@constCast(&val.record_val))), ctx);
         },
     }
 }

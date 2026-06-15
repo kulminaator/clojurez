@@ -7,8 +7,18 @@ const Env = Value.Env;
 const phm = @import("../../persistent_hash_map.zig");
 const eval = @import("../../eval.zig");
 const protocols = @import("protocols.zig");
+const gc_mod = @import("../../gc.zig");
 
 const Allocator = std.mem.Allocator;
+
+/// Mark a list's buffer as a value_array so the GC scans the Value objects inside.
+fn markListAsValueArray(l: *const list.List) void {
+    if (l.items.len > 0) {
+        if (gc_mod.current_gc) |gc| {
+            gc.setObjectType(@as(*anyopaque, @ptrCast(l.items.ptr)), gc_mod.GCObjectType.value_array);
+        }
+    }
+}
 
 /// Record type descriptor — stored in the namespace env under the record name.
 /// Contains metadata about the record type: field names, namespace, field count.
@@ -225,6 +235,9 @@ pub fn buildPositionalFactory(
     const fn_name = try std.fmt.allocPrint(allocator, "->{s}", .{desc.name});
     errdefer allocator.free(fn_name);
 
+    // Mark body list as value_array so GC scans Value objects inside
+    markListAsValueArray(&body_list);
+
     // Create the function value
     const env_copy: Env = env.*;
     const result = try Value.fnValueSingleNamed(
@@ -295,6 +308,9 @@ pub fn buildMapFactory(
     const fn_name = try std.fmt.allocPrint(allocator, "map->{s}", .{desc.name});
     errdefer allocator.free(fn_name);
 
+    // Mark body list as value_array so GC scans Value objects inside
+    markListAsValueArray(&body_list);
+
     // Create the function value
     const env_copy: Env = env.*;
     const result = try Value.fnValueSingleNamed(
@@ -323,6 +339,7 @@ fn processRecordProtocolSpec(
     l: *const list.List,
     method_indices: []const usize,
     full_type_name: []const u8,
+    field_names: []const []const u8,
 ) anyerror!Value {
 
     // Evaluate the protocol symbol to get the protocol value
@@ -391,12 +408,48 @@ fn processRecordProtocolSpec(
             if (!std.mem.eql(u8, mname_sym.sym_val, mname)) continue;
 
             // items[1:] of the method def: [params] body...
-            // Build arity form: ([params] body...)
+            // Build arity form: ([params] (let [field1 (get this :field1) ...] body...))
             var arity_form: list.List = .empty;
             defer arity_form.deinit(arena_alloc);
             const def_items = mdef.list_val.items[1..];
-            for (def_items) |item| {
-                try arity_form.append(arena_alloc, try item.clone(arena_alloc));
+            // params vector is def_items[0], body is def_items[1..]
+            try arity_form.append(arena_alloc, try def_items[0].clone(arena_alloc));
+
+            // Wrap body in let that binds field names to (get this :field_name)
+            if (field_names.len > 0) {
+                // Build let form: (let [f1 (get this :f1) f2 (get this :f2) ...] body...)
+                var let_form: list.List = .empty;
+                defer let_form.deinit(arena_alloc);
+                try let_form.append(arena_alloc, try Value.symValue(allocator, "let"));
+
+                // Build bindings vector: [f1 (get this :f1) f2 (get this :f2) ...]
+                var bindings: list.List = .empty;
+                defer bindings.deinit(arena_alloc);
+                for (field_names) |fname| {
+                    try bindings.append(arena_alloc, try Value.symValue(allocator, fname));
+                    // (get this :fname)
+                    var get_form: list.List = .empty;
+                    defer get_form.deinit(arena_alloc);
+                    try get_form.append(arena_alloc, try Value.symValue(allocator, "get"));
+                    try get_form.append(arena_alloc, try Value.symValue(allocator, "this"));
+                    try get_form.append(arena_alloc, try Value.keywordValue(allocator, fname));
+                    try bindings.append(arena_alloc, Value.listValue(get_form));
+                    get_form = .empty;
+                }
+                try let_form.append(arena_alloc, Value.listValue(bindings));
+                bindings = .empty;
+
+                // Append body forms
+                for (def_items[1..]) |item| {
+                    try let_form.append(arena_alloc, try item.clone(arena_alloc));
+                }
+                try arity_form.append(arena_alloc, Value.listValue(let_form));
+                let_form = .empty;
+            } else {
+                // No fields, just append body as-is
+                for (def_items[1..]) |item| {
+                    try arity_form.append(arena_alloc, try item.clone(arena_alloc));
+                }
             }
             try fn_form.append(arena_alloc, Value.listValue(arity_form));
             arity_form = .empty;
@@ -568,6 +621,7 @@ pub fn evalDefRecord(
                     &l,
                     method_indices.items,
                     full_name,
+                    field_names.items,
                 ) catch {};
             }
         } else {
