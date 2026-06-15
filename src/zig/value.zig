@@ -35,6 +35,7 @@ pub const Type = enum {
     atom,
     reduced, // Wrapper for early reduction termination
     wrapped, // Raw pointer wrapper — stores a usize pointer in wrapped_val
+    record,  // defrecord instance: named struct-like data with fields
 };
 
 pub const MapEntry = struct {
@@ -81,6 +82,77 @@ pub const AtomData = struct {
 
 pub const BuiltinFn = *const fn (self: *Self, args: list.List, env: *Env) anyerror!Self;
 
+// Record data for defrecord instances.
+// Records behave like maps with a fixed set of known fields.
+pub const RecordData = struct {
+    // Full type name for identity and printing (e.g. "user.Person")
+    type_name: []const u8,
+    // Field values as keyword→value map (in declaration order)
+    fields: Map,
+    // Extension map: extra keys added via assoc beyond defined fields
+    extmap: Map,
+    // Optional metadata (null if none)
+    meta: ?Map,
+    // Allocator used for this record's internal allocations
+    allocator: Allocator,
+};
+
+/// Create a record value.
+/// type_name: full record type name (e.g. "user.Person")
+/// fields: map of keyword→value for defined fields
+/// extmap: map of keyword→value for extension fields
+/// meta: optional metadata map (null for none)
+pub fn recordValue(
+    allocator: Allocator,
+    type_name: []const u8,
+    fields: Map,
+    extmap: Map,
+    meta: ?Map,
+) anyerror!Self {
+    const owned_name = try allocator.dupe(u8, type_name);
+    const owned_meta = if (meta) |m| try cloneMap(allocator, m) else null;
+    errdefer {
+        if (owned_meta) |om| {
+            for (om.items) |*entry| {
+                entry.key.deinit(allocator);
+                entry.value.deinit(allocator);
+            }
+            allocator.free(om.items);
+        }
+        allocator.free(owned_name);
+    }
+    return .{
+        .type = .record,
+        .record_val = .{
+            .type_name = owned_name,
+            .fields = fields,
+            .extmap = extmap,
+            .meta = owned_meta,
+            .allocator = allocator,
+        },
+    };
+}
+
+/// Deep-clone a Value.Map.
+fn cloneMap(allocator: Allocator, src: Map) anyerror!Map {
+    var dst: Map = .empty;
+    errdefer {
+        for (dst.items) |*entry| {
+            entry.key.deinit(allocator);
+            entry.value.deinit(allocator);
+        }
+        allocator.free(dst.items);
+    }
+    try dst.ensureTotalCapacity(allocator, src.items.len);
+    for (src.items) |entry| {
+        try dst.append(allocator, .{
+            .key = try entry.key.clone(allocator),
+            .value = try entry.value.clone(allocator),
+        });
+    }
+    return dst;
+}
+
 type: Type,
 
 nil_val: void = {},
@@ -107,6 +179,7 @@ cons_val: ?*ConsData = null,
 atom_val: ?*AtomData = null,
 reduced_val: ?*Self = null, // wrapped value for early reduction
 wrapped_val: usize = 0,     // raw pointer stored as usize (for PersistentHashMap pointer values)
+record_val: RecordData = .{ .type_name = "", .fields = .empty, .extmap = .empty, .meta = null, .allocator = undefined },
 
 // Single arity: one [params] + body forms + optional rest param
 pub const Arity = struct {
@@ -701,6 +774,32 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
             }
         },
         .wrapped => {}, // raw pointer, no ownership
+        .record => {
+            const rd = &self.record_val;
+            const a = rd.allocator;
+            // Free type_name string
+            a.free(rd.type_name);
+            // Free fields map entries
+            for (rd.fields.items) |*entry| {
+                entry.key.deinit(a);
+                entry.value.deinit(a);
+            }
+            a.free(rd.fields.items);
+            // Free extmap entries
+            for (rd.extmap.items) |*entry| {
+                entry.key.deinit(a);
+                entry.value.deinit(a);
+            }
+            a.free(rd.extmap.items);
+            // Free meta map entries if present
+            if (rd.meta) |m| {
+                for (m.items) |*entry| {
+                    entry.key.deinit(a);
+                    entry.value.deinit(a);
+                }
+                a.free(m.items);
+            }
+        },
     }
 }
 
@@ -838,6 +937,46 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
                 return reducedValue(allocator, data.*);
             }
             return .{ .type = .reduced, .reduced_val = null };
+        },
+        .record => {
+            const rd = &self.record_val;
+            const owned_name = try allocator.dupe(u8, rd.type_name);
+            const cloned_fields = try cloneMap(allocator, rd.fields);
+            const cloned_extmap = try cloneMap(allocator, rd.extmap);
+            const cloned_meta = if (rd.meta) |m|
+                try cloneMap(allocator, m)
+            else
+                null;
+            errdefer {
+                if (cloned_meta) |cm| {
+                    for (cm.items) |*entry| {
+                        entry.key.deinit(allocator);
+                        entry.value.deinit(allocator);
+                    }
+                    allocator.free(cm.items);
+                }
+                for (cloned_extmap.items) |*entry| {
+                    entry.key.deinit(allocator);
+                    entry.value.deinit(allocator);
+                }
+                allocator.free(cloned_extmap.items);
+                for (cloned_fields.items) |*entry| {
+                    entry.key.deinit(allocator);
+                    entry.value.deinit(allocator);
+                }
+                allocator.free(cloned_fields.items);
+                allocator.free(owned_name);
+            }
+            return .{
+                .type = .record,
+                .record_val = .{
+                    .type_name = owned_name,
+                    .fields = cloned_fields,
+                    .extmap = cloned_extmap,
+                    .meta = cloned_meta,
+                    .allocator = allocator,
+                },
+            };
         },
     }
 }
@@ -1074,6 +1213,7 @@ pub fn fmt(self: Self, allocator: Allocator) anyerror![]const u8 {
             return allocator.dupe(u8, "#reduced(nil)");
         },
         .wrapped => try std.fmt.allocPrint(allocator, "#ptr({X})", .{self.wrapped_val}),
+        .record => try recordFmt(&self.record_val, allocator),
     };
 }
 
@@ -1192,6 +1332,44 @@ pub fn consFmt(data: *const ConsData, allocator: Allocator) anyerror![]const u8 
     }
 
     try buf.append(allocator, ')');
+    return buf.toOwnedSlice(allocator);
+}
+
+/// Format a RecordData as #ns.RecordName{:field1 val1 :field2 val2 ...}
+fn recordFmt(rd: *const RecordData, allocator: Allocator) anyerror![]const u8 {
+    var buf: std.ArrayList(u8) = .empty;
+    errdefer buf.deinit(allocator);
+
+    // Prefix with type name
+    try buf.append(allocator, '#');
+    try buf.appendSlice(allocator, rd.type_name);
+    try buf.append(allocator, '{');
+
+    // Print fields in order
+    for (rd.fields.items, 0..) |entry, i| {
+        if (i > 0) try buf.append(allocator, ' ');
+        const key_s = try entry.key.fmt(allocator);
+        defer allocator.free(key_s);
+        const val_s = try entry.value.fmt(allocator);
+        defer allocator.free(val_s);
+        try buf.appendSlice(allocator, key_s);
+        try buf.append(allocator, ' ');
+        try buf.appendSlice(allocator, val_s);
+    }
+
+    // Print extmap entries
+    for (rd.extmap.items, 0..) |entry, i| {
+        if (rd.fields.items.len > 0 or i > 0) try buf.append(allocator, ' ');
+        const key_s = try entry.key.fmt(allocator);
+        defer allocator.free(key_s);
+        const val_s = try entry.value.fmt(allocator);
+        defer allocator.free(val_s);
+        try buf.appendSlice(allocator, key_s);
+        try buf.append(allocator, ' ');
+        try buf.appendSlice(allocator, val_s);
+    }
+
+    try buf.append(allocator, '}');
     return buf.toOwnedSlice(allocator);
 }
 

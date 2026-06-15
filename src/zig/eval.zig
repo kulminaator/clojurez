@@ -12,6 +12,7 @@ const eval_thread = @import("eval_thread.zig");
 const eval_macro = @import("eval_macro.zig");
 const eval_ns = @import("eval_ns.zig");
 const protocols = @import("namespaces/core/protocols.zig");
+const records = @import("namespaces/core/records.zig");
 const gc_mod = @import("gc.zig");
 
 const Allocator = std.mem.Allocator;
@@ -83,7 +84,7 @@ pub fn evalRec(allocator: Allocator, arena_alloc: Allocator, form: Value, env: *
     if (depth > MAX_RECURSION) return error.RecursionLimit;
 
     switch (form.type) {
-        .nil, .bool, .integer, .float, .bigint, .ratio, .decimal, .string, .regex, .character, .keyword, .set, .queue, .atom, .reduced, .wrapped => {
+        .nil, .bool, .integer, .float, .bigint, .ratio, .decimal, .string, .regex, .character, .keyword, .set, .queue, .atom, .reduced, .wrapped, .record => {
             return try form.clone(arena_alloc);
         },
         .symbol => {
@@ -587,6 +588,12 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
         // (extend-protocol protocol atype1 (method [params] body...)+ atype2 ...)
         if (std.mem.eql(u8, name, "extend-protocol")) {
             return try protocols.evalExtendProtocol(allocator, arena_alloc, l, env, depth + 1);
+        }
+
+        // defrecord - define a record type with named fields
+        // (defrecord name [fields*] options* specs*)
+        if (std.mem.eql(u8, name, "defrecord")) {
+            return try records.evalDefRecord(allocator, arena_alloc, l, env, depth + 1);
         }
 
         // do - evaluate a sequence of forms

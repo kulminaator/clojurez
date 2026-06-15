@@ -522,6 +522,7 @@ pub fn core_type(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
         .cons => "cons",
         .reduced => "reduced",
         .wrapped => "wrapped",
+        .record => args.items[0].record_val.type_name,
     };
     return try Value.keywordValue(env_env.allocator, type_name);
 }

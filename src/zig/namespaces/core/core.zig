@@ -24,6 +24,7 @@ const random = @import("random.zig");
 const gc_builtins = @import("gc.zig");
 const eval_helpers = @import("eval_helpers.zig");
 const regexp_core = @import("regexp.zig");
+const records = @import("records.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -364,6 +365,7 @@ pub fn registerCoreFunctions(env: *Env) anyerror!void {
     // Higher-order functions (kept here)
     try env.put("apply", Value.builtinFnValue(core_apply));
     try env.put("trampoline", Value.builtinFnValue(core_trampoline));
+    try env.put("record-ctor", Value.builtinFnValue(records.core_record_ctor));
     try env.put("if-not", Value.builtinFnValue(core_if_not));
     try env.put("partial", Value.builtinFnValue(core_partial));
     try env.put("comp", Value.builtinFnValue(core_comp));

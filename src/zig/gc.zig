@@ -49,6 +49,7 @@ pub const GCObjectType = enum(u8) {
     hash_map_node = 10, // PersistentHashMap HAMT node (Node union)
     hash_map_kvp_array = 11, // array of Kvp { key: Value, val: Value } in HAMT
     hash_map_sub_nodes = 12, // array of ?*Node (sub-node pointers in HAMT)
+    record_data = 15,        // RecordData { type_name, fields, extmap, meta, allocator }
 };
 
 const Header = struct {

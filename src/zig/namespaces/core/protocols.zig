@@ -47,6 +47,7 @@ pub fn typeKeyword(v: Value) []const u8 {
         .cons => "cons",
         .reduced => "reduced",
         .wrapped => "wrapped",
+        .record => v.record_val.type_name,
     };
 }
 
@@ -413,6 +414,8 @@ pub fn evalDefProtocol(
     try env.put(proto_name, persistent_proto);
 
     // Create dispatch functions for each method
+    // Each method has one arity per arglist from its :sigs entry
+    var method_idx: usize = 0;
     for (method_names.items) |mname| {
         // Build closure env with protocol reference info
         var dispatch_env: Env = .{
@@ -425,17 +428,19 @@ pub fn evalDefProtocol(
         try dispatch_env.put("__proto_name", try Value.stringValue(allocator, proto_name));
         try dispatch_env.put("__method_kw", try Value.stringValue(allocator, mname));
 
+        // Look up this method's :arglists from the sigs
+        const sig_entry = sigs.items[method_idx];
+        const sig_map_val = sig_entry.value;
+        const arglists_entry = getMapEntry(sig_map_val, try Value.keywordValue(allocator, "arglists"));
+        var arglists_val: ?Value = null;
+        if (arglists_entry) |ae| {
+            arglists_val = ae;
+        }
+
         // Body: (__protocol_dispatch__) — marker for the evaluator
         var body_list: list.List = .empty;
         defer body_list.deinit(allocator);
         try body_list.append(allocator, try Value.symValue(allocator, "__protocol_dispatch__"));
-
-        // Params: (this & __rest) — variadic, at least one arg
-        var params_list: list.List = .empty;
-        defer params_list.deinit(allocator);
-        try params_list.append(allocator, try Value.symValue(allocator, "this"));
-
-        const rest_name = try allocator.dupe(u8, "__rest");
 
         var arities: std.ArrayListUnmanaged(Value.Arity) = .empty;
         errdefer {
@@ -447,19 +452,48 @@ pub fn evalDefProtocol(
             allocator.free(arities.items);
         }
 
-        const cloned_params = try params_list.clone(allocator);
-        const cloned_body = try body_list.clone(allocator);
-        try arities.append(allocator, Value.Arity{
-            .params = cloned_params,
-            .body = cloned_body,
-            .rest_name = rest_name,
-        });
+        if (arglists_val) |al_val| {
+            // Create one arity per arglist from :sigs
+            for (al_val.list_val.items) |al_item| {
+                if (al_item.type != .list) continue;
+                // Build params from the arglist (list of symbols)
+                var params_list: list.List = .empty;
+                defer params_list.deinit(allocator);
+                for (al_item.list_val.items) |param_sym| {
+                    try params_list.append(allocator, try param_sym.clone(allocator));
+                }
+
+                const cloned_params = try params_list.clone(allocator);
+                const cloned_body = try body_list.clone(allocator);
+                try arities.append(allocator, Value.Arity{
+                    .params = cloned_params,
+                    .body = cloned_body,
+                    .rest_name = null,
+                });
+            }
+        }
+
+        // Fallback: if no arglists found, use single variadic arity
+        if (arities.items.len == 0) {
+            var params_list: list.List = .empty;
+            defer params_list.deinit(allocator);
+            try params_list.append(allocator, try Value.symValue(allocator, "this"));
+            const rest_name = try allocator.dupe(u8, "__rest");
+            const cloned_params = try params_list.clone(allocator);
+            const cloned_body = try body_list.clone(allocator);
+            try arities.append(allocator, Value.Arity{
+                .params = cloned_params,
+                .body = cloned_body,
+                .rest_name = rest_name,
+            });
+        }
 
         var fn_val = try Value.fnValue(allocator, arities, dispatch_env, false);
         const persistent_fn = try fn_val.clone(allocator);
         fn_val.deinit(allocator);
 
         try env.put(mname, persistent_fn);
+        method_idx += 1;
     }
 
     return try Value.symValue(allocator, proto_name);
@@ -725,6 +759,7 @@ pub fn evalExtendType(
         }
 
         // Build method map for this protocol
+        // Group method definitions by name to support multi-arity methods
         var mmap: Value.Map = .empty;
         errdefer {
             for (mmap.items) |*entry| {
@@ -734,31 +769,63 @@ pub fn evalExtendType(
             allocator.free(mmap.items);
         }
 
+        // Collect unique method names (preserving order)
+        var unique_names: std.ArrayListUnmanaged([]const u8) = .empty;
+        errdefer {
+            for (unique_names.items) |n| allocator.free(n);
+            allocator.free(unique_names.items);
+        }
+
         for (method_defs.items) |mi| {
             const mdef = l.items[mi];
             if (mdef.type != .list or mdef.list_val.items.len < 2) return error.TypeError;
-
             const mname_sym = mdef.list_val.items[0];
             if (mname_sym.type != .symbol) return error.TypeError;
             const mname = mname_sym.sym_val;
 
-            // Method def: (name [params] body...)
-            // Build (fn ([params] body...)) by wrapping items[1:] in a list
-            const arities = mdef.list_val.items[1..];
+            // Add to unique names if not already present
+            var found = false;
+            for (unique_names.items) |existing| {
+                if (std.mem.eql(u8, existing, mname)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) {
+                try unique_names.append(allocator, try allocator.dupe(u8, mname));
+            }
+        }
 
+        // For each unique method name, collect all arities and build a multi-arity fn
+        for (unique_names.items) |mname| {
+            // fn form: (fn arity1 arity2 ...) where arity = ([params] body...)
             var fn_form: list.List = .empty;
             defer fn_form.deinit(arena_alloc);
             try fn_form.append(arena_alloc, try Value.symValue(allocator, "fn"));
 
-            var arity_wrapper: list.List = .empty;
-            defer arity_wrapper.deinit(arena_alloc);
-            for (arities) |a| {
-                try arity_wrapper.append(arena_alloc, try a.clone(arena_alloc));
+            // For each method definition of this name, build an arity form
+            for (method_defs.items) |mi| {
+                const mdef = l.items[mi];
+                const mname_sym = mdef.list_val.items[0];
+                if (mname_sym.type != .symbol) continue;
+                if (!std.mem.eql(u8, mname_sym.sym_val, mname)) continue;
+
+                // items[1:] of the method def: [params] body...
+                // Build arity form: ([params] body...)
+                var arity_form: list.List = .empty;
+                defer arity_form.deinit(arena_alloc);
+                const def_items = mdef.list_val.items[1..];
+                for (def_items) |item| {
+                    try arity_form.append(arena_alloc, try item.clone(arena_alloc));
+                }
+                // Append arity form directly to fn_form (not wrapped)
+                try fn_form.append(arena_alloc, Value.listValue(arity_form));
+                arity_form = .empty;
             }
-            try fn_form.append(arena_alloc, Value.listValue(arity_wrapper));
 
             // Evaluate to get a function value
             var fn_val = try eval.evalRec(allocator, arena_alloc, Value.listValue(fn_form), env, depth + 1);
+            fn_form = .empty;
             const persistent_fn = try fn_val.clone(allocator);
             fn_val.deinit(arena_alloc);
 
@@ -826,7 +893,8 @@ pub fn evalExtendProtocol(
         }
         const method_end = idx;
 
-        // Build a method map by evaluating each method definition into a fn
+        // Build a method map by evaluating method definitions into fns
+        // Group method definitions by name to support multi-arity methods
         var mmap: Value.Map = .empty;
         errdefer {
             for (mmap.items) |*entry| {
@@ -836,31 +904,57 @@ pub fn evalExtendProtocol(
             allocator.free(mmap.items);
         }
 
+        // Collect unique method names
+        var unique_names: std.ArrayListUnmanaged([]const u8) = .empty;
+        errdefer {
+            for (unique_names.items) |n| allocator.free(n);
+            allocator.free(unique_names.items);
+        }
+
         var mi: usize = method_start;
         while (mi < method_end) : (mi += 1) {
             const mdef = l.items[mi];
             if (mdef.type != .list or mdef.list_val.items.len < 2) return error.TypeError;
-
             const mname_sym = mdef.list_val.items[0];
             if (mname_sym.type != .symbol) return error.TypeError;
             const mname = mname_sym.sym_val;
 
-            // Build (fn ([params] body...)) from the method definition
-            const arities = mdef.list_val.items[1..];
+            var found = false;
+            for (unique_names.items) |existing| {
+                if (std.mem.eql(u8, existing, mname)) { found = true; break; }
+            }
+            if (!found) {
+                try unique_names.append(allocator, try allocator.dupe(u8, mname));
+            }
+        }
 
+        // For each unique method name, collect all arities and build a multi-arity fn
+        for (unique_names.items) |mname| {
+            // fn form: (fn arity1 arity2 ...) where arity = ([params] body...)
             var fn_form: list.List = .empty;
             defer fn_form.deinit(arena_alloc);
             try fn_form.append(arena_alloc, try Value.symValue(allocator, "fn"));
 
-            var arity_wrapper: list.List = .empty;
-            defer arity_wrapper.deinit(arena_alloc);
-            for (arities) |a| {
-                try arity_wrapper.append(arena_alloc, try a.clone(arena_alloc));
-            }
-            try fn_form.append(arena_alloc, Value.listValue(arity_wrapper));
+            mi = method_start;
+            while (mi < method_end) : (mi += 1) {
+                const mdef = l.items[mi];
+                const mname_sym = mdef.list_val.items[0];
+                if (mname_sym.type != .symbol) continue;
+                if (!std.mem.eql(u8, mname_sym.sym_val, mname)) continue;
 
-            // Evaluate to get a function value
+                // items[1:] of the method def: [params] body...
+                const def_items = mdef.list_val.items[1..];
+                var arity_form: list.List = .empty;
+                defer arity_form.deinit(arena_alloc);
+                for (def_items) |item| {
+                    try arity_form.append(arena_alloc, try item.clone(arena_alloc));
+                }
+                try fn_form.append(arena_alloc, Value.listValue(arity_form));
+                arity_form = .empty;
+            }
+
             var fn_val = try eval.evalRec(allocator, arena_alloc, Value.listValue(fn_form), env, depth + 1);
+            fn_form = .empty;
             const persistent_fn = try fn_val.clone(allocator);
             fn_val.deinit(arena_alloc);
 

@@ -24,6 +24,7 @@ pub fn valueScanFn(obj: *anyopaque, ctx: *gc.ScanContext) void {
         .hash_map_sub_nodes => scanSubNodesArray(obj, ctx, header.size),
         .env => scanEnv(obj, ctx),
         .namespace_manager => scanNamespaceManager(obj, ctx),
+        .record_data => scanRecordData(obj, ctx),
     }
 }
 
@@ -100,7 +101,7 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         .nil, .bool, .integer, .float, .bigint, .ratio, .decimal,
         .string, .regex, .character, .symbol, .keyword,
         .list, .vector, .map, .set, .queue, .function, .builtin_fn,
-        .lazy_seq, .cons, .atom, .reduced, .wrapped,
+        .lazy_seq, .cons, .atom, .reduced, .wrapped, .record,
     };
     var is_valid = false;
     for (valid_types) |vt| {
@@ -254,6 +255,11 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
                 ctx.gc.markRecursive(data, ctx);
             }
         },
+
+        .record => {
+            // Scan the RecordData struct so GC can find all child pointers
+            ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(&val.record_val))), ctx);
+        },
     }
 }
 
@@ -389,6 +395,29 @@ fn scanEnv(env_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     // Mark ns_manager pointer
     if (env.ns_manager) |ns_mgr| {
         ctx.gc.markRecursive(ns_mgr, ctx);
+    }
+}
+
+/// Scan RecordData: { type_name: []const u8, fields: Map, extmap: Map, meta: ?Map, allocator }.
+fn scanRecordData(rd_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const rd: *Value.RecordData = @ptrCast(@alignCast(rd_ptr));
+    // Mark type_name string
+    if (rd.type_name.len > 0) {
+        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(rd.type_name.ptr))), ctx);
+    }
+    // Mark fields map entries buffer (contains Value.MapEntry { key, value })
+    if (rd.fields.items.len > 0) {
+        ctx.gc.markRecursive(rd.fields.items.ptr, ctx);
+    }
+    // Mark extmap entries buffer
+    if (rd.extmap.items.len > 0) {
+        ctx.gc.markRecursive(rd.extmap.items.ptr, ctx);
+    }
+    // Mark meta map entries buffer if present
+    if (rd.meta) |m| {
+        if (m.items.len > 0) {
+            ctx.gc.markRecursive(m.items.ptr, ctx);
+        }
     }
 }
 

@@ -117,6 +117,17 @@ pub fn valueHash(val: Value) i32 {
             if (val.reduced_val) |data| return valueHash(data.*);
             return 0;
         },
+        .record => {
+            // Hash record: XOR type name hash with field values hash
+            var h: i32 = hashString(val.record_val.type_name);
+            for (val.record_val.fields.items) |entry| {
+                h ^= valueHash(entry.key) + valueHash(entry.value);
+            }
+            for (val.record_val.extmap.items) |entry| {
+                h ^= valueHash(entry.key) + valueHash(entry.value);
+            }
+            return h;
+        },
     };
 }
 

@@ -90,4 +90,30 @@
 (check "re-extend: string still works" (rext "a") "first-a")
 (check "re-extend: integer works" (rext 7) 14)
 
+;; --- Multi-arity protocol methods ---
+(defprotocol MultiArityP
+  "Protocol with multi-arity methods"
+  (ma-method [this] [this x] [this x y]))
+(extend-type :string MultiArityP
+  (ma-method [this] (str "a1:" this))
+  (ma-method [this x] (str "a2:" this ":" x))
+  (ma-method [this x y] (str "a3:" this ":" x ":" y)))
+(check "multi-arity: arity 1" (ma-method "hello") "a1:hello")
+(check "multi-arity: arity 2" (ma-method "hello" "world") "a2:hello:world")
+(check "multi-arity: arity 3" (ma-method "a" "b" "c") "a3:a:b:c")
+
+;; --- Multi-arity with extend-protocol ---
+(defprotocol MultiExtP (mep [this] [this x]))
+(extend-protocol MultiExtP
+  :string
+    (mep [this] (str "s1:" this))
+    (mep [this x] (str "s2:" this ":" x))
+  :integer
+    (mep [this] (* this 10))
+    (mep [this x] (+ this x)))
+(check "multi-arity extend-protocol: string arity1" (mep "hi") "s1:hi")
+(check "multi-arity extend-protocol: string arity2" (mep "hi" "there") "s2:hi:there")
+(check "multi-arity extend-protocol: int arity1" (mep 5) 50)
+(check "multi-arity extend-protocol: int arity2" (mep 5 3) 8)
+
 (print-summary)
