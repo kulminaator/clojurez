@@ -778,3 +778,111 @@ pub fn evalExtendType(
 
 // Import helpers for listFromVector
 const helpers = @import("helpers.zig");
+
+/// Evaluate a (extend-protocol protocol atype1 (method [params] body...)+ atype2 ...)
+/// form.
+/// Groups methods by type and delegates to evalExtend for each group.
+pub fn evalExtendProtocol(
+    allocator: Allocator,
+    arena_alloc: Allocator,
+    l: list.List,
+    env: *Env,
+    depth: usize,
+) anyerror!Value {
+    // (extend-protocol protocol atype1 (method [params] body...)+ atype2 ...)
+    if (l.items.len < 3) return error.ArityError;
+
+    // Evaluate the protocol (index 1)
+    var proto_val = try eval.evalRec(allocator, arena_alloc, l.items[1], env, depth + 1);
+    defer proto_val.deinit(arena_alloc);
+
+    // Validate it's a protocol
+    var sigs_kw = try Value.keywordValue(allocator, "sigs");
+    defer sigs_kw.deinit(allocator);
+    if (getMapEntry(proto_val, sigs_kw) == null) {
+        return makeErrorStr(allocator, "extend-protocol: {s} is not a protocol", .{formatValueShort(proto_val)});
+    }
+
+    // Parse: alternating type-keyword and method definitions
+    var idx: usize = 2;
+    var result: Value = Value.nilValue();
+
+    while (idx < l.items.len) {
+        // Get the type keyword (unevaluated)
+        const atype = l.items[idx];
+        if (atype.type != .keyword) {
+            return makeErrorStr(allocator, "extend-protocol: type must be a keyword, got {s}", .{@tagName(atype.type)});
+        }
+        idx += 1;
+
+        // Collect method definitions until next type keyword or end
+        const method_start = idx;
+        while (idx < l.items.len) {
+            const item = l.items[idx];
+            if (item.type == .keyword) {
+                break;
+            }
+            idx += 1;
+        }
+        const method_end = idx;
+
+        // Build a method map by evaluating each method definition into a fn
+        var mmap: Value.Map = .empty;
+        errdefer {
+            for (mmap.items) |*entry| {
+                entry.key.deinit(allocator);
+                entry.value.deinit(allocator);
+            }
+            allocator.free(mmap.items);
+        }
+
+        var mi: usize = method_start;
+        while (mi < method_end) : (mi += 1) {
+            const mdef = l.items[mi];
+            if (mdef.type != .list or mdef.list_val.items.len < 2) return error.TypeError;
+
+            const mname_sym = mdef.list_val.items[0];
+            if (mname_sym.type != .symbol) return error.TypeError;
+            const mname = mname_sym.sym_val;
+
+            // Build (fn ([params] body...)) from the method definition
+            const arities = mdef.list_val.items[1..];
+
+            var fn_form: list.List = .empty;
+            defer fn_form.deinit(arena_alloc);
+            try fn_form.append(arena_alloc, try Value.symValue(allocator, "fn"));
+
+            var arity_wrapper: list.List = .empty;
+            defer arity_wrapper.deinit(arena_alloc);
+            for (arities) |a| {
+                try arity_wrapper.append(arena_alloc, try a.clone(arena_alloc));
+            }
+            try fn_form.append(arena_alloc, Value.listValue(arity_wrapper));
+
+            // Evaluate to get a function value
+            var fn_val = try eval.evalRec(allocator, arena_alloc, Value.listValue(fn_form), env, depth + 1);
+            const persistent_fn = try fn_val.clone(allocator);
+            fn_val.deinit(arena_alloc);
+
+            try mmap.append(allocator, .{
+                .key = try Value.keywordValue(allocator, mname),
+                .value = persistent_fn,
+            });
+        }
+
+        // Build extend args: atype (unevaluated), protocol (evaluated), mmap (evaluated)
+        var ext_args: list.List = .empty;
+        defer ext_args.deinit(arena_alloc);
+        try ext_args.append(arena_alloc, try atype.clone(arena_alloc));
+        try ext_args.append(arena_alloc, try proto_val.clone(arena_alloc));
+        try ext_args.append(arena_alloc, Value.mapValue(mmap));
+        mmap = .empty;
+
+        // Call evalExtend directly
+        result.deinit(arena_alloc);
+        result = try evalExtend(allocator, arena_alloc, ext_args, env, depth + 1);
+        ext_args = .empty;
+    }
+
+    return result;
+}

@@ -583,6 +583,12 @@ fn evalList(allocator: Allocator, arena_alloc: Allocator, l: list.List, env: *En
             return try protocols.evalExtendType(allocator, arena_alloc, l, env, depth + 1);
         }
 
+        // extend-protocol - extend one protocol for multiple types at once
+        // (extend-protocol protocol atype1 (method [params] body...)+ atype2 ...)
+        if (std.mem.eql(u8, name, "extend-protocol")) {
+            return try protocols.evalExtendProtocol(allocator, arena_alloc, l, env, depth + 1);
+        }
+
         // do - evaluate a sequence of forms
         if (std.mem.eql(u8, name, "do")) {
             var do_result: Value = Value.nilValue();

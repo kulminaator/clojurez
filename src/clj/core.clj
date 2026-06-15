@@ -1538,3 +1538,21 @@
 ;; ---- Protocol support ----
 ;; extend-type is implemented as a special form in Zig (protocols.zig)
 ;; quasiquote is now available in macro expansion (eval_helpers.zig)
+
+(defn satisfies?
+  "Returns true if x satisfies protocol (i.e. has an implementation for it)."
+  [protocol x]
+  (let [impls (get protocol :impls)
+        type-kw (type x)]
+    (boolean (get impls type-kw))))
+
+(defn extends?
+  "Returns true if protocol has an implementation for atype (a keyword like :string)."
+  [protocol atype]
+  (let [impls (get protocol :impls)]
+    (boolean (get impls atype))))
+
+(defn extenders
+  "Returns a set of types for which protocol has implementations."
+  [protocol]
+  (set (keys (get protocol :impls))))
