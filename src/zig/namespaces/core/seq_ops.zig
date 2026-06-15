@@ -126,11 +126,15 @@ pub fn core_map(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
         stable_coll.* = cloned_coll;
         thunk.shared_coll = stable_coll;
         try thunk.env.put("idx", Value.intValue(0));
+        // Clone again for env storage — put() will deinit the passed value,
+        // which would corrupt stable_coll if we passed cloned_coll directly.
+        try thunk.env.put("coll", try cloned_coll.clone(allocator));
+        // stable_coll owns the original cloned_coll now; no deinit needed here.
     } else {
         // Lazy collections: store in env, shared_coll stays null
         // forceMapStepLazy clones from env on each step.
+        try thunk.env.put("coll", cloned_coll);
     }
-    try thunk.env.put("coll", cloned_coll);
 
     return Value.lazySeqValue(thunk);
 }
