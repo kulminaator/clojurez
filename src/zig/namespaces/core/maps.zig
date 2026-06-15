@@ -6,16 +6,34 @@ const vec = @import("../../vector.zig");
 const Env = Value.Env;
 const test_utils = @import("test_utils.zig");
 
+const Allocator = std.mem.Allocator;
+
 pub fn core_get(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 1) return error.ArityError;
-    const map_val = args.items[0];
-    if (map_val.type != .map) return error.TypeError;
+    const val = args.items[0];
+    if (val.type != .map and val.type != .record) return error.TypeError;
     if (args.items.len == 1) return Value.nilValue();
     const key = args.items[1];
-    for (map_val.map_val.items) |entry| {
-        if (entry.key.equals(key)) {
-            return try entry.value.clone(env_env.allocator);
+
+    if (val.type == .record) {
+        // Look up in fields map first
+        for (val.record_val.fields.items) |entry| {
+            if (entry.key.equals(key)) {
+                return try entry.value.clone(env_env.allocator);
+            }
+        }
+        // Then in extmap
+        for (val.record_val.extmap.items) |entry| {
+            if (entry.key.equals(key)) {
+                return try entry.value.clone(env_env.allocator);
+            }
+        }
+    } else {
+        for (val.map_val.items) |entry| {
+            if (entry.key.equals(key)) {
+                return try entry.value.clone(env_env.allocator);
+            }
         }
     }
     // Return default value if provided, otherwise nil
@@ -33,6 +51,11 @@ pub fn core_assoc(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     // Vector assoc: (assoc vec index val & more-kvs)
     if (first.type == .vector) {
         return assocVector(first, args, env_env);
+    }
+
+    // Record assoc: (assoc record key val & more-kvs)
+    if (first.type == .record) {
+        return assocRecord(first, args, env_env);
     }
 
     // Map assoc: (assoc map key val & more-kvs)
@@ -130,13 +153,22 @@ fn assocMap(map_val: Value, args: list.List, env: *Env) anyerror!Value {
 pub fn core_keys(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
-    const map_val = args.items[0];
-    if (map_val.type != .map) return error.TypeError;
+    const val = args.items[0];
+    if (val.type != .map and val.type != .record) return error.TypeError;
 
     var result: list.List = .empty;
     errdefer result.deinit(env_env.allocator);
-    for (map_val.map_val.items) |entry| {
-        try result.append(env_env.allocator, try entry.key.clone(env_env.allocator));
+    if (val.type == .record) {
+        for (val.record_val.fields.items) |entry| {
+            try result.append(env_env.allocator, try entry.key.clone(env_env.allocator));
+        }
+        for (val.record_val.extmap.items) |entry| {
+            try result.append(env_env.allocator, try entry.key.clone(env_env.allocator));
+        }
+    } else {
+        for (val.map_val.items) |entry| {
+            try result.append(env_env.allocator, try entry.key.clone(env_env.allocator));
+        }
     }
     return Value.listValue(result);
 }
@@ -144,13 +176,22 @@ pub fn core_keys(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 pub fn core_vals(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
-    const map_val = args.items[0];
-    if (map_val.type != .map) return error.TypeError;
+    const val = args.items[0];
+    if (val.type != .map and val.type != .record) return error.TypeError;
 
     var result: list.List = .empty;
     errdefer result.deinit(env_env.allocator);
-    for (map_val.map_val.items) |entry| {
-        try result.append(env_env.allocator, try entry.value.clone(env_env.allocator));
+    if (val.type == .record) {
+        for (val.record_val.fields.items) |entry| {
+            try result.append(env_env.allocator, try entry.value.clone(env_env.allocator));
+        }
+        for (val.record_val.extmap.items) |entry| {
+            try result.append(env_env.allocator, try entry.value.clone(env_env.allocator));
+        }
+    } else {
+        for (val.map_val.items) |entry| {
+            try result.append(env_env.allocator, try entry.value.clone(env_env.allocator));
+        }
     }
     return Value.listValue(result);
 }
@@ -158,8 +199,12 @@ pub fn core_vals(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 pub fn core_dissoc(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 2) return error.ArityError;
-    const map_val = args.items[0];
-    if (map_val.type != .map) return error.TypeError;
+    const val = args.items[0];
+    if (val.type != .map and val.type != .record) return error.TypeError;
+
+    if (val.type == .record) {
+        return dissocRecord(val, args, env_env);
+    }
 
     var new_map: Value.Map = .empty;
     errdefer {
@@ -170,7 +215,7 @@ pub fn core_dissoc(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
         env_env.allocator.free(new_map.items);
     }
 
-    for (map_val.map_val.items) |entry| {
+    for (val.map_val.items) |entry| {
         var should_keep = true;
         var i: usize = 1;
         while (i < args.items.len) : (i += 1) {
@@ -230,37 +275,419 @@ pub fn core_merge(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len == 0) return Value.mapValue(.empty);
 
-    var result: Value.Map = .empty;
+    const allocator = env_env.allocator;
+    // If first arg is a record, start with record's fields as base
+    var base_map: Value.Map = .empty;
     errdefer {
-        for (result.items) |*entry| {
-            entry.key.deinit(env_env.allocator);
-            entry.value.deinit(env_env.allocator);
+        for (base_map.items) |*entry| {
+            entry.key.deinit(allocator);
+            entry.value.deinit(allocator);
         }
-        env_env.allocator.free(result.items);
+        allocator.free(base_map.items);
     }
 
+    // Collect all key-value pairs from all args into base_map
     for (args.items) |arg| {
-        if (arg.type != .map) continue;
-        for (arg.map_val.items) |entry| {
-            var found = false;
-            var j: usize = 0;
-            while (j < result.items.len) : (j += 1) {
-                if (result.items[j].key.equals(entry.key)) {
-                    result.items[j].value.deinit(env_env.allocator);
-                    result.items[j].value = try entry.value.clone(env_env.allocator);
-                    found = true;
-                    break;
+        switch (arg.type) {
+            .map => {
+                for (arg.map_val.items) |entry| {
+                    var found = false;
+                    var j: usize = 0;
+                    while (j < base_map.items.len) : (j += 1) {
+                        if (base_map.items[j].key.equals(entry.key)) {
+                            base_map.items[j].value.deinit(allocator);
+                            base_map.items[j].value = try entry.value.clone(allocator);
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        try base_map.append(allocator, .{
+                            .key = try entry.key.clone(allocator),
+                            .value = try entry.value.clone(allocator),
+                        });
+                    }
+                }
+            },
+            .record => {
+                for (arg.record_val.fields.items) |entry| {
+                    var found = false;
+                    var j: usize = 0;
+                    while (j < base_map.items.len) : (j += 1) {
+                        if (base_map.items[j].key.equals(entry.key)) {
+                            base_map.items[j].value.deinit(allocator);
+                            base_map.items[j].value = try entry.value.clone(allocator);
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        try base_map.append(allocator, .{
+                            .key = try entry.key.clone(allocator),
+                            .value = try entry.value.clone(allocator),
+                        });
+                    }
+                }
+                for (arg.record_val.extmap.items) |entry| {
+                    var found = false;
+                    var j: usize = 0;
+                    while (j < base_map.items.len) : (j += 1) {
+                        if (base_map.items[j].key.equals(entry.key)) {
+                            base_map.items[j].value.deinit(allocator);
+                            base_map.items[j].value = try entry.value.clone(allocator);
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        try base_map.append(allocator, .{
+                            .key = try entry.key.clone(allocator),
+                            .value = try entry.value.clone(allocator),
+                        });
+                    }
+                }
+            },
+            else => continue,
+        }
+    }
+
+    // If first arg was a record, try to reconstruct a record
+    if (args.items[0].type == .record) {
+        return mergeToRecord(args.items[0], base_map, allocator);
+    }
+    // Transfer ownership
+    const result = base_map;
+    base_map = .empty;
+    return Value.mapValue(result);
+}
+
+/// Check if a key is a defined field of a record (exists in fields map).
+pub fn isRecordDefinedField(record: *const Value, key: Value) bool {
+    for (record.record_val.fields.items) |entry| {
+        if (entry.key.equals(key)) return true;
+    }
+    return false;
+}
+
+/// Convert a record to a plain map (for dissoc of a defined field).
+fn recordToMap(record: Value, allocator: Allocator) anyerror!Value {
+    var new_map: Value.Map = .empty;
+    errdefer {
+        for (new_map.items) |*entry| {
+            entry.key.deinit(allocator);
+            entry.value.deinit(allocator);
+        }
+        allocator.free(new_map.items);
+    }
+    for (record.record_val.fields.items) |entry| {
+        try new_map.append(allocator, .{
+            .key = try entry.key.clone(allocator),
+            .value = try entry.value.clone(allocator),
+        });
+    }
+    for (record.record_val.extmap.items) |entry| {
+        try new_map.append(allocator, .{
+            .key = try entry.key.clone(allocator),
+            .value = try entry.value.clone(allocator),
+        });
+    }
+    return Value.mapValue(new_map);
+}
+
+/// Assoc on a record. Returns a new record (assoc never demotes a record).
+fn assocRecord(record: Value, args: list.List, env: *Env) anyerror!Value {
+    const allocator = env.allocator;
+    var current = record;
+    defer current.deinit(allocator);
+
+    var i: usize = 1;
+    while (i + 1 < args.items.len) : (i += 2) {
+        const key = args.items[i];
+        const value = args.items[i + 1];
+        const rd = &current.record_val;
+
+        if (isRecordDefinedField(&current, key)) {
+            // Update field value - create new record with updated field
+            var new_fields: Value.Map = .empty;
+            errdefer {
+                for (new_fields.items) |*entry| {
+                    entry.key.deinit(allocator);
+                    entry.value.deinit(allocator);
+                }
+                allocator.free(new_fields.items);
+            }
+            for (rd.fields.items) |entry| {
+                if (entry.key.equals(key)) {
+                    try new_fields.append(allocator, .{
+                        .key = try entry.key.clone(allocator),
+                        .value = try value.clone(allocator),
+                    });
+                } else {
+                    try new_fields.append(allocator, .{
+                        .key = try entry.key.clone(allocator),
+                        .value = try entry.value.clone(allocator),
+                    });
                 }
             }
-            if (!found) {
-                try result.append(env_env.allocator, .{
-                    .key = try entry.key.clone(env_env.allocator),
-                    .value = try entry.value.clone(env_env.allocator),
+            const cloned_extmap = try Value.cloneMap(allocator, rd.extmap);
+            const cloned_meta = if (rd.meta) |m|
+                try Value.cloneMap(allocator, m)
+            else
+                null;
+            errdefer {
+                if (cloned_meta) |cm| {
+                    for (cm.items) |*entry| {
+                        entry.key.deinit(allocator);
+                        entry.value.deinit(allocator);
+                    }
+                    allocator.free(cm.items);
+                }
+                for (cloned_extmap.items) |*entry| {
+                    entry.key.deinit(allocator);
+                    entry.value.deinit(allocator);
+                }
+                allocator.free(cloned_extmap.items);
+            }
+            const new_type_name = try allocator.dupe(u8, rd.type_name);
+            errdefer allocator.free(new_type_name);
+
+            current.deinit(allocator);
+            current = try Value.recordValue(allocator, new_type_name, new_fields, cloned_extmap, cloned_meta);
+            new_fields = .empty;
+        } else {
+            // Add/update in extmap - create new record with updated extmap
+            var new_extmap: Value.Map = .empty;
+            errdefer {
+                for (new_extmap.items) |*entry| {
+                    entry.key.deinit(allocator);
+                    entry.value.deinit(allocator);
+                }
+                allocator.free(new_extmap.items);
+            }
+            var found_in_extmap = false;
+            for (rd.extmap.items) |entry| {
+                if (entry.key.equals(key)) {
+                    try new_extmap.append(allocator, .{
+                        .key = try entry.key.clone(allocator),
+                        .value = try value.clone(allocator),
+                    });
+                    found_in_extmap = true;
+                } else {
+                    try new_extmap.append(allocator, .{
+                        .key = try entry.key.clone(allocator),
+                        .value = try entry.value.clone(allocator),
+                    });
+                }
+            }
+            if (!found_in_extmap) {
+                try new_extmap.append(allocator, .{
+                    .key = try key.clone(allocator),
+                    .value = try value.clone(allocator),
                 });
+            }
+            const cloned_fields = try Value.cloneMap(allocator, rd.fields);
+            const cloned_meta = if (rd.meta) |m|
+                try Value.cloneMap(allocator, m)
+            else
+                null;
+            errdefer {
+                if (cloned_meta) |cm| {
+                    for (cm.items) |*entry| {
+                        entry.key.deinit(allocator);
+                        entry.value.deinit(allocator);
+                    }
+                    allocator.free(cm.items);
+                }
+                for (cloned_fields.items) |*entry| {
+                    entry.key.deinit(allocator);
+                    entry.value.deinit(allocator);
+                }
+                allocator.free(cloned_fields.items);
+            }
+            const new_type_name = try allocator.dupe(u8, rd.type_name);
+            errdefer allocator.free(new_type_name);
+
+            current.deinit(allocator);
+            current = try Value.recordValue(allocator, new_type_name, cloned_fields, new_extmap, cloned_meta);
+            new_extmap = .empty;
+        }
+    }
+
+    const result = current;
+    current = Value.nilValue();
+    return result;
+}
+
+/// Dissoc on a record. If a defined field is removed, demote to plain map.
+fn dissocRecord(record: Value, args: list.List, env: *Env) anyerror!Value {
+    const allocator = env.allocator;
+
+    // Check if any key to dissoc is a defined field
+    var i: usize = 1;
+    while (i < args.items.len) : (i += 1) {
+        if (isRecordDefinedField(&record, args.items[i])) {
+            // Demote to plain map, then dissoc from map
+            var plain_map = try recordToMap(record, allocator);
+            defer plain_map.deinit(allocator);
+            // Now dissoc from the plain map
+            return core_dissocMap(plain_map, args, env);
+        }
+    }
+
+    // All keys are in extmap - create new record with updated extmap
+    var new_extmap: Value.Map = .empty;
+    errdefer {
+        for (new_extmap.items) |*entry| {
+            entry.key.deinit(allocator);
+            entry.value.deinit(allocator);
+        }
+        allocator.free(new_extmap.items);
+    }
+    for (record.record_val.extmap.items) |entry| {
+        var should_keep = true;
+        var j: usize = 1;
+        while (j < args.items.len) : (j += 1) {
+            if (entry.key.equals(args.items[j])) {
+                should_keep = false;
+                break;
+            }
+        }
+        if (should_keep) {
+            try new_extmap.append(allocator, .{
+                .key = try entry.key.clone(allocator),
+                .value = try entry.value.clone(allocator),
+            });
+        }
+    }
+
+    const cloned_fields = try Value.cloneMap(allocator, record.record_val.fields);
+    const cloned_meta = if (record.record_val.meta) |m|
+        try Value.cloneMap(allocator, m)
+    else
+        null;
+    errdefer {
+        if (cloned_meta) |cm| {
+            for (cm.items) |*entry| {
+                entry.key.deinit(allocator);
+                entry.value.deinit(allocator);
+            }
+            allocator.free(cm.items);
+        }
+        for (cloned_fields.items) |*entry| {
+            entry.key.deinit(allocator);
+            entry.value.deinit(allocator);
+        }
+        allocator.free(cloned_fields.items);
+    }
+    const new_type_name = try allocator.dupe(u8, record.record_val.type_name);
+    errdefer allocator.free(new_type_name);
+
+    return try Value.recordValue(allocator, new_type_name, cloned_fields, new_extmap, cloned_meta);
+}
+
+/// Dissoc on a plain map (used internally by dissocRecord after demotion).
+fn core_dissocMap(map_val: Value, args: list.List, env: *Env) anyerror!Value {
+    const allocator = env.allocator;
+    var new_map: Value.Map = .empty;
+    errdefer {
+        for (new_map.items) |*entry| {
+            entry.key.deinit(allocator);
+            entry.value.deinit(allocator);
+        }
+        allocator.free(new_map.items);
+    }
+
+    for (map_val.map_val.items) |entry| {
+        var should_keep = true;
+        var i: usize = 1;
+        while (i < args.items.len) : (i += 1) {
+            if (entry.key.equals(args.items[i])) {
+                should_keep = false;
+                break;
+            }
+        }
+        if (should_keep) {
+            try new_map.append(allocator, .{
+                .key = try entry.key.clone(allocator),
+                .value = try entry.value.clone(allocator),
+            });
+        }
+    }
+    return Value.mapValue(new_map);
+}
+
+/// Merge result back to a record if the first arg was a record.
+/// If all keys in the merged map are defined fields, return a record.
+/// Otherwise return a record with extmap for extra keys.
+fn mergeToRecord(original_record: Value, merged_map: Value.Map, allocator: Allocator) anyerror!Value {
+    const rd = &original_record.record_val;
+
+    // Build new fields map from merged_map entries that match defined fields
+    var new_fields: Value.Map = .empty;
+    errdefer {
+        for (new_fields.items) |*entry| {
+            entry.key.deinit(allocator);
+            entry.value.deinit(allocator);
+        }
+        allocator.free(new_fields.items);
+    }
+    var new_extmap: Value.Map = .empty;
+    errdefer {
+        for (new_extmap.items) |*entry| {
+            entry.key.deinit(allocator);
+            entry.value.deinit(allocator);
+        }
+        allocator.free(new_extmap.items);
+    }
+
+    // First, get all defined field values from merged_map
+    for (rd.fields.items) |entry| {
+        // Look up in merged_map
+        for (merged_map.items) |m_entry| {
+            if (m_entry.key.equals(entry.key)) {
+                try new_fields.append(allocator, .{
+                    .key = try entry.key.clone(allocator),
+                    .value = try m_entry.value.clone(allocator),
+                });
+                break;
             }
         }
     }
-    return Value.mapValue(result);
+
+    // Then, collect any extra keys from merged_map into extmap
+    for (merged_map.items) |m_entry| {
+        var is_defined = false;
+        for (rd.fields.items) |entry| {
+            if (entry.key.equals(m_entry.key)) {
+                is_defined = true;
+                break;
+            }
+        }
+        if (!is_defined) {
+            try new_extmap.append(allocator, .{
+                .key = try m_entry.key.clone(allocator),
+                .value = try m_entry.value.clone(allocator),
+            });
+        }
+    }
+
+    const cloned_meta = if (rd.meta) |m|
+        try Value.cloneMap(allocator, m)
+    else
+        null;
+    errdefer {
+        if (cloned_meta) |cm| {
+            for (cm.items) |*entry| {
+                entry.key.deinit(allocator);
+                entry.value.deinit(allocator);
+            }
+            allocator.free(cm.items);
+        }
+    }
+    const new_type_name = try allocator.dupe(u8, rd.type_name);
+    errdefer allocator.free(new_type_name);
+
+    return try Value.recordValue(allocator, new_type_name, new_fields, new_extmap, cloned_meta);
 }
 
 pub fn registerMapFunctions(env: *Env) anyerror!void {

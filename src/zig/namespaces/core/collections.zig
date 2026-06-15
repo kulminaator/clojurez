@@ -5,6 +5,7 @@ const list = @import("../../list.zig");
 const vec = @import("../../vector.zig");
 const Env = Value.Env;
 const sequences = @import("sequences.zig");
+const maps = @import("maps.zig");
 const helpers = @import("helpers.zig");
 const test_utils = @import("test_utils.zig");
 
@@ -122,6 +123,39 @@ pub fn core_conj(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
                 }
             }
             return Value.mapValue(new_map);
+        },
+        .record => {
+            // conj on record with map entries: (conj record [k v]) or (conj record {k v})
+            // Each entry is a 2-element collection that becomes an assoc pair
+            const allocator = env_env.allocator;
+            var current = try coll.clone(allocator);
+            defer current.deinit(allocator);
+
+            for (args.items[1..]) |item| {
+                var entry_items: []const Value = undefined;
+                switch (item.type) {
+                    .vector => entry_items = item.vec_val.items,
+                    .list => entry_items = item.list_val.items,
+                    else => return error.TypeError,
+                }
+                if (entry_items.len != 2) return error.ArityError;
+
+                // Build args: (assoc current key value)
+                const current_clone = try current.clone(allocator);
+                var assoc_args: list.List = .empty;
+                defer assoc_args.deinit(allocator);
+                try assoc_args.append(allocator, current_clone);
+                try assoc_args.append(allocator, try entry_items[0].clone(allocator));
+                try assoc_args.append(allocator, try entry_items[1].clone(allocator));
+
+                const new_val = try maps.core_assoc(@constCast(&current_clone), assoc_args, env_env);
+                current.deinit(allocator);
+                current = new_val;
+            }
+
+            const result = current;
+            current = Value.nilValue();
+            return result;
         },
         else => return error.TypeError,
     }
@@ -278,6 +312,16 @@ pub fn core_contains_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
     switch (coll.type) {
         .map => {
             for (coll.map_val.items) |entry| {
+                if (entry.key.equals(key)) return Value.boolValue(true);
+            }
+            return Value.boolValue(false);
+        },
+        .record => {
+            // Check fields first, then extmap
+            for (coll.record_val.fields.items) |entry| {
+                if (entry.key.equals(key)) return Value.boolValue(true);
+            }
+            for (coll.record_val.extmap.items) |entry| {
                 if (entry.key.equals(key)) return Value.boolValue(true);
             }
             return Value.boolValue(false);

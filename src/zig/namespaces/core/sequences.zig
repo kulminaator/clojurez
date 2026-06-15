@@ -153,6 +153,11 @@ pub fn core_count(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
         .list => return Value.intValue(@as(i64, @intCast(val.list_val.items.len))),
         .vector => return Value.intValue(@as(i64, @intCast(val.vec_val.items.len))),
         .map => return Value.intValue(@as(i64, @intCast(args.items[0].map_val.items.len))),
+        .record => {
+            const rd = &args.items[0].record_val;
+            const total: i64 = @as(i64, @intCast(rd.fields.items.len)) + @as(i64, @intCast(rd.extmap.items.len));
+            return Value.intValue(total);
+        },
         .set => return Value.intValue(@as(i64, @intCast(args.items[0].set_val.items.len))),
         .queue => return Value.intValue(@as(i64, @intCast(args.items[0].queue_val.items.len))),
         .string => return Value.intValue(@as(i64, @intCast(Value.utf8CodepointCount(args.items[0].str_val)))),
@@ -989,6 +994,7 @@ pub fn core_seq(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
         .list => coll.list_val.items.len,
         .vector => coll.vec_val.items.len,
         .map => coll.map_val.items.len,
+        .record => coll.record_val.fields.items.len + coll.record_val.extmap.items.len,
         .set => coll.set_val.items.len,
         .queue => coll.queue_val.items.len,
         .string => {
@@ -1000,6 +1006,12 @@ pub fn core_seq(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
         else => return Value.nilValue(),
     };
     if (len == 0) return Value.nilValue();
+
+    // For records, seq returns a list of [key value] pairs
+    if (coll.type == .record) {
+        return seqRecord(coll, allocator);
+    }
+
     return try coll.clone(allocator);
 }
 
@@ -1070,6 +1082,30 @@ pub fn core_cons(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     // This mirrors Clojure's Cons — head is x, tail is xs (any sequence).
     // first returns x directly, rest returns xs directly (no forcing).
     return Value.consValue(allocator, try x.clone(allocator), try xs.clone(allocator));
+}
+
+/// Build seq for a record: list of [key value] pairs from fields + extmap.
+fn seqRecord(record: Value, allocator: Allocator) anyerror!Value {
+    var result: list.List = .empty;
+    errdefer result.deinit(allocator);
+
+    // Add field pairs in declaration order
+    for (record.record_val.fields.items) |entry| {
+        var pair: vec.Vector = .empty;
+        try pair.append(allocator, try entry.key.clone(allocator));
+        try pair.append(allocator, try entry.value.clone(allocator));
+        try result.append(allocator, Value.vectorValue(pair));
+    }
+
+    // Add extmap pairs
+    for (record.record_val.extmap.items) |entry| {
+        var pair: vec.Vector = .empty;
+        try pair.append(allocator, try entry.key.clone(allocator));
+        try pair.append(allocator, try entry.value.clone(allocator));
+        try result.append(allocator, Value.vectorValue(pair));
+    }
+
+    return Value.listValue(result);
 }
 
 pub fn registerSequenceFunctions(env: *Env) anyerror!void {

@@ -134,7 +134,7 @@ pub fn recordValue(
 }
 
 /// Deep-clone a Value.Map.
-fn cloneMap(allocator: Allocator, src: Map) anyerror!Map {
+pub fn cloneMap(allocator: Allocator, src: Map) anyerror!Map {
     var dst: Map = .empty;
     errdefer {
         for (dst.items) |*entry| {
