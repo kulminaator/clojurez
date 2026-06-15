@@ -74,7 +74,10 @@ pub fn runRepl(allocator: Allocator, env: *Value.Env) anyerror!void {
     var multiline_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer multiline_buf.deinit(allocator);
 
+    var iteration: usize = 0;
     while (true) {
+        iteration += 1;
+        std.debug.print("[REPL-LOOP] === iteration {d} start ===\n", .{iteration});
         // Print prompt (normal or continuation) - show current namespace
         if (multiline_buf.items.len == 0) {
             if (eval_ns.findNsManager(env)) |ns_mgr| {
@@ -87,6 +90,7 @@ pub fn runRepl(allocator: Allocator, env: *Value.Env) anyerror!void {
         } else {
             try writeStdout("#_=> ");
         }
+        std.debug.print("[REPL-LOOP] prompt printed, about to readLineWithLeftover, leftover_len={d}\n", .{leftover_len});
 
         const len = readLineWithLeftover(&input_buf, &leftover_buf, &leftover_len) catch |err| {
             // EOF - if we have accumulated input, try to evaluate it
@@ -97,6 +101,7 @@ pub fn runRepl(allocator: Allocator, env: *Value.Env) anyerror!void {
             if (err == error.Eof) break;
             return err;
         };
+        std.debug.print("[REPL-LOOP] readLineWithLeftover returned len={d}, leftover_len={d}\n", .{len, leftover_len});
 
         // Strip trailing whitespace
         var end = len;
@@ -107,9 +112,11 @@ pub fn runRepl(allocator: Allocator, env: *Value.Env) anyerror!void {
 
         if (trimmed.len == 0) continue;
 
+        std.debug.print("[REPL-LOOP] appending trimmed.len={d} to multiline_buf (current len={d})\n", .{ trimmed.len, multiline_buf.items.len });
         // Append to multiline buffer with newline
         try multiline_buf.appendSlice(allocator, trimmed);
         try multiline_buf.append(allocator, '\n');
+        std.debug.print("[REPL-LOOP] multiline_buf now len={d}, cap={d}, ptr={*}\n", .{ multiline_buf.items.len, multiline_buf.capacity, multiline_buf.items.ptr });
         // Update GC root so the history buffer survives sweeps
         gc_mod.repl_history_buffer = multiline_buf.items;
 
@@ -136,8 +143,10 @@ pub fn runRepl(allocator: Allocator, env: *Value.Env) anyerror!void {
         if (parse_result == error.UnexpectedEof or
             parse_result == error.UnterminatedString) {
             // Incomplete expression or multiline string, wait for more input
+            std.debug.print("[REPL-LOOP] incomplete expression, waiting for more\n", .{});
             continue;
         } else {
+            std.debug.print("[REPL-LOOP] complete form parsed, evaluating\n", .{});
             // We have a complete form - evaluate it (and any remaining forms)
             // Use current namespace's env for evaluation
             const eval_env = getCurrentNsEnv(env) orelse env;
@@ -147,11 +156,15 @@ pub fn runRepl(allocator: Allocator, env: *Value.Env) anyerror!void {
             // Collect garbage after each expression — temporary values from
             // evaluation (strings, lists, intermediate results) are no longer
             // reachable and should be swept.
+            std.debug.print("[REPL-LOOP] before GC collect, leftover_len={d}\n", .{leftover_len});
             if (gc_mod.current_gc) |gc| gc.collect(gc_scan.valueScanFn);
+            std.debug.print("[REPL-LOOP] after GC collect, leftover_len={d}\n", .{leftover_len});
 
             // Clear the multiline buffer for the next expression
+            std.debug.print("[REPL-LOOP] clearing multiline_buf (before: len={d}, cap={d}, ptr={*})\n", .{ multiline_buf.items.len, multiline_buf.capacity, multiline_buf.items.ptr });
             multiline_buf.clearRetainingCapacity();
             gc_mod.repl_history_buffer = multiline_buf.items;
+            std.debug.print("[REPL-LOOP] multiline_buf cleared (after: len={d}, cap={d}, ptr={*})\n", .{ multiline_buf.items.len, multiline_buf.capacity, multiline_buf.items.ptr });
         }
     }
 
@@ -232,23 +245,37 @@ fn evaluateAndPrint(allocator: Allocator, input: []const u8, env: *Value.Env) an
 fn readLineWithLeftover(buf: []u8, leftover_buf: []u8, leftover_len: *usize) anyerror!usize {
     var len: usize = 0;
 
+    // DEBUG: trace readLineWithLeftover calls
+    std.debug.print("[REPL-READ] call start, leftover_len={d}, buf.len={d}\n", .{ leftover_len.*, buf.len });
+
     // First, check if there's leftover data from a previous read
     if (leftover_len.* > 0) {
+        // Sanity check: leftover_len should not exceed leftover_buf capacity
+        if (leftover_len.* > leftover_buf.len) {
+            std.debug.print("[REPL-READ] ERROR: leftover_len={d} > leftover_buf.len={d}!\n", .{ leftover_len.*, leftover_buf.len });
+        }
         const lo = leftover_buf[0..leftover_len.*];
         // Find newline in leftover
         if (std.mem.indexOfScalar(u8, lo, '\n')) |nl_pos| {
             const line_len = nl_pos;
+            std.debug.print("[REPL-READ] leftover-newline: memcpy buf[0..{d}] <- lo[0..{d}]\n", .{ line_len, line_len });
             @memcpy(buf[0..line_len], lo[0..line_len]);
+            std.debug.print("[REPL-READ] leftover-newline: memcpy done\n", .{});
             // Update leftover to skip past the newline
             const remaining = lo[nl_pos + 1..];
             const store_len = if (remaining.len < leftover_buf.len) remaining.len else leftover_buf.len;
+            std.debug.print("[REPL-READ] leftover-newline: copyForwards leftover_buf[0..{d}] <- remaining[0..{d}]\n", .{ store_len, store_len });
             std.mem.copyForwards(u8, leftover_buf[0..store_len], remaining[0..store_len]);
+            std.debug.print("[REPL-READ] leftover-newline: copyForwards done\n", .{});
             leftover_len.* = remaining.len;
+            std.debug.print("[REPL-READ] leftover has newline: line_len={d}, remaining={d} leftover_len*={d}\n", .{ line_len, remaining.len, leftover_len.* });
             return line_len;
         }
         // No newline in leftover, need more data
         const copy_len = if (lo.len < buf.len) lo.len else buf.len;
+        std.debug.print("[REPL-READ] leftover-no-nl: memcpy buf[0..{d}] <- lo[0..{d}]\n", .{ copy_len, copy_len });
         @memcpy(buf[0..copy_len], lo[0..copy_len]);
+        std.debug.print("[REPL-READ] leftover-no-nl: memcpy done\n", .{});
         len = copy_len;
         leftover_len.* = 0;
     }
@@ -278,18 +305,23 @@ fn readLineWithLeftover(buf: []u8, leftover_buf: []u8, leftover_len: *usize) any
             break;
         }
         len += n;
+        std.debug.print("[REPL-READ] readVec returned n={d}, total len={d}\n", .{ n, len });
         // Find newline in the data we just read
         if (std.mem.indexOfScalar(u8, buf[0..len], '\n')) |nl_pos| {
             const line_len = nl_pos;
             // Store remaining data as leftover
             const remaining = buf[nl_pos + 1 .. len];
             const store_len = if (remaining.len < leftover_buf.len) remaining.len else leftover_buf.len;
+            std.debug.print("[REPL-READ] stdin-newline: copyForwards leftover_buf[0..{d}] <- remaining[0..{d}]\n", .{ store_len, store_len });
             std.mem.copyForwards(u8, leftover_buf[0..store_len], remaining[0..store_len]);
+            std.debug.print("[REPL-READ] stdin-newline: copyForwards done\n", .{});
             leftover_len.* = remaining.len;
+            std.debug.print("[REPL-READ] found newline: line_len={d}, remaining={d} leftover_len*={d}\n", .{ line_len, remaining.len, leftover_len.* });
             return line_len;
         }
     }
     leftover_len.* = 0;
+    std.debug.print("[REPL-READ] no newline found, returning len={d}, hit_eof={}\n", .{ len, hit_eof });
     if (hit_eof and len == 0) return error.Eof;
     return len;
 }
