@@ -268,3 +268,110 @@ else
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
 fi
+
+# ---- Namespace Introspection Functions ----
+
+# find-ns returns nil for nonexistent namespace
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT $VM -e '(find-ns '\''nonexistent.ns.xyz)' 2>&1)
+if [ -z "$result" ]; then
+    echo "PASS: find-ns nonexistent returns nil"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: find-ns nonexistent returns nil"
+    echo "  Expected: (empty/nil)"
+    echo "  Got:      $result"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
+
+# find-ns clojure.core returns map with :name
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT $VM -e '(get (find-ns '\''clojure.core) :name)' 2>&1)
+if [ "$result" = "clojure.core" ]; then
+    echo "PASS: find-ns clojure.core :name"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: find-ns clojure.core :name"
+    echo "  Expected: clojure.core"
+    echo "  Got:      $result"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
+
+# create-ns creates new namespace
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT $VM -e '(get (create-ns '\''shell.test.ns) :name)' 2>&1)
+if [ "$result" = "shell.test.ns" ]; then
+    echo "PASS: create-ns returns correct name"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: create-ns returns correct name"
+    echo "  Expected: shell.test.ns"
+    echo "  Got:      $result"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
+
+# all-ns returns list with at least 2 namespaces
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT $VM -e '(count (all-ns))' 2>&1)
+if [ "$result" -ge 2 ] 2>/dev/null; then
+    echo "PASS: all-ns count >= 2"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: all-ns count >= 2"
+    echo "  Expected: >= 2"
+    echo "  Got:      $result"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
+
+# the-ns errors on nonexistent namespace
+TEST_TOTAL=$((TEST_TOTAL + 1))
+exit_code=0
+result=$($TOOL_TIMEOUT $TIMEOUT $VM -e '(the-ns '\''nonexistent.ns.xyz)' 2>&1) || exit_code=$?
+if [ $exit_code -ne 0 ] && echo "$result" | grep -q "UndefinedNamespace"; then
+    echo "PASS: the-ns nonexistent errors"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: the-ns nonexistent errors"
+    echo "  Expected: exit code != 0 with UndefinedNamespace"
+    echo "  Got:      exit=$exit_code, output=$result"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
+
+# ns-name returns symbol
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT $VM -e '(ns-name '\''clojure.core)' 2>&1)
+if [ "$result" = "clojure.core" ]; then
+    echo "PASS: ns-name returns symbol"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: ns-name returns symbol"
+    echo "  Expected: clojure.core"
+    echo "  Got:      $result"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
+
+# ns-name with ns map argument
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT $VM -e '(ns-name (find-ns '\''user))' 2>&1)
+if [ "$result" = "user" ]; then
+    echo "PASS: ns-name with ns map arg"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: ns-name with ns map arg"
+    echo "  Expected: user"
+    echo "  Got:      $result"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
+
+# find-ns with ns map argument (idempotent)
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT $VM -e '(get (find-ns (find-ns '\''user)) :name)' 2>&1)
+if [ "$result" = "user" ]; then
+    echo "PASS: find-ns with ns map arg"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: find-ns with ns map arg"
+    echo "  Expected: user"
+    echo "  Got:      $result"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi

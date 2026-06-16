@@ -1556,3 +1556,10 @@
   "Returns a set of types for which protocol has implementations."
   [protocol]
   (set (keys (get protocol :impls))))
+
+;; Namespace introspection helpers
+
+(defn ns-name
+  "Returns the name of a namespace as a symbol."
+  [ns]
+  (get (find-ns ns) :name))

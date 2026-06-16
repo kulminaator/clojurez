@@ -145,7 +145,7 @@ pub fn evalNs(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyer
 }
 
 /// Check if a name is in the referred-names list (linear scan, simple and reliable).
-fn isReferredName(referred: []const []const u8, name: []const u8) bool {
+pub fn isReferredName(referred: []const []const u8, name: []const u8) bool {
     for (referred) |r| {
         if (std.mem.eql(u8, r, name)) return true;
     }
