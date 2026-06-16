@@ -268,8 +268,13 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         },
 
         .record => {
-            // Scan the RecordData directly (it's embedded in the Value, not a separate GC block)
-            scanRecordData(@as(*anyopaque, @ptrCast(@constCast(&val.record_val))), ctx);
+            // RecordData is heap-allocated, record_val is a pointer to it.
+            if (val.record_val) |rd| {
+                // Mark the RecordData block itself so it survives GC sweep
+                ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(rd))), ctx);
+                // Then scan its children (type_name, fields, extmap, meta)
+                scanRecordData(@as(*anyopaque, @ptrCast(@constCast(rd))), ctx);
+            }
         },
     }
 }
