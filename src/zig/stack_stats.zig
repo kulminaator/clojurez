@@ -19,8 +19,6 @@ fn captureStackPtr() usize {
     return @intFromPtr(&sentinel);
 }
 
-
-
 /// Record the app-baseline. Called at the very top of main().
 pub fn recordAppBaseline() void {
     app_baseline = captureStackPtr();
