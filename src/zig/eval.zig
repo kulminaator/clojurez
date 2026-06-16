@@ -17,6 +17,63 @@ const gc_mod = @import("gc.zig");
 
 const Allocator = std.mem.Allocator;
 
+/// Unified special form handler signature.
+const SpecialFormFn = *const fn (Allocator, list.List, *Env, usize) anyerror!Value;
+
+/// Dispatch table: static array of special form names → handler functions.
+/// Linear search over ~42 entries is trivial and avoids any allocation.
+const special_forms = [_]struct { name: []const u8, fn_ptr: SpecialFormFn }{
+    .{ .name = "quit", .fn_ptr = evalQuit },
+    .{ .name = "exit", .fn_ptr = evalQuit },
+    .{ .name = "quote", .fn_ptr = evalQuote },
+    .{ .name = "quasiquote", .fn_ptr = evalQuasiquote },
+    .{ .name = "def", .fn_ptr = evalDef },
+    .{ .name = "let", .fn_ptr = evalLet },
+    .{ .name = "letfn", .fn_ptr = evalLetFn },
+    .{ .name = "if", .fn_ptr = evalIf },
+    .{ .name = "when", .fn_ptr = evalWhen },
+    .{ .name = "cond", .fn_ptr = evalCond },
+    .{ .name = "defn", .fn_ptr = evalDefn },
+    .{ .name = "defn-", .fn_ptr = evalDefn },
+    .{ .name = "fn", .fn_ptr = evalFn },
+    .{ .name = "defmacro", .fn_ptr = evalDefmacro },
+    .{ .name = "do", .fn_ptr = evalDo },
+    .{ .name = "set!", .fn_ptr = evalSetBang },
+    .{ .name = "recur", .fn_ptr = evalRecur },
+    .{ .name = "loop", .fn_ptr = evalLoop },
+    .{ .name = "var", .fn_ptr = evalVar },
+    .{ .name = "deref", .fn_ptr = evalDeref },
+    .{ .name = "@", .fn_ptr = evalDeref },
+    .{ .name = "or", .fn_ptr = evalOr },
+    .{ .name = "and", .fn_ptr = evalAnd },
+    .{ .name = "binding", .fn_ptr = evalBinding },
+    .{ .name = "lazy-seq", .fn_ptr = evalLazySeq },
+    .{ .name = "dorun", .fn_ptr = evalDorun },
+    .{ .name = "doall", .fn_ptr = evalDoall },
+    .{ .name = "extend", .fn_ptr = evalExtend },
+    .{ .name = "ns", .fn_ptr = evalNsForm },
+    .{ .name = "in-ns", .fn_ptr = evalInNsForm },
+    .{ .name = "defprotocol", .fn_ptr = evalDefprotocolForm },
+    .{ .name = "extend-type", .fn_ptr = evalExtendTypeForm },
+    .{ .name = "extend-protocol", .fn_ptr = evalExtendProtocolForm },
+    .{ .name = "defrecord", .fn_ptr = evalDefrecordForm },
+    .{ .name = "->>", .fn_ptr = evalThreadLastForm },
+    .{ .name = "->", .fn_ptr = evalThreadFirstForm },
+    .{ .name = "cond->", .fn_ptr = evalCondThreadFirstForm },
+    .{ .name = "cond->>", .fn_ptr = evalCondThreadLastForm },
+    .{ .name = "case", .fn_ptr = evalCaseForm },
+};
+
+/// Look up a special form handler by name. Returns null if not a special form.
+fn findSpecialForm(name: []const u8) ?SpecialFormFn {
+    for (special_forms) |entry| {
+        if (std.mem.eql(u8, entry.name, name)) {
+            return entry.fn_ptr;
+        }
+    }
+    return null;
+}
+
 /// Push the HAMT root from an Env as a temporary GC root.
 /// Returns a Guard struct that pops the root on deinit (use `defer guard.deinit()`).
 /// This protects HAMT nodes reachable from stack-allocated Env structs.
@@ -326,215 +383,10 @@ fn evalList(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerro
 
     const first = l.items[0];
 
-    // Self-evaluating symbols (special forms)
+    // Self-evaluating symbols (special forms) — dispatch via lookup table
     if (first.type == .symbol) {
-        const name = first.sym_val;
-
-        // Special forms that don't evaluate their arguments
-        // quit / exit - signal REPL to exit
-        if (std.mem.eql(u8, name, "quit") or std.mem.eql(u8, name, "exit")) {
-            return error.ReplExit;
-        }
-
-        // ns - namespace declaration
-        // (ns namespace-name (:require [other.ns :as alias] ...))
-        if (std.mem.eql(u8, name, "ns")) {
-            return try eval_ns.evalNs(allocator, l, env, depth);
-        }
-
-        // in-ns - create/find namespace and set as current
-        // (in-ns namespace-name)
-        if (std.mem.eql(u8, name, "in-ns")) {
-            return try eval_ns.evalInNs(allocator, l, env, depth);
-        }
-
-        if (std.mem.eql(u8, name, "quote")) {
-            return try evalQuote(allocator, l);
-        }
-
-        if (std.mem.eql(u8, name, "quasiquote")) {
-            return try evalQuasiquote(allocator, l, env, depth);
-        }
-
-        // def - define in current namespace
-        if (std.mem.eql(u8, name, "def")) {
-            return try evalDef(allocator, l, env, depth);
-        }
-
-        // let - local bindings
-        if (std.mem.eql(u8, name, "let")) {
-            if (l.items.len < 2) return error.ArityError;
-            const bindings = l.items[1];
-            if (bindings.type != .list and bindings.type != .vector) return error.TypeError;
-            return try evalLet(allocator, bindings, l.items[2..], env, depth + 1);
-        }
-
-        // letfn - define mutually recursive functions
-        // (letfn [(name [params] body...)+] body...)
-        if (std.mem.eql(u8, name, "letfn")) {
-            if (l.items.len < 2) return error.ArityError;
-            const bindings = l.items[1];
-            if (bindings.type != .list and bindings.type != .vector) return error.TypeError;
-            return try evalLetFn(allocator, bindings, l.items[2..], env, depth + 1);
-        }
-
-        // if - conditional
-        if (std.mem.eql(u8, name, "if")) {
-            return try evalIf(allocator, l, env, depth);
-        }
-
-        // when - (when test body...)
-        if (std.mem.eql(u8, name, "when")) {
-            return try evalWhen(allocator, l, env, depth);
-        }
-
-        // cond - multi-way conditional
-        if (std.mem.eql(u8, name, "cond")) {
-            return try evalCond(allocator, l.items[1..], env, depth + 1);
-        }
-
-        // defn / defn- - define a named function (supports multi-arity)
-        // (defn name docstring? ([params] body...)+)
-        // defn- is an alias for defn (convention for private functions)
-        if (std.mem.eql(u8, name, "defn") or std.mem.eql(u8, name, "defn-")) {
-            return try evalDefn(allocator, l, env);
-        }
-
-        // fn - define a function (supports multi-arity)
-        // (fn name? ([params] body...)+)
-        if (std.mem.eql(u8, name, "fn")) {
-            return try evalFn(allocator, l, env);
-        }
-
-        // defmacro - define a macro (like defn but args are passed unevaluated)
-        // (defmacro name docstring? ([params] body...)+)
-        if (std.mem.eql(u8, name, "defmacro")) {
-            return try evalDefmacro(allocator, l, env);
-        }
-
-        // defprotocol - define a protocol
-        // (defprotocol name docstring? options? (method [params]... docstring?)+)
-        if (std.mem.eql(u8, name, "defprotocol")) {
-            return try protocols.evalDefProtocol(allocator, l, env, depth + 1);
-        }
-
-        // extend - add protocol implementations for a type
-        // (extend atype protocol mmap & more...)
-        if (std.mem.eql(u8, name, "extend")) {
-            return try evalExtend(allocator, l, env, depth);
-        }
-
-        // extend-type - convenience form for extend with inline method definitions
-        // (extend-type atype protocol (method [params] body...)+ & more...)
-        if (std.mem.eql(u8, name, "extend-type")) {
-            return try protocols.evalExtendType(allocator, l, env, depth + 1);
-        }
-
-        // extend-protocol - extend one protocol for multiple types at once
-        // (extend-protocol protocol atype1 (method [params] body...)+ atype2 ...)
-        if (std.mem.eql(u8, name, "extend-protocol")) {
-            return try protocols.evalExtendProtocol(allocator, l, env, depth + 1);
-        }
-
-        // defrecord - define a record type with named fields
-        // (defrecord name [fields*] options* specs*)
-        if (std.mem.eql(u8, name, "defrecord")) {
-            return try records.evalDefRecord(allocator, l, env, depth + 1);
-        }
-
-        // do - evaluate a sequence of forms
-        if (std.mem.eql(u8, name, "do")) {
-            return try evalDo(allocator, l, env, depth);
-        }
-
-        // set! - modify a var
-        if (std.mem.eql(u8, name, "set!")) {
-            return try evalSetBang(allocator, l, env, depth);
-        }
-
-        // recur - tail recursion
-        if (std.mem.eql(u8, name, "recur")) {
-            return try evalRecur(allocator, l, env, depth);
-        }
-
-        // loop - named recursion point
-        if (std.mem.eql(u8, name, "loop")) {
-            if (l.items.len < 2) return error.ArityError;
-            const bindings = l.items[1];
-            if (bindings.type != .list and bindings.type != .vector) return error.TypeError;
-            return try evalLoop(allocator, bindings, l.items[2..], env, depth + 1);
-        }
-
-        // var - create a mutable var
-        if (std.mem.eql(u8, name, "var")) {
-            return try evalVar(allocator, l, env, depth);
-        }
-
-        // deref - get the value of a derefable object (atom, var, etc.)
-        if (std.mem.eql(u8, name, "deref") or std.mem.eql(u8, name, "@")) {
-            return try evalDeref(allocator, l, env, depth);
-        }
-
-        // or - short-circuit or
-        if (std.mem.eql(u8, name, "or")) {
-            return try evalOr(allocator, l, env, depth);
-        }
-
-        // and - short-circuit and
-        if (std.mem.eql(u8, name, "and")) {
-            return try evalAnd(allocator, l, env, depth);
-        }
-
-        // binding - dynamic variable binding (simplified)
-        // Matches Clojure syntax: (binding [var1 val1 var2 val2] body...)
-        if (std.mem.eql(u8, name, "binding")) {
-            return try evalBinding(allocator, l, env, depth);
-        }
-
-        // ->> thread-last macro
-        // (->> x (f 1) (g 2 3)) => (g (f x 1) 2 3)
-        if (std.mem.eql(u8, name, "->>")) {
-            return try eval_thread.evalThreadLast(allocator, l.items[1..], env, depth + 1);
-        }
-
-        // -> thread-first macro
-        // (-> x (f 1) (g 2 3)) => (g (f 1 x) 2 3)
-        if (std.mem.eql(u8, name, "->")) {
-            return eval_thread.evalThreadFirst(allocator, l.items[1..], env, depth + 1);
-        }
-
-        // lazy-seq - create a lazy sequence
-        if (std.mem.eql(u8, name, "lazy-seq")) {
-            return try evalLazySeq(allocator, l, env);
-        }
-
-        // dorun - realize a lazy sequence for side effects, return nil
-        // (dorun coll) or (dorun n coll)
-        if (std.mem.eql(u8, name, "dorun")) {
-            return try evalDorun(allocator, l, env, depth);
-        }
-
-        // doall - realize lazy sequences and return the result
-        if (std.mem.eql(u8, name, "doall")) {
-            return try evalDoall(allocator, l, env, depth);
-        }
-
-        // cond-> - thread-first with conditions
-        // (cond-> expr test1 step1 test2 step2 ...)
-        if (std.mem.eql(u8, name, "cond->")) {
-            return try eval_thread.evalCondThreadFirst(allocator, l.items[1..], env, depth + 1);
-        }
-
-        // cond->> - thread-last with conditions
-        // (cond->> expr test1 step1 test2 step2 ...)
-        if (std.mem.eql(u8, name, "cond->>")) {
-            return try eval_thread.evalCondThreadLast(allocator, l.items[1..], env, depth + 1);
-        }
-
-        // case - multi-way constant dispatch
-        // (case expr test1 result1 test2 result2 ... default)
-        if (std.mem.eql(u8, name, "case")) {
-            return try evalCase(allocator, l.items[1..], env, depth + 1);
+        if (findSpecialForm(first.sym_val)) |fn_ptr| {
+            return fn_ptr(allocator, l, env, depth);
         }
     }
 
@@ -579,8 +431,11 @@ fn evalFunctionCall(allocator: Allocator, l: list.List, env: *Env, depth: usize)
     return try call(allocator, op, transferred, env, depth);
 }
 
-fn evalLet(allocator: Allocator, bindings: Value, body: []const Value, env: *Env, depth: usize) anyerror!Value {
+fn evalLet(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+    if (l.items.len < 2) return error.ArityError;
+    const bindings = l.items[1];
     if (bindings.type != .list and bindings.type != .vector) return error.TypeError;
+    const body = l.items[2..];
 
     // Heap-allocate Env to reduce C stack pressure during deep recursion.
     // Env is ~416 bytes; keeping it on the stack in debug mode causes overflow.
@@ -616,7 +471,11 @@ fn evalLet(allocator: Allocator, bindings: Value, body: []const Value, env: *Env
     return do_result;
 }
 
-fn evalLetFn(allocator: Allocator, bindings: Value, body: []const Value, env: *Env, depth: usize) anyerror!Value {
+fn evalLetFn(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+    if (l.items.len < 2) return error.ArityError;
+    const bindings = l.items[1];
+    if (bindings.type != .list and bindings.type != .vector) return error.TypeError;
+    const body_forms = l.items[2..];
     const bind_items = switch (bindings.type) {
         .list => bindings.list_val.items,
         .vector => bindings.vec_val.items,
@@ -702,7 +561,7 @@ fn evalLetFn(allocator: Allocator, bindings: Value, body: []const Value, env: *E
 
     var do_result: Value = Value.nilValue();
     errdefer do_result.deinit(allocator);
-    for (body) |form| {
+    for (body_forms) |form| {
         do_result.deinit(allocator);
         do_result = Value.nilValue();
         do_result = try evalRec(allocator, form, &new_env, depth);
@@ -752,7 +611,9 @@ fn bindPattern(allocator: Allocator, pattern: Value, val: Value, env: *Value.Env
     }
 }
 
-fn evalCond(allocator: Allocator, clauses: []const Value, env: *Env, depth: usize) anyerror!Value {
+fn evalCond(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+    if (l.items.len < 2) return error.ArityError;
+    const clauses = l.items[1..];
     var i: usize = 0;
     while (i < clauses.len) : (i += 2) {
         const cond = clauses[i];
@@ -773,8 +634,11 @@ fn evalCond(allocator: Allocator, clauses: []const Value, env: *Env, depth: usiz
     return Value.nilValue();
 }
 
-fn evalLoop(allocator: Allocator, bindings: Value, body: []const Value, env: *Env, depth: usize) anyerror!Value {
+fn evalLoop(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+    if (l.items.len < 2) return error.ArityError;
+    const bindings = l.items[1];
     if (bindings.type != .list and bindings.type != .vector) return error.TypeError;
+    const body = l.items[2..];
 
     const bind_items = switch (bindings.type) {
         .list => bindings.list_val.items,
@@ -1293,9 +1157,20 @@ fn evalCase(allocator: Allocator, forms: []const Value, env: *Env, depth: usize)
 // ============================================================================
 
 /// (quote form) — return form unevaluated
-fn evalQuote(allocator: Allocator, l: list.List) anyerror!Value {
+fn evalQuote(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+    _ = env;
+    _ = depth;
     if (l.items.len != 2) return error.ArityError;
     return try l.items[1].clone(allocator);
+}
+
+/// (quit) / (exit) — signal REPL to exit
+fn evalQuit(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+    _ = allocator;
+    _ = l;
+    _ = env;
+    _ = depth;
+    return error.ReplExit;
 }
 
 /// (quasiquote form) — template with unquote
@@ -1364,7 +1239,8 @@ fn evalDo(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!
 }
 
 /// (defn name docstring? ([params] body...)+) — define named function
-fn evalDefn(allocator: Allocator, l: list.List, env: *Env) anyerror!Value {
+fn evalDefn(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+    _ = depth;
     if (l.items.len < 3) return error.ArityError;
     const fname = l.items[1];
     if (fname.type != .symbol) return error.TypeError;
@@ -1400,7 +1276,8 @@ fn evalDefn(allocator: Allocator, l: list.List, env: *Env) anyerror!Value {
 }
 
 /// (fn name? ([params] body...)+) — anonymous function
-fn evalFn(allocator: Allocator, l: list.List, env: *Env) anyerror!Value {
+fn evalFn(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+    _ = depth;
     if (l.items.len < 2) return error.ArityError;
     var idx: usize = 1;
     var fn_name: ?Value = null;
@@ -1434,7 +1311,8 @@ fn evalFn(allocator: Allocator, l: list.List, env: *Env) anyerror!Value {
 }
 
 /// (defmacro name docstring? ([params] body...)+) — define a macro
-fn evalDefmacro(allocator: Allocator, l: list.List, env: *Env) anyerror!Value {
+fn evalDefmacro(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+    _ = depth;
     if (l.items.len < 3) return error.ArityError;
     const macro_name = l.items[1];
     if (macro_name.type != .symbol) return error.TypeError;
@@ -1585,7 +1463,8 @@ fn evalBinding(allocator: Allocator, l: list.List, env: *Env, depth: usize) anye
 }
 
 /// (lazy-seq body...) — create a lazy sequence
-fn evalLazySeq(allocator: Allocator, l: list.List, env: *Env) anyerror!Value {
+fn evalLazySeq(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+    _ = depth;
     if (l.items.len < 2) return error.ArityError;
     var body: list.List = .empty;
     errdefer body.deinit(allocator);
@@ -1679,4 +1558,53 @@ fn evalExtend(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyer
         try ext_args.append(allocator, try evalRec(allocator, l.items[ei], env, depth + 1));
     }
     return try protocols.evalExtend(allocator, ext_args, env, depth + 1);
+}
+
+// ============================================================================
+// Wrapper functions for external module handlers
+// These adapt the unified SpecialFormFn signature to external module APIs.
+// ============================================================================
+
+fn evalNsForm(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+    return eval_ns.evalNs(allocator, l, env, depth);
+}
+
+fn evalInNsForm(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+    return eval_ns.evalInNs(allocator, l, env, depth);
+}
+
+fn evalDefprotocolForm(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+    return protocols.evalDefProtocol(allocator, l, env, depth + 1);
+}
+
+fn evalExtendTypeForm(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+    return protocols.evalExtendType(allocator, l, env, depth + 1);
+}
+
+fn evalExtendProtocolForm(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+    return protocols.evalExtendProtocol(allocator, l, env, depth + 1);
+}
+
+fn evalDefrecordForm(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+    return records.evalDefRecord(allocator, l, env, depth + 1);
+}
+
+fn evalThreadLastForm(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+    return eval_thread.evalThreadLast(allocator, l.items[1..], env, depth + 1);
+}
+
+fn evalThreadFirstForm(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+    return eval_thread.evalThreadFirst(allocator, l.items[1..], env, depth + 1);
+}
+
+fn evalCondThreadFirstForm(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+    return eval_thread.evalCondThreadFirst(allocator, l.items[1..], env, depth + 1);
+}
+
+fn evalCondThreadLastForm(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+    return eval_thread.evalCondThreadLast(allocator, l.items[1..], env, depth + 1);
+}
+
+fn evalCaseForm(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+    return evalCase(allocator, l.items[1..], env, depth + 1);
 }
