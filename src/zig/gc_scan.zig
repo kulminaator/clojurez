@@ -204,11 +204,14 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         },
 
         .function => {
+            const fn_data = val.fn_val orelse return;
+            // Mark the FnData struct itself so GC can find arities and env
+            ctx.gc.markRecursive(fn_data, ctx);
             // Mark the arities array buffer itself
-            if (val.fn_val.arities.items.len > 0) {
-                ctx.gc.markRecursive(val.fn_val.arities.items.ptr, ctx);
+            if (fn_data.arities.items.len > 0) {
+                ctx.gc.markRecursive(fn_data.arities.items.ptr, ctx);
                 // Each Arity has params (list) and body (list) that need marking
-                for (val.fn_val.arities.items) |arity| {
+                for (fn_data.arities.items) |arity| {
                     if (arity.params.items.len > 0) {
                         ctx.gc.markRecursive(arity.params.items.ptr, ctx);
                     }
@@ -223,7 +226,7 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
                 }
             }
             // Mark the fn's env struct itself (heap-allocated *Env)
-            const fn_env = val.fn_val.env;
+            const fn_env = fn_data.env;
             ctx.gc.markRecursive(fn_env, ctx);
             // Mark the fn's env HAMT root node (triggers recursive scanning)
             if (fn_env.entries.root) |root| {

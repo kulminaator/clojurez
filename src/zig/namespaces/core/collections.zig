@@ -318,10 +318,10 @@ pub fn core_contains_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
         },
         .record => {
             // Check fields first, then extmap
-            for (coll.record_val.fields.items) |entry| {
+            for (coll.record_val.?.fields.items) |entry| {
                 if (entry.key.equals(key)) return Value.boolValue(true);
             }
-            for (coll.record_val.extmap.items) |entry| {
+            for (coll.record_val.?.extmap.items) |entry| {
                 if (entry.key.equals(key)) return Value.boolValue(true);
             }
             return Value.boolValue(false);

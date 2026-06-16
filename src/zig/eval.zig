@@ -869,7 +869,7 @@ fn evalFunctionCall(allocator: Allocator, l: list.List, env: *Env, depth: usize)
     defer op.deinit(allocator);
 
     // Check if operator is a macro
-    if (op.type == .function and op.fn_val.is_macro) {
+    if (op.type == .function and op.fn_val.?.is_macro) {
         // Macro: pass unevaluated arguments
         var macro_args: list.List = .empty;
         errdefer macro_args.deinit(allocator);
@@ -1172,7 +1172,7 @@ pub fn call(allocator: Allocator, op: Value, args_list: list.List, env: *Env, de
 
     switch (op.type) {
         .function => {
-            const fn_data = op.fn_val;
+            const fn_data = op.fn_val orelse return error.TypeError;
             const arg_count = args.items.len;
 
             // Find matching arity: exact match first, then variadic with enough args
@@ -1289,12 +1289,12 @@ pub fn call(allocator: Allocator, op: Value, args_list: list.List, env: *Env, de
                 }
             } else if (coll.type == .record) {
                 // Look up in fields first, then extmap
-                for (coll.record_val.fields.items) |entry| {
+                for (coll.record_val.?.fields.items) |entry| {
                     if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, op.kw_val)) {
                         return try entry.value.clone(allocator);
                     }
                 }
-                for (coll.record_val.extmap.items) |entry| {
+                for (coll.record_val.?.extmap.items) |entry| {
                     if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, op.kw_val)) {
                         return try entry.value.clone(allocator);
                     }
@@ -1321,12 +1321,12 @@ pub fn call(allocator: Allocator, op: Value, args_list: list.List, env: *Env, de
             // Record as function: returns value for key (fields first, then extmap)
             if (args.items.len < 1 or args.items.len > 2) return error.ArityError;
             const key = args.items[0];
-            for (op.record_val.fields.items) |entry| {
+            for (op.record_val.?.fields.items) |entry| {
                 if (entry.key.equals(key)) {
                     return try entry.value.clone(allocator);
                 }
             }
-            for (op.record_val.extmap.items) |entry| {
+            for (op.record_val.?.extmap.items) |entry| {
                 if (entry.key.equals(key)) {
                     return try entry.value.clone(allocator);
                 }

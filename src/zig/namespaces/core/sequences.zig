@@ -154,7 +154,7 @@ pub fn core_count(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
         .vector => return Value.intValue(@as(i64, @intCast(val.vec_val.items.len))),
         .map => return Value.intValue(@as(i64, @intCast(args.items[0].map_val.items.len))),
         .record => {
-            const rd = &args.items[0].record_val;
+            const rd = args.items[0].record_val orelse return error.TypeError;
             const total: i64 = @as(i64, @intCast(rd.fields.items.len)) + @as(i64, @intCast(rd.extmap.items.len));
             return Value.intValue(total);
         },
@@ -994,7 +994,7 @@ pub fn core_seq(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
         .list => coll.list_val.items.len,
         .vector => coll.vec_val.items.len,
         .map => coll.map_val.items.len,
-        .record => coll.record_val.fields.items.len + coll.record_val.extmap.items.len,
+        .record => coll.record_val.?.fields.items.len + coll.record_val.?.extmap.items.len,
         .set => coll.set_val.items.len,
         .queue => coll.queue_val.items.len,
         .string => {
@@ -1090,7 +1090,7 @@ fn seqRecord(record: Value, allocator: Allocator) anyerror!Value {
     errdefer result.deinit(allocator);
 
     // Add field pairs in declaration order
-    for (record.record_val.fields.items) |entry| {
+    for (record.record_val.?.fields.items) |entry| {
         var pair: vec.Vector = .empty;
         try pair.append(allocator, try entry.key.clone(allocator));
         try pair.append(allocator, try entry.value.clone(allocator));
@@ -1098,7 +1098,7 @@ fn seqRecord(record: Value, allocator: Allocator) anyerror!Value {
     }
 
     // Add extmap pairs
-    for (record.record_val.extmap.items) |entry| {
+    for (record.record_val.?.extmap.items) |entry| {
         var pair: vec.Vector = .empty;
         try pair.append(allocator, try entry.key.clone(allocator));
         try pair.append(allocator, try entry.value.clone(allocator));

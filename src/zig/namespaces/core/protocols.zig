@@ -47,7 +47,7 @@ pub fn typeKeyword(v: Value) []const u8 {
         .cons => "cons",
         .reduced => "reduced",
         .wrapped => "wrapped",
-        .record => v.record_val.type_name,
+        .record => v.record_val.?.type_name,
     };
 }
 
