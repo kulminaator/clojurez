@@ -803,7 +803,7 @@ test "value::Env: function closures with captured envs survive GC" {
     try std.testing.expect(retrieved.?.type == .function);
 
     // The fn's env should still be accessible and not corrupt
-    const fn_data = retrieved.?.fn_val;
+    const fn_data = retrieved.?.fn_val orelse unreachable;
     _ = fn_data.env; // accessing the pointer should not crash
     try std.testing.expect(fn_data.env.entries.count == 0); // empty env (clone of empty root)
 }
