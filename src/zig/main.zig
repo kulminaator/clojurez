@@ -297,7 +297,7 @@ fn loadCoreLibrary(allocator: Allocator, env: *Env) anyerror!void {
     defer forms.deinit(allocator);
 
     for (forms.items) |form| {
-        var result = try eval.eval(allocator, allocator, form, env);
+        var result = try eval.eval(allocator, form, env);
         result.deinit(allocator);
         // Silent: don't print results during core library loading
     }
@@ -314,7 +314,7 @@ fn loadStringLibrary(allocator: Allocator, env: *Env) anyerror!void {
     defer forms.deinit(allocator);
 
     for (forms.items) |form| {
-        var result = try eval.eval(allocator, allocator, form, env);
+        var result = try eval.eval(allocator, form, env);
         result.deinit(allocator);
         // Silent: don't print results during string library loading
     }
@@ -362,7 +362,7 @@ fn runExpression(allocator: Allocator, expr: []const u8, env: *Env) anyerror!voi
     for (forms.items) |form| {
         // Use current namespace's env for evaluation
         const eval_env = getCurrentNsEnv(env) orelse env;
-        const result = try eval.eval(allocator, allocator, form, eval_env);
+        const result = try eval.eval(allocator, form, eval_env);
 
         if (!result.equals(Value.nilValue())) {
             const print_val = if (result.type == .lazy_seq) blk: {
@@ -420,7 +420,7 @@ fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void 
     for (forms.items) |form| {
         // Get current namespace's env for each form (ns form may change it)
         const eval_env = getCurrentNsEnv(env) orelse env;
-        var result = try eval.eval(allocator, allocator, form, eval_env);
+        var result = try eval.eval(allocator, form, eval_env);
 
         if (print_results and !result.equals(Value.nilValue())) {
             var print_val: Value = undefined;
@@ -540,7 +540,7 @@ fn runMain(allocator: Allocator, env: *Env, ns_name: []const u8) anyerror!void {
     defer forms.deinit(allocator);
 
     for (forms.items) |form| {
-        var result = try eval.eval(allocator, allocator, form, env);
+        var result = try eval.eval(allocator, form, env);
         result.deinit(allocator);
     }
 
@@ -564,7 +564,7 @@ fn runMain(allocator: Allocator, env: *Env, ns_name: []const u8) anyerror!void {
     var call_list: list.List = .empty;
     defer call_list.deinit(allocator);
     try call_list.append(allocator, try main_fn.clone(allocator));
-    var call_result = try eval.eval(allocator, allocator, Value.listValue(call_list), ns_env);
+    var call_result = try eval.eval(allocator, Value.listValue(call_list), ns_env);
     call_result.deinit(allocator);
 
 }

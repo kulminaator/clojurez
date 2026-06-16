@@ -67,7 +67,6 @@ fn makeErrorStr(allocator: Allocator, comptime fmt: []const u8, args: anytype) a
 ///   __method_kw  (string) — method keyword name (without colon)
 pub fn dispatchProtocolMethod(
     allocator: Allocator,
-    arena_alloc: Allocator,
     args: list.List,
     proto_env: *const Env,
     depth: usize,
@@ -102,7 +101,7 @@ pub fn dispatchProtocolMethod(
         return makeErrorStr(allocator, "error: protocol '{s}' not found in namespace '{s}'", .{proto_name, proto_ns});
 
     // Get :impls from protocol map
-    const impls_kw = try Value.keywordValue(arena_alloc, "impls");
+    const impls_kw = try Value.keywordValue(allocator, "impls");
     const impls_map = getMapEntry(protocol_map_val, impls_kw) orelse {
         const type_kw = typeKeyword(target);
         return makeErrorStr(allocator, "No implementation of method: :{s} of protocol: #{{'{s}/{s} found for type: {s}", .{ method_kw, proto_ns, proto_name, type_kw });
@@ -110,7 +109,7 @@ pub fn dispatchProtocolMethod(
 
     // Get type keyword for the dispatch target
     const type_kw_str = typeKeyword(target);
-    const type_kw = try Value.keywordValue(arena_alloc, type_kw_str);
+    const type_kw = try Value.keywordValue(allocator, type_kw_str);
 
     // Look up impl for this type in the impls map
     const type_impls = getMapEntry(impls_map, type_kw) orelse {
@@ -118,21 +117,20 @@ pub fn dispatchProtocolMethod(
     };
 
     // Look up the method function in the type's impl map
-    const method_kw_full = try Value.keywordValue(arena_alloc, method_kw);
+    const method_kw_full = try Value.keywordValue(allocator, method_kw);
     const impl_fn = getMapEntry(type_impls, method_kw_full) orelse {
         return makeErrorStr(allocator, "No implementation of method: :{s} of protocol: #{{'{s}/{s} found for type: {s}", .{ method_kw, proto_ns, proto_name, type_kw_str });
     };
 
     // Call the implementation function with all arguments
     const call_env: *Env = @constCast(proto_env);
-    return eval.call(allocator, arena_alloc, impl_fn, args, call_env, depth);
+    return eval.call(allocator, impl_fn, args, call_env, depth);
 }
 
 /// Evaluate a (defprotocol ...) form.
 /// Returns the protocol name symbol.
 pub fn evalDefProtocol(
     allocator: Allocator,
-    arena_alloc: Allocator,
     l: list.List,
     env: *Env,
     _depth: usize,
@@ -177,10 +175,10 @@ pub fn evalDefProtocol(
     var sigs: std.ArrayListUnmanaged(Value.MapEntry) = .empty;
     errdefer {
         for (sigs.items) |*entry| {
-            entry.key.deinit(arena_alloc);
-            entry.value.deinit(arena_alloc);
+            entry.key.deinit(allocator);
+            entry.value.deinit(allocator);
         }
-        arena_alloc.free(sigs.items);
+        allocator.free(sigs.items);
     }
 
     while (idx < l.items.len) {
@@ -203,8 +201,8 @@ pub fn evalDefProtocol(
         // Parse arities (vectors) and optional docstring
         var arglists: std.ArrayListUnmanaged([]const u8) = .empty;
         defer {
-            for (arglists.items) |a| arena_alloc.free(a);
-            arena_alloc.free(arglists.items);
+            for (arglists.items) |a| allocator.free(a);
+            allocator.free(arglists.items);
         }
 
         var method_doc: ?[]const u8 = null;
@@ -215,22 +213,22 @@ pub fn evalDefProtocol(
             if (item.type == .vector) {
                 // Build arglist like "(this x y)"
                 var buf: std.ArrayListUnmanaged(u8) = .empty;
-                defer arena_alloc.free(buf.items);
-                try buf.append(arena_alloc, '(');
+                defer allocator.free(buf.items);
+                try buf.append(allocator, '(');
                 var first_param = true;
                 for (item.vec_val.items) |param| {
-                    if (!first_param) try buf.append(arena_alloc, ' ');
+                    if (!first_param) try buf.append(allocator, ' ');
                     first_param = false;
                     if (param.type == .symbol) {
-                        try buf.appendSlice(arena_alloc, param.sym_val);
+                        try buf.appendSlice(allocator, param.sym_val);
                     } else {
-                        try buf.appendSlice(arena_alloc, "x");
+                        try buf.appendSlice(allocator, "x");
                     }
                 }
-                try buf.append(arena_alloc, ')');
-                try arglists.append(arena_alloc, try arena_alloc.dupe(u8, buf.items));
+                try buf.append(allocator, ')');
+                try arglists.append(allocator, try allocator.dupe(u8, buf.items));
             } else if (item.type == .string) {
-                method_doc = try arena_alloc.dupe(u8, item.str_val);
+                method_doc = try allocator.dupe(u8, item.str_val);
             }
         }
 
@@ -262,24 +260,24 @@ pub fn evalDefProtocol(
         var sig_map: Value.Map = .empty;
         defer {
             for (sig_map.items) |*entry| {
-                entry.key.deinit(arena_alloc);
-                entry.value.deinit(arena_alloc);
+                entry.key.deinit(allocator);
+                entry.value.deinit(allocator);
             }
-            arena_alloc.free(sig_map.items);
+            allocator.free(sig_map.items);
         }
 
         // :name
-        try sig_map.append(arena_alloc, .{
-            .key = try Value.keywordValue(arena_alloc, "name"),
-            .value = try Value.symValue(arena_alloc, mname),
+        try sig_map.append(allocator, .{
+            .key = try Value.keywordValue(allocator, "name"),
+            .value = try Value.symValue(allocator, mname),
         });
 
         // :arglists — list of lists of symbols
         var arglists_list: list.List = .empty;
-        defer arglists_list.deinit(arena_alloc);
+        defer arglists_list.deinit(allocator);
         for (arglists.items) |al_str| {
             var al_list: list.List = .empty;
-            defer al_list.deinit(arena_alloc);
+            defer al_list.deinit(allocator);
             // Parse "(this x y)" -> extract param names
             var start: usize = 0;
             var in_token = false;
@@ -293,7 +291,7 @@ pub fn evalDefProtocol(
                 } else if (is_sep and in_token) {
                     const token = al_str[start..i];
                     if (token.len > 0) {
-                        try al_list.append(arena_alloc, try Value.symValue(arena_alloc, token));
+                        try al_list.append(allocator, try Value.symValue(allocator, token));
                     }
                     in_token = false;
                 }
@@ -301,31 +299,31 @@ pub fn evalDefProtocol(
             if (in_token) {
                 const token = al_str[start..];
                 if (token.len > 0) {
-                    try al_list.append(arena_alloc, try Value.symValue(arena_alloc, token));
+                    try al_list.append(allocator, try Value.symValue(allocator, token));
                 }
             }
-            try arglists_list.append(arena_alloc, Value.listValue(al_list));
+            try arglists_list.append(allocator, Value.listValue(al_list));
             // Transfer ownership: clear al_list so its defer doesn't double-free
             al_list = .empty;
         }
-        try sig_map.append(arena_alloc, .{
-            .key = try Value.keywordValue(arena_alloc, "arglists"),
+        try sig_map.append(allocator, .{
+            .key = try Value.keywordValue(allocator, "arglists"),
             .value = Value.listValue(arglists_list),
         });
         // Transfer ownership: clear arglists_list so its defer doesn't double-free
         arglists_list = .empty;
 
         // :doc
-        try sig_map.append(arena_alloc, .{
-            .key = try Value.keywordValue(arena_alloc, "doc"),
+        try sig_map.append(allocator, .{
+            .key = try Value.keywordValue(allocator, "doc"),
             .value = if (method_doc) |doc|
-                try Value.stringValue(arena_alloc, doc)
+                try Value.stringValue(allocator, doc)
             else
                 Value.nilValue(),
         });
 
-        try sigs.append(arena_alloc, .{
-            .key = try Value.keywordValue(arena_alloc, mname),
+        try sigs.append(allocator, .{
+            .key = try Value.keywordValue(allocator, mname),
             .value = Value.mapValue(sig_map),
         });
         // Transfer ownership: clear sig_map so its defer doesn't double-free
@@ -504,12 +502,10 @@ pub fn evalDefProtocol(
 /// Returns nil.
 pub fn evalExtend(
     allocator: Allocator,
-    arena_alloc: Allocator,
     l: list.List,
     env: *Env,
     depth: usize,
 ) anyerror!Value {
-    _ = arena_alloc;
     _ = depth;
     // (extend atype protocol mmap & more...)
     // l has: atype (unevaluated), protocol (evaluated), mmap (evaluated), ...
@@ -708,7 +704,6 @@ fn formatValueShort(v: Value) []const u8 {
 /// Builds fn values for each method and calls extend internally.
 pub fn evalExtendType(
     allocator: Allocator,
-    arena_alloc: Allocator,
     l: list.List,
     env: *Env,
     depth: usize,
@@ -726,15 +721,15 @@ pub fn evalExtendType(
     // We need to group methods by protocol
     var idx: usize = 2;
     var extend_args: list.List = .empty;
-    errdefer extend_args.deinit(arena_alloc);
+    errdefer extend_args.deinit(allocator);
 
     // Add atype as first arg (unevaluated)
-    try extend_args.append(arena_alloc, try atype.clone(arena_alloc));
+    try extend_args.append(allocator, try atype.clone(allocator));
 
     while (idx < l.items.len) {
         // Evaluate the protocol
-        const proto_val = try eval.evalRec(allocator, arena_alloc, l.items[idx], env, depth + 1);
-        try extend_args.append(arena_alloc, proto_val);
+        const proto_val = try eval.evalRec(allocator, l.items[idx], env, depth + 1);
+        try extend_args.append(allocator, proto_val);
 
         // Collect method definitions until next protocol or end
         idx += 1;
@@ -800,8 +795,8 @@ pub fn evalExtendType(
         for (unique_names.items) |mname| {
             // fn form: (fn arity1 arity2 ...) where arity = ([params] body...)
             var fn_form: list.List = .empty;
-            defer fn_form.deinit(arena_alloc);
-            try fn_form.append(arena_alloc, try Value.symValue(allocator, "fn"));
+            defer fn_form.deinit(allocator);
+            try fn_form.append(allocator, try Value.symValue(allocator, "fn"));
 
             // For each method definition of this name, build an arity form
             for (method_defs.items) |mi| {
@@ -813,21 +808,21 @@ pub fn evalExtendType(
                 // items[1:] of the method def: [params] body...
                 // Build arity form: ([params] body...)
                 var arity_form: list.List = .empty;
-                defer arity_form.deinit(arena_alloc);
+                defer arity_form.deinit(allocator);
                 const def_items = mdef.list_val.items[1..];
                 for (def_items) |item| {
-                    try arity_form.append(arena_alloc, try item.clone(arena_alloc));
+                    try arity_form.append(allocator, try item.clone(allocator));
                 }
                 // Append arity form directly to fn_form (not wrapped)
-                try fn_form.append(arena_alloc, Value.listValue(arity_form));
+                try fn_form.append(allocator, Value.listValue(arity_form));
                 arity_form = .empty;
             }
 
             // Evaluate to get a function value
-            var fn_val = try eval.evalRec(allocator, arena_alloc, Value.listValue(fn_form), env, depth + 1);
+            var fn_val = try eval.evalRec(allocator, Value.listValue(fn_form), env, depth + 1);
             fn_form = .empty;
             const persistent_fn = try fn_val.clone(allocator);
-            fn_val.deinit(arena_alloc);
+            fn_val.deinit(allocator);
 
             try mmap.append(allocator, .{
                 .key = try Value.keywordValue(allocator, mname),
@@ -835,12 +830,12 @@ pub fn evalExtendType(
             });
         }
 
-        try extend_args.append(arena_alloc, Value.mapValue(mmap));
+        try extend_args.append(allocator, Value.mapValue(mmap));
         mmap = .empty;
     }
 
     // Now call extend with the built args
-    return evalExtend(allocator, arena_alloc, extend_args, env, depth);
+    return evalExtend(allocator, extend_args, env, depth);
 }
 
 // Import helpers for listFromVector
@@ -851,7 +846,6 @@ const helpers = @import("helpers.zig");
 /// Groups methods by type and delegates to evalExtend for each group.
 pub fn evalExtendProtocol(
     allocator: Allocator,
-    arena_alloc: Allocator,
     l: list.List,
     env: *Env,
     depth: usize,
@@ -860,8 +854,8 @@ pub fn evalExtendProtocol(
     if (l.items.len < 3) return error.ArityError;
 
     // Evaluate the protocol (index 1)
-    var proto_val = try eval.evalRec(allocator, arena_alloc, l.items[1], env, depth + 1);
-    defer proto_val.deinit(arena_alloc);
+    var proto_val = try eval.evalRec(allocator, l.items[1], env, depth + 1);
+    defer proto_val.deinit(allocator);
 
     // Validate it's a protocol
     var sigs_kw = try Value.keywordValue(allocator, "sigs");
@@ -932,8 +926,8 @@ pub fn evalExtendProtocol(
         for (unique_names.items) |mname| {
             // fn form: (fn arity1 arity2 ...) where arity = ([params] body...)
             var fn_form: list.List = .empty;
-            defer fn_form.deinit(arena_alloc);
-            try fn_form.append(arena_alloc, try Value.symValue(allocator, "fn"));
+            defer fn_form.deinit(allocator);
+            try fn_form.append(allocator, try Value.symValue(allocator, "fn"));
 
             mi = method_start;
             while (mi < method_end) : (mi += 1) {
@@ -945,18 +939,18 @@ pub fn evalExtendProtocol(
                 // items[1:] of the method def: [params] body...
                 const def_items = mdef.list_val.items[1..];
                 var arity_form: list.List = .empty;
-                defer arity_form.deinit(arena_alloc);
+                defer arity_form.deinit(allocator);
                 for (def_items) |item| {
-                    try arity_form.append(arena_alloc, try item.clone(arena_alloc));
+                    try arity_form.append(allocator, try item.clone(allocator));
                 }
-                try fn_form.append(arena_alloc, Value.listValue(arity_form));
+                try fn_form.append(allocator, Value.listValue(arity_form));
                 arity_form = .empty;
             }
 
-            var fn_val = try eval.evalRec(allocator, arena_alloc, Value.listValue(fn_form), env, depth + 1);
+            var fn_val = try eval.evalRec(allocator, Value.listValue(fn_form), env, depth + 1);
             fn_form = .empty;
             const persistent_fn = try fn_val.clone(allocator);
-            fn_val.deinit(arena_alloc);
+            fn_val.deinit(allocator);
 
             try mmap.append(allocator, .{
                 .key = try Value.keywordValue(allocator, mname),
@@ -966,15 +960,15 @@ pub fn evalExtendProtocol(
 
         // Build extend args: atype (unevaluated), protocol (evaluated), mmap (evaluated)
         var ext_args: list.List = .empty;
-        defer ext_args.deinit(arena_alloc);
-        try ext_args.append(arena_alloc, try atype.clone(arena_alloc));
-        try ext_args.append(arena_alloc, try proto_val.clone(arena_alloc));
-        try ext_args.append(arena_alloc, Value.mapValue(mmap));
+        defer ext_args.deinit(allocator);
+        try ext_args.append(allocator, try atype.clone(allocator));
+        try ext_args.append(allocator, try proto_val.clone(allocator));
+        try ext_args.append(allocator, Value.mapValue(mmap));
         mmap = .empty;
 
         // Call evalExtend directly
-        result.deinit(arena_alloc);
-        result = try evalExtend(allocator, arena_alloc, ext_args, env, depth + 1);
+        result.deinit(allocator);
+        result = try evalExtend(allocator, ext_args, env, depth + 1);
         ext_args = .empty;
     }
 

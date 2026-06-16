@@ -226,7 +226,7 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
                 }
                 if (std.mem.eql(u8, first.sym_val, "quasiquote")) {
                     if (form.list_val.items.len != 2) return error.ArityError;
-                    return try eval_macro.unquoteProcess(allocator, allocator, form.list_val.items[1], env, 0);
+                    return try eval_macro.unquoteProcess(allocator, form.list_val.items[1], env, 0);
                 }
                 if (std.mem.eql(u8, first.sym_val, "do")) {
                     var result: Value = Value.nilValue();

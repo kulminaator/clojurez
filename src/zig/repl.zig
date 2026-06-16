@@ -192,7 +192,7 @@ fn evaluateAndPrint(allocator: Allocator, input: []const u8, env: *Value.Env) an
 
         // Parser succeeded - evaluate the form
         var form = parsed_form;
-        var result = eval.eval(allocator, allocator, form, env) catch |err| {
+        var result = eval.eval(allocator, form, env) catch |err| {
             form.deinit(allocator);
             switch (err) {
                 eval.EvalError.ReplExit => {
