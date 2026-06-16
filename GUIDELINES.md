@@ -118,33 +118,6 @@ The REPL is inherently interactive and can loop forever if fed malformed input o
 
 **Minimum target: 80% line coverage across the entire codebase.**
 
-### Coverage by Module
-
-| Module                        | Minimum Coverage | Notes                              |
-| ----------------------------- | ---------------- | ---------------------------------- |
-| `lexer.zig`                   | 90%              | Tokenization is foundational       |
-| `parser.zig`                  | 90%              | Parsing is foundational            |
-| `value.zig`                   | 95%              | Core data structures               |
-| `eval.zig`                    | 85%              | Evaluator logic, special forms     |
-| `core.zig`                    | 80%              | Coordinator + higher-order fns     |
-| `core/arithmetic.zig`         | 80%              | +, -, *, /, rem                    |
-| `core/comparison.zig`         | 80%              | =, !=, <, >, <=, >=, not           |
-| `core/type_predicates.zig`    | 80%              | nil?, number?, string?, etc.       |
-| `core/strings.zig`            | 80%              | str, utf8-valid?                   |
-| `core/sequences.zig`          | 80%              | count, first, rest, nth, list, vec |
-| `core/seq_ops.zig`            | 80%              | map, reduce, filter, flatten, etc. |
-| `core/maps.zig`               | 80%              | get, assoc, keys, vals, merge      |
-| `core/sets.zig`               | 80%              | set, set?, disj                    |
-| `core/collections.zig`        | 80%              | conj, pop, last, reverse, range    |
-| `core/io.zig`                 | 80%              | print, println, spit, slurp        |
-| `core/atoms.zig`              | 80%              | atom, swap!, reset!                |
-| `core/eval_helpers.zig`       | 80%              | Shared callBuiltin/evalForm        |
-| `core/helpers.zig`            | 80%              | Shared numeric helpers             |
-| `repl.zig`                    | 70%              | Hard to test interactively         |
-| `main.zig`                    | 80%              | CLI argument handling              |
-| `list.zig`                    | 90%              | Collection utilities               |
-| `vector.zig`                  | 90%              | Collection utilities               |
-
 ### Measuring Coverage
 
 Use Zig's built-in code coverage tools:
@@ -191,22 +164,15 @@ test "plus with two arguments" {
 ### 3.2 Integration Tests
 
 Test the interaction between multiple modules (e.g., lexer → parser → evaluator). These verify that the full pipeline works correctly.
+They are under tests folder.
 
+Quick evaluations can be done like this:
 ```bash
 # Example: test a full expression through the CLI
 timeout 10s ./zig-out/bin/clojurez -e '(defn add [a b] (+ a b)) (add 3 4)'
 ```
 
-### 3.3 CLI / End-to-End Tests
-
-Test the command-line interface behavior:
-
-- Argument parsing (`-e`, `--eval`, `--repl`, `-h`, `--help`)
-- File execution
-- Exit codes
-- Error messages
-
-### 3.4 REPL Tests
+### 3.3 REPL Tests
 
 Test REPL behavior with controlled, finite input:
 
@@ -341,46 +307,7 @@ Every pull request must:
 
 ---
 
-## 10. Test Data
-
-Store test fixtures in `tests/fixtures/`:
-
-```
-tests/
-├── fixtures/
-│   ├── simple.clj          # Simple expressions
-│   ├── functions.clj       # Function definitions and calls
-│   ├── control_flow.clj    # if, when, cond
-│   ├── data_structures.clj # Lists, vectors, maps
-│   └── errors.clj          # Error cases
-├── unit/
-│   ├── test_lexer.zig
-│   ├── test_parser.zig
-│   └── test_eval.zig
-└── integration/
-    ├── test_cli.sh
-    └── test_repl.sh
-```
-
----
-
-## 11. Coverage Reporting
-
-Generate coverage reports regularly:
-
-```bash
-# Generate coverage HTML report
-./scripts/coverage.sh
-
-# View report
-open coverage/index.html
-```
-
-The coverage report should be part of the CI/CD pipeline and posted as a comment on pull requests.
-
----
-
-## 12. Incremental Development
+## 10. Incremental Development
 
 ### Split Tasks into Small Steps
 
@@ -478,31 +405,3 @@ Before starting a task, ask:
 ## Appendix: Test Requirements
 
 **All tests must pass.** Both CLI/integration tests and Zig unit tests.
-
-### Test Categories (run_tests.sh)
-
-- Arithmetic (7): `+`, `-`, `*`, `/`, division with floats, `rem`
-- Comparison (6): `=`, `!=`, `<`, `>`, `<=`, `>=`
-- Boolean (5): `true`, `false`, `nil`, `not`
-- Strings (2): literals, `str`
-- Type checks (5): `nil?`, `number?`, `string?`, `list?`, etc.
-- Sequences (6): `list`, `vec`, `count`, `first`, `rest`, `nth`
-- Special forms (5): `def`, `if`, `quote`, `do`
-- Functions (2): `fn` calls, `defn`
-- I/O (1): `print`
-- Thread macros (2): `->>`, `->`
-- Sequence functions (3): `iterate`, `map`, `take`
-- Destructuring (2): vector, nested vector
-- Maps (5): literal, get, assoc
-- Collections (5): conj, pop, last, reverse, range
-- Namespace (1): `ns` declaration
-- Sets (12): literal, empty, set, set?, conj, disj, set-as-fn, count, equality
-- Queues (7): literal, empty, conj, pop, peek, queue?, count
-- Map enhancements (12): keys, vals, dissoc, merge, contains?, map-as-fn, count
-- Collection predicates (14): empty?, not-empty, seq, coll?, sequential?, vector?, map?, next, nthnext
-- Sequence operations (11): reduce, into, flatten, filter, remove, every?, some, distinct?, nthnext
-- Core library (20): update, if-not, drop, apply, comp, partial, fnil, juxt, atom, identity, even?, odd?, zero?, pos?, neg?, abs, max, min, cons, second, third
-- File I/O (6): spit, slurp, spit integer, slurp integer, slurp with str, slurp nonexistent
-- UTF-8 strings (42): estonian, emoji, japanese, unicode escapes, utf8-valid?, equality, type checks, print, nth, complex expressions, lists/vectors/maps with UTF-8
-- Fibonacci sample (1): full pipeline verification
-- Hanoi sample (1): full pipeline verification
