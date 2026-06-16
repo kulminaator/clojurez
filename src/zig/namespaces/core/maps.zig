@@ -18,13 +18,13 @@ pub fn core_get(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 
     if (val.type == .record) {
         // Look up in fields map first
-        for (val.record_val.fields.items) |entry| {
+        for (val.record_val.?.fields.items) |entry| {
             if (entry.key.equals(key)) {
                 return try entry.value.clone(env_env.allocator);
             }
         }
         // Then in extmap
-        for (val.record_val.extmap.items) |entry| {
+        for (val.record_val.?.extmap.items) |entry| {
             if (entry.key.equals(key)) {
                 return try entry.value.clone(env_env.allocator);
             }
@@ -159,10 +159,10 @@ pub fn core_keys(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     var result: list.List = .empty;
     errdefer result.deinit(env_env.allocator);
     if (val.type == .record) {
-        for (val.record_val.fields.items) |entry| {
+        for (val.record_val.?.fields.items) |entry| {
             try result.append(env_env.allocator, try entry.key.clone(env_env.allocator));
         }
-        for (val.record_val.extmap.items) |entry| {
+        for (val.record_val.?.extmap.items) |entry| {
             try result.append(env_env.allocator, try entry.key.clone(env_env.allocator));
         }
     } else {
@@ -182,10 +182,10 @@ pub fn core_vals(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     var result: list.List = .empty;
     errdefer result.deinit(env_env.allocator);
     if (val.type == .record) {
-        for (val.record_val.fields.items) |entry| {
+        for (val.record_val.?.fields.items) |entry| {
             try result.append(env_env.allocator, try entry.value.clone(env_env.allocator));
         }
-        for (val.record_val.extmap.items) |entry| {
+        for (val.record_val.?.extmap.items) |entry| {
             try result.append(env_env.allocator, try entry.value.clone(env_env.allocator));
         }
     } else {
@@ -310,7 +310,7 @@ pub fn core_merge(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
                 }
             },
             .record => {
-                for (arg.record_val.fields.items) |entry| {
+                for (arg.record_val.?.fields.items) |entry| {
                     var found = false;
                     var j: usize = 0;
                     while (j < base_map.items.len) : (j += 1) {
@@ -328,7 +328,7 @@ pub fn core_merge(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
                         });
                     }
                 }
-                for (arg.record_val.extmap.items) |entry| {
+                for (arg.record_val.?.extmap.items) |entry| {
                     var found = false;
                     var j: usize = 0;
                     while (j < base_map.items.len) : (j += 1) {
@@ -363,7 +363,7 @@ pub fn core_merge(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 
 /// Check if a key is a defined field of a record (exists in fields map).
 pub fn isRecordDefinedField(record: *const Value, key: Value) bool {
-    for (record.record_val.fields.items) |entry| {
+    for (record.record_val.?.fields.items) |entry| {
         if (entry.key.equals(key)) return true;
     }
     return false;
@@ -379,13 +379,13 @@ fn recordToMap(record: Value, allocator: Allocator) anyerror!Value {
         }
         allocator.free(new_map.items);
     }
-    for (record.record_val.fields.items) |entry| {
+    for (record.record_val.?.fields.items) |entry| {
         try new_map.append(allocator, .{
             .key = try entry.key.clone(allocator),
             .value = try entry.value.clone(allocator),
         });
     }
-    for (record.record_val.extmap.items) |entry| {
+    for (record.record_val.?.extmap.items) |entry| {
         try new_map.append(allocator, .{
             .key = try entry.key.clone(allocator),
             .value = try entry.value.clone(allocator),
@@ -404,7 +404,7 @@ fn assocRecord(record: Value, args: list.List, env: *Env) anyerror!Value {
     while (i + 1 < args.items.len) : (i += 2) {
         const key = args.items[i];
         const value = args.items[i + 1];
-        const rd = &current.record_val;
+        const rd = current.record_val orelse return error.TypeError;
 
         if (isRecordDefinedField(&current, key)) {
             // Update field value - create new record with updated field
@@ -543,7 +543,7 @@ fn dissocRecord(record: Value, args: list.List, env: *Env) anyerror!Value {
         }
         allocator.free(new_extmap.items);
     }
-    for (record.record_val.extmap.items) |entry| {
+    for (record.record_val.?.extmap.items) |entry| {
         var should_keep = true;
         var j: usize = 1;
         while (j < args.items.len) : (j += 1) {
@@ -560,8 +560,8 @@ fn dissocRecord(record: Value, args: list.List, env: *Env) anyerror!Value {
         }
     }
 
-    const cloned_fields = try Value.cloneMap(allocator, record.record_val.fields);
-    const cloned_meta = if (record.record_val.meta) |m|
+    const cloned_fields = try Value.cloneMap(allocator, record.record_val.?.fields);
+    const cloned_meta = if (record.record_val.?.meta) |m|
         try Value.cloneMap(allocator, m)
     else
         null;
@@ -579,7 +579,7 @@ fn dissocRecord(record: Value, args: list.List, env: *Env) anyerror!Value {
         }
         allocator.free(cloned_fields.items);
     }
-    const new_type_name = try allocator.dupe(u8, record.record_val.type_name);
+    const new_type_name = try allocator.dupe(u8, record.record_val.?.type_name);
     errdefer allocator.free(new_type_name);
 
     return try Value.recordValue(allocator, new_type_name, cloned_fields, new_extmap, cloned_meta);
@@ -620,7 +620,7 @@ fn core_dissocMap(map_val: Value, args: list.List, env: *Env) anyerror!Value {
 /// If all keys in the merged map are defined fields, return a record.
 /// Otherwise return a record with extmap for extra keys.
 fn mergeToRecord(original_record: Value, merged_map: Value.Map, allocator: Allocator) anyerror!Value {
-    const rd = &original_record.record_val;
+    const rd = original_record.record_val orelse return error.TypeError;
 
     // Build new fields map from merged_map entries that match defined fields
     var new_fields: Value.Map = .empty;

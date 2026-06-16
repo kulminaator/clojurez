@@ -139,16 +139,20 @@ pub fn recordValue(
             }
         }
     }
-    return .{
-        .type = .record,
-        .record_val = .{
-            .type_name = owned_name,
-            .fields = fields,
-            .extmap = extmap,
-            .meta = owned_meta,
-            .allocator = allocator,
-        },
+    const rd = try allocator.create(RecordData);
+    errdefer allocator.destroy(rd);
+    rd.* = .{
+        .type_name = owned_name,
+        .fields = fields,
+        .extmap = extmap,
+        .meta = owned_meta,
+        .allocator = allocator,
     };
+    // Register with GC for proper scanning
+    if (gc_mod.current_gc) |gc_inst| {
+        gc_inst.setObjectType(@as(*anyopaque, @ptrCast(rd)), gc_mod.GCObjectType.record_data);
+    }
+    return .{ .type = .record, .record_val = rd };
 }
 
 /// Deep-clone a Value.Map.
@@ -196,14 +200,14 @@ vec_val: vec.Vector = vec.Vector.empty,
 map_val: Map = .empty,
 set_val: Set = .empty,
 queue_val: Queue = .empty,
-fn_val: FnData = .{ .arities = .empty, .env = undefined, .is_macro = false, .name = null },
+fn_val: ?*FnData = null,
 builtin_fn_val: BuiltinFn = undefined,
 lazy_seq_val: LazySeq = .{},
 cons_val: ?*ConsData = null,
 atom_val: ?*AtomData = null,
 reduced_val: ?*Self = null, // wrapped value for early reduction
 wrapped_val: usize = 0,     // raw pointer stored as usize (for PersistentHashMap pointer values)
-record_val: RecordData = .{ .type_name = "", .fields = .empty, .extmap = .empty, .meta = null, .allocator = undefined },
+record_val: ?*RecordData = null,
 
 // Single arity: one [params] + body forms + optional rest param
 pub const Arity = struct {
@@ -679,7 +683,14 @@ pub fn fnValueNamed(allocator: Allocator, arities: std.ArrayListUnmanaged(Arity)
     const env_ptr = try allocator.create(Env);
     errdefer allocator.destroy(env_ptr);
     env_ptr.* = env;
-    return .{ .type = .function, .fn_val = .{ .arities = arities, .env = env_ptr, .is_macro = is_macro, .name = name } };
+    const fn_data = try allocator.create(FnData);
+    errdefer allocator.destroy(fn_data);
+    fn_data.* = .{ .arities = arities, .env = env_ptr, .is_macro = is_macro, .name = name };
+    // Register with GC for proper scanning
+    if (gc_mod.current_gc) |gc_inst| {
+        gc_inst.setObjectType(@as(*anyopaque, @ptrCast(fn_data)), gc_mod.GCObjectType.fn_data);
+    }
+    return .{ .type = .function, .fn_val = fn_data };
 }
 
 /// Create a single-arity function (convenience wrapper)
@@ -757,17 +768,20 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
             }
         },
         .function => {
-            for (self.fn_val.arities.items) |*arity| {
-                arity.params.deinit(allocator);
-                arity.body.deinit(allocator);
-                if (arity.rest_name) |rn| {
-                    allocator.free(rn);
+            if (self.fn_val) |fn_data| {
+                for (fn_data.arities.items) |*arity| {
+                    arity.params.deinit(allocator);
+                    arity.body.deinit(allocator);
+                    if (arity.rest_name) |rn| {
+                        allocator.free(rn);
+                    }
                 }
+                allocator.free(fn_data.arities.items);
+                fn_data.env.deinit(allocator);
+                allocator.destroy(fn_data.env);
+                if (fn_data.name) |n| allocator.free(n);
+                allocator.destroy(fn_data);
             }
-            allocator.free(self.fn_val.arities.items);
-            self.fn_val.env.deinit(allocator);
-            allocator.destroy(self.fn_val.env);
-            if (self.fn_val.name) |n| allocator.free(n);
         },
         .builtin_fn => {},
         .cons => {
@@ -799,29 +813,31 @@ pub fn deinit(self: *Self, allocator: Allocator) void {
         },
         .wrapped => {}, // raw pointer, no ownership
         .record => {
-            const rd = &self.record_val;
-            const a = rd.allocator;
-            // Free type_name string
-            a.free(rd.type_name);
-            // Free fields map entries
-            for (rd.fields.items) |*entry| {
-                entry.key.deinit(a);
-                entry.value.deinit(a);
-            }
-            a.free(rd.fields.items);
-            // Free extmap entries
-            for (rd.extmap.items) |*entry| {
-                entry.key.deinit(a);
-                entry.value.deinit(a);
-            }
-            a.free(rd.extmap.items);
-            // Free meta map entries if present
-            if (rd.meta) |m| {
-                for (m.items) |*entry| {
+            if (self.record_val) |rd| {
+                const a = rd.allocator;
+                // Free type_name string
+                a.free(rd.type_name);
+                // Free fields map entries
+                for (rd.fields.items) |*entry| {
                     entry.key.deinit(a);
                     entry.value.deinit(a);
                 }
-                a.free(m.items);
+                a.free(rd.fields.items);
+                // Free extmap entries
+                for (rd.extmap.items) |*entry| {
+                    entry.key.deinit(a);
+                    entry.value.deinit(a);
+                }
+                a.free(rd.extmap.items);
+                // Free meta map entries if present
+                if (rd.meta) |m| {
+                    for (m.items) |*entry| {
+                        entry.key.deinit(a);
+                        entry.value.deinit(a);
+                    }
+                    a.free(m.items);
+                }
+                allocator.destroy(rd);
             }
         },
     }
@@ -928,7 +944,7 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
             return nilValue();
         },
         .function => {
-            const fnv = self.fn_val;
+            const fnv = self.fn_val orelse return nilValue();
             var cloned_arities: std.ArrayListUnmanaged(Arity) = .empty;
             errdefer {
                 for (cloned_arities.items) |*ca| {
@@ -963,7 +979,7 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
             return .{ .type = .reduced, .reduced_val = null };
         },
         .record => {
-            const rd = &self.record_val;
+            const rd = self.record_val orelse return nilValue();
             const owned_name = try allocator.dupe(u8, rd.type_name);
             const cloned_fields = try cloneMap(allocator, rd.fields);
             const cloned_extmap = try cloneMap(allocator, rd.extmap);
@@ -991,16 +1007,7 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
                 allocator.free(cloned_fields.items);
                 allocator.free(owned_name);
             }
-            return .{
-                .type = .record,
-                .record_val = .{
-                    .type_name = owned_name,
-                    .fields = cloned_fields,
-                    .extmap = cloned_extmap,
-                    .meta = cloned_meta,
-                    .allocator = allocator,
-                },
-            };
+            return try recordValue(allocator, owned_name, cloned_fields, cloned_extmap, cloned_meta);
         },
     }
 }
@@ -1113,8 +1120,8 @@ pub fn equals(self: Self, other: Self) bool {
         },
         .wrapped => return self.wrapped_val == other.wrapped_val,
         .record => {
-            const a = &self.record_val;
-            const b = &other.record_val;
+            const a = self.record_val orelse return false;
+            const b = other.record_val orelse return false;
             // Must have same type name
             if (!std.mem.eql(u8, a.type_name, b.type_name)) return false;
             // Must have same number of fields
@@ -1259,7 +1266,7 @@ pub fn fmt(self: Self, allocator: Allocator) anyerror![]const u8 {
             return allocator.dupe(u8, "#reduced(nil)");
         },
         .wrapped => try std.fmt.allocPrint(allocator, "#ptr({X})", .{self.wrapped_val}),
-        .record => try recordFmt(&self.record_val, allocator),
+        .record => try recordFmt(self.record_val orelse @panic("null record"), allocator),
     };
 }
 

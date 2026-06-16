@@ -43,7 +43,7 @@ fn bindParam(allocator: Allocator, param: Value, arg: Value, env: *Value.Env) an
 pub fn callBuiltin(allocator: Allocator, f: Value, args_list: list.List, env: *Value.Env) anyerror!Value {
     switch (f.type) {
         .function => {
-            const fn_data = f.fn_val;
+            const fn_data = f.fn_val orelse return error.TypeError;
             const arg_count = args_list.items.len;
 
             // Find matching arity
@@ -370,7 +370,7 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
             defer op.deinit(allocator);
 
             // Check if operator is a macro
-            if (op.type == .function and op.fn_val.is_macro) {
+            if (op.type == .function and op.fn_val.?.is_macro) {
                 // Macro: pass unevaluated arguments
                 var macro_args: list.List = .empty;
                 errdefer macro_args.deinit(allocator);
@@ -479,7 +479,7 @@ pub fn core_macroexpand_1(self: *Value, args: list.List, env_env: *Value.Env) an
     defer op.deinit(allocator);
 
     // Check if operator is a macro
-    if (op.type == .function and op.fn_val.is_macro) {
+    if (op.type == .function and op.fn_val.?.is_macro) {
         // Macro: pass unevaluated arguments
         var macro_args: list.List = .empty;
         defer macro_args.deinit(allocator);
@@ -520,7 +520,7 @@ pub fn core_macroexpand(self: *Value, args: list.List, env_env: *Value.Env) anye
         }
         // Check if the expanded first element is a macro
         if (env_env.get(exp_first.sym_val)) |v| {
-            if (v.type == .function and v.fn_val.is_macro) {
+            if (v.type == .function and v.fn_val.?.is_macro) {
                 current = expanded;
                 continue;
             }

@@ -133,6 +133,19 @@ echo ""
 echo "========================================"
 echo "Shell tests: $TEST_PASS passed, $TEST_FAIL failed (out of $TEST_TOTAL)"
 echo "========================================"
+echo ""
+
+# Combined summary
+TOTAL_TESTS=$((CLJ_TOTAL + TEST_TOTAL))
+TOTAL_PASSED=$((CLJ_PASSED + TEST_PASS))
+TOTAL_FAILED=$((CLJ_FAILED + TEST_FAIL))
+echo "========================================"
+if [ $TOTAL_FAILED -eq 0 ]; then
+    echo "ALL TESTS PASSED: $TOTAL_PASSED/$TOTAL_TESTS"
+else
+    echo "RESULT: $TOTAL_PASSED passed, $TOTAL_FAILED failed (out of $TOTAL_TESTS)"
+fi
+echo "========================================"
 
 # Combined exit
 if [ $CLJ_FAILED -gt 0 ] || [ $TEST_FAIL -gt 0 ]; then

@@ -528,7 +528,7 @@ pub fn core_type(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
         .cons => "cons",
         .reduced => "reduced",
         .wrapped => "wrapped",
-        .record => args.items[0].record_val.type_name,
+        .record => args.items[0].record_val.?.type_name,
     };
     return try Value.keywordValue(env_env.allocator, type_name);
 }
@@ -542,7 +542,7 @@ pub fn core_meta(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     const val = args.items[0];
 
     if (val.type == .record) {
-        if (val.record_val.meta) |m| {
+        if (val.record_val.?.meta) |m| {
             // Clone and return the meta map
             const cloned = try Value.cloneMap(allocator, m);
             return Value.mapValue(cloned);
@@ -564,7 +564,7 @@ pub fn core_with_meta(self: *Value, args: list.List, env_env: *Env) anyerror!Val
     const new_meta = args.items[1];
 
     if (val.type == .record) {
-        const rd = &val.record_val;
+        const rd = val.record_val orelse return error.TypeError;
         const new_meta_map = if (new_meta.type == .map)
             try Value.cloneMap(allocator, new_meta.map_val)
         else
