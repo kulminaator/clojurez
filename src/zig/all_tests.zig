@@ -35,6 +35,7 @@ const test_regexp = @import("namespaces/regexp/regexp.zig");
 const test_persistent_hash_map = @import("persistent_hash_map.zig");
 const test_persistent_string_hash_map = @import("persistent_string_hash_map.zig");
 const test_debug = @import("debug.zig");
+const test_stack_stats = @import("stack_stats.zig");
 
 // Suppress unused import warnings
 comptime {
@@ -72,4 +73,5 @@ comptime {
     _ = test_persistent_hash_map;
     _ = test_persistent_string_hash_map;
     _ = test_debug;
+    _ = test_stack_stats;
 }

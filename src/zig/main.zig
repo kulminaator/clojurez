@@ -16,6 +16,7 @@ const slab_allocator = @import("slab_allocator.zig");
 const debug = @import("debug.zig");
 const gc_mod = @import("gc.zig");
 const gc_scan = @import("gc_scan.zig");
+const stack_stats = @import("stack_stats.zig");
 const sequences = @import("namespaces/core/sequences.zig");
 
 const Allocator = std.mem.Allocator;
@@ -69,6 +70,9 @@ fn fullyRealizeLazySeq(allocator: Allocator, val: Value) anyerror!Value {
 }
 
 pub fn main(init: std.process.Init.Minimal) anyerror!void {
+    // Record the earliest possible stack pointer baseline.
+    stack_stats.recordAppBaseline();
+
     // --parse-debug: handle BEFORE any VM initialization.
     // Needs only a simple allocator — no GC, no namespaces, no library loading.
     {
@@ -148,6 +152,7 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // Register Zig built-in functions directly in zig.core namespace.
     // No global builtins in root env — everything is namespaced.
     try core.registerCoreFunctions(zc_env);
+    try stack_stats.registerStackStats(zc_env);
 
     // Copy builtins to clojure.core as well, so they are directly accessible.
     // The Clojure wrappers in core.clj will shadow these with docstrings.
@@ -156,6 +161,9 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // Load embedded Clojure core library into clojure.core namespace.
     // The defn wrappers shadow the raw builtins with docstrings.
     try loadCoreLibrary(allocator, clojure_core_env);
+
+    // Record vm-baseline after core library is fully loaded.
+    stack_stats.recordVMBaseline();
 
     // Create clojure.string namespace — string utility functions.
     // Parent set to clojure.core so string code can use core functions.
@@ -293,12 +301,12 @@ fn loadCoreLibrary(allocator: Allocator, env: *Env) anyerror!void {
     var p = try parser.Parser.init(allocator, content);
     defer p.deinit();
 
-    var forms = try p.parseAll();
-    defer forms.deinit(allocator);
+    const forms = try p.parseAll();
+    // GC handles cleanup.
 
     for (forms.items) |form| {
-        var result = try eval.eval(allocator, allocator, form, env);
-        result.deinit(allocator);
+        _ = try eval.eval(allocator, form, env);
+        // GC handles result cleanup.
         // Silent: don't print results during core library loading
     }
 }
@@ -310,12 +318,12 @@ fn loadStringLibrary(allocator: Allocator, env: *Env) anyerror!void {
     var p = try parser.Parser.init(allocator, content);
     defer p.deinit();
 
-    var forms = try p.parseAll();
-    defer forms.deinit(allocator);
+    const forms = try p.parseAll();
+    // GC handles cleanup.
 
     for (forms.items) |form| {
-        var result = try eval.eval(allocator, allocator, form, env);
-        result.deinit(allocator);
+        _ = try eval.eval(allocator, form, env);
+        // GC handles result cleanup.
         // Silent: don't print results during string library loading
     }
 }
@@ -362,7 +370,7 @@ fn runExpression(allocator: Allocator, expr: []const u8, env: *Env) anyerror!voi
     for (forms.items) |form| {
         // Use current namespace's env for evaluation
         const eval_env = getCurrentNsEnv(env) orelse env;
-        const result = try eval.eval(allocator, allocator, form, eval_env);
+        const result = try eval.eval(allocator, form, eval_env);
 
         if (!result.equals(Value.nilValue())) {
             const print_val = if (result.type == .lazy_seq) blk: {
@@ -370,8 +378,7 @@ fn runExpression(allocator: Allocator, expr: []const u8, env: *Env) anyerror!voi
                 break :blk realized;
             } else result;
             const formatted = try print_val.fmt(allocator);
-            defer allocator.free(formatted);
-            // Don't deinit print_val/result — GC handles it
+            // GC handles all cleanup — no manual deinit/free for GC-allocated values.
             try writeStdout(formatted);
             try writeStdout("\n");
         }
@@ -399,8 +406,8 @@ fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void 
     var p = try parser.Parser.init(allocator, content);
     defer p.deinit();
 
-    var forms = try p.parseAll();
-    defer forms.deinit(allocator);
+    const forms = try p.parseAll();
+    // Don't deinit forms — all values are GC-managed.
 
     // Protect the forms buffer as a GC root for the entire loop —
     // user code (e.g. zig.core/gc-sweep) may trigger collection mid-loop.
@@ -420,24 +427,20 @@ fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void 
     for (forms.items) |form| {
         // Get current namespace's env for each form (ns form may change it)
         const eval_env = getCurrentNsEnv(env) orelse env;
-        var result = try eval.eval(allocator, allocator, form, eval_env);
+        var result = try eval.eval(allocator, form, eval_env);
 
         if (print_results and !result.equals(Value.nilValue())) {
-            var print_val: Value = undefined;
-            if (result.type == .lazy_seq) {
-                print_val = try fullyRealizeLazySeq(allocator, result);
-                result.lazy_seq_val.thunk = null;
-            } else {
-                print_val = result;
-            }
+            const print_val = if (result.type == .lazy_seq) blk: {
+                const realized = try fullyRealizeLazySeq(allocator, result);
+                break :blk realized;
+            } else result;
             const formatted = try print_val.fmt(allocator);
-            defer allocator.free(formatted);
-            print_val.deinit(allocator);
+            // GC handles all cleanup — no manual deinit/free for GC-allocated values.
             try writeStdout(formatted);
             try writeStdout("\n");
         }
 
-        result.deinit(allocator);
+        // GC handles result cleanup.
         // Auto-GC: check threshold between form evaluations (safe point).
         if (gc_mod.current_gc) |gc| gc.tryAutoCollect();
     }
@@ -536,12 +539,12 @@ fn runMain(allocator: Allocator, env: *Env, ns_name: []const u8) anyerror!void {
     var p = try parser.Parser.init(allocator, content);
     defer p.deinit();
 
-    var forms = try p.parseAll();
-    defer forms.deinit(allocator);
+    const forms = try p.parseAll();
+    // GC handles cleanup.
 
     for (forms.items) |form| {
-        var result = try eval.eval(allocator, allocator, form, env);
-        result.deinit(allocator);
+        _ = try eval.eval(allocator, form, env);
+        // GC handles result cleanup.
     }
 
     // Look up -main function in the namespace
@@ -564,7 +567,7 @@ fn runMain(allocator: Allocator, env: *Env, ns_name: []const u8) anyerror!void {
     var call_list: list.List = .empty;
     defer call_list.deinit(allocator);
     try call_list.append(allocator, try main_fn.clone(allocator));
-    var call_result = try eval.eval(allocator, allocator, Value.listValue(call_list), ns_env);
+    var call_result = try eval.eval(allocator, Value.listValue(call_list), ns_env);
     call_result.deinit(allocator);
 
 }

@@ -332,7 +332,6 @@ pub fn buildMapFactory(
 /// Evaluates the protocol symbol, builds method functions, and calls extend.
 fn processRecordProtocolSpec(
     allocator: Allocator,
-    arena_alloc: Allocator,
     env: *Env,
     depth: usize,
     proto_sym: Value,
@@ -343,8 +342,8 @@ fn processRecordProtocolSpec(
 ) anyerror!Value {
 
     // Evaluate the protocol symbol to get the protocol value
-    var proto_val = try eval.evalRec(allocator, arena_alloc, proto_sym, env, depth + 1);
-    defer proto_val.deinit(arena_alloc);
+    var proto_val = try eval.evalRec(allocator, proto_sym, env, depth + 1);
+    defer proto_val.deinit(allocator);
 
     // Validate it's a protocol (has :sigs key)
     var sigs_kw = try Value.keywordValue(allocator, "sigs");
@@ -398,8 +397,8 @@ fn processRecordProtocolSpec(
     for (unique_names.items) |mname| {
         // fn form: (fn arity1 arity2 ...) where arity = ([params] body...)
         var fn_form: list.List = .empty;
-        defer fn_form.deinit(arena_alloc);
-        try fn_form.append(arena_alloc, try Value.symValue(allocator, "fn"));
+        defer fn_form.deinit(allocator);
+        try fn_form.append(allocator, try Value.symValue(allocator, "fn"));
 
         for (method_indices) |mi| {
             const mdef = l.items[mi];
@@ -410,56 +409,56 @@ fn processRecordProtocolSpec(
             // items[1:] of the method def: [params] body...
             // Build arity form: ([params] (let [field1 (get this :field1) ...] body...))
             var arity_form: list.List = .empty;
-            defer arity_form.deinit(arena_alloc);
+            defer arity_form.deinit(allocator);
             const def_items = mdef.list_val.items[1..];
             // params vector is def_items[0], body is def_items[1..]
-            try arity_form.append(arena_alloc, try def_items[0].clone(arena_alloc));
+            try arity_form.append(allocator, try def_items[0].clone(allocator));
 
             // Wrap body in let that binds field names to (get this :field_name)
             if (field_names.len > 0) {
                 // Build let form: (let [f1 (get this :f1) f2 (get this :f2) ...] body...)
                 var let_form: list.List = .empty;
-                defer let_form.deinit(arena_alloc);
-                try let_form.append(arena_alloc, try Value.symValue(allocator, "let"));
+                defer let_form.deinit(allocator);
+                try let_form.append(allocator, try Value.symValue(allocator, "let"));
 
                 // Build bindings vector: [f1 (get this :f1) f2 (get this :f2) ...]
                 var bindings: list.List = .empty;
-                defer bindings.deinit(arena_alloc);
+                defer bindings.deinit(allocator);
                 for (field_names) |fname| {
-                    try bindings.append(arena_alloc, try Value.symValue(allocator, fname));
+                    try bindings.append(allocator, try Value.symValue(allocator, fname));
                     // (get this :fname)
                     var get_form: list.List = .empty;
-                    defer get_form.deinit(arena_alloc);
-                    try get_form.append(arena_alloc, try Value.symValue(allocator, "get"));
-                    try get_form.append(arena_alloc, try Value.symValue(allocator, "this"));
-                    try get_form.append(arena_alloc, try Value.keywordValue(allocator, fname));
-                    try bindings.append(arena_alloc, Value.listValue(get_form));
+                    defer get_form.deinit(allocator);
+                    try get_form.append(allocator, try Value.symValue(allocator, "get"));
+                    try get_form.append(allocator, try Value.symValue(allocator, "this"));
+                    try get_form.append(allocator, try Value.keywordValue(allocator, fname));
+                    try bindings.append(allocator, Value.listValue(get_form));
                     get_form = .empty;
                 }
-                try let_form.append(arena_alloc, Value.listValue(bindings));
+                try let_form.append(allocator, Value.listValue(bindings));
                 bindings = .empty;
 
                 // Append body forms
                 for (def_items[1..]) |item| {
-                    try let_form.append(arena_alloc, try item.clone(arena_alloc));
+                    try let_form.append(allocator, try item.clone(allocator));
                 }
-                try arity_form.append(arena_alloc, Value.listValue(let_form));
+                try arity_form.append(allocator, Value.listValue(let_form));
                 let_form = .empty;
             } else {
                 // No fields, just append body as-is
                 for (def_items[1..]) |item| {
-                    try arity_form.append(arena_alloc, try item.clone(arena_alloc));
+                    try arity_form.append(allocator, try item.clone(allocator));
                 }
             }
-            try fn_form.append(arena_alloc, Value.listValue(arity_form));
+            try fn_form.append(allocator, Value.listValue(arity_form));
             arity_form = .empty;
         }
 
         // Evaluate to get a function value
-        var fn_val = try eval.evalRec(allocator, arena_alloc, Value.listValue(fn_form), env, depth + 1);
+        var fn_val = try eval.evalRec(allocator, Value.listValue(fn_form), env, depth + 1);
         fn_form = .empty;
         const persistent_fn = try fn_val.clone(allocator);
-        fn_val.deinit(arena_alloc);
+        fn_val.deinit(allocator);
 
         try mmap.append(allocator, .{
             .key = try Value.keywordValue(allocator, mname),
@@ -473,14 +472,14 @@ fn processRecordProtocolSpec(
 
     // Build extend args: (extend atype protocol mmap)
     var extend_args: list.List = .empty;
-    defer extend_args.deinit(arena_alloc);
-    try extend_args.append(arena_alloc, atype);
-    try extend_args.append(arena_alloc, proto_val);
-    try extend_args.append(arena_alloc, Value.mapValue(mmap));
+    defer extend_args.deinit(allocator);
+    try extend_args.append(allocator, atype);
+    try extend_args.append(allocator, proto_val);
+    try extend_args.append(allocator, Value.mapValue(mmap));
     mmap = .empty;
 
     // Call evalExtend
-    return protocols.evalExtend(allocator, arena_alloc, extend_args, env, depth);
+    return protocols.evalExtend(allocator, extend_args, env, depth);
 }
 
 /// Look up a key in a map, returning the value or null.
@@ -497,7 +496,6 @@ fn getMapEntry(m: Value, key: Value) ?Value {
 /// Returns the record name symbol.
 pub fn evalDefRecord(
     allocator: Allocator,
-    arena_alloc: Allocator,
     l: list.List,
     env: *Env,
     depth: usize,
@@ -614,7 +612,6 @@ pub fn evalDefRecord(
             if (method_indices.items.len > 0) {
                 _ = processRecordProtocolSpec(
                     allocator,
-                    arena_alloc,
                     env,
                     depth,
                     proto_sym,
