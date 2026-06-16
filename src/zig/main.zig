@@ -301,12 +301,12 @@ fn loadCoreLibrary(allocator: Allocator, env: *Env) anyerror!void {
     var p = try parser.Parser.init(allocator, content);
     defer p.deinit();
 
-    var forms = try p.parseAll();
-    defer forms.deinit(allocator);
+    const forms = try p.parseAll();
+    // GC handles cleanup.
 
     for (forms.items) |form| {
-        var result = try eval.eval(allocator, form, env);
-        result.deinit(allocator);
+        _ = try eval.eval(allocator, form, env);
+        // GC handles result cleanup.
         // Silent: don't print results during core library loading
     }
 }
@@ -318,12 +318,12 @@ fn loadStringLibrary(allocator: Allocator, env: *Env) anyerror!void {
     var p = try parser.Parser.init(allocator, content);
     defer p.deinit();
 
-    var forms = try p.parseAll();
-    defer forms.deinit(allocator);
+    const forms = try p.parseAll();
+    // GC handles cleanup.
 
     for (forms.items) |form| {
-        var result = try eval.eval(allocator, form, env);
-        result.deinit(allocator);
+        _ = try eval.eval(allocator, form, env);
+        // GC handles result cleanup.
         // Silent: don't print results during string library loading
     }
 }
@@ -378,8 +378,7 @@ fn runExpression(allocator: Allocator, expr: []const u8, env: *Env) anyerror!voi
                 break :blk realized;
             } else result;
             const formatted = try print_val.fmt(allocator);
-            defer allocator.free(formatted);
-            // Don't deinit print_val/result — GC handles it
+            // GC handles all cleanup — no manual deinit/free for GC-allocated values.
             try writeStdout(formatted);
             try writeStdout("\n");
         }
@@ -407,8 +406,8 @@ fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void 
     var p = try parser.Parser.init(allocator, content);
     defer p.deinit();
 
-    var forms = try p.parseAll();
-    defer forms.deinit(allocator);
+    const forms = try p.parseAll();
+    // Don't deinit forms — all values are GC-managed.
 
     // Protect the forms buffer as a GC root for the entire loop —
     // user code (e.g. zig.core/gc-sweep) may trigger collection mid-loop.
@@ -431,21 +430,17 @@ fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void 
         var result = try eval.eval(allocator, form, eval_env);
 
         if (print_results and !result.equals(Value.nilValue())) {
-            var print_val: Value = undefined;
-            if (result.type == .lazy_seq) {
-                print_val = try fullyRealizeLazySeq(allocator, result);
-                result.lazy_seq_val.thunk = null;
-            } else {
-                print_val = result;
-            }
+            const print_val = if (result.type == .lazy_seq) blk: {
+                const realized = try fullyRealizeLazySeq(allocator, result);
+                break :blk realized;
+            } else result;
             const formatted = try print_val.fmt(allocator);
-            defer allocator.free(formatted);
-            print_val.deinit(allocator);
+            // GC handles all cleanup — no manual deinit/free for GC-allocated values.
             try writeStdout(formatted);
             try writeStdout("\n");
         }
 
-        result.deinit(allocator);
+        // GC handles result cleanup.
         // Auto-GC: check threshold between form evaluations (safe point).
         if (gc_mod.current_gc) |gc| gc.tryAutoCollect();
     }
@@ -544,12 +539,12 @@ fn runMain(allocator: Allocator, env: *Env, ns_name: []const u8) anyerror!void {
     var p = try parser.Parser.init(allocator, content);
     defer p.deinit();
 
-    var forms = try p.parseAll();
-    defer forms.deinit(allocator);
+    const forms = try p.parseAll();
+    // GC handles cleanup.
 
     for (forms.items) |form| {
-        var result = try eval.eval(allocator, form, env);
-        result.deinit(allocator);
+        _ = try eval.eval(allocator, form, env);
+        // GC handles result cleanup.
     }
 
     // Look up -main function in the namespace

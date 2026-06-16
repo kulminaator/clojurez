@@ -250,3 +250,21 @@ else
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
 fi
+
+# Regression: REPL must not crash on map literals (double-free in deinit)
+# Previously, returning a map from the REPL would crash with
+# "panic: switch on corrupt value" due to double-deinit of map entries.
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT bash -c "printf '{:a 1 :b 2}\n[1 2 3]\n#{:x :y}\n(exit)\n' | $VM --repl 2>&1 | grep -c 'user=>'" ) || {
+    echo "FAIL: repl map/vector/set no crash (timeout or error)"
+    TEST_FAIL=$((TEST_FAIL + 1))
+}
+if [ "$result" = "4" ]; then
+    echo "PASS: repl map/vector/set no crash"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: repl map/vector/set no crash"
+    echo "  Expected: 4 prompts"
+    echo "  Got:      $result"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi

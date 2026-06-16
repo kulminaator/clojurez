@@ -191,9 +191,9 @@ fn evaluateAndPrint(allocator: Allocator, input: []const u8, env: *Value.Env) an
         };
 
         // Parser succeeded - evaluate the form
-        var form = parsed_form;
-        var result = eval.eval(allocator, form, env) catch |err| {
-            form.deinit(allocator);
+        const form = parsed_form;
+        const result = eval.eval(allocator, form, env) catch |err| {
+            // GC handles form cleanup
             switch (err) {
                 eval.EvalError.ReplExit => {
                     return true; // signal exit
@@ -211,17 +211,13 @@ fn evaluateAndPrint(allocator: Allocator, input: []const u8, env: *Value.Env) an
         var print_val: Value = undefined;
         if (result.type == .lazy_seq) {
             print_val = try fullyRealizeLazySeq(allocator, result);
-            result.deinit(allocator);
         } else {
             print_val = result;
         }
         const formatted = try print_val.fmt(allocator);
-        print_val.deinit(allocator);
         try writeStdout(formatted);
         try writeStdout("\n");
-        allocator.free(formatted);
-        result.deinit(allocator);
-        form.deinit(allocator);
+        // GC handles all cleanup — no manual deinit/free for GC-allocated values.
 
         pos += consumed;
     }
