@@ -16,6 +16,7 @@ const slab_allocator = @import("slab_allocator.zig");
 const debug = @import("debug.zig");
 const gc_mod = @import("gc.zig");
 const gc_scan = @import("gc_scan.zig");
+const stack_stats = @import("stack_stats.zig");
 const sequences = @import("namespaces/core/sequences.zig");
 
 const Allocator = std.mem.Allocator;
@@ -69,6 +70,9 @@ fn fullyRealizeLazySeq(allocator: Allocator, val: Value) anyerror!Value {
 }
 
 pub fn main(init: std.process.Init.Minimal) anyerror!void {
+    // Record the earliest possible stack pointer baseline.
+    stack_stats.recordAppBaseline();
+
     // --parse-debug: handle BEFORE any VM initialization.
     // Needs only a simple allocator — no GC, no namespaces, no library loading.
     {
@@ -148,6 +152,7 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // Register Zig built-in functions directly in zig.core namespace.
     // No global builtins in root env — everything is namespaced.
     try core.registerCoreFunctions(zc_env);
+    try stack_stats.registerStackStats(zc_env);
 
     // Copy builtins to clojure.core as well, so they are directly accessible.
     // The Clojure wrappers in core.clj will shadow these with docstrings.
@@ -156,6 +161,9 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // Load embedded Clojure core library into clojure.core namespace.
     // The defn wrappers shadow the raw builtins with docstrings.
     try loadCoreLibrary(allocator, clojure_core_env);
+
+    // Record vm-baseline after core library is fully loaded.
+    stack_stats.recordVMBaseline();
 
     // Create clojure.string namespace — string utility functions.
     // Parent set to clojure.core so string code can use core functions.
