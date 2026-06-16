@@ -714,182 +714,194 @@ pub fn call(allocator: Allocator, op: Value, args_list: list.List, env: *Env, de
     defer args.deinit(allocator);
 
     switch (op.type) {
-        .function => {
-            const fn_data = op.fn_val orelse return error.TypeError;
-            const arg_count = args.items.len;
-
-            // Find matching arity: exact match first, then variadic with enough args
-            var matched_arity: ?*const Value.Arity = null;
-            var i: usize = 0;
-            while (i < fn_data.arities.items.len) : (i += 1) {
-                const arity = &fn_data.arities.items[i];
-                const min_args = arity.params.items.len;
-                const has_rest = arity.rest_name != null;
-                if (has_rest) {
-                    if (arg_count >= min_args) {
-                        matched_arity = arity;
-                        break;
-                    }
-                } else {
-                    if (arg_count == min_args) {
-                        matched_arity = arity;
-                        break;
-                    }
-                }
-            }
-            if (matched_arity == null) return error.ArityError;
-            const arity = matched_arity.?;
-
-            // Heap-allocate Env to reduce C stack pressure during deep recursion.
-            // Env is ~416 bytes; keeping it on the stack in debug mode causes overflow.
-            const new_env = try allocator.create(Env);
-            errdefer allocator.destroy(new_env);
-            // Optimization: skip env clone if no local entries
-            if (!fn_data.env.entries.isEmpty()) {
-                new_env.* = try fn_data.env.clone(allocator);
-            } else {
-                new_env.* = .{
-                    .allocator = allocator,
-                    .entries = phm.PersistentHashMap.empty(),
-                    .parent = fn_data.env.parent,
-                    .ns_manager = null,
-                };
-            }
-            defer new_env.deinit(allocator);
-            defer pushEnvTempRoot(new_env).deinit();
-            defer allocator.destroy(new_env);
-
-            // Bind function name for self-reference (e.g., (fn self [x] (self (dec x))))
-            if (fn_data.name) |fn_name| {
-                const fn_clone = try op.clone(allocator);
-                try new_env.put(fn_name, fn_clone);
-            }
-
-            const min_args = arity.params.items.len;
-            const has_rest = arity.rest_name != null;
-
-            // Bind regular parameters to arguments (with destructuring support)
-            var j: usize = 0;
-            while (j < arity.params.items.len) : (j += 1) {
-                const param = arity.params.items[j];
-                try bindParam(allocator, param, args.items[j], new_env);
-            }
-
-            // Bind rest parameter to remaining args as a list
-            if (has_rest and args.items.len > min_args) {
-                var rest_list: list.List = .empty;
-                errdefer rest_list.deinit(allocator);
-                var k: usize = min_args;
-                while (k < args.items.len) : (k += 1) {
-                    try rest_list.append(allocator, try args.items[k].clone(allocator));
-                }
-                try new_env.put(arity.rest_name.?, Value.listValue(rest_list));
-            } else if (has_rest) {
-                // No extra args: bind empty list to rest parameter
-                try new_env.put(arity.rest_name.?, Value.listValue(.empty));
-            }
-
-            // Check for protocol dispatch marker
-            if (arity.body.items.len >= 1 and
-                arity.body.items[0].type == .symbol and
-                std.mem.eql(u8, arity.body.items[0].sym_val, "__protocol_dispatch__"))
-            {
-                // Protocol dispatch: call the dispatcher with all args
-                return try protocols.dispatchProtocolMethod(
-                    allocator,
-                    args,
-                    new_env,
-                    depth,
-                );
-            }
-
-            // Evaluate the function body
-            return try evalRec(allocator, Value.listValue(arity.body), new_env, depth);
-        },
-        .builtin_fn => {
-            var op_mut = op;
-            return op_mut.builtin_fn_val(&op_mut, args, env);
-        },
-        .set => {
-            // Set as function: returns the element if found, nil otherwise
-            if (args.items.len != 1) return error.ArityError;
-            for (op.set_val.items) |item| {
-                if (item.equals(args.items[0])) {
-                    return try item.clone(allocator);
-                }
-            }
-            return Value.nilValue();
-        },
-        .keyword => {
-            // Keyword as function: looks up the keyword in a map or record
-            if (args.items.len != 1) return error.ArityError;
-            const coll = args.items[0];
-            if (coll.type == .map) {
-                for (coll.map_val.items) |entry| {
-                    if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, op.kw_val)) {
-                        return try entry.value.clone(allocator);
-                    }
-                }
-            } else if (coll.type == .record) {
-                // Look up in fields first, then extmap
-                for (coll.record_val.?.fields.items) |entry| {
-                    if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, op.kw_val)) {
-                        return try entry.value.clone(allocator);
-                    }
-                }
-                for (coll.record_val.?.extmap.items) |entry| {
-                    if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, op.kw_val)) {
-                        return try entry.value.clone(allocator);
-                    }
-                }
-            }
-            return Value.nilValue();
-        },
-        .map => {
-            // Map as function: returns value for key, or not-found if provided
-            if (args.items.len < 1 or args.items.len > 2) return error.ArityError;
-            const key = args.items[0];
-            for (op.map_val.items) |entry| {
-                if (entry.key.equals(key)) {
-                    return try entry.value.clone(allocator);
-                }
-            }
-            // Return not-found value if provided
-            if (args.items.len == 2) {
-                return try args.items[1].clone(allocator);
-            }
-            return Value.nilValue();
-        },
-        .record => {
-            // Record as function: returns value for key (fields first, then extmap)
-            if (args.items.len < 1 or args.items.len > 2) return error.ArityError;
-            const key = args.items[0];
-            for (op.record_val.?.fields.items) |entry| {
-                if (entry.key.equals(key)) {
-                    return try entry.value.clone(allocator);
-                }
-            }
-            for (op.record_val.?.extmap.items) |entry| {
-                if (entry.key.equals(key)) {
-                    return try entry.value.clone(allocator);
-                }
-            }
-            // Return not-found value if provided
-            if (args.items.len == 2) {
-                return try args.items[1].clone(allocator);
-            }
-            return Value.nilValue();
-        },
-        .lazy_seq => {
-            // Force evaluation of lazy sequence
-            if (args.items.len != 0) return error.ArityError;
-            return try forceLazySeq(allocator, op, env, depth);
-        },
+        .function => return callFunction(allocator, op, args, env, depth),
+        .builtin_fn => return callBuiltinFn(op, args, env),
+        .set => return callSet(allocator, op, args),
+        .keyword => return callKeyword(allocator, op, args),
+        .map => return callMap(allocator, op, args),
+        .record => return callRecord(allocator, op, args),
+        .lazy_seq => return callLazySeq(allocator, op, env, depth),
         else => {
             std.debug.print("NotCallable: tried to call value of type {s}\n", .{@tagName(op.type)});
             return error.NotCallable;
         }
     }
+}
+
+/// Call a user-defined function: match arity, bind params, evaluate body.
+fn callFunction(allocator: Allocator, op: Value, args: list.List, env: *Env, depth: usize) anyerror!Value {
+    _ = env;
+    const fn_data = op.fn_val orelse return error.TypeError;
+    const arity = try matchArity(fn_data, args.items.len);
+
+    // Heap-allocate Env to reduce C stack pressure during deep recursion.
+    // Env is ~416 bytes; keeping it on the stack in debug mode causes overflow.
+    const new_env = try allocator.create(Env);
+    errdefer allocator.destroy(new_env);
+    new_env.* = try cloneFnEnv(allocator, fn_data.env);
+    defer new_env.deinit(allocator);
+    defer pushEnvTempRoot(new_env).deinit();
+    defer allocator.destroy(new_env);
+
+    // Bind function name for self-reference (e.g., (fn self [x] (self (dec x))))
+    if (fn_data.name) |fn_name| {
+        const fn_clone = try op.clone(allocator);
+        try new_env.put(fn_name, fn_clone);
+    }
+
+    // Bind parameters (regular + rest) to arguments
+    try bindArityParams(allocator, arity, args, new_env);
+
+    // Check for protocol dispatch marker
+    if (arity.body.items.len >= 1 and
+        arity.body.items[0].type == .symbol and
+        std.mem.eql(u8, arity.body.items[0].sym_val, "__protocol_dispatch__"))
+    {
+        return try protocols.dispatchProtocolMethod(allocator, args, new_env, depth);
+    }
+
+    // Evaluate the function body
+    return try evalRec(allocator, Value.listValue(arity.body), new_env, depth);
+}
+
+/// Find the matching arity for a given argument count.
+fn matchArity(fn_data: *const Value.FnData, arg_count: usize) anyerror!*const Value.Arity {
+    var i: usize = 0;
+    while (i < fn_data.arities.items.len) : (i += 1) {
+        const arity = &fn_data.arities.items[i];
+        const min_args = arity.params.items.len;
+        const has_rest = arity.rest_name != null;
+        if (has_rest) {
+            if (arg_count >= min_args) return arity;
+        } else {
+            if (arg_count == min_args) return arity;
+        }
+    }
+    return error.ArityError;
+}
+
+/// Clone a function's closure env, skipping the clone if the env has no local entries.
+fn cloneFnEnv(allocator: Allocator, src: *const Env) anyerror!Env {
+    if (!src.entries.isEmpty()) {
+        return try src.clone(allocator);
+    }
+    return .{
+        .allocator = allocator,
+        .entries = phm.PersistentHashMap.empty(),
+        .parent = src.parent,
+        .ns_manager = null,
+    };
+}
+
+/// Bind arity parameters (regular + rest) to arguments in the call env.
+fn bindArityParams(allocator: Allocator, arity: *const Value.Arity, args: list.List, new_env: *Env) anyerror!void {
+    const min_args = arity.params.items.len;
+    const has_rest = arity.rest_name != null;
+
+    // Bind regular parameters to arguments (with destructuring support)
+    var j: usize = 0;
+    while (j < arity.params.items.len) : (j += 1) {
+        const param = arity.params.items[j];
+        try bindParam(allocator, param, args.items[j], new_env);
+    }
+
+    // Bind rest parameter to remaining args as a list
+    if (has_rest) {
+        if (args.items.len > min_args) {
+            var rest_list: list.List = .empty;
+            errdefer rest_list.deinit(allocator);
+            var k: usize = min_args;
+            while (k < args.items.len) : (k += 1) {
+                try rest_list.append(allocator, try args.items[k].clone(allocator));
+            }
+            try new_env.put(arity.rest_name.?, Value.listValue(rest_list));
+        } else {
+            // No extra args: bind empty list to rest parameter
+            try new_env.put(arity.rest_name.?, Value.listValue(.empty));
+        }
+    }
+}
+
+/// Call a built-in function registered with the VM.
+fn callBuiltinFn(op: Value, args: list.List, env: *Env) anyerror!Value {
+    var op_mut = op;
+    return op_mut.builtin_fn_val(&op_mut, args, env);
+}
+
+/// Call a set as a function: returns the element if found, nil otherwise.
+fn callSet(allocator: Allocator, op: Value, args: list.List) anyerror!Value {
+    if (args.items.len != 1) return error.ArityError;
+    for (op.set_val.items) |item| {
+        if (item.equals(args.items[0])) {
+            return try item.clone(allocator);
+        }
+    }
+    return Value.nilValue();
+}
+
+/// Call a keyword as a function: looks up the keyword in a map or record.
+fn callKeyword(allocator: Allocator, op: Value, args: list.List) anyerror!Value {
+    if (args.items.len != 1) return error.ArityError;
+    const coll = args.items[0];
+    if (coll.type == .map) {
+        for (coll.map_val.items) |entry| {
+            if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, op.kw_val)) {
+                return try entry.value.clone(allocator);
+            }
+        }
+    } else if (coll.type == .record) {
+        for (coll.record_val.?.fields.items) |entry| {
+            if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, op.kw_val)) {
+                return try entry.value.clone(allocator);
+            }
+        }
+        for (coll.record_val.?.extmap.items) |entry| {
+            if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, op.kw_val)) {
+                return try entry.value.clone(allocator);
+            }
+        }
+    }
+    return Value.nilValue();
+}
+
+/// Call a map as a function: returns value for key, or not-found if provided.
+fn callMap(allocator: Allocator, op: Value, args: list.List) anyerror!Value {
+    if (args.items.len < 1 or args.items.len > 2) return error.ArityError;
+    const key = args.items[0];
+    for (op.map_val.items) |entry| {
+        if (entry.key.equals(key)) {
+            return try entry.value.clone(allocator);
+        }
+    }
+    if (args.items.len == 2) {
+        return try args.items[1].clone(allocator);
+    }
+    return Value.nilValue();
+}
+
+/// Call a record as a function: returns value for key (fields first, then extmap).
+fn callRecord(allocator: Allocator, op: Value, args: list.List) anyerror!Value {
+    if (args.items.len < 1 or args.items.len > 2) return error.ArityError;
+    const key = args.items[0];
+    for (op.record_val.?.fields.items) |entry| {
+        if (entry.key.equals(key)) {
+            return try entry.value.clone(allocator);
+        }
+    }
+    for (op.record_val.?.extmap.items) |entry| {
+        if (entry.key.equals(key)) {
+            return try entry.value.clone(allocator);
+        }
+    }
+    if (args.items.len == 2) {
+        return try args.items[1].clone(allocator);
+    }
+    return Value.nilValue();
+}
+
+/// Call a lazy-seq as a function: forces its evaluation (no args allowed).
+fn callLazySeq(allocator: Allocator, op: Value, env: *Env, depth: usize) anyerror!Value {
+    return try forceLazySeq(allocator, op, env, depth);
 }
 
 // Flatten a cons chain into a list for doall/dorun.
