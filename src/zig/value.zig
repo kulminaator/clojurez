@@ -253,6 +253,8 @@ pub const NamespaceManager = struct {
     aliases: phm.PersistentHashMap = phm.PersistentHashMap.empty(),
     /// Classpath directories for loading .clj files
     classpath: std.ArrayListUnmanaged([]const u8) = .empty,
+    /// Loaded library namespace names (for loaded-libs)
+    loaded_libs: std.ArrayListUnmanaged([]const u8) = .empty,
 
     pub fn init(allocator: Allocator) anyerror!*NamespaceManager {
         const mgr = try allocator.create(NamespaceManager);
@@ -285,6 +287,11 @@ pub const NamespaceManager = struct {
             allocator.free(dir);
         }
         allocator.free(self.classpath.items);
+        // Free loaded_libs entries
+        for (self.loaded_libs.items) |lib| {
+            allocator.free(lib);
+        }
+        self.loaded_libs.deinit(allocator);
         allocator.free(self.current_ns);
         allocator.destroy(self);
     }
@@ -366,6 +373,35 @@ pub const NamespaceManager = struct {
             if (val.type == .string) return val.str_val;
         }
         return null;
+    }
+
+    /// Remove an alias from a namespace.
+    pub fn removeAlias(self: *NamespaceManager, ns_name: []const u8, alias: []const u8) anyerror!void {
+        // Build composite key: "ns_name/alias_name"
+        var key_buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer key_buf.deinit(self.allocator);
+        try key_buf.appendSlice(self.allocator, ns_name);
+        try key_buf.append(self.allocator, '/');
+        try key_buf.appendSlice(self.allocator, alias);
+        const composite_key = key_buf.items;
+
+        const key = symKey(composite_key);
+        self.aliases = try self.aliases.mapWithout(self.allocator, key);
+    }
+
+    /// Record that a library namespace has been loaded.
+    pub fn addLoadedLib(self: *NamespaceManager, ns_name: []const u8) anyerror!void {
+        // Check if already tracked
+        for (self.loaded_libs.items) |lib| {
+            if (std.mem.eql(u8, lib, ns_name)) return;
+        }
+        const owned = try self.allocator.dupe(u8, ns_name);
+        try self.loaded_libs.append(self.allocator, owned);
+    }
+
+    /// Get all loaded library names.
+    pub fn getLoadedLibs(self: *const NamespaceManager) []const []const u8 {
+        return self.loaded_libs.items;
     }
 
     /// Add a directory to the classpath.

@@ -5,7 +5,6 @@ const Value = @import("../../value.zig");
 const list = @import("../../list.zig");
 const vec = @import("../../vector.zig");
 const Env = Value.Env;
-const eval_ns = @import("../../eval_ns.zig");
 
 // Domain modules
 const arithmetic = @import("arithmetic.zig");
@@ -26,8 +25,7 @@ const gc_builtins = @import("gc.zig");
 const eval_helpers = @import("eval_helpers.zig");
 const regexp_core = @import("regexp.zig");
 const records = @import("records.zig");
-
-const Allocator = std.mem.Allocator;
+const namespace = @import("namespace.zig");
 
 // ---- Collection predicates (empty?, not-empty, seq) ----
 
@@ -337,221 +335,6 @@ pub fn core_juxt(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return try Value.fnValueSingle(env_env.allocator, cloned_params, cloned_body, final_env, null, false);
 }
 
-// ---- Namespace introspection functions ----
-
-/// Build a namespace map {:name sym, :interns map, :refers map, :aliases map}
-fn buildNsMap(allocator: Allocator, ns_name: []const u8, ns_env: *Env, ns_mgr: *Value.NamespaceManager) anyerror!Value {
-    var result_map: Value.Map = .empty;
-    errdefer {
-        for (result_map.items) |*entry| {
-            entry.key.deinit(allocator);
-            entry.value.deinit(allocator);
-        }
-        allocator.free(result_map.items);
-    }
-
-    // :name → symbol
-    try result_map.append(allocator, .{
-        .key = try Value.keywordValue(allocator, "name"),
-        .value = try Value.symValue(allocator, ns_name),
-    });
-
-    // :interns → map of owned symbols (not referred)
-    var interns_map: Value.Map = .empty;
-    errdefer {
-        for (interns_map.items) |*entry| {
-            entry.key.deinit(allocator);
-            entry.value.deinit(allocator);
-        }
-        allocator.free(interns_map.items);
-    }
-    var it = ns_env.entries.entryIterator();
-    while (it.next()) |entry| {
-        const sym_name = if (entry.key.type == .symbol) entry.key.sym_val else continue;
-        // Skip referred names — interns are only owned vars
-        if (eval_ns.isReferredName(ns_env.referred_names.items, sym_name)) continue;
-        try interns_map.append(allocator, .{
-            .key = try Value.symValue(allocator, sym_name),
-            .value = try entry.val.clone(allocator),
-        });
-    }
-    try result_map.append(allocator, .{
-        .key = try Value.keywordValue(allocator, "interns"),
-        .value = Value.mapValue(interns_map),
-    });
-
-    // :refers → map of referred symbols
-    var refers_map: Value.Map = .empty;
-    errdefer {
-        for (refers_map.items) |*entry| {
-            entry.key.deinit(allocator);
-            entry.value.deinit(allocator);
-        }
-        allocator.free(refers_map.items);
-    }
-    var it2 = ns_env.entries.entryIterator();
-    while (it2.next()) |entry| {
-        const sym_name = if (entry.key.type == .symbol) entry.key.sym_val else continue;
-        // Only include referred names
-        if (!eval_ns.isReferredName(ns_env.referred_names.items, sym_name)) continue;
-        try refers_map.append(allocator, .{
-            .key = try Value.symValue(allocator, sym_name),
-            .value = try entry.val.clone(allocator),
-        });
-    }
-    try result_map.append(allocator, .{
-        .key = try Value.keywordValue(allocator, "refers"),
-        .value = Value.mapValue(refers_map),
-    });
-
-    // :aliases → map of alias symbol → target namespace symbol
-    var aliases_map: Value.Map = .empty;
-    errdefer {
-        for (aliases_map.items) |*entry| {
-            entry.key.deinit(allocator);
-            entry.value.deinit(allocator);
-        }
-        allocator.free(aliases_map.items);
-    }
-    var it3 = ns_mgr.aliases.entryIterator();
-    while (it3.next()) |entry| {
-        const composite_key = if (entry.key.type == .symbol) entry.key.sym_val else continue;
-        // Parse "ns_name/alias_name" composite key
-        if (std.mem.indexOfScalar(u8, composite_key, '/')) |slash_idx| {
-            const key_ns_name = composite_key[0..slash_idx];
-            const alias_name = composite_key[slash_idx + 1 ..];
-            if (std.mem.eql(u8, key_ns_name, ns_name)) {
-                // This alias belongs to our namespace
-                const target_ns = if (entry.val.type == .string) entry.val.str_val else continue;
-                try aliases_map.append(allocator, .{
-                    .key = try Value.symValue(allocator, alias_name),
-                    .value = try Value.symValue(allocator, target_ns),
-                });
-            }
-        }
-    }
-    try result_map.append(allocator, .{
-        .key = try Value.keywordValue(allocator, "aliases"),
-        .value = Value.mapValue(aliases_map),
-    });
-
-    return Value.mapValue(result_map);
-}
-
-/// find-ns: (find-ns sym-or-ns) → namespace-object or nil
-/// Returns the namespace named by the symbol, or nil if it doesn't exist.
-pub fn core_find_ns(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
-    _ = self;
-    const allocator = env_env.allocator;
-    if (args.items.len != 1) return error.ArityError;
-
-    const arg = args.items[0];
-    const ns_name: []const u8 = switch (arg.type) {
-        .symbol => arg.sym_val,
-        // If passed a map with :name, extract the namespace name from it
-        .map => blk: {
-            for (arg.map_val.items) |entry| {
-                if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, "name")) {
-                    if (entry.value.type == .symbol) break :blk entry.value.sym_val;
-                    break :blk ""; // won't match any ns
-                }
-            }
-            break :blk ""; // no :name key, won't match
-        },
-        else => return Value.nilValue(),
-    };
-
-    if (ns_name.len == 0) return Value.nilValue();
-
-    const ns_mgr = eval_ns.findNsManager(env_env) orelse return Value.nilValue();
-    const ns_env = ns_mgr.getNamespace(ns_name) orelse return Value.nilValue();
-
-    return try buildNsMap(allocator, ns_name, ns_env, ns_mgr);
-}
-
-/// create-ns: (create-ns sym) → namespace-object
-/// Creates a new namespace named by sym if one doesn't exist.
-/// Returns the namespace object (new or existing).
-pub fn core_create_ns(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
-    _ = self;
-    const allocator = env_env.allocator;
-    if (args.items.len != 1) return error.ArityError;
-
-    const arg = args.items[0];
-    if (arg.type != .symbol) return error.TypeError;
-    const ns_name = arg.sym_val;
-
-    const ns_mgr = eval_ns.findNsManager(env_env) orelse return error.TypeError;
-
-    // Create or get existing namespace
-    const ns_env = try ns_mgr.createNamespace(ns_name);
-
-    // Set parent to clojure.core if not already set (matching ns form behavior)
-    if (ns_env.parent == null and !std.mem.eql(u8, ns_name, "clojure.core")) {
-        const clojure_core = ns_mgr.getNamespace("clojure.core");
-        if (clojure_core) |core_env| {
-            ns_env.parent = core_env;
-        }
-    }
-
-    return try buildNsMap(allocator, ns_name, ns_env, ns_mgr);
-}
-
-/// all-ns: (all-ns) → sequence-of-namespace-objects
-/// Returns a sequence of all namespace maps.
-pub fn core_all_ns(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
-    _ = self;
-    _ = args;
-    const allocator = env_env.allocator;
-
-    const ns_mgr = eval_ns.findNsManager(env_env) orelse return Value.listValue(list.empty());
-
-    var result_list: list.List = .empty;
-    errdefer result_list.deinit(allocator);
-
-    var it = ns_mgr.namespaces.entryIterator();
-    while (it.next()) |entry| {
-        const ns_name = if (entry.key.type == .symbol) entry.key.sym_val else continue;
-        const ns_env = entry.val;
-        if (ns_env.type != .wrapped) continue;
-        const env_ptr: *Env = Value.unwrapPtr(*Env, ns_env);
-        const ns_map = try buildNsMap(allocator, ns_name, env_ptr, ns_mgr);
-        try result_list.append(allocator, ns_map);
-    }
-
-    return Value.listValue(result_list);
-}
-
-/// the-ns: (the-ns x) → namespace-object or error
-/// Like find-ns but returns an error if not found.
-pub fn core_the_ns(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
-    _ = self;
-    const allocator = env_env.allocator;
-    if (args.items.len != 1) return error.ArityError;
-
-    const arg = args.items[0];
-    const ns_name: []const u8 = switch (arg.type) {
-        .symbol => arg.sym_val,
-        .map => blk: {
-            for (arg.map_val.items) |entry| {
-                if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, "name")) {
-                    if (entry.value.type == .symbol) break :blk entry.value.sym_val;
-                    break :blk "";
-                }
-            }
-            break :blk "";
-        },
-        else => return error.TypeError,
-    };
-
-    if (ns_name.len == 0) return error.UndefinedNamespace;
-
-    const ns_mgr = eval_ns.findNsManager(env_env) orelse return error.UndefinedNamespace;
-    const ns_env = ns_mgr.getNamespace(ns_name) orelse return error.UndefinedNamespace;
-
-    return try buildNsMap(allocator, ns_name, ns_env, ns_mgr);
-}
-
 // ---- Registration ----
 
 pub fn registerCoreFunctions(env: *Env) anyerror!void {
@@ -605,12 +388,8 @@ pub fn registerCoreFunctions(env: *Env) anyerror!void {
     try env.put("macroexpand-1", Value.builtinFnValue(eval_helpers.core_macroexpand_1));
     try env.put("macroexpand", Value.builtinFnValue(eval_helpers.core_macroexpand));
 
-    // Namespace introspection
-    try env.put("find-ns", Value.builtinFnValue(core_find_ns));
-    try env.put("create-ns", Value.builtinFnValue(core_create_ns));
-    try env.put("all-ns", Value.builtinFnValue(core_all_ns));
-    try env.put("the-ns", Value.builtinFnValue(core_the_ns));
+    // Namespace functions (from namespace.zig)
+    try namespace.registerNamespaceFunctions(env);
 
     // defn is handled as a special form alias in the evaluator
 }
-

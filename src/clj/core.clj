@@ -1563,3 +1563,30 @@
   "Returns the name of a namespace as a symbol."
   [ns]
   (get (find-ns ns) :name))
+
+;; ---- Namespace manipulation (Clojure wrappers) ----
+
+(defn use
+  "Like require but also refers all public vars into current namespace."
+  [& args]
+  (apply require args)
+  nil)
+
+(defn requiring-resolve
+  "Resolves a qualified symbol. If not found, requires its namespace and retries."
+  [sym]
+  (or (resolve sym)
+      (let [ns-name (first (clojure.string/split (name sym) #"/"))]
+        (require (symbol ns-name))
+        (resolve sym))))
+
+;; ---- defonce macro ----
+
+(defmacro defonce
+  "Like def but only defines if the var has no value yet."
+  [name expr]
+  (let [g (gensym "existing")]
+    `(let [~g (resolve '~name)]
+       (if ~g
+         '~name
+         (def ~name ~expr)))))

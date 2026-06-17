@@ -156,7 +156,7 @@ pub fn isReferredName(referred: []const []const u8, name: []const u8) bool {
 /// Matches original Clojure semantics: only copies OWNED vars (ns-interns),
 /// not vars that were themselves referred (ns-refers). This prevents
 /// transitive refers — if A refers B and B refers C, A does NOT get C's vars.
-fn referVars(
+pub fn referVars(
     allocator: Allocator,
     target_ns: *Env,
     source_ns: *const Env,
