@@ -1582,8 +1582,9 @@
   "Resolves a qualified symbol. If not found, requires its namespace and retries."
   [sym]
   (or (resolve sym)
-      (let [ns-name (first (clojure.string/split (name sym) #"/"))]
-        (require (symbol ns-name))
+      (let [full-name (str sym)
+            ns-name (first (clojure.string/split full-name #"/"))]
+        (require ns-name)
         (resolve sym))))
 
 ;; ---- defonce macro ----

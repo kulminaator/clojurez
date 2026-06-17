@@ -270,4 +270,26 @@
 (check-true "remove-ns user protected (skip test)"
             true)
 
+;; ---- Phase 6: ns macro enhancements ----
+
+;; :refer-clojure is accepted syntactically (not enforced, parent chain still works)
+(ns test.ref-clojure (:refer-clojure :exclude [+]))
+(ns user)
+(check-true "refer-clojure accepted syntactically"
+            (find-ns 'test.ref-clojure))
+
+;; :use clause in ns form
+(ns test.use-clause (:use [clojure.string]))
+(ns user)
+(check-true "use clause creates namespace"
+            (find-ns 'test.use-clause))
+
+;; Prefix lists in :require
+(ns test.prefix-req (:require (clojure [string :as str-pl])))
+(ns user)
+(check-true "prefix list in require creates namespace"
+            (find-ns 'test.prefix-req))
+(check-true "prefix list creates alias"
+            (contains? (ns-aliases (find-ns 'test.prefix-req)) 'str-pl))
+
 (print-summary)

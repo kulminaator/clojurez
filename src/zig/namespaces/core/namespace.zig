@@ -449,6 +449,14 @@ pub fn core_require(self: *Value, args: list.List, env_env: *Env) anyerror!Value
             continue;
         }
 
+        // Handle simple string: (require "my.lib")
+        if (arg.type == .string) {
+            const ns_name = arg.str_val;
+            try eval_ns.loadNamespaceFile(allocator, ns_mgr, ns_name, env_env);
+            try ns_mgr.addLoadedLib(ns_name);
+            continue;
+        }
+
         // Handle vector libspec: (require '[my.lib :as ml :refer [foo]])
         if (arg.type == .vector) {
             const items = arg.vec_val.items;

@@ -375,3 +375,59 @@ else
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
 fi
+
+# ---- requiring-resolve ----
+
+# requiring-resolve resolves a qualified symbol from a loaded namespace
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT $VM -e '((requiring-resolve '\''clojure.string/upper-case) "hello")' 2>&1)
+if [ "$result" = '"HELLO"' ]; then
+    echo "PASS: requiring-resolve resolves qualified symbol"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: requiring-resolve resolves qualified symbol"
+    echo "  Expected: \"HELLO\""
+    echo "  Got:      $result"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
+
+# requiring-resolve returns function for already-resolved symbol
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT $VM -e '(requiring-resolve '\''clojure.string/lower-case)' 2>&1)
+if [ "$result" = "#function" ]; then
+    echo "PASS: requiring-resolve already-resolved symbol"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: requiring-resolve already-resolved symbol"
+    echo "  Expected: #function"
+    echo "  Got:      $result"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
+
+# requiring-resolve with unqualified symbol that exists
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT $VM -e '(requiring-resolve '\''inc)' 2>&1)
+if [ "$result" = "#function" ]; then
+    echo "PASS: requiring-resolve unqualified existing symbol"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: requiring-resolve unqualified existing symbol"
+    echo "  Expected: #function"
+    echo "  Got:      $result"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
+
+# ---- require with string argument ----
+
+# require with string loads namespace and tracks in loaded-libs
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT $VM -e '(require "clojure.string") (loaded-libs)' 2>&1)
+if echo "$result" | grep -q "clojure.string"; then
+    echo "PASS: require with string tracks in loaded-libs"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: require with string tracks in loaded-libs"
+    echo "  Expected: output containing clojure.string"
+    echo "  Got:      $result"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
