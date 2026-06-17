@@ -1570,6 +1570,12 @@
   "Like require but also refers all public vars into current namespace."
   [& args]
   (apply require args)
+  (doseq [arg args]
+    (let [ns-name (if (symbol? arg)
+                    (name arg)
+                    (name (first (vec arg))))]
+      (when ns-name
+        (refer (symbol ns-name) :refer :all))))
   nil)
 
 (defn requiring-resolve

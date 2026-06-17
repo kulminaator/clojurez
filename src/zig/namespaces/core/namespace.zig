@@ -1,10 +1,15 @@
 // Namespace built-in functions: find-ns, create-ns, all-ns, the-ns,
 // ns-resolve, resolve, refer, alias, ns-aliases, ns-unalias, require, loaded-libs
+// Plus Phase 4: ns-publics, ns-interns, ns-refers, ns-map, ns-unmap, intern
+// Plus Phase 5: load-string, remove-ns
 const std = @import("std");
 const Value = @import("../../value.zig");
 const list = @import("../../list.zig");
 const Env = Value.Env;
 const eval_ns = @import("../../eval_ns.zig");
+const eval_mod = @import("../../eval.zig");
+const parser = @import("../../parser.zig");
+const phm = @import("../../persistent_hash_map.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -655,6 +660,313 @@ pub fn core_resolve(self: *Value, args: list.List, env_env: *Env) anyerror!Value
     return Value.nilValue();
 }
 
+/// Build a map of owned (interned) vars for a namespace.
+fn buildInternsMap(allocator: Allocator, ns_env: *const Env) anyerror!Value {
+    var interns_map: Value.Map = .empty;
+    errdefer {
+        for (interns_map.items) |*entry| {
+            entry.key.deinit(allocator);
+            entry.value.deinit(allocator);
+        }
+        allocator.free(interns_map.items);
+    }
+    var it = ns_env.entries.entryIterator();
+    while (it.next()) |entry| {
+        const sym_name = if (entry.key.type == .symbol) entry.key.sym_val else continue;
+        // Skip referred names — interns are only owned vars
+        if (eval_ns.isReferredName(ns_env.referred_names.items, sym_name)) continue;
+        try interns_map.append(allocator, .{
+            .key = try Value.symValue(allocator, sym_name),
+            .value = try entry.val.clone(allocator),
+        });
+    }
+    return Value.mapValue(interns_map);
+}
+
+/// Build a map of referred vars for a namespace.
+fn buildRefersMap(allocator: Allocator, ns_env: *const Env) anyerror!Value {
+    var refers_map: Value.Map = .empty;
+    errdefer {
+        for (refers_map.items) |*entry| {
+            entry.key.deinit(allocator);
+            entry.value.deinit(allocator);
+        }
+        allocator.free(refers_map.items);
+    }
+    var it = ns_env.entries.entryIterator();
+    while (it.next()) |entry| {
+        const sym_name = if (entry.key.type == .symbol) entry.key.sym_val else continue;
+        // Only include referred names
+        if (!eval_ns.isReferredName(ns_env.referred_names.items, sym_name)) continue;
+        try refers_map.append(allocator, .{
+            .key = try Value.symValue(allocator, sym_name),
+            .value = try entry.val.clone(allocator),
+        });
+    }
+    return Value.mapValue(refers_map);
+}
+
+/// ns-publics: (ns-publics ns) → map-of-symbol-to-value
+/// Returns the vars OWNED by the namespace (not referred).
+pub fn core_ns_publics(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    const allocator = env_env.allocator;
+    if (args.items.len != 1) return error.ArityError;
+
+    const ns_arg = args.items[0];
+    const ns_name = extractNsName(ns_arg) orelse return error.TypeError;
+
+    const ns_mgr = eval_ns.findNsManager(env_env) orelse return error.TypeError;
+    const ns_env = ns_mgr.getNamespace(ns_name) orelse return error.TypeError;
+
+    return try buildInternsMap(allocator, ns_env);
+}
+
+/// ns-interns: (ns-interns ns) → map-of-symbol-to-value
+/// Same as ns-publics in our model (no private vars yet).
+pub fn core_ns_interns(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    const allocator = env_env.allocator;
+    if (args.items.len != 1) return error.ArityError;
+
+    const ns_arg = args.items[0];
+    const ns_name = extractNsName(ns_arg) orelse return error.TypeError;
+
+    const ns_mgr = eval_ns.findNsManager(env_env) orelse return error.TypeError;
+    const ns_env = ns_mgr.getNamespace(ns_name) orelse return error.TypeError;
+
+    return try buildInternsMap(allocator, ns_env);
+}
+
+/// ns-refers: (ns-refers ns) → map-of-symbol-to-value
+/// Returns the vars referred (imported) into the namespace.
+pub fn core_ns_refers(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    const allocator = env_env.allocator;
+    if (args.items.len != 1) return error.ArityError;
+
+    const ns_arg = args.items[0];
+    const ns_name = extractNsName(ns_arg) orelse return error.TypeError;
+
+    const ns_mgr = eval_ns.findNsManager(env_env) orelse return error.TypeError;
+    const ns_env = ns_mgr.getNamespace(ns_name) orelse return error.TypeError;
+
+    return try buildRefersMap(allocator, ns_env);
+}
+
+/// ns-map: (ns-map ns) → map-of-all-mappings
+/// Returns ALL mappings (publics + refers + aliases).
+pub fn core_ns_map(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    const allocator = env_env.allocator;
+    if (args.items.len != 1) return error.ArityError;
+
+    const ns_arg = args.items[0];
+    const ns_name = extractNsName(ns_arg) orelse return error.TypeError;
+
+    const ns_mgr = eval_ns.findNsManager(env_env) orelse return error.TypeError;
+    const ns_env = ns_mgr.getNamespace(ns_name) orelse return error.TypeError;
+
+    // Merge all three maps
+    var result_map: Value.Map = .empty;
+    errdefer {
+        for (result_map.items) |*entry| {
+            entry.key.deinit(allocator);
+            entry.value.deinit(allocator);
+        }
+        allocator.free(result_map.items);
+    }
+
+    // Add interns (owned vars)
+    var it = ns_env.entries.entryIterator();
+    while (it.next()) |entry| {
+        const sym_name = if (entry.key.type == .symbol) entry.key.sym_val else continue;
+        try result_map.append(allocator, .{
+            .key = try Value.symValue(allocator, sym_name),
+            .value = try entry.val.clone(allocator),
+        });
+    }
+
+    // Add aliases (as symbol → symbol mappings)
+    var it2 = ns_mgr.aliases.entryIterator();
+    while (it2.next()) |entry| {
+        const composite_key = if (entry.key.type == .symbol) entry.key.sym_val else continue;
+        if (std.mem.indexOfScalar(u8, composite_key, '/')) |slash_idx| {
+            const key_ns_name = composite_key[0..slash_idx];
+            const alias_name = composite_key[slash_idx + 1 ..];
+            if (std.mem.eql(u8, key_ns_name, ns_name)) {
+                const target_ns = if (entry.val.type == .string) entry.val.str_val else continue;
+                try result_map.append(allocator, .{
+                    .key = try Value.symValue(allocator, alias_name),
+                    .value = try Value.symValue(allocator, target_ns),
+                });
+            }
+        }
+    }
+
+    return Value.mapValue(result_map);
+}
+
+/// ns-unmap: (ns-unmap ns sym) → nil
+/// Removes a var mapping from a namespace.
+pub fn core_ns_unmap(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 2) return error.ArityError;
+
+    const ns_arg = args.items[0];
+    const sym_arg = args.items[1];
+    const ns_name = extractNsName(ns_arg) orelse return error.TypeError;
+    if (sym_arg.type != .symbol) return error.TypeError;
+
+    const ns_mgr = eval_ns.findNsManager(env_env) orelse return error.TypeError;
+    const ns_env = ns_mgr.getNamespace(ns_name) orelse return error.TypeError;
+
+    // Remove from the HAMT
+    const key = phm.sym(sym_arg.sym_val);
+    ns_env.entries = try ns_env.entries.mapWithout(ns_env.allocator, key);
+
+    // Also remove from referred_names if present
+    var i: usize = 0;
+    while (i < ns_env.referred_names.items.len) : (i += 1) {
+        if (std.mem.eql(u8, ns_env.referred_names.items[i], sym_arg.sym_val)) {
+            ns_env.allocator.free(ns_env.referred_names.items[i]);
+            // Remove from the list by shifting
+            const remaining = ns_env.referred_names.items.len - i - 1;
+            if (remaining > 0) {
+                @memcpy(ns_env.referred_names.items[i..], ns_env.referred_names.items[i + 1 ..]);
+            }
+            ns_env.referred_names.items = ns_env.referred_names.items[0 .. ns_env.referred_names.items.len - 1];
+            break;
+        }
+    }
+
+    return Value.nilValue();
+}
+
+/// intern: (intern ns sym) → var
+///           (intern ns sym val) → var
+/// Finds or creates a var in ns named sym, optionally setting its value.
+pub fn core_intern(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    const allocator = env_env.allocator;
+    if (args.items.len < 2 or args.items.len > 3) return error.ArityError;
+
+    const ns_arg = args.items[0];
+    const sym_arg = args.items[1];
+    const ns_name = extractNsName(ns_arg) orelse return error.TypeError;
+    if (sym_arg.type != .symbol) return error.TypeError;
+
+    const ns_mgr = eval_ns.findNsManager(env_env) orelse return error.TypeError;
+    const ns_env = ns_mgr.getNamespace(ns_name) orelse return error.TypeError;
+
+    // If value provided, set it
+    if (args.items.len == 3) {
+        const val = try args.items[2].clone(allocator);
+        try ns_env.put(sym_arg.sym_val, val);
+    }
+
+    // Return the symbol (we don't have Var objects)
+    return try Value.symValue(allocator, sym_arg.sym_val);
+}
+
+/// load-string: (load-string s) → result-of-last-form
+/// Parses and evaluates a string of Clojure code.
+pub fn core_load_string(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    const allocator = env_env.allocator;
+    if (args.items.len != 1) return error.ArityError;
+
+    const str_arg = args.items[0];
+    if (str_arg.type != .string) return error.TypeError;
+    const source = str_arg.str_val;
+
+    // Parse the string
+    var p = try parser.Parser.init(allocator, source);
+    defer p.deinit();
+
+    var forms = try p.parseAll();
+    defer forms.deinit(allocator);
+
+    // Resolve current namespace's env for evaluation
+    var eval_env: *Env = env_env;
+    if (eval_mod.findNsManager(env_env)) |ns_mgr| {
+        const current_ns = ns_mgr.getCurrentNamespace();
+        if (ns_mgr.getNamespace(current_ns)) |ns_env| {
+            eval_env = ns_env;
+        }
+    }
+
+    // Evaluate each form, keeping track of the last result
+    var last_result: Value = Value.nilValue();
+    for (forms.items) |form| {
+        const result = try eval_mod.eval(allocator, form, eval_env);
+        last_result.deinit(allocator);
+        last_result = result;
+    }
+
+    return last_result;
+}
+
+/// remove-ns: (remove-ns sym) → nil
+/// Removes a namespace. Cannot remove clojure.core or user.
+pub fn core_remove_ns(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+
+    const ns_arg = args.items[0];
+    if (ns_arg.type != .symbol) return error.TypeError;
+    const ns_name = ns_arg.sym_val;
+
+    // Cannot remove clojure.core or user
+    if (std.mem.eql(u8, ns_name, "clojure.core") or std.mem.eql(u8, ns_name, "user")) {
+        return error.ProtectedNamespace;
+    }
+
+    const ns_mgr = eval_ns.findNsManager(env_env) orelse return error.TypeError;
+    const allocator = ns_mgr.allocator;
+
+    // Get the namespace env before removing it
+    const ns_env = ns_mgr.getNamespace(ns_name) orelse return Value.nilValue();
+
+    // Remove from namespaces map
+    const key = phm.sym(ns_name);
+    ns_mgr.namespaces = try ns_mgr.namespaces.mapWithout(allocator, key);
+
+    // Remove all aliases for this namespace
+    // Aliases have composite keys "ns_name/alias_name"
+    var prefix_buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer prefix_buf.deinit(allocator);
+    try prefix_buf.appendSlice(allocator, ns_name);
+    try prefix_buf.append(allocator, '/');
+    const prefix = prefix_buf.items;
+
+    // Collect alias keys to remove (can't modify map while iterating)
+    var keys_to_remove: std.ArrayListUnmanaged([]const u8) = .empty;
+    defer keys_to_remove.deinit(allocator);
+
+    var it = ns_mgr.aliases.entryIterator();
+    while (it.next()) |entry| {
+        const composite_key = if (entry.key.type == .symbol) entry.key.sym_val else continue;
+        if (std.mem.startsWith(u8, composite_key, prefix)) {
+            const owned = try allocator.dupe(u8, composite_key);
+            try keys_to_remove.append(allocator, owned);
+        }
+    }
+
+    // Remove collected alias keys
+    for (keys_to_remove.items) |alias_key| {
+        const alias_sym_key = phm.sym(alias_key);
+        ns_mgr.aliases = try ns_mgr.aliases.mapWithout(allocator, alias_sym_key);
+        allocator.free(alias_key);
+    }
+
+    // Free the namespace env (HAMT nodes are GC-tracked)
+    ns_env.deinit(allocator);
+    allocator.destroy(ns_env);
+
+    return Value.nilValue();
+}
+
 // ---- Registration ----
 
 pub fn registerNamespaceFunctions(env: *Env) anyerror!void {
@@ -675,4 +987,16 @@ pub fn registerNamespaceFunctions(env: *Env) anyerror!void {
     try env.put("ns-unalias", Value.builtinFnValue(core_ns_unalias));
     try env.put("require", Value.builtinFnValue(core_require));
     try env.put("loaded-libs", Value.builtinFnValue(core_loaded_libs));
+
+    // Namespace internals (Phase 4)
+    try env.put("ns-publics", Value.builtinFnValue(core_ns_publics));
+    try env.put("ns-interns", Value.builtinFnValue(core_ns_interns));
+    try env.put("ns-refers", Value.builtinFnValue(core_ns_refers));
+    try env.put("ns-map", Value.builtinFnValue(core_ns_map));
+    try env.put("ns-unmap", Value.builtinFnValue(core_ns_unmap));
+    try env.put("intern", Value.builtinFnValue(core_intern));
+
+    // Loading and evaluation (Phase 5)
+    try env.put("load-string", Value.builtinFnValue(core_load_string));
+    try env.put("remove-ns", Value.builtinFnValue(core_remove_ns));
 }
