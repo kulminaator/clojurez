@@ -61,79 +61,32 @@ pub fn evalNs(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyer
         const clause_keyword = clause.list_val.items[0];
         if (clause_keyword.type != .keyword) continue;
 
+        // :refer-clojure is accepted syntactically but not fully enforced.
+        // The parent chain already gives access to all clojure.core functions.
+        if (std.mem.eql(u8, clause_keyword.kw_val, "refer-clojure")) continue;
+
         if (std.mem.eql(u8, clause_keyword.kw_val, "require")) {
             // Process :require clause
-            // Each item is a vector: [ns.name :as alias :refer [fn1 fn2] :exclude [fn3] :rename {fn1 fn2}]
             var j: usize = 1;
             while (j < clause.list_val.items.len) : (j += 1) {
                 const req_item = clause.list_val.items[j];
-                if (req_item.type != .vector) continue;
-                const req_items = req_item.vec_val.items;
-                if (req_items.len < 1) continue;
-
-                const req_ns_sym = req_items[0];
-                if (req_ns_sym.type != .symbol) continue;
-                const req_ns_name = req_ns_sym.sym_val;
-
-                // Parse :as, :refer, :exclude, :rename from the require vector
-                var alias: ?[]const u8 = null;
-                var refer_all: bool = false;
-                var refer_syms: ?[]const Value = null;
-                var exclude_syms: ?[]const Value = null;
-                var rename_map: ?Value.Map = null;
-                var k: usize = 1;
-                while (k < req_items.len) : (k += 1) {
-                    if (req_items[k].type == .keyword) {
-                        if (std.mem.eql(u8, req_items[k].kw_val, "as") and k + 1 < req_items.len) {
-                            k += 1;
-                            if (req_items[k].type == .symbol) {
-                                alias = req_items[k].sym_val;
-                            }
-                        } else if (std.mem.eql(u8, req_items[k].kw_val, "refer") and k + 1 < req_items.len) {
-                            k += 1;
-                            if (req_items[k].type == .keyword and std.mem.eql(u8, req_items[k].kw_val, "all")) {
-                                refer_all = true;
-                            } else if (req_items[k].type == .list) {
-                                refer_syms = req_items[k].list_val.items;
-                            } else if (req_items[k].type == .vector) {
-                                refer_syms = req_items[k].vec_val.items;
-                            }
-                        } else if (std.mem.eql(u8, req_items[k].kw_val, "exclude") and k + 1 < req_items.len) {
-                            k += 1;
-                            if (req_items[k].type == .list) {
-                                exclude_syms = req_items[k].list_val.items;
-                            } else if (req_items[k].type == .vector) {
-                                exclude_syms = req_items[k].vec_val.items;
-                            }
-                        } else if (std.mem.eql(u8, req_items[k].kw_val, "rename") and k + 1 < req_items.len) {
-                            k += 1;
-                            if (req_items[k].type == .map) {
-                                rename_map = req_items[k].map_val;
-                            }
-                        }
-                    }
+                if (req_item.type == .vector) {
+                    try processRequireItem(allocator, ns_mgr, ns_env, ns_name, req_item.vec_val.items, false, env);
+                } else if (req_item.type == .list) {
+                    // Prefix list: (clojure [string :as str] zip)
+                    try processPrefixList(allocator, ns_mgr, ns_env, ns_name, req_item.list_val.items, false, env);
                 }
-
-                // Use alias if provided, otherwise use the last part of the namespace name as alias
-                const effective_alias = alias orelse blk: {
-                    const ns_name_str = req_ns_name;
-                    var last_dot: usize = 0;
-                    var d: usize = 0;
-                    while (d < ns_name_str.len) : (d += 1) {
-                        if (ns_name_str[d] == '.') last_dot = d + 1;
-                    }
-                    break :blk if (last_dot > 0 and last_dot < ns_name_str.len) ns_name_str[last_dot..] else ns_name_str;
-                };
-
-                // Register alias
-                try ns_mgr.addAlias(ns_name, effective_alias, req_ns_name);
-
-                // Load the required namespace file from classpath
-                try loadNamespaceFile(allocator, ns_mgr, req_ns_name, env);
-
-                // Copy referenced vars from target namespace into current namespace (refer semantics)
-                const target_env = ns_mgr.getNamespace(req_ns_name) orelse continue;
-                try referVars(allocator, ns_env, target_env, refer_all, refer_syms, exclude_syms, rename_map);
+            }
+        } else if (std.mem.eql(u8, clause_keyword.kw_val, "use")) {
+            // :use is like :require but with :refer :all by default
+            var j: usize = 1;
+            while (j < clause.list_val.items.len) : (j += 1) {
+                const use_item = clause.list_val.items[j];
+                if (use_item.type == .vector) {
+                    try processRequireItem(allocator, ns_mgr, ns_env, ns_name, use_item.vec_val.items, true, env);
+                } else if (use_item.type == .list) {
+                    try processPrefixList(allocator, ns_mgr, ns_env, ns_name, use_item.list_val.items, true, env);
+                }
             }
         }
     }
@@ -144,8 +97,175 @@ pub fn evalNs(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyer
     return Value.nilValue();
 }
 
+/// Process a single require/use vector item: [ns.name :as alias :refer [...] ...]
+fn processRequireItem(
+    allocator: Allocator,
+    ns_mgr: *Value.NamespaceManager,
+    target_ns: *Env,
+    target_ns_name: []const u8,
+    req_items: []const Value,
+    refer_all_default: bool,
+    root_env: *Env,
+) anyerror!void {
+    if (req_items.len < 1) return;
+    const req_ns_sym = req_items[0];
+    if (req_ns_sym.type != .symbol) return;
+    const req_ns_name = req_ns_sym.sym_val;
+
+    // Parse options from the vector
+    var alias: ?[]const u8 = null;
+    var refer_all: bool = false;
+    var refer_syms: ?[]const Value = null;
+    var exclude_syms: ?[]const Value = null;
+    var rename_map: ?Value.Map = null;
+
+    var k: usize = 1;
+    while (k < req_items.len) : (k += 1) {
+        if (req_items[k].type != .keyword) continue;
+        if (k + 1 >= req_items.len) break;
+        k += 1;
+        if (std.mem.eql(u8, req_items[k - 1].kw_val, "as")) {
+            if (req_items[k].type == .symbol) alias = req_items[k].sym_val;
+        } else if (std.mem.eql(u8, req_items[k - 1].kw_val, "refer")) {
+            if (req_items[k].type == .keyword and std.mem.eql(u8, req_items[k].kw_val, "all")) {
+                refer_all = true;
+            } else if (req_items[k].type == .list) {
+                refer_syms = req_items[k].list_val.items;
+            } else if (req_items[k].type == .vector) {
+                refer_syms = req_items[k].vec_val.items;
+            }
+        } else if (std.mem.eql(u8, req_items[k - 1].kw_val, "exclude")) {
+            if (req_items[k].type == .list) {
+                exclude_syms = req_items[k].list_val.items;
+            } else if (req_items[k].type == .vector) {
+                exclude_syms = req_items[k].vec_val.items;
+            }
+        } else if (std.mem.eql(u8, req_items[k - 1].kw_val, "rename")) {
+            if (req_items[k].type == .map) rename_map = req_items[k].map_val;
+        }
+    }
+
+    // :use defaults to :refer :all
+    if (refer_all_default and !refer_all and refer_syms == null) {
+        refer_all = true;
+    }
+
+    const effective_alias = alias orelse blk: {
+        var last_dot: usize = 0;
+        var d: usize = 0;
+        while (d < req_ns_name.len) : (d += 1) {
+            if (req_ns_name[d] == '.') last_dot = d + 1;
+        }
+        break :blk if (last_dot > 0 and last_dot < req_ns_name.len) req_ns_name[last_dot..] else req_ns_name;
+    };
+
+    try ns_mgr.addAlias(target_ns_name, effective_alias, req_ns_name);
+    try loadNamespaceFile(allocator, ns_mgr, req_ns_name, root_env);
+
+    const source_env = ns_mgr.getNamespace(req_ns_name) orelse return;
+    try referVars(allocator, target_ns, source_env, refer_all, refer_syms, exclude_syms, rename_map);
+}
+
+/// Process a prefix list item: (prefix [suffix :as a] suffix2 ...)
+fn processPrefixList(
+    allocator: Allocator,
+    ns_mgr: *Value.NamespaceManager,
+    target_ns: *Env,
+    target_ns_name: []const u8,
+    list_items: []const Value,
+    refer_all_default: bool,
+    root_env: *Env,
+) anyerror!void {
+    if (list_items.len < 1) return;
+    const prefix_sym = list_items[0];
+    if (prefix_sym.type != .symbol) return;
+    const prefix = prefix_sym.sym_val;
+
+    var j: usize = 1;
+    while (j < list_items.len) : (j += 1) {
+        const suffix_item = list_items[j];
+
+        // Simple suffix: (clojure zip) → clojure.zip
+        if (suffix_item.type == .symbol) {
+            const full_ns = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ prefix, suffix_item.sym_val });
+            defer allocator.free(full_ns);
+
+            var last_dot: usize = 0;
+            var d: usize = 0;
+            while (d < full_ns.len) : (d += 1) {
+                if (full_ns[d] == '.') last_dot = d + 1;
+            }
+            const alias = if (last_dot > 0 and last_dot < full_ns.len) full_ns[last_dot..] else full_ns;
+            try ns_mgr.addAlias(target_ns_name, alias, full_ns);
+            try loadNamespaceFile(allocator, ns_mgr, full_ns, root_env);
+            continue;
+        }
+
+        // Vector with options: (clojure [string :as str])
+        if (suffix_item.type == .vector and suffix_item.vec_val.items.len >= 1) {
+            const suffix_sym = suffix_item.vec_val.items[0];
+            if (suffix_sym.type == .symbol) {
+                const full_ns = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ prefix, suffix_sym.sym_val });
+                defer allocator.free(full_ns);
+
+                // Parse options from the vector
+                var alias: ?[]const u8 = null;
+                var refer_all: bool = false;
+                var refer_syms: ?[]const Value = null;
+                var exclude_syms: ?[]const Value = null;
+                var rename_map: ?Value.Map = null;
+
+                var k: usize = 1;
+                while (k < suffix_item.vec_val.items.len) : (k += 1) {
+                    if (suffix_item.vec_val.items[k].type != .keyword) continue;
+                    if (k + 1 >= suffix_item.vec_val.items.len) break;
+                    k += 1;
+                    if (std.mem.eql(u8, suffix_item.vec_val.items[k - 1].kw_val, "as")) {
+                        if (suffix_item.vec_val.items[k].type == .symbol) alias = suffix_item.vec_val.items[k].sym_val;
+                    } else if (std.mem.eql(u8, suffix_item.vec_val.items[k - 1].kw_val, "refer")) {
+                        if (suffix_item.vec_val.items[k].type == .keyword and std.mem.eql(u8, suffix_item.vec_val.items[k].kw_val, "all")) {
+                            refer_all = true;
+                        } else if (suffix_item.vec_val.items[k].type == .list) {
+                            refer_syms = suffix_item.vec_val.items[k].list_val.items;
+                        } else if (suffix_item.vec_val.items[k].type == .vector) {
+                            refer_syms = suffix_item.vec_val.items[k].vec_val.items;
+                        }
+                    } else if (std.mem.eql(u8, suffix_item.vec_val.items[k - 1].kw_val, "exclude")) {
+                        if (suffix_item.vec_val.items[k].type == .list) {
+                            exclude_syms = suffix_item.vec_val.items[k].list_val.items;
+                        } else if (suffix_item.vec_val.items[k].type == .vector) {
+                            exclude_syms = suffix_item.vec_val.items[k].vec_val.items;
+                        }
+                    } else if (std.mem.eql(u8, suffix_item.vec_val.items[k - 1].kw_val, "rename")) {
+                        if (suffix_item.vec_val.items[k].type == .map) rename_map = suffix_item.vec_val.items[k].map_val;
+                    }
+                }
+
+                if (refer_all_default and !refer_all and refer_syms == null) {
+                    refer_all = true;
+                }
+
+                const effective_alias = alias orelse blk: {
+                    var last_dot: usize = 0;
+                    var d2: usize = 0;
+                    while (d2 < suffix_sym.sym_val.len) : (d2 += 1) {
+                        if (suffix_sym.sym_val[d2] == '.') last_dot = d2 + 1;
+                    }
+                    break :blk if (last_dot > 0 and last_dot < suffix_sym.sym_val.len) suffix_sym.sym_val[last_dot..] else suffix_sym.sym_val;
+                };
+
+                try ns_mgr.addAlias(target_ns_name, effective_alias, full_ns);
+                try loadNamespaceFile(allocator, ns_mgr, full_ns, root_env);
+
+                const source_env = ns_mgr.getNamespace(full_ns) orelse continue;
+                try referVars(allocator, target_ns, source_env, refer_all, refer_syms, exclude_syms, rename_map);
+            }
+        }
+    }
+}
+
 /// Check if a name is in the referred-names list (linear scan, simple and reliable).
-fn isReferredName(referred: []const []const u8, name: []const u8) bool {
+pub fn isReferredName(referred: []const []const u8, name: []const u8) bool {
     for (referred) |r| {
         if (std.mem.eql(u8, r, name)) return true;
     }
@@ -156,7 +276,7 @@ fn isReferredName(referred: []const []const u8, name: []const u8) bool {
 /// Matches original Clojure semantics: only copies OWNED vars (ns-interns),
 /// not vars that were themselves referred (ns-refers). This prevents
 /// transitive refers — if A refers B and B refers C, A does NOT get C's vars.
-fn referVars(
+pub fn referVars(
     allocator: Allocator,
     target_ns: *Env,
     source_ns: *const Env,
@@ -221,9 +341,9 @@ fn referVars(
         // Clone the value into the target namespace
         const cloned = try sym_val.clone(allocator);
         try target_ns.put(local_name, cloned);
-        // entry.val is a copy from the iterator; deinit to avoid leak
-        var sv = sym_val;
-        sv.deinit(allocator);
+        // NOTE: Do NOT deinit sym_val here. The iterator returns a shallow
+        // copy of the Value from the HAMT. The HAMT owns the underlying
+        // strings/objects, so deinit would corrupt the HAMT.
 
         // Mark as referred so transitive refers won't copy it further.
         // Uses target_ns.allocator so the string lifetime matches the env.

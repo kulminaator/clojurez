@@ -25,8 +25,7 @@ const gc_builtins = @import("gc.zig");
 const eval_helpers = @import("eval_helpers.zig");
 const regexp_core = @import("regexp.zig");
 const records = @import("records.zig");
-
-const Allocator = std.mem.Allocator;
+const namespace = @import("namespace.zig");
 
 // ---- Collection predicates (empty?, not-empty, seq) ----
 
@@ -389,6 +388,8 @@ pub fn registerCoreFunctions(env: *Env) anyerror!void {
     try env.put("macroexpand-1", Value.builtinFnValue(eval_helpers.core_macroexpand_1));
     try env.put("macroexpand", Value.builtinFnValue(eval_helpers.core_macroexpand));
 
+    // Namespace functions (from namespace.zig)
+    try namespace.registerNamespaceFunctions(env);
+
     // defn is handled as a special form alias in the evaluator
 }
-

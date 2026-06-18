@@ -1556,3 +1556,44 @@
   "Returns a set of types for which protocol has implementations."
   [protocol]
   (set (keys (get protocol :impls))))
+
+;; Namespace introspection helpers
+
+(defn ns-name
+  "Returns the name of a namespace as a symbol."
+  [ns]
+  (get (find-ns ns) :name))
+
+;; ---- Namespace manipulation (Clojure wrappers) ----
+
+(defn use
+  "Like require but also refers all public vars into current namespace."
+  [& args]
+  (apply require args)
+  (doseq [arg args]
+    (let [ns-name (if (symbol? arg)
+                    (name arg)
+                    (name (first (vec arg))))]
+      (when ns-name
+        (refer (symbol ns-name) :refer :all))))
+  nil)
+
+(defn requiring-resolve
+  "Resolves a qualified symbol. If not found, requires its namespace and retries."
+  [sym]
+  (or (resolve sym)
+      (let [full-name (str sym)
+            ns-name (first (clojure.string/split full-name #"/"))]
+        (require ns-name)
+        (resolve sym))))
+
+;; ---- defonce macro ----
+
+(defmacro defonce
+  "Like def but only defines if the var has no value yet."
+  [name expr]
+  (let [g (gensym "existing")]
+    `(let [~g (resolve '~name)]
+       (if ~g
+         '~name
+         (def ~name ~expr)))))
