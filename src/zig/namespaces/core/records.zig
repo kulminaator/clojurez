@@ -342,13 +342,13 @@ fn processRecordProtocolSpec(
 ) anyerror!Value {
 
     // Evaluate the protocol symbol to get the protocol value
-    var proto_val = try eval.evalRec(allocator, proto_sym, env, depth + 1);
-    defer proto_val.deinit(allocator);
+    const proto_ptr = try eval.evalRec(allocator, proto_sym, env, depth + 1);
+    defer proto_ptr.*.deinit(allocator);
 
     // Validate it's a protocol (has :sigs key)
     var sigs_kw = try Value.keywordValue(allocator, "sigs");
     defer sigs_kw.deinit(allocator);
-    if (getMapEntry(proto_val, sigs_kw) == null) {
+    if (getMapEntry(proto_ptr.*, sigs_kw) == null) {
         return makeErrorStr(allocator, "defrecord: {s} is not a protocol", .{proto_sym.sym_val});
     }
 
@@ -455,10 +455,10 @@ fn processRecordProtocolSpec(
         }
 
         // Evaluate to get a function value
-        var fn_val = try eval.evalRec(allocator, Value.listValue(fn_form), env, depth + 1);
+        const fn_ptr = try eval.evalRec(allocator, Value.listValue(fn_form), env, depth + 1);
         fn_form = .empty;
-        const persistent_fn = try fn_val.clone(allocator);
-        fn_val.deinit(allocator);
+        const persistent_fn = try fn_ptr.*.clone(allocator);
+        fn_ptr.*.deinit(allocator);
 
         try mmap.append(allocator, .{
             .key = try Value.keywordValue(allocator, mname),
@@ -474,7 +474,7 @@ fn processRecordProtocolSpec(
     var extend_args: list.List = .empty;
     defer extend_args.deinit(allocator);
     try extend_args.append(allocator, atype);
-    try extend_args.append(allocator, proto_val);
+    try extend_args.append(allocator, proto_ptr.*);
     try extend_args.append(allocator, Value.mapValue(mmap));
     mmap = .empty;
 

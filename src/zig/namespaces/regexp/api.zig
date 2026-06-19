@@ -328,7 +328,8 @@ fn getReplacementString(allocator: Allocator, v: Value) anyerror![]const u8 {
 // ============================================================
 
 fn callBuiltin(allocator: Allocator, op: Value, args: list.List, env: *Env) anyerror!Value {
-    return eval_mod.call(allocator, op, args, env, 0);
+    const result_ptr = try eval_mod.call(allocator, op, &args, env, 0);
+    return result_ptr.*;
 }
 
 // ============================================================

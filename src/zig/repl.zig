@@ -192,7 +192,7 @@ fn evaluateAndPrint(allocator: Allocator, input: []const u8, env: *Value.Env) an
 
         // Parser succeeded - evaluate the form
         const form = parsed_form;
-        const result = eval.eval(allocator, form, env) catch |err| {
+        const result_ptr = eval.eval(allocator, form, env) catch |err| {
             // GC handles form cleanup
             switch (err) {
                 eval.EvalError.ReplExit => {
@@ -209,10 +209,10 @@ fn evaluateAndPrint(allocator: Allocator, input: []const u8, env: *Value.Env) an
         };
         // Force lazy-seqs before printing so they show realized values
         var print_val: Value = undefined;
-        if (result.type == .lazy_seq) {
-            print_val = try fullyRealizeLazySeq(allocator, result);
+        if (result_ptr.type == .lazy_seq) {
+            print_val = try fullyRealizeLazySeq(allocator, result_ptr.*);
         } else {
-            print_val = result;
+            print_val = result_ptr.*;
         }
         const formatted = try print_val.fmt(allocator);
         try writeStdout(formatted);

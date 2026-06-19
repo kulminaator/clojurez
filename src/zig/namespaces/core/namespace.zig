@@ -907,9 +907,9 @@ pub fn core_load_string(self: *Value, args: list.List, env_env: *Env) anyerror!V
     // Evaluate each form, keeping track of the last result
     var last_result: Value = Value.nilValue();
     for (forms.items) |form| {
-        const result = try eval_mod.eval(allocator, form, eval_env);
+        const result_ptr = try eval_mod.eval(allocator, form, eval_env);
         last_result.deinit(allocator);
-        last_result = result;
+        last_result = result_ptr.*;
     }
 
     return last_result;

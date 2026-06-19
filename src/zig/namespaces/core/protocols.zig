@@ -124,7 +124,8 @@ pub fn dispatchProtocolMethod(
 
     // Call the implementation function with all arguments
     const call_env: *Env = @constCast(proto_env);
-    return eval.call(allocator, impl_fn, args, call_env, depth);
+    const result_ptr = try eval.call(allocator, impl_fn, &args, call_env, depth);
+    return result_ptr.*;
 }
 
 /// Evaluate a (defprotocol ...) form.
@@ -728,8 +729,8 @@ pub fn evalExtendType(
 
     while (idx < l.items.len) {
         // Evaluate the protocol
-        const proto_val = try eval.evalRec(allocator, l.items[idx], env, depth + 1);
-        try extend_args.append(allocator, proto_val);
+        const proto_ptr = try eval.evalRec(allocator, l.items[idx], env, depth + 1);
+        try extend_args.append(allocator, proto_ptr.*);
 
         // Collect method definitions until next protocol or end
         idx += 1;
@@ -819,10 +820,10 @@ pub fn evalExtendType(
             }
 
             // Evaluate to get a function value
-            var fn_val = try eval.evalRec(allocator, Value.listValue(fn_form), env, depth + 1);
+            const fn_ptr = try eval.evalRec(allocator, Value.listValue(fn_form), env, depth + 1);
             fn_form = .empty;
-            const persistent_fn = try fn_val.clone(allocator);
-            fn_val.deinit(allocator);
+            const persistent_fn = try fn_ptr.*.clone(allocator);
+            fn_ptr.*.deinit(allocator);
 
             try mmap.append(allocator, .{
                 .key = try Value.keywordValue(allocator, mname),
@@ -854,14 +855,14 @@ pub fn evalExtendProtocol(
     if (l.items.len < 3) return error.ArityError;
 
     // Evaluate the protocol (index 1)
-    var proto_val = try eval.evalRec(allocator, l.items[1], env, depth + 1);
-    defer proto_val.deinit(allocator);
+    const proto_ptr = try eval.evalRec(allocator, l.items[1], env, depth + 1);
+    defer proto_ptr.*.deinit(allocator);
 
     // Validate it's a protocol
     var sigs_kw = try Value.keywordValue(allocator, "sigs");
     defer sigs_kw.deinit(allocator);
-    if (getMapEntry(proto_val, sigs_kw) == null) {
-        return makeErrorStr(allocator, "extend-protocol: {s} is not a protocol", .{formatValueShort(proto_val)});
+    if (getMapEntry(proto_ptr.*, sigs_kw) == null) {
+        return makeErrorStr(allocator, "extend-protocol: {s} is not a protocol", .{formatValueShort(proto_ptr.*)});
     }
 
     // Parse: alternating type-keyword and method definitions
@@ -947,10 +948,10 @@ pub fn evalExtendProtocol(
                 arity_form = .empty;
             }
 
-            var fn_val = try eval.evalRec(allocator, Value.listValue(fn_form), env, depth + 1);
+            const fn_ptr = try eval.evalRec(allocator, Value.listValue(fn_form), env, depth + 1);
             fn_form = .empty;
-            const persistent_fn = try fn_val.clone(allocator);
-            fn_val.deinit(allocator);
+            const persistent_fn = try fn_ptr.*.clone(allocator);
+            fn_ptr.*.deinit(allocator);
 
             try mmap.append(allocator, .{
                 .key = try Value.keywordValue(allocator, mname),
@@ -962,7 +963,7 @@ pub fn evalExtendProtocol(
         var ext_args: list.List = .empty;
         defer ext_args.deinit(allocator);
         try ext_args.append(allocator, try atype.clone(allocator));
-        try ext_args.append(allocator, try proto_val.clone(allocator));
+        try ext_args.append(allocator, try proto_ptr.*.clone(allocator));
         try ext_args.append(allocator, Value.mapValue(mmap));
         mmap = .empty;
 

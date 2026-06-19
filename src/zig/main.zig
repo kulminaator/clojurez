@@ -305,7 +305,8 @@ fn loadCoreLibrary(allocator: Allocator, env: *Env) anyerror!void {
     // GC handles cleanup.
 
     for (forms.items) |form| {
-        _ = try eval.eval(allocator, form, env);
+        const result_ptr = try eval.eval(allocator, form, env);
+        result_ptr.*.deinit(allocator);
         // GC handles result cleanup.
         // Silent: don't print results during core library loading
     }
@@ -322,7 +323,8 @@ fn loadStringLibrary(allocator: Allocator, env: *Env) anyerror!void {
     // GC handles cleanup.
 
     for (forms.items) |form| {
-        _ = try eval.eval(allocator, form, env);
+        const result_ptr = try eval.eval(allocator, form, env);
+        result_ptr.*.deinit(allocator);
         // GC handles result cleanup.
         // Silent: don't print results during string library loading
     }
@@ -370,13 +372,13 @@ fn runExpression(allocator: Allocator, expr: []const u8, env: *Env) anyerror!voi
     for (forms.items) |form| {
         // Use current namespace's env for evaluation
         const eval_env = getCurrentNsEnv(env) orelse env;
-        const result = try eval.eval(allocator, form, eval_env);
+        const result_ptr = try eval.eval(allocator, form, eval_env);
 
-        if (!result.equals(Value.nilValue())) {
-            const print_val = if (result.type == .lazy_seq) blk: {
-                const realized = try fullyRealizeLazySeq(allocator, result);
+        if (!result_ptr.equals(Value.nilValue())) {
+            const print_val = if (result_ptr.type == .lazy_seq) blk: {
+                const realized = try fullyRealizeLazySeq(allocator, result_ptr.*);
                 break :blk realized;
-            } else result;
+            } else result_ptr.*;
             const formatted = try print_val.fmt(allocator);
             // GC handles all cleanup — no manual deinit/free for GC-allocated values.
             try writeStdout(formatted);
@@ -427,13 +429,13 @@ fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void 
     for (forms.items) |form| {
         // Get current namespace's env for each form (ns form may change it)
         const eval_env = getCurrentNsEnv(env) orelse env;
-        var result = try eval.eval(allocator, form, eval_env);
+        const result_ptr = try eval.eval(allocator, form, eval_env);
 
-        if (print_results and !result.equals(Value.nilValue())) {
-            const print_val = if (result.type == .lazy_seq) blk: {
-                const realized = try fullyRealizeLazySeq(allocator, result);
+        if (print_results and !result_ptr.equals(Value.nilValue())) {
+            const print_val = if (result_ptr.type == .lazy_seq) blk: {
+                const realized = try fullyRealizeLazySeq(allocator, result_ptr.*);
                 break :blk realized;
-            } else result;
+            } else result_ptr.*;
             const formatted = try print_val.fmt(allocator);
             // GC handles all cleanup — no manual deinit/free for GC-allocated values.
             try writeStdout(formatted);
@@ -543,7 +545,8 @@ fn runMain(allocator: Allocator, env: *Env, ns_name: []const u8) anyerror!void {
     // GC handles cleanup.
 
     for (forms.items) |form| {
-        _ = try eval.eval(allocator, form, env);
+        const result_ptr = try eval.eval(allocator, form, env);
+        result_ptr.*.deinit(allocator);
         // GC handles result cleanup.
     }
 
@@ -567,8 +570,8 @@ fn runMain(allocator: Allocator, env: *Env, ns_name: []const u8) anyerror!void {
     var call_list: list.List = .empty;
     defer call_list.deinit(allocator);
     try call_list.append(allocator, try main_fn.clone(allocator));
-    var call_result = try eval.eval(allocator, Value.listValue(call_list), ns_env);
-    call_result.deinit(allocator);
+    const call_result_ptr = try eval.eval(allocator, Value.listValue(call_list), ns_env);
+    call_result_ptr.*.deinit(allocator);
 
 }
 

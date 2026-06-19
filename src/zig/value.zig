@@ -1048,6 +1048,16 @@ pub fn clone(self: *const Self, allocator: Allocator) anyerror!Self {
     }
 }
 
+/// Clone this Value into a GC-allocated *Value in a single allocation.
+/// Unlike clone() which returns Value by value (copying the struct onto the stack),
+/// this allocates the Value struct from the GC allocator and returns a pointer.
+/// This eliminates the intermediate stack copy for large Value structs.
+pub fn cloneGC(self: *const Self, allocator: Allocator) anyerror!*Self {
+    const ptr = try allocator.create(Self);
+    ptr.* = try self.clone(allocator);
+    return ptr;
+}
+
 pub fn isTruthy(self: Self) bool {
     return switch (self.type) {
         .nil => false,

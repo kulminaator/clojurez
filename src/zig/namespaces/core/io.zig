@@ -272,9 +272,9 @@ pub fn core_load_file(self: *Value, args: list.List, env_env: *Env) anyerror!Val
                 eval_env = ns_env;
             }
         }
-        const result = try eval_mod.eval(env_env.allocator, form, eval_env);
+        const result_ptr = try eval_mod.eval(env_env.allocator, form, eval_env);
         last_result.deinit(env_env.allocator);
-        last_result = result;
+        last_result = result_ptr.*;
     }
 
     return last_result;
@@ -295,7 +295,8 @@ pub fn core_eval(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
         }
     }
 
-    return eval_mod.eval(env_env.allocator, form, eval_env);
+    const result_ptr = try eval_mod.eval(env_env.allocator, form, eval_env);
+    return result_ptr.*;
 }
 
 pub fn registerIOFunctions(env: *Env) anyerror!void {

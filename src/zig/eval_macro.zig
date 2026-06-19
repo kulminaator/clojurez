@@ -17,12 +17,14 @@ pub fn unquoteProcess(allocator: Allocator, form: Value, env: *Env, depth: usize
             if (first.type == .symbol) {
                 if (std.mem.eql(u8, first.sym_val, "unquote")) {
                     if (form.list_val.items.len != 2) return error.ArityError;
-                    return try eval.evalRec(allocator, form.list_val.items[1], env, depth);
+                    const ptr = try eval.evalRec(allocator, form.list_val.items[1], env, depth);
+                    const result = ptr.*;
+                    return result;
                 }
                 if (std.mem.eql(u8, first.sym_val, "unquote-splicing")) {
                     if (form.list_val.items.len != 2) return error.ArityError;
-                    const result = try eval.evalRec(allocator, form.list_val.items[1], env, depth);
-                    if (result.type == .list) return result;
+                    const result_ptr = try eval.evalRec(allocator, form.list_val.items[1], env, depth);
+                    if (result_ptr.type == .list) return result_ptr.*;
                     return error.TypeError;
                 }
             }
@@ -34,13 +36,13 @@ pub fn unquoteProcess(allocator: Allocator, form: Value, env: *Env, depth: usize
                 if (item.type == .list and item.list_val.items.len == 2) {
                     const uq_first = item.list_val.items[0];
                     if (uq_first.type == .symbol and std.mem.eql(u8, uq_first.sym_val, "unquote-splicing")) {
-                        var splice_result = try eval.evalRec(allocator, item.list_val.items[1], env, depth);
-                        if (splice_result.type == .list) {
-                            for (splice_result.list_val.items) |elem| {
+                        const splice_ptr = try eval.evalRec(allocator, item.list_val.items[1], env, depth);
+                        if (splice_ptr.type == .list) {
+                            for (splice_ptr.list_val.items) |elem| {
                                 try result.append(allocator, try elem.clone(allocator));
                             }
                         }
-                        splice_result.deinit(allocator);
+                        splice_ptr.*.deinit(allocator);
                         continue;
                     }
                 }
