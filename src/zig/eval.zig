@@ -836,7 +836,7 @@ fn bindArityParams(allocator: Allocator, arity: *const Value.Arity, args: *const
 /// Call a built-in function registered with the VM.
 fn callBuiltinFn(allocator: Allocator, op: Value, args: *const list.List, env: *Env) anyerror!*Value {
     var op_mut = op;
-    const result = try op_mut.builtin_fn_val(&op_mut, args.*, env);
+    const result = try op_mut.builtin_fn_val(&op_mut, args, env);
     return try allocValue(allocator, result);
 }
 

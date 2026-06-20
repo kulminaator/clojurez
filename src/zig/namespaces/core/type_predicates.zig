@@ -14,56 +14,56 @@ const RatioMod = @import("../../ratio.zig");
 const Allocator = std.mem.Allocator;
 
 // Type predicates
-pub fn core_nil_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_nil_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     return Value.boolValue(args.items[0].type == .nil);
 }
 
-pub fn core_number_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_number_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const t = args.items[0].type;
     return Value.boolValue(t == .integer or t == .float or t == .bigint or t == .ratio or t == .decimal);
 }
 
-pub fn core_string_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_string_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     return Value.boolValue(args.items[0].type == .string);
 }
 
-pub fn core_regex_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_regex_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     return Value.boolValue(args.items[0].type == .regex);
 }
 
-pub fn core_list_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_list_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     return Value.boolValue(args.items[0].type == .list);
 }
 
-pub fn core_symbol_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_symbol_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     return Value.boolValue(args.items[0].type == .symbol);
 }
 
-pub fn core_keyword_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_keyword_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     return Value.boolValue(args.items[0].type == .keyword);
 }
 
-pub fn core_true_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_true_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     return Value.boolValue(args.items[0].type == .bool and args.items[0].bool_val);
 }
 
-pub fn core_false_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_false_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     return Value.boolValue(args.items[0].type == .bool and !args.items[0].bool_val);
@@ -71,7 +71,7 @@ pub fn core_false_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
 
 /// Returns true if x is a boolean (true or false).
 /// Clojure: (boolean? x)
-pub fn core_boolean_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_boolean_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     return Value.boolValue(args.items[0].type == .bool);
@@ -79,7 +79,7 @@ pub fn core_boolean_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
 
 /// Returns true if x is a character.
 /// Clojure: (char? x)
-pub fn core_char_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_char_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     return Value.boolValue(args.items[0].type == .character);
@@ -87,7 +87,7 @@ pub fn core_char_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
 
 /// Coerce to char. Accepts a char (identity) or an integer (converts to char).
 /// Clojure: (char x)
-pub fn core_char(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_char(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const v = args.items[0];
@@ -129,37 +129,37 @@ pub fn core_char(self: *Value, args: list.List, _: *Env) anyerror!Value {
     };
 }
 
-pub fn core_fn_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_fn_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     return Value.boolValue(args.items[0].type == .function or args.items[0].type == .builtin_fn);
 }
 
-pub fn core_vector_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_vector_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     return Value.boolValue(args.items[0].type == .vector);
 }
 
-pub fn core_map_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_map_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     return Value.boolValue(args.items[0].type == .map);
 }
 
-pub fn core_record_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_record_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     return Value.boolValue(args.items[0].type == .record);
 }
 
-pub fn core_queue_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_queue_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     return Value.boolValue(args.items[0].type == .queue);
 }
 
-pub fn core_coll_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_coll_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const coll = args.items[0];
@@ -169,7 +169,7 @@ pub fn core_coll_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
     });
 }
 
-pub fn core_sequential_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_sequential_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const coll = args.items[0];
@@ -177,7 +177,7 @@ pub fn core_sequential_q(self: *Value, args: list.List, _: *Env) anyerror!Value 
 }
 
 // Type constructor
-pub fn core_keyword(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_keyword(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len == 1) {
@@ -216,14 +216,14 @@ pub fn core_keyword(self: *Value, args: list.List, env_env: *Env) anyerror!Value
 // Numeric type predicates
 // ============================================================
 
-pub fn core_integer_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_integer_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const t = args.items[0].type;
     return Value.boolValue(t == .integer or t == .bigint);
 }
 
-pub fn core_int_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_int_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     // int? checks for fixed-precision integers (not bigint)
@@ -231,14 +231,14 @@ pub fn core_int_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
     return Value.boolValue(args.items[0].type == .integer);
 }
 
-pub fn core_double_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_double_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     // Our float type is f64 (double precision)
     return Value.boolValue(args.items[0].type == .float);
 }
 
-pub fn core_float_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_float_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     // Clojure float? checks for Double or Float.
@@ -246,7 +246,7 @@ pub fn core_float_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
     return Value.boolValue(args.items[0].type == .float);
 }
 
-pub fn core_nan_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_nan_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const v = args.items[0];
@@ -254,7 +254,7 @@ pub fn core_nan_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
     return Value.boolValue(std.math.isNan(v.float_val));
 }
 
-pub fn core_infinite_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_infinite_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const v = args.items[0];
@@ -307,7 +307,7 @@ fn coerceToInt(v: Value, allocator: Allocator) ?i64 {
     };
 }
 
-pub fn core_int(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_int(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 1) return error.ArityError;
@@ -316,7 +316,7 @@ pub fn core_int(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return Value.intValue(i);
 }
 
-pub fn core_float(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_float(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 1) return error.ArityError;
@@ -358,12 +358,12 @@ pub fn core_float(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     };
 }
 
-pub fn core_double(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_double(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     // Same as float since our float is f64 (double precision)
     return core_float(self, args, env_env);
 }
 
-pub fn core_bigint(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_bigint(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 1) return error.ArityError;
@@ -427,7 +427,7 @@ pub fn core_bigint(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
     };
 }
 
-pub fn core_bigdec(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_bigdec(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 1) return error.ArityError;
@@ -473,7 +473,7 @@ pub fn core_bigdec(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
     };
 }
 
-pub fn core_byte(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_byte(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     // Coerce to integer first, then truncate to i8 range (wrapping)
@@ -485,7 +485,7 @@ pub fn core_byte(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return Value.intValue(@as(i64, @intCast(signed_b8)));
 }
 
-pub fn core_short(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_short(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     // Coerce to integer first, then truncate to i16 range (wrapping)
@@ -500,7 +500,7 @@ pub fn core_short(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 /// Returns a keyword representing the runtime type of x.
 /// Clojure: (type x)
 /// E.g. (type "hello") => :string, (type 42) => :integer, (type nil) => :nil
-pub fn core_type(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_type(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const type_name = switch (args.items[0].type) {
@@ -535,7 +535,7 @@ pub fn core_type(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 
 /// Returns the metadata of x, or nil if it has none.
 /// For records, returns the record's meta map.
-pub fn core_meta(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_meta(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const allocator = env_env.allocator;
@@ -556,7 +556,7 @@ pub fn core_meta(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 /// Returns a copy of x with metadata m attached.
 /// For records, creates a new record with updated meta.
 /// For other types, returns x unchanged (metadata not supported).
-pub fn core_with_meta(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_with_meta(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const allocator = env_env.allocator;
@@ -654,7 +654,7 @@ test "type_predicates::nil_q: nil is nil" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.nilValue() });
-    var result = core_nil_q(testSelf(), args, &a) catch unreachable;
+    var result = core_nil_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -663,7 +663,7 @@ test "type_predicates::nil_q: int is not nil" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(1) });
-    var result = core_nil_q(testSelf(), args, &a) catch unreachable;
+    var result = core_nil_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
 }
@@ -672,7 +672,7 @@ test "type_predicates::number_q: integer is number" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(42) });
-    var result = core_number_q(testSelf(), args, &a) catch unreachable;
+    var result = core_number_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -681,7 +681,7 @@ test "type_predicates::number_q: float is number" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.floatValue(3.14) });
-    var result = core_number_q(testSelf(), args, &a) catch unreachable;
+    var result = core_number_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -690,7 +690,7 @@ test "type_predicates::number_q: nil is not number" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.nilValue() });
-    var result = core_number_q(testSelf(), args, &a) catch unreachable;
+    var result = core_number_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
 }
@@ -699,7 +699,7 @@ test "type_predicates::true_q: true is true" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.boolValue(true) });
-    var result = core_true_q(testSelf(), args, &a) catch unreachable;
+    var result = core_true_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -708,7 +708,7 @@ test "type_predicates::true_q: false is not true" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.boolValue(false) });
-    var result = core_true_q(testSelf(), args, &a) catch unreachable;
+    var result = core_true_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
 }
@@ -717,7 +717,7 @@ test "type_predicates::false_q: false is false" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.boolValue(false) });
-    var result = core_false_q(testSelf(), args, &a) catch unreachable;
+    var result = core_false_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -726,7 +726,7 @@ test "type_predicates::coll_q: list is coll" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.listValue(list.empty()) });
-    var result = core_coll_q(testSelf(), args, &a) catch unreachable;
+    var result = core_coll_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -735,7 +735,7 @@ test "type_predicates::coll_q: nil is not coll" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.nilValue() });
-    var result = core_coll_q(testSelf(), args, &a) catch unreachable;
+    var result = core_coll_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
 }
@@ -744,7 +744,7 @@ test "type_predicates::sequential_q: list is sequential" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.listValue(list.empty()) });
-    var result = core_sequential_q(testSelf(), args, &a) catch unreachable;
+    var result = core_sequential_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -753,7 +753,7 @@ test "type_predicates::sequential_q: set is not sequential" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.setValue(.empty) });
-    var result = core_sequential_q(testSelf(), args, &a) catch unreachable;
+    var result = core_sequential_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
 }
@@ -764,7 +764,7 @@ test "type_predicates::integer_q: int is integer" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(42) });
-    var result = core_integer_q(testSelf(), args, &a) catch unreachable;
+    var result = core_integer_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -773,7 +773,7 @@ test "type_predicates::integer_q: float is not integer" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.floatValue(1.5) });
-    var result = core_integer_q(testSelf(), args, &a) catch unreachable;
+    var result = core_integer_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
 }
@@ -782,7 +782,7 @@ test "type_predicates::int_q: int is int" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(42) });
-    var result = core_int_q(testSelf(), args, &a) catch unreachable;
+    var result = core_int_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -791,7 +791,7 @@ test "type_predicates::double_q: float is double" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.floatValue(1.5) });
-    var result = core_double_q(testSelf(), args, &a) catch unreachable;
+    var result = core_double_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -800,7 +800,7 @@ test "type_predicates::double_q: int is not double" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(42) });
-    var result = core_double_q(testSelf(), args, &a) catch unreachable;
+    var result = core_double_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
 }
@@ -809,7 +809,7 @@ test "type_predicates::float_q: float is float" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.floatValue(1.5) });
-    var result = core_float_q(testSelf(), args, &a) catch unreachable;
+    var result = core_float_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -818,7 +818,7 @@ test "type_predicates::nan_q: nan is nan" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.floatValue(std.math.nan(f64)) });
-    var result = core_nan_q(testSelf(), args, &a) catch unreachable;
+    var result = core_nan_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -827,7 +827,7 @@ test "type_predicates::nan_q: normal float is not nan" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.floatValue(1.5) });
-    var result = core_nan_q(testSelf(), args, &a) catch unreachable;
+    var result = core_nan_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
 }
@@ -836,7 +836,7 @@ test "type_predicates::nan_q: int is not nan" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(42) });
-    var result = core_nan_q(testSelf(), args, &a) catch unreachable;
+    var result = core_nan_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
 }
@@ -845,7 +845,7 @@ test "type_predicates::infinite_q: positive infinity" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.floatValue(std.math.inf(f64)) });
-    var result = core_infinite_q(testSelf(), args, &a) catch unreachable;
+    var result = core_infinite_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -854,7 +854,7 @@ test "type_predicates::infinite_q: negative infinity" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.floatValue(-std.math.inf(f64)) });
-    var result = core_infinite_q(testSelf(), args, &a) catch unreachable;
+    var result = core_infinite_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -863,7 +863,7 @@ test "type_predicates::infinite_q: normal float is not infinite" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.floatValue(1.5) });
-    var result = core_infinite_q(testSelf(), args, &a) catch unreachable;
+    var result = core_infinite_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
 }
@@ -874,7 +874,7 @@ test "type_predicates::core_int: float to int" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.floatValue(3.7) });
-    var result = core_int(testSelf(), args, &a) catch unreachable;
+    var result = core_int(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 3);
@@ -884,7 +884,7 @@ test "type_predicates::core_int: float to int negative" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.floatValue(-3.7) });
-    var result = core_int(testSelf(), args, &a) catch unreachable;
+    var result = core_int(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == -3);
@@ -894,7 +894,7 @@ test "type_predicates::core_float: int to float" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(42) });
-    var result = core_float(testSelf(), args, &a) catch unreachable;
+    var result = core_float(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .float);
     try std.testing.expect(result.float_val == 42.0);
@@ -904,7 +904,7 @@ test "type_predicates::core_byte: in range" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(127) });
-    var result = core_byte(testSelf(), args, &a) catch unreachable;
+    var result = core_byte(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.int_val == 127);
 }
@@ -913,7 +913,7 @@ test "type_predicates::core_byte: overflow wraps" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(256) });
-    var result = core_byte(testSelf(), args, &a) catch unreachable;
+    var result = core_byte(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.int_val == 0);
 }
@@ -922,7 +922,7 @@ test "type_predicates::core_byte: 128 wraps to -128" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(128) });
-    var result = core_byte(testSelf(), args, &a) catch unreachable;
+    var result = core_byte(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.int_val == -128);
 }
@@ -931,7 +931,7 @@ test "type_predicates::core_short: overflow wraps" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(32768) });
-    var result = core_short(testSelf(), args, &a) catch unreachable;
+    var result = core_short(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.int_val == -32768);
 }
@@ -940,7 +940,7 @@ test "type_predicates::core_bigint: int to bigint" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(42) });
-    var result = core_bigint(testSelf(), args, &a) catch unreachable;
+    var result = core_bigint(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .bigint);
 }
@@ -949,7 +949,7 @@ test "type_predicates::core_bigdec: int to bigdec" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(42) });
-    var result = core_bigdec(testSelf(), args, &a) catch unreachable;
+    var result = core_bigdec(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .decimal);
 }
@@ -958,14 +958,14 @@ test "type_predicates::core_int: arity error" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{});
-    try std.testing.expectError(error.ArityError, core_int(testSelf(), args, &a));
+    try std.testing.expectError(error.ArityError, core_int(testSelf(), &args, &a));
 }
 
 test "type_predicates::core_integer_q: arity error" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{});
-    try std.testing.expectError(error.ArityError, core_integer_q(testSelf(), args, &a));
+    try std.testing.expectError(error.ArityError, core_integer_q(testSelf(), &args, &a));
 }
 
 // Character type tests
@@ -974,7 +974,7 @@ test "type_predicates::char_q: char is char" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.charValue(65) });
-    var result = core_char_q(testSelf(), args, &a) catch unreachable;
+    var result = core_char_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -983,7 +983,7 @@ test "type_predicates::char_q: int is not char" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(65) });
-    var result = core_char_q(testSelf(), args, &a) catch unreachable;
+    var result = core_char_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
 }
@@ -994,7 +994,7 @@ test "type_predicates::char_q: string is not char" {
     var s = try Value.stringValue(std.heap.page_allocator, "A");
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
-    var result = core_char_q(testSelf(), args, &a) catch unreachable;
+    var result = core_char_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
 }
@@ -1003,7 +1003,7 @@ test "type_predicates::char: int to char" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(65) });
-    var result = core_char(testSelf(), args, &a) catch unreachable;
+    var result = core_char(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .character);
     try std.testing.expect(result.char_val == 65);
@@ -1013,7 +1013,7 @@ test "type_predicates::char: char identity" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.charValue(65) });
-    var result = core_char(testSelf(), args, &a) catch unreachable;
+    var result = core_char(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .character);
     try std.testing.expect(result.char_val == 65);
@@ -1023,7 +1023,7 @@ test "type_predicates::char: float to char" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.floatValue(97.9) });
-    var result = core_char(testSelf(), args, &a) catch unreachable;
+    var result = core_char(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .character);
     try std.testing.expect(result.char_val == 97);
@@ -1033,14 +1033,14 @@ test "type_predicates::char: negative int error" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(-1) });
-    try std.testing.expectError(error.NegativeCharacter, core_char(testSelf(), args, &a));
+    try std.testing.expectError(error.NegativeCharacter, core_char(testSelf(), &args, &a));
 }
 
 test "type_predicates::char: out of range error" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(0x110000) });
-    try std.testing.expectError(error.CharacterOutOfRange, core_char(testSelf(), args, &a));
+    try std.testing.expectError(error.CharacterOutOfRange, core_char(testSelf(), &args, &a));
 }
 
 test "type_predicates::char: string to char" {
@@ -1049,7 +1049,7 @@ test "type_predicates::char: string to char" {
     var s = try Value.stringValue(std.heap.page_allocator, "A");
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
-    const result = core_char(testSelf(), args, &a) catch unreachable;
+    const result = core_char(testSelf(), &args, &a) catch unreachable;
     try std.testing.expect(result.type == .character);
     try std.testing.expect(result.char_val == 'A');
 }
@@ -1058,21 +1058,21 @@ test "type_predicates::char: arity error" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{});
-    try std.testing.expectError(error.ArityError, core_char(testSelf(), args, &a));
+    try std.testing.expectError(error.ArityError, core_char(testSelf(), &args, &a));
 }
 
 test "type_predicates::char_q: arity error" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{});
-    try std.testing.expectError(error.ArityError, core_char_q(testSelf(), args, &a));
+    try std.testing.expectError(error.ArityError, core_char_q(testSelf(), &args, &a));
 }
 
 test "type_predicates::type: returns :string for string" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.stringValue(std.heap.page_allocator, "hello") catch unreachable });
-    var result = core_type(testSelf(), args, &a) catch unreachable;
+    var result = core_type(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .keyword);
     try std.testing.expect(std.mem.eql(u8, result.kw_val, "string"));
@@ -1082,7 +1082,7 @@ test "type_predicates::type: returns :integer for integer" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(42) });
-    var result = core_type(testSelf(), args, &a) catch unreachable;
+    var result = core_type(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .keyword);
     try std.testing.expect(std.mem.eql(u8, result.kw_val, "integer"));
@@ -1092,7 +1092,7 @@ test "type_predicates::type: returns :nil for nil" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.nilValue() });
-    var result = core_type(testSelf(), args, &a) catch unreachable;
+    var result = core_type(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .keyword);
     try std.testing.expect(std.mem.eql(u8, result.kw_val, "nil"));
@@ -1102,7 +1102,7 @@ test "type_predicates::type: returns :bool for true" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.boolValue(true) });
-    var result = core_type(testSelf(), args, &a) catch unreachable;
+    var result = core_type(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .keyword);
     try std.testing.expect(std.mem.eql(u8, result.kw_val, "bool"));
@@ -1116,7 +1116,7 @@ test "type_predicates::type: returns :map for map" {
     try m.append(alloc, .{ .key = Value.keywordValue(alloc, "a") catch unreachable, .value = Value.intValue(1) });
     const map_val = Value.mapValue(m);
     const args = makeArgs(&[_]Value{ map_val });
-    var result = core_type(testSelf(), args, &a) catch unreachable;
+    var result = core_type(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .keyword);
     try std.testing.expect(std.mem.eql(u8, result.kw_val, "map"));
@@ -1126,6 +1126,6 @@ test "type_predicates::type: arity error" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{});
-    try std.testing.expectError(error.ArityError, core_type(testSelf(), args, &a));
+    try std.testing.expectError(error.ArityError, core_type(testSelf(), &args, &a));
 }
 

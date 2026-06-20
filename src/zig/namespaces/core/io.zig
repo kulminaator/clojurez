@@ -15,7 +15,7 @@ pub var env_vars: std.process.Environ.Map = undefined;
 /// temp-dir: returns the OS temp directory as a string.
 /// Checks TMPDIR (Unix), TEMP and TMP (Windows) environment variables.
 /// Falls back to /tmp on Unix-like systems.
-pub fn core_temp_dir(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_temp_dir(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     _ = args;
 
@@ -98,7 +98,7 @@ fn fmtValue(allocator: std.mem.Allocator, val: Value) anyerror![]const u8 {
     return try val.fmt(allocator);
 }
 
-pub fn core_print(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_print(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const stdout = std.Io.File.stdout();
     var buf: [256]u8 = undefined;
@@ -116,7 +116,7 @@ pub fn core_print(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return Value.nilValue();
 }
 
-pub fn core_println(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_println(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const stdout = std.Io.File.stdout();
     var buf: [256]u8 = undefined;
@@ -136,7 +136,7 @@ pub fn core_println(self: *Value, args: list.List, env_env: *Env) anyerror!Value
     return Value.nilValue();
 }
 
-pub fn core_read_line(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_read_line(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     _ = args;
     const stdin = std.Io.File.stdin();
@@ -167,7 +167,7 @@ pub fn core_read_line(self: *Value, args: list.List, env_env: *Env) anyerror!Val
     return Value.stringValue(env_env.allocator, buf[0..end]);
 }
 
-pub fn core_slurp(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_slurp(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const filename = args.items[0];
@@ -184,7 +184,7 @@ pub fn core_slurp(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return Value.stringValue(env_env.allocator, content);
 }
 
-pub fn core_spit(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_spit(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 2) return error.ArityError;
     const filename = args.items[0];
@@ -217,7 +217,7 @@ pub fn core_spit(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return Value.nilValue();
 }
 
-pub fn core_nano_time(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_nano_time(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     _ = args;
     const io = std.Io.Threaded.global_single_threaded.io();
@@ -227,7 +227,7 @@ pub fn core_nano_time(self: *Value, args: list.List, _: *Env) anyerror!Value {
 
 /// read-string: parses a string into a single Clojure form (data structure).
 /// Returns the parsed form (list, vector, map, symbol, etc.).
-pub fn core_read_string(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_read_string(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const input = args.items[0];
@@ -241,7 +241,7 @@ pub fn core_read_string(self: *Value, args: list.List, env_env: *Env) anyerror!V
 }
 
 /// load-file: reads a file, parses and evaluates all forms, returns last result.
-pub fn core_load_file(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_load_file(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const filename = args.items[0];
@@ -281,7 +281,7 @@ pub fn core_load_file(self: *Value, args: list.List, env_env: *Env) anyerror!Val
 }
 
 /// eval: evaluates a single Clojure form (data structure) in the current environment.
-pub fn core_eval(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_eval(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const form = args.items[0];

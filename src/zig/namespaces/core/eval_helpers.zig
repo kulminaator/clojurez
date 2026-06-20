@@ -153,7 +153,7 @@ pub fn callBuiltin(allocator: Allocator, f: Value, args_list: list.List, env: *V
         },
         .builtin_fn => {
             var f_mut = f;
-            return f_mut.builtin_fn_val(&f_mut, args_list, env);
+            return f_mut.builtin_fn_val(&f_mut, &args_list, env);
         },
         .keyword => {
             // Keyword as function: looks up the keyword in a map
@@ -450,7 +450,7 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
 
 /// macroexpand-1: expand a macro call once, or return the form unchanged.
 /// Takes a single argument: the form to expand.
-pub fn core_macroexpand_1(self: *Value, args: list.List, env_env: *Value.Env) anyerror!Value {
+pub fn core_macroexpand_1(self: *const Value, args: *const list.List, env_env: *Value.Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const form = args.items[0];
@@ -496,7 +496,7 @@ pub fn core_macroexpand_1(self: *Value, args: list.List, env_env: *Value.Env) an
 
 /// macroexpand: repeatedly expand macros until no more expansion.
 /// Takes a single argument: the form to expand.
-pub fn core_macroexpand(self: *Value, args: list.List, env_env: *Value.Env) anyerror!Value {
+pub fn core_macroexpand(self: *const Value, args: *const list.List, env_env: *Value.Env) anyerror!Value {
     if (args.items.len != 1) return error.ArityError;
 
     var current = try args.items[0].clone(env_env.allocator);
@@ -506,7 +506,7 @@ pub fn core_macroexpand(self: *Value, args: list.List, env_env: *Value.Env) anye
         var call_args: list.List = .empty;
         errdefer call_args.deinit(env_env.allocator);
         try call_args.append(env_env.allocator, try current.clone(env_env.allocator));
-        const expanded = try core_macroexpand_1(self, call_args, env_env);
+        const expanded = try core_macroexpand_1(self, &call_args, env_env);
         current.deinit(env_env.allocator);
 
         // Check if anything changed by comparing

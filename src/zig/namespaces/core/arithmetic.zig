@@ -1127,7 +1127,7 @@ fn quotValues(allocator: Allocator, a: Value, b: Value) anyerror!Value {
 // Public built-in functions
 // ============================================================
 
-pub fn core_plus(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_plus(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len == 0) return Value.intValue(0);
@@ -1142,7 +1142,7 @@ pub fn core_plus(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return result;
 }
 
-pub fn core_minus(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_minus(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len == 0) return error.ArityError;
@@ -1161,7 +1161,7 @@ pub fn core_minus(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return result;
 }
 
-pub fn core_mult(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_mult(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len == 0) return Value.intValue(1);
@@ -1176,7 +1176,7 @@ pub fn core_mult(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return result;
 }
 
-pub fn core_div(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_div(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len == 0) return error.ArityError;
@@ -1195,21 +1195,21 @@ pub fn core_div(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return result;
 }
 
-pub fn core_rem(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_rem(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 2) return error.ArityError;
     return remValues(allocator, args.items[0], args.items[1]);
 }
 
-pub fn core_mod(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_mod(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 2) return error.ArityError;
     return modValues(allocator, args.items[0], args.items[1]);
 }
 
-pub fn core_quot(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_quot(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 2) return error.ArityError;
@@ -1219,7 +1219,7 @@ pub fn core_quot(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 // rationalize - returns the rational value of num
 // For integers/bigints/ratios: returns the value as-is
 // For floats/decimals: converts to a ratio (unscaled / 10^scale)
-pub fn core_rationalize(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_rationalize(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 1) return error.ArityError;
@@ -1280,7 +1280,7 @@ pub fn core_rationalize(self: *Value, args: list.List, env_env: *Env) anyerror!V
 
 /// Returns the numerator of a ratio, or the value itself for integers/bigints.
 /// Clojure: (numerator x)
-pub fn core_numerator(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_numerator(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 1) return error.ArityError;
@@ -1301,7 +1301,7 @@ pub fn core_numerator(self: *Value, args: list.List, env_env: *Env) anyerror!Val
 
 /// Returns the denominator of a ratio, or 1 for integers/bigints.
 /// Clojure: (denominator x)
-pub fn core_denominator(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_denominator(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 1) return error.ArityError;
@@ -1349,7 +1349,7 @@ test "arithmetic::mod: positive values" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(7), Value.intValue(3) });
-    var result = core_mod(testSelf(), args, &a) catch unreachable;
+    var result = core_mod(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 1);
@@ -1359,7 +1359,7 @@ test "arithmetic::mod: neg dividend" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(-7), Value.intValue(3) });
-    var result = core_mod(testSelf(), args, &a) catch unreachable;
+    var result = core_mod(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 2);
@@ -1369,7 +1369,7 @@ test "arithmetic::mod: neg divisor" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(7), Value.intValue(-3) });
-    var result = core_mod(testSelf(), args, &a) catch unreachable;
+    var result = core_mod(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == -2);
@@ -1379,7 +1379,7 @@ test "arithmetic::mod: both neg" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(-7), Value.intValue(-3) });
-    var result = core_mod(testSelf(), args, &a) catch unreachable;
+    var result = core_mod(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == -1);
@@ -1389,7 +1389,7 @@ test "arithmetic::rem: neg dividend" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(-7), Value.intValue(3) });
-    var result = core_rem(testSelf(), args, &a) catch unreachable;
+    var result = core_rem(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == -1);
@@ -1399,7 +1399,7 @@ test "arithmetic::quot: positive" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(7), Value.intValue(3) });
-    var result = core_quot(testSelf(), args, &a) catch unreachable;
+    var result = core_quot(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 2);
@@ -1409,7 +1409,7 @@ test "arithmetic::quot: neg dividend" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(-7), Value.intValue(3) });
-    var result = core_quot(testSelf(), args, &a) catch unreachable;
+    var result = core_quot(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == -2);
@@ -1419,7 +1419,7 @@ test "arithmetic::rationalize: int" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(5) });
-    var result = core_rationalize(testSelf(), args, &a) catch unreachable;
+    var result = core_rationalize(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 5);
@@ -1429,7 +1429,7 @@ test "arithmetic::rationalize: 1.0 to int" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.floatValue(1.0) });
-    var result = core_rationalize(testSelf(), args, &a) catch unreachable;
+    var result = core_rationalize(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 1);
@@ -1439,7 +1439,7 @@ test "arithmetic::rationalize: 1.5 to ratio" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.floatValue(1.5) });
-    var result = core_rationalize(testSelf(), args, &a) catch unreachable;
+    var result = core_rationalize(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .ratio);
 }
@@ -1448,7 +1448,7 @@ test "regression: minus single arg negation" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(7) });
-    var result = core_minus(testSelf(), args, &a) catch unreachable;
+    var result = core_minus(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == -7);
@@ -1458,7 +1458,7 @@ test "regression: minus single arg negation of negative" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(-5) });
-    var result = core_minus(testSelf(), args, &a) catch unreachable;
+    var result = core_minus(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 5);
@@ -1468,7 +1468,7 @@ test "regression: minus single arg negation of float" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.floatValue(3.14) });
-    var result = core_minus(testSelf(), args, &a) catch unreachable;
+    var result = core_minus(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .float);
     try std.testing.expect(std.math.approxEqAbs(f64, result.float_val, -3.14, 0.001));
@@ -1478,14 +1478,14 @@ test "regression: minus zero args arity error" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{});
-    try std.testing.expectError(error.ArityError, core_minus(testSelf(), args, &a));
+    try std.testing.expectError(error.ArityError, core_minus(testSelf(), &args, &a));
 }
 
 test "regression: div single arg reciprocal" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(2) });
-    var result = core_div(testSelf(), args, &a) catch unreachable;
+    var result = core_div(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .ratio);
 }
@@ -1494,7 +1494,7 @@ test "regression: div single arg reciprocal of 1" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(1) });
-    var result = core_div(testSelf(), args, &a) catch unreachable;
+    var result = core_div(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 1);
@@ -1504,7 +1504,7 @@ test "regression: div single arg reciprocal of negative" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(-5) });
-    var result = core_div(testSelf(), args, &a) catch unreachable;
+    var result = core_div(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .ratio);
 }
@@ -1513,7 +1513,7 @@ test "regression: div single arg reciprocal of float" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.floatValue(2.0) });
-    var result = core_div(testSelf(), args, &a) catch unreachable;
+    var result = core_div(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .float);
     try std.testing.expect(std.math.approxEqAbs(f64, result.float_val, 0.5, 0.001));
@@ -1523,5 +1523,5 @@ test "regression: div zero args arity error" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{});
-    try std.testing.expectError(error.ArityError, core_div(testSelf(), args, &a));
+    try std.testing.expectError(error.ArityError, core_div(testSelf(), &args, &a));
 }

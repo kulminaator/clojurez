@@ -5,7 +5,7 @@ const list = @import("../../list.zig");
 const Env = Value.Env;
 const test_utils = @import("test_utils.zig");
 
-pub fn core_set(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_set(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const coll = args.items[0];
@@ -41,13 +41,13 @@ pub fn core_set(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return Value.setValue(new_set);
 }
 
-pub fn core_set_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_set_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     return Value.boolValue(args.items[0].type == .set);
 }
 
-pub fn core_disj(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_disj(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 2) return error.ArityError;
     const set_val = args.items[0];
@@ -92,7 +92,7 @@ test "sets::set_q: set is set" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.setValue(.empty) });
-    var result = core_set_q(testSelf(), args, &a) catch unreachable;
+    var result = core_set_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -101,7 +101,7 @@ test "sets::set_q: list is not set" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.listValue(list.empty()) });
-    var result = core_set_q(testSelf(), args, &a) catch unreachable;
+    var result = core_set_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
 }
@@ -115,7 +115,7 @@ test "sets::set: from list" {
     _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
     const lv = Value.listValue(l);
     const args = makeArgs(&[_]Value{ lv });
-    var result = core_set(testSelf(), args, &a) catch unreachable;
+    var result = core_set(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .set);
     // Duplicates removed: {1, 2}
@@ -132,7 +132,7 @@ test "sets::disj: removes element" {
     var sv = Value.setValue(s);
     defer sv.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ sv, Value.intValue(2) });
-    var result = core_disj(testSelf(), args, &a) catch unreachable;
+    var result = core_disj(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .set);
     try std.testing.expect(result.set_val.items.len == 2);

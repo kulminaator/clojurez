@@ -84,7 +84,7 @@ pub fn forceToConcreteList(allocator: Allocator, val: Value) anyerror!list.List 
     };
 }
 
-pub fn core_map(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_map(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 2) return error.ArityError;
@@ -139,7 +139,7 @@ pub fn core_map(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return Value.lazySeqValue(thunk);
 }
 
-pub fn core_mapcat(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_mapcat(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len < 2) return error.ArityError;
@@ -205,7 +205,7 @@ pub fn core_mapcat(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
     return Value.listValue(result);
 }
 
-pub fn core_reduce(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_reduce(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 2 or args.items.len > 3) return error.ArityError;
 
@@ -355,14 +355,14 @@ pub fn core_reduce(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
 }
 
 // reduced - wrap x for early reduction termination
-pub fn core_reduced(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_reduced(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     return Value.reducedValue(env_env.allocator, args.items[0]);
 }
 
 // reduced? - check if value is a reduced wrapper
-pub fn core_reduced_q(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_reduced_q(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     _ = env_env;
     if (args.items.len != 1) return error.ArityError;
@@ -370,7 +370,7 @@ pub fn core_reduced_q(self: *Value, args: list.List, env_env: *Env) anyerror!Val
 }
 
 // ensure-reduced - if already reduced, return as-is; else wrap in reduced
-pub fn core_ensure_reduced(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_ensure_reduced(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     if (args.items[0].isReduced()) {
@@ -380,13 +380,13 @@ pub fn core_ensure_reduced(self: *Value, args: list.List, env_env: *Env) anyerro
 }
 
 // unreduced - unwrap reduced value if reduced, else return as-is
-pub fn core_unreduced(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_unreduced(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     return Value.unreducedValue(env_env.allocator, args.items[0]);
 }
 
-pub fn core_flatten(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_flatten(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     return doFlatten(env_env.allocator, args.items[0], env_env);
@@ -430,7 +430,7 @@ fn doFlatten(allocator: Allocator, val: Value, env: *Env) anyerror!Value {
     return Value.listValue(result);
 }
 
-pub fn core_next(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_next(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     if (args.items.len != 1) return error.ArityError;
     var rest = try sequences_mod.core_rest(self, args, env_env);
     if (rest.type == .list and rest.list_val.items.len == 0) {
@@ -440,7 +440,7 @@ pub fn core_next(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return rest;
 }
 
-pub fn core_nthnext(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_nthnext(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     if (args.items.len != 2) return error.ArityError;
     const n = try toInt(args.items[0]);
     if (n <= 0) return try sequences_mod.core_seq(self, args, env_env);
@@ -465,7 +465,7 @@ pub fn core_nthnext(self: *Value, args: list.List, env_env: *Env) anyerror!Value
     return Value.listValue(result);
 }
 
-pub fn core_filter(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_filter(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const f = args.items[0];
@@ -494,7 +494,7 @@ pub fn core_filter(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
     return Value.listValue(result);
 }
 
-pub fn core_remove(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_remove(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const f = args.items[0];
@@ -523,7 +523,7 @@ pub fn core_remove(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
     return Value.listValue(result);
 }
 
-pub fn core_every_q(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_every_q(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const f = args.items[0];
@@ -548,7 +548,7 @@ pub fn core_every_q(self: *Value, args: list.List, env_env: *Env) anyerror!Value
     return Value.boolValue(true);
 }
 
-pub fn core_some(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_some(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const f = args.items[0];
@@ -573,7 +573,7 @@ pub fn core_some(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return Value.nilValue();
 }
 
-pub fn core_distinct_q(_: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_distinct_q(_: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     if (args.items.len != 1) return error.ArityError;
     const coll = args.items[0];
 
@@ -593,7 +593,7 @@ pub fn core_distinct_q(_: *Value, args: list.List, _: *Env) anyerror!Value {
     return Value.boolValue(true);
 }
 
-pub fn core_drop(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_drop(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const allocator = env_env.allocator;
@@ -745,7 +745,7 @@ fn dropLazySeq(allocator: Allocator, n: i64, coll: Value, env: *Env) anyerror!Va
 }
 
 // doall* - realizes a lazy sequence and returns the realized list
-pub fn core_doall_star(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_doall_star(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const allocator = env_env.allocator;
@@ -987,7 +987,7 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
 
 // iterate: repeatedly apply f to init, lazily
 // Mirrors Clojure: returns a lazy (infinite!) sequence of x, (f x), (f (f x)) etc.
-pub fn core_iterate(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_iterate(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const allocator = env_env.allocator;
@@ -1040,7 +1040,7 @@ pub fn core_iterate(self: *Value, args: list.List, env_env: *Env) anyerror!Value
 // cycle: returns a lazy (infinite) sequence of repetitions of the items in coll
 // Mirrors Clojure: (lazy-seq (when-let [s (seq coll)] (concat s (cycle coll))))
 // Uses cons-based approach to avoid concat's lazy-seq embedding issue
-pub fn core_cycle(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_cycle(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const allocator = env_env.allocator;
@@ -1165,7 +1165,7 @@ test "seq_ops::flatten: nested list" {
     _ = outer.append(std.heap.page_allocator, Value.intValue(4)) catch unreachable;
     const lv = Value.listValue(outer);
     const args = makeArgs(&[_]Value{ lv });
-    var result = core_flatten(testSelf(), args, &a) catch unreachable;
+    var result = core_flatten(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .list);
     try std.testing.expect(result.list_val.items.len == 4);
@@ -1184,7 +1184,7 @@ test "seq_ops::distinct_q: all distinct" {
     _ = l.append(std.heap.page_allocator, Value.intValue(3)) catch unreachable;
     const lv = Value.listValue(l);
     const args = makeArgs(&[_]Value{ lv });
-    var result = core_distinct_q(testSelf(), args, &a) catch unreachable;
+    var result = core_distinct_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -1198,7 +1198,7 @@ test "seq_ops::distinct_q: has duplicates" {
     _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
     const lv = Value.listValue(l);
     const args = makeArgs(&[_]Value{ lv });
-    var result = core_distinct_q(testSelf(), args, &a) catch unreachable;
+    var result = core_distinct_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
 }
@@ -1213,7 +1213,7 @@ test "seq_ops::drop: list" {
     _ = l.append(std.heap.page_allocator, Value.intValue(4)) catch unreachable;
     const lv = Value.listValue(l);
     const args = makeArgs(&[_]Value{ Value.intValue(2), lv });
-    var result = core_drop(testSelf(), args, &a) catch unreachable;
+    var result = core_drop(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .list);
     try std.testing.expect(result.list_val.items.len == 2);
@@ -1227,7 +1227,7 @@ test "seq_ops::drop: more than length returns empty" {
     _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
     const lv = Value.listValue(l);
     const args = makeArgs(&[_]Value{ Value.intValue(5), lv });
-    var result = core_drop(testSelf(), args, &a) catch unreachable;
+    var result = core_drop(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .list);
     try std.testing.expect(result.list_val.items.len == 0);
@@ -1242,7 +1242,7 @@ test "seq_ops::next: list" {
     _ = l.append(std.heap.page_allocator, Value.intValue(3)) catch unreachable;
     const lv = Value.listValue(l);
     const args = makeArgs(&[_]Value{ lv });
-    var result = core_next(testSelf(), args, &a) catch unreachable;
+    var result = core_next(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .list);
     try std.testing.expect(result.list_val.items.len == 2);
@@ -1256,7 +1256,7 @@ test "seq_ops::next: single element returns nil" {
     _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
     const lv = Value.listValue(l);
     const args = makeArgs(&[_]Value{ lv });
-    var result = core_next(testSelf(), args, &a) catch unreachable;
+    var result = core_next(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .nil);
 }
@@ -1271,7 +1271,7 @@ test "seq_ops::nthnext: list" {
     _ = l.append(std.heap.page_allocator, Value.intValue(4)) catch unreachable;
     const lv = Value.listValue(l);
     const args = makeArgs(&[_]Value{ Value.intValue(2), lv });
-    var result = core_nthnext(testSelf(), args, &a) catch unreachable;
+    var result = core_nthnext(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .list);
     try std.testing.expect(result.list_val.items.len == 2);
@@ -1285,7 +1285,7 @@ test "seq_ops::nthnext: out of range returns nil" {
     _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
     const lv = Value.listValue(l);
     const args = makeArgs(&[_]Value{ Value.intValue(5), lv });
-    var result = core_nthnext(testSelf(), args, &a) catch unreachable;
+    var result = core_nthnext(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .nil);
 }
@@ -1295,7 +1295,7 @@ test "seq_ops::reduced: wraps value" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(42) });
-    var result = core_reduced(testSelf(), args, &a) catch unreachable;
+    var result = core_reduced(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .reduced);
     try std.testing.expect(result.reduced_val.?.int_val == 42);
@@ -1307,7 +1307,7 @@ test "seq_ops::reduced_q: true for reduced" {
     var reduced_val = Value.reducedValue(std.heap.page_allocator, Value.intValue(42)) catch unreachable;
     defer reduced_val.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ reduced_val });
-    var result = core_reduced_q(testSelf(), args, &a) catch unreachable;
+    var result = core_reduced_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .bool);
     try std.testing.expect(result.bool_val == true);
@@ -1317,7 +1317,7 @@ test "seq_ops::reduced_q: false for non-reduced" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(42) });
-    var result = core_reduced_q(testSelf(), args, &a) catch unreachable;
+    var result = core_reduced_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .bool);
     try std.testing.expect(result.bool_val == false);
@@ -1327,7 +1327,7 @@ test "seq_ops::ensure_reduced: wraps non-reduced" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(42) });
-    var result = core_ensure_reduced(testSelf(), args, &a) catch unreachable;
+    var result = core_ensure_reduced(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .reduced);
 }
@@ -1338,7 +1338,7 @@ test "seq_ops::ensure_reduced: passes through reduced" {
     var reduced_val = Value.reducedValue(std.heap.page_allocator, Value.intValue(42)) catch unreachable;
     defer reduced_val.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ reduced_val });
-    var result = core_ensure_reduced(testSelf(), args, &a) catch unreachable;
+    var result = core_ensure_reduced(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .reduced);
 }
@@ -1349,7 +1349,7 @@ test "seq_ops::unreduced: unwraps reduced" {
     var reduced_val = Value.reducedValue(std.heap.page_allocator, Value.intValue(42)) catch unreachable;
     defer reduced_val.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ reduced_val });
-    var result = core_unreduced(testSelf(), args, &a) catch unreachable;
+    var result = core_unreduced(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 42);
@@ -1359,7 +1359,7 @@ test "seq_ops::unreduced: passes through non-reduced" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(42) });
-    var result = core_unreduced(testSelf(), args, &a) catch unreachable;
+    var result = core_unreduced(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 42);

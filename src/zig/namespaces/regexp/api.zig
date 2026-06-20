@@ -14,7 +14,7 @@ const Allocator = std.mem.Allocator;
 // Public API: re-pattern
 // ============================================================
 
-pub fn core_re_pattern(self: *Value, args: list.List, env: *Env) anyerror!Value {
+pub fn core_re_pattern(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const arg = args.items[0];
@@ -51,7 +51,7 @@ pub fn core_re_pattern(self: *Value, args: list.List, env: *Env) anyerror!Value 
 // Public API: re-matches (full string match)
 // ============================================================
 
-pub fn core_re_matches(self: *Value, args: list.List, env: *Env) anyerror!Value {
+pub fn core_re_matches(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const pattern = args.items[0];
@@ -72,7 +72,7 @@ pub fn core_re_matches(self: *Value, args: list.List, env: *Env) anyerror!Value 
 // Public API: re-find (find first match)
 // ============================================================
 
-pub fn core_re_find(self: *Value, args: list.List, env: *Env) anyerror!Value {
+pub fn core_re_find(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const pattern = args.items[0];
@@ -102,7 +102,7 @@ pub fn core_re_find(self: *Value, args: list.List, env: *Env) anyerror!Value {
 // Public API: re-seq (sequence of all matches)
 // ============================================================
 
-pub fn core_re_seq(self: *Value, args: list.List, env: *Env) anyerror!Value {
+pub fn core_re_seq(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const pattern = args.items[0];
@@ -149,7 +149,7 @@ pub fn core_re_seq(self: *Value, args: list.List, env: *Env) anyerror!Value {
 // Public API: re-split
 // ============================================================
 
-pub fn core_re_split(self: *Value, args: list.List, env: *Env) anyerror!Value {
+pub fn core_re_split(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const pattern = args.items[0];
@@ -197,7 +197,7 @@ pub fn core_re_split(self: *Value, args: list.List, env: *Env) anyerror!Value {
 // Public API: re-replace (first match only)
 // ============================================================
 
-pub fn core_re_replace(self: *Value, args: list.List, env: *Env) anyerror!Value {
+pub fn core_re_replace(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 3) return error.ArityError;
     const pattern = args.items[0];
@@ -251,7 +251,7 @@ pub fn core_re_replace(self: *Value, args: list.List, env: *Env) anyerror!Value 
 // Public API: re-replace-all
 // ============================================================
 
-pub fn core_re_replace_all(self: *Value, args: list.List, env: *Env) anyerror!Value {
+pub fn core_re_replace_all(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 3) return error.ArityError;
     const pattern = args.items[0];

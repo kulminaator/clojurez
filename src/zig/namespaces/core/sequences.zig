@@ -138,7 +138,7 @@ fn evalLazySeqThunk(allocator: Allocator, lazy: Value) anyerror!Value {
     return Value.nilValue();
 }
 
-pub fn core_count(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_count(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const allocator = env_env.allocator;
@@ -206,7 +206,7 @@ fn countConsSeq(allocator: Allocator, val: Value) anyerror!Value {
     return Value.intValue(count);
 }
 
-pub fn core_first(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_first(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const allocator = env_env.allocator;
@@ -242,7 +242,7 @@ pub fn core_first(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     }
 }
 
-pub fn core_rest(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_rest(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const allocator = env_env.allocator;
@@ -532,7 +532,7 @@ fn getRestValue(allocator: Allocator, val: Value) anyerror!Value {
     }
 }
 
-pub fn core_nth(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_nth(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 2) return error.ArityError;
     const allocator = env_env.allocator;
@@ -706,7 +706,7 @@ fn getRest(allocator: Allocator, val: Value) anyerror!Value {
 /// subvec - returns a persistent vector of the items in vector from
 /// start (inclusive) to end (exclusive). If end is not supplied,
 /// defaults to (count vector).
-pub fn core_subvec(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_subvec(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 2 or args.items.len > 3) return error.ArityError;
     const allocator = env_env.allocator;
@@ -729,7 +729,7 @@ pub fn core_subvec(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
     return Value.vectorValue(result);
 }
 
-pub fn core_take(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_take(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const allocator = env_env.allocator;
@@ -842,7 +842,7 @@ pub fn core_take(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return Value.lazySeqValue(thunk);
 }
 
-pub fn core_concat(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_concat(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     var result: list.List = .empty;
@@ -879,7 +879,7 @@ pub fn core_concat(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
     return Value.listValue(result);
 }
 
-pub fn core_list(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_list(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     var new_list: list.List = .empty;
     errdefer new_list.deinit(env_env.allocator);
@@ -889,7 +889,7 @@ pub fn core_list(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return Value.listValue(new_list);
 }
 
-pub fn core_vec(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_vec(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     var new_vec: vec.Vector = .empty;
     errdefer new_vec.deinit(env_env.allocator);
@@ -921,7 +921,7 @@ pub fn core_vec(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 // Global counter for gensym
 var gensym_counter: usize = 0;
 
-pub fn core_gensym(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_gensym(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len > 1) return error.ArityError;
@@ -943,7 +943,7 @@ pub fn core_gensym(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
     return try Value.symValue(allocator, name);
 }
 
-pub fn core_seq(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_seq(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const allocator = env_env.allocator;
@@ -1019,7 +1019,7 @@ pub fn core_seq(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 // Implemented as a built-in to avoid the lazy-seq recursion that causes
 // stack overflow with large ranges (range's Clojure impl uses cons->concat
 // which forces lazy-seqs, creating deep recursion).
-pub fn core_range(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_range(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
 
@@ -1071,7 +1071,7 @@ pub fn core_range(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 // This is a built-in because the Clojure (concat (list x) xs) version
 // creates a concrete list (x <lazy-seq>) which breaks rest/seq semantics.
 // In Clojure, (rest (cons x lazy-seq)) returns the lazy-seq directly.
-pub fn core_cons(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_cons(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const allocator = env_env.allocator;
@@ -1138,7 +1138,7 @@ test "sequences::count: list" {
     _ = l.append(std.heap.page_allocator, Value.intValue(3)) catch unreachable;
     const lv = Value.listValue(l);
     const args = makeArgs(&[_]Value{ lv });
-    var result = core_count(testSelf(), args, &a) catch unreachable;
+    var result = core_count(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.int_val == 3);
 }
@@ -1151,7 +1151,7 @@ test "sequences::count: vector" {
     _ = v.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
     const vv = Value.vectorValue(v);
     const args = makeArgs(&[_]Value{ vv });
-    var result = core_count(testSelf(), args, &a) catch unreachable;
+    var result = core_count(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.int_val == 2);
 }
@@ -1162,7 +1162,7 @@ test "sequences::count: string (code points)" {
     var s = try Value.stringValue(std.heap.page_allocator, "hello");
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
-    var result = core_count(testSelf(), args, &a) catch unreachable;
+    var result = core_count(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.int_val == 5);
 }
@@ -1175,7 +1175,7 @@ test "sequences::first: list" {
     _ = l.append(std.heap.page_allocator, Value.intValue(99)) catch unreachable;
     const lv = Value.listValue(l);
     const args = makeArgs(&[_]Value{ lv });
-    var result = core_first(testSelf(), args, &a) catch unreachable;
+    var result = core_first(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.int_val == 42);
 }
@@ -1184,7 +1184,7 @@ test "sequences::first: empty list returns nil" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.listValue(list.empty()) });
-    var result = core_first(testSelf(), args, &a) catch unreachable;
+    var result = core_first(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .nil);
 }
@@ -1198,7 +1198,7 @@ test "sequences::rest: list" {
     _ = l.append(std.heap.page_allocator, Value.intValue(3)) catch unreachable;
     const lv = Value.listValue(l);
     const args = makeArgs(&[_]Value{ lv });
-    var result = core_rest(testSelf(), args, &a) catch unreachable;
+    var result = core_rest(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .list);
     try std.testing.expect(result.list_val.items.len == 2);
@@ -1214,7 +1214,7 @@ test "sequences::nth: list" {
     _ = l.append(std.heap.page_allocator, Value.intValue(30)) catch unreachable;
     const lv = Value.listValue(l);
     const args = makeArgs(&[_]Value{ lv, Value.intValue(1) });
-    var result = core_nth(testSelf(), args, &a) catch unreachable;
+    var result = core_nth(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.int_val == 20);
 }
@@ -1226,7 +1226,7 @@ test "sequences::nth: out of range returns nil" {
     _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
     const lv = Value.listValue(l);
     const args = makeArgs(&[_]Value{ lv, Value.intValue(5) });
-    var result = core_nth(testSelf(), args, &a) catch unreachable;
+    var result = core_nth(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .nil);
 }
@@ -1235,7 +1235,7 @@ test "sequences::list: creates list from args" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(1), Value.intValue(2), Value.intValue(3) });
-    var result = core_list(testSelf(), args, &a) catch unreachable;
+    var result = core_list(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .list);
     try std.testing.expect(result.list_val.items.len == 3);
@@ -1248,7 +1248,7 @@ test "sequences::seq: non-empty list returns list" {
     _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
     const lv = Value.listValue(l);
     const args = makeArgs(&[_]Value{ lv });
-    var result = core_seq(testSelf(), args, &a) catch unreachable;
+    var result = core_seq(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .list);
 }
@@ -1257,7 +1257,7 @@ test "sequences::seq: empty list returns nil" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.listValue(list.empty()) });
-    var result = core_seq(testSelf(), args, &a) catch unreachable;
+    var result = core_seq(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .nil);
 }
@@ -1272,7 +1272,7 @@ test "sequences::concat: two lists" {
     const lv1 = Value.listValue(l1);
     const lv2 = Value.listValue(l2);
     const args = makeArgs(&[_]Value{ lv1, lv2 });
-    var result = core_concat(testSelf(), args, &a) catch unreachable;
+    var result = core_concat(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .list);
     try std.testing.expect(result.list_val.items.len == 2);
@@ -1285,7 +1285,7 @@ test "sequences::concat: nil treated as empty" {
     _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
     const lv = Value.listValue(l);
     const args = makeArgs(&[_]Value{ lv, Value.nilValue() });
-    var result = core_concat(testSelf(), args, &a) catch unreachable;
+    var result = core_concat(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.list_val.items.len == 1);
 }

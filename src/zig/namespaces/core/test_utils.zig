@@ -20,7 +20,7 @@ pub fn makeArgs(args: []const Value) list.List {
 }
 
 /// A nil Value used as `self` for builtin function tests.
-pub fn testSelf() *Value {
+pub fn testSelf() *const Value {
     _testSelf = Value.nilValue();
     return &_testSelf;
 }

@@ -73,7 +73,7 @@ pub fn getStackStats() StackStats {
 ///   :vm-baseline   — stack pointer after clojure core init
 ///   :current       — current stack pointer
 ///   :usage         — app-baseline - current (bytes of stack consumed)
-pub fn core_stack_stats(self: *Value, args: list.List, env: *Env) anyerror!Value {
+pub fn core_stack_stats(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 0) return error.ArityError;
 

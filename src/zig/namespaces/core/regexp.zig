@@ -14,7 +14,7 @@ const Allocator = std.mem.Allocator;
 // re-pattern: Create a regex pattern from a string
 // ============================================================
 
-pub fn core_re_pattern(self: *Value, args: list.List, env: *Env) anyerror!Value {
+pub fn core_re_pattern(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const arg = args.items[0];
@@ -36,7 +36,7 @@ pub fn core_re_pattern(self: *Value, args: list.List, env: *Env) anyerror!Value 
 // re-matches: Full string match (returns match string or nil)
 // ============================================================
 
-pub fn core_re_matches(self: *Value, args: list.List, env: *Env) anyerror!Value {
+pub fn core_re_matches(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const pattern = args.items[0];
@@ -56,7 +56,7 @@ pub fn core_re_matches(self: *Value, args: list.List, env: *Env) anyerror!Value 
 // re-find: Find first match in string
 // ============================================================
 
-pub fn core_re_find(self: *Value, args: list.List, env: *Env) anyerror!Value {
+pub fn core_re_find(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const pattern = args.items[0];
@@ -85,7 +85,7 @@ pub fn core_re_find(self: *Value, args: list.List, env: *Env) anyerror!Value {
 // re-seq: All matches as a vector
 // ============================================================
 
-pub fn core_re_seq(self: *Value, args: list.List, env: *Env) anyerror!Value {
+pub fn core_re_seq(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const pattern = args.items[0];
@@ -130,7 +130,7 @@ pub fn core_re_seq(self: *Value, args: list.List, env: *Env) anyerror!Value {
 // Returns [match-string, start-index, end-index] or nil
 // ============================================================
 
-pub fn core_re_find_with_index(self: *Value, args: list.List, env: *Env) anyerror!Value {
+pub fn core_re_find_with_index(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const pattern = args.items[0];
@@ -166,7 +166,7 @@ pub fn core_re_find_with_index(self: *Value, args: list.List, env: *Env) anyerro
 // Returns vector of [match-string, start-index, end-index]
 // ============================================================
 
-pub fn core_re_find_all(self: *Value, args: list.List, env: *Env) anyerror!Value {
+pub fn core_re_find_all(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const pattern = args.items[0];

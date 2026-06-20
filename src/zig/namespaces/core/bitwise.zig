@@ -27,7 +27,7 @@ fn toI64(v: Value) anyerror!i64 {
 // bit-not - Bitwise NOT (complement)
 // ============================================================
 
-pub fn core_bit_not(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_bit_not(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     _ = env_env;
     if (args.items.len != 1) return error.ArityError;
@@ -39,7 +39,7 @@ pub fn core_bit_not(self: *Value, args: list.List, env_env: *Env) anyerror!Value
 // bit-and - Bitwise AND (n-ary)
 // ============================================================
 
-pub fn core_bit_and(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_bit_and(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     _ = env_env;
     if (args.items.len < 2) return error.ArityError;
@@ -55,7 +55,7 @@ pub fn core_bit_and(self: *Value, args: list.List, env_env: *Env) anyerror!Value
 // bit-or - Bitwise OR (n-ary)
 // ============================================================
 
-pub fn core_bit_or(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_bit_or(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     _ = env_env;
     if (args.items.len < 2) return error.ArityError;
@@ -71,7 +71,7 @@ pub fn core_bit_or(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
 // bit-xor - Bitwise XOR (n-ary)
 // ============================================================
 
-pub fn core_bit_xor(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_bit_xor(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     _ = env_env;
     if (args.items.len < 2) return error.ArityError;
@@ -89,7 +89,7 @@ pub fn core_bit_xor(self: *Value, args: list.List, env_env: *Env) anyerror!Value
 // For n-ary: reduce left to right, (bit-and-not (bit-and-not x y1) y2) ...
 // ============================================================
 
-pub fn core_bit_and_not(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_bit_and_not(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     _ = env_env;
     if (args.items.len < 2) return error.ArityError;
@@ -105,7 +105,7 @@ pub fn core_bit_and_not(self: *Value, args: list.List, env_env: *Env) anyerror!V
 // bit-clear - Clear bit at position n
 // ============================================================
 
-pub fn core_bit_clear(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_bit_clear(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     _ = env_env;
     if (args.items.len != 2) return error.ArityError;
@@ -119,7 +119,7 @@ pub fn core_bit_clear(self: *Value, args: list.List, env_env: *Env) anyerror!Val
 // bit-set - Set bit at position n
 // ============================================================
 
-pub fn core_bit_set(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_bit_set(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     _ = env_env;
     if (args.items.len != 2) return error.ArityError;
@@ -133,7 +133,7 @@ pub fn core_bit_set(self: *Value, args: list.List, env_env: *Env) anyerror!Value
 // bit-flip - Flip bit at position n
 // ============================================================
 
-pub fn core_bit_flip(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_bit_flip(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     _ = env_env;
     if (args.items.len != 2) return error.ArityError;
@@ -147,7 +147,7 @@ pub fn core_bit_flip(self: *Value, args: list.List, env_env: *Env) anyerror!Valu
 // bit-test - Test bit at position n (returns true/false)
 // ============================================================
 
-pub fn core_bit_test(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_bit_test(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     _ = env_env;
     if (args.items.len != 2) return error.ArityError;
@@ -161,7 +161,7 @@ pub fn core_bit_test(self: *Value, args: list.List, env_env: *Env) anyerror!Valu
 // bit-shift-left - Bitwise shift left
 // ============================================================
 
-pub fn core_bit_shift_left(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_bit_shift_left(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     _ = env_env;
     if (args.items.len != 2) return error.ArityError;
@@ -176,7 +176,7 @@ pub fn core_bit_shift_left(self: *Value, args: list.List, env_env: *Env) anyerro
 // bit-shift-right - Bitwise shift right (signed / arithmetic)
 // ============================================================
 
-pub fn core_bit_shift_right(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_bit_shift_right(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     _ = env_env;
     if (args.items.len != 2) return error.ArityError;
@@ -194,7 +194,7 @@ pub fn core_bit_shift_right(self: *Value, args: list.List, env_env: *Env) anyerr
 // unsigned-bit-shift-right - Bitwise shift right (unsigned / logical)
 // ============================================================
 
-pub fn core_unsigned_bit_shift_right(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_unsigned_bit_shift_right(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     _ = env_env;
     if (args.items.len != 2) return error.ArityError;
@@ -238,7 +238,7 @@ test "bitwise::bit-not: basic" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(5) });
-    var result = core_bit_not(testSelf(), args, &env) catch unreachable;
+    var result = core_bit_not(testSelf(), &args, &env) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == -6);
@@ -248,7 +248,7 @@ test "bitwise::bit-not: -1" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(-1) });
-    var result = core_bit_not(testSelf(), args, &env) catch unreachable;
+    var result = core_bit_not(testSelf(), &args, &env) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 0);
@@ -258,7 +258,7 @@ test "bitwise::bit-and: basic" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(12), Value.intValue(10) });
-    var result = core_bit_and(testSelf(), args, &env) catch unreachable;
+    var result = core_bit_and(testSelf(), &args, &env) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 8);
@@ -268,7 +268,7 @@ test "bitwise::bit-and: n-ary" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(1), Value.intValue(2), Value.intValue(4), Value.intValue(8) });
-    var result = core_bit_and(testSelf(), args, &env) catch unreachable;
+    var result = core_bit_and(testSelf(), &args, &env) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 0);
@@ -278,7 +278,7 @@ test "bitwise::bit-or: basic" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(12), Value.intValue(10) });
-    var result = core_bit_or(testSelf(), args, &env) catch unreachable;
+    var result = core_bit_or(testSelf(), &args, &env) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 14);
@@ -288,7 +288,7 @@ test "bitwise::bit-or: n-ary" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(1), Value.intValue(2), Value.intValue(4), Value.intValue(8) });
-    var result = core_bit_or(testSelf(), args, &env) catch unreachable;
+    var result = core_bit_or(testSelf(), &args, &env) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 15);
@@ -298,7 +298,7 @@ test "bitwise::bit-xor: basic" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(12), Value.intValue(10) });
-    var result = core_bit_xor(testSelf(), args, &env) catch unreachable;
+    var result = core_bit_xor(testSelf(), &args, &env) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 6);
@@ -308,7 +308,7 @@ test "bitwise::bit-xor: n-ary" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(1), Value.intValue(2), Value.intValue(4), Value.intValue(8) });
-    var result = core_bit_xor(testSelf(), args, &env) catch unreachable;
+    var result = core_bit_xor(testSelf(), &args, &env) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 15);
@@ -318,7 +318,7 @@ test "bitwise::bit-and-not: basic" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(12), Value.intValue(10) });
-    var result = core_bit_and_not(testSelf(), args, &env) catch unreachable;
+    var result = core_bit_and_not(testSelf(), &args, &env) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 4);
@@ -328,7 +328,7 @@ test "bitwise::bit-and-not: n-ary" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(15), Value.intValue(1), Value.intValue(2), Value.intValue(4) });
-    var result = core_bit_and_not(testSelf(), args, &env) catch unreachable;
+    var result = core_bit_and_not(testSelf(), &args, &env) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 8);
@@ -338,7 +338,7 @@ test "bitwise::bit-clear: basic" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(10), Value.intValue(1) });
-    var result = core_bit_clear(testSelf(), args, &env) catch unreachable;
+    var result = core_bit_clear(testSelf(), &args, &env) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 8);
@@ -348,7 +348,7 @@ test "bitwise::bit-set: basic" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(10), Value.intValue(1) });
-    var result = core_bit_set(testSelf(), args, &env) catch unreachable;
+    var result = core_bit_set(testSelf(), &args, &env) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 10);
@@ -358,7 +358,7 @@ test "bitwise::bit-flip: basic" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(10), Value.intValue(1) });
-    var result = core_bit_flip(testSelf(), args, &env) catch unreachable;
+    var result = core_bit_flip(testSelf(), &args, &env) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 8);
@@ -368,7 +368,7 @@ test "bitwise::bit-test: true" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(10), Value.intValue(1) });
-    var result = core_bit_test(testSelf(), args, &env) catch unreachable;
+    var result = core_bit_test(testSelf(), &args, &env) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .bool);
     try std.testing.expect(result.bool_val == true);
@@ -378,7 +378,7 @@ test "bitwise::bit-test: false" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(10), Value.intValue(0) });
-    var result = core_bit_test(testSelf(), args, &env) catch unreachable;
+    var result = core_bit_test(testSelf(), &args, &env) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .bool);
     try std.testing.expect(result.bool_val == false);
@@ -388,7 +388,7 @@ test "bitwise::bit-test: -1 bit 0" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(-1), Value.intValue(0) });
-    var result = core_bit_test(testSelf(), args, &env) catch unreachable;
+    var result = core_bit_test(testSelf(), &args, &env) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .bool);
     try std.testing.expect(result.bool_val == true);
@@ -398,7 +398,7 @@ test "bitwise::bit-shift-left: basic" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(5), Value.intValue(2) });
-    var result = core_bit_shift_left(testSelf(), args, &env) catch unreachable;
+    var result = core_bit_shift_left(testSelf(), &args, &env) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 20);
@@ -408,7 +408,7 @@ test "bitwise::bit-shift-right: signed negative" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(-8), Value.intValue(2) });
-    var result = core_bit_shift_right(testSelf(), args, &env) catch unreachable;
+    var result = core_bit_shift_right(testSelf(), &args, &env) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == -2);
@@ -418,7 +418,7 @@ test "bitwise::unsigned-bit-shift-right: negative value" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(-8), Value.intValue(2) });
-    var result = core_unsigned_bit_shift_right(testSelf(), args, &env) catch unreachable;
+    var result = core_unsigned_bit_shift_right(testSelf(), &args, &env) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 4611686018427387902);
@@ -428,7 +428,7 @@ test "bitwise::bit-shift-right: shift >= 64" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(-1), Value.intValue(64) });
-    var result = core_bit_shift_right(testSelf(), args, &env) catch unreachable;
+    var result = core_bit_shift_right(testSelf(), &args, &env) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == -1);
@@ -438,7 +438,7 @@ test "bitwise::bit-shift-left: shift >= 64" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(5), Value.intValue(64) });
-    var result = core_bit_shift_left(testSelf(), args, &env) catch unreachable;
+    var result = core_bit_shift_left(testSelf(), &args, &env) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 0);
@@ -448,7 +448,7 @@ test "bitwise::bit-not: type error on float" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.floatValue(1.5) });
-    const result = core_bit_not(testSelf(), args, &env);
+    const result = core_bit_not(testSelf(), &args, &env);
     try std.testing.expectError(error.TypeError, result);
 }
 
@@ -456,7 +456,7 @@ test "bitwise::bit-and: type error on float" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(1), Value.floatValue(2.0) });
-    const result = core_bit_and(testSelf(), args, &env);
+    const result = core_bit_and(testSelf(), &args, &env);
     try std.testing.expectError(error.TypeError, result);
 }
 
@@ -464,7 +464,7 @@ test "bitwise::bit-clear: negative position" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(10), Value.intValue(-1) });
-    const result = core_bit_clear(testSelf(), args, &env);
+    const result = core_bit_clear(testSelf(), &args, &env);
     try std.testing.expectError(error.IndexOutOfBounds, result);
 }
 
@@ -472,7 +472,7 @@ test "bitwise::bit-clear: position >= 64" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(10), Value.intValue(64) });
-    const result = core_bit_clear(testSelf(), args, &env);
+    const result = core_bit_clear(testSelf(), &args, &env);
     try std.testing.expectError(error.IndexOutOfBounds, result);
 }
 
@@ -480,7 +480,7 @@ test "bitwise::bit-shift-left: negative shift" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(5), Value.intValue(-1) });
-    const result = core_bit_shift_left(testSelf(), args, &env);
+    const result = core_bit_shift_left(testSelf(), &args, &env);
     try std.testing.expectError(error.InvalidArgument, result);
 }
 
@@ -488,7 +488,7 @@ test "bitwise::bit-and: arity error" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(1) });
-    const result = core_bit_and(testSelf(), args, &env);
+    const result = core_bit_and(testSelf(), &args, &env);
     try std.testing.expectError(error.ArityError, result);
 }
 
@@ -496,6 +496,6 @@ test "bitwise::bit-not: arity error" {
     var env = testEnv();
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{});
-    const result = core_bit_not(testSelf(), args, &env);
+    const result = core_bit_not(testSelf(), &args, &env);
     try std.testing.expectError(error.ArityError, result);
 }

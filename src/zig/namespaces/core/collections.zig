@@ -11,7 +11,7 @@ const test_utils = @import("test_utils.zig");
 
 const toInt = helpers.toInt;
 
-pub fn core_conj(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_conj(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 2) return error.ArityError;
     const coll = args.items[0];
@@ -148,7 +148,7 @@ pub fn core_conj(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
                 try assoc_args.append(allocator, try entry_items[0].clone(allocator));
                 try assoc_args.append(allocator, try entry_items[1].clone(allocator));
 
-                const new_val = try maps.core_assoc(@constCast(&current_clone), assoc_args, env_env);
+                const new_val = try maps.core_assoc(&current_clone, &assoc_args, env_env);
                 current.deinit(allocator);
                 current = new_val;
             }
@@ -161,7 +161,7 @@ pub fn core_conj(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     }
 }
 
-pub fn core_pop(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_pop(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const coll = args.items[0];
@@ -207,7 +207,7 @@ pub fn core_pop(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     }
 }
 
-pub fn core_last(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_last(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const allocator = env_env.allocator;
@@ -241,7 +241,7 @@ pub fn core_last(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     }
 }
 
-pub fn core_reverse(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_reverse(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const coll = args.items[0];
@@ -282,7 +282,7 @@ pub fn core_reverse(self: *Value, args: list.List, env_env: *Env) anyerror!Value
     }
 }
 
-pub fn core_peek(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_peek(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const coll = args.items[0];
@@ -303,7 +303,7 @@ pub fn core_peek(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     }
 }
 
-pub fn core_contains_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_contains_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const coll = args.items[0];
@@ -371,7 +371,7 @@ test "collections::conj: vector" {
     var vv = Value.vectorValue(v);
     defer vv.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vv, Value.intValue(3) });
-    var result = core_conj(testSelf(), args, &a) catch unreachable;
+    var result = core_conj(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .vector);
     try std.testing.expect(result.vec_val.items.len == 3);
@@ -386,7 +386,7 @@ test "collections::conj: list" {
     var lv = Value.listValue(l);
     defer lv.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ lv, Value.intValue(3) });
-    var result = core_conj(testSelf(), args, &a) catch unreachable;
+    var result = core_conj(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .list);
     // conj on list adds to front: (3 1 2)
@@ -404,7 +404,7 @@ test "collections::pop: vector" {
     var vv = Value.vectorValue(v);
     defer vv.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vv });
-    var result = core_pop(testSelf(), args, &a) catch unreachable;
+    var result = core_pop(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .vector);
     try std.testing.expect(result.vec_val.items.len == 2);
@@ -420,7 +420,7 @@ test "collections::last: list" {
     var lv = Value.listValue(l);
     defer lv.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ lv });
-    var result = core_last(testSelf(), args, &a) catch unreachable;
+    var result = core_last(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.int_val == 3);
 }
@@ -429,7 +429,7 @@ test "collections::last: empty list returns nil" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.listValue(list.empty()) });
-    var result = core_last(testSelf(), args, &a) catch unreachable;
+    var result = core_last(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .nil);
 }
@@ -444,7 +444,7 @@ test "collections::reverse: list" {
     var lv = Value.listValue(l);
     defer lv.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ lv });
-    var result = core_reverse(testSelf(), args, &a) catch unreachable;
+    var result = core_reverse(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .list);
     try std.testing.expect(result.list_val.items[0].int_val == 3);
@@ -459,7 +459,7 @@ test "collections::contains_q: map has key" {
     var mv = Value.mapValue(m);
     defer mv.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ mv, Value.intValue(1) });
-    var result = core_contains_q(testSelf(), args, &a) catch unreachable;
+    var result = core_contains_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -472,7 +472,7 @@ test "collections::contains_q: map missing key" {
     var mv = Value.mapValue(m);
     defer mv.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ mv, Value.intValue(99) });
-    var result = core_contains_q(testSelf(), args, &a) catch unreachable;
+    var result = core_contains_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
 }
@@ -486,7 +486,7 @@ test "collections::contains_q: vector index in range" {
     var vv = Value.vectorValue(v);
     defer vv.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vv, Value.intValue(0) });
-    var result = core_contains_q(testSelf(), args, &a) catch unreachable;
+    var result = core_contains_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -499,7 +499,7 @@ test "collections::contains_q: vector index out of range" {
     var vv = Value.vectorValue(v);
     defer vv.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vv, Value.intValue(5) });
-    var result = core_contains_q(testSelf(), args, &a) catch unreachable;
+    var result = core_contains_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
 }

@@ -16,7 +16,7 @@ const toInt = helpers.toInt;
 
 // sort: returns a sorted sequence of the items in coll
 // Uses a simple insertion sort (fine for small collections)
-pub fn core_sort(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_sort(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const allocator = env_env.allocator;
@@ -57,7 +57,7 @@ pub fn core_sort(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 }
 
 // sort-by: returns a sorted sequence of coll, sorted by the comparison of (keyfn item)
-pub fn core_sort_by(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_sort_by(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const allocator = env_env.allocator;
@@ -108,7 +108,7 @@ pub fn core_sort_by(self: *Value, args: list.List, env_env: *Env) anyerror!Value
 }
 
 // reductions: return all intermediate reduce results
-pub fn core_reductions(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_reductions(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 2 and args.items.len != 3) return error.ArityError;
@@ -173,7 +173,7 @@ pub fn core_reductions(self: *Value, args: list.List, env_env: *Env) anyerror!Va
 }
 
 // map-indexed: map with index
-pub fn core_map_indexed(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_map_indexed(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 2) return error.ArityError;
@@ -203,7 +203,7 @@ pub fn core_map_indexed(self: *Value, args: list.List, env_env: *Env) anyerror!V
 }
 
 // keep-indexed: keep with index
-pub fn core_keep_indexed(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_keep_indexed(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 2) return error.ArityError;
@@ -236,7 +236,7 @@ pub fn core_keep_indexed(self: *Value, args: list.List, env_env: *Env) anyerror!
 }
 
 // bounded-count: count with upper bound
-pub fn core_bounded_count(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_bounded_count(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     _ = env_env;
     if (args.items.len != 2) return error.ArityError;
@@ -262,7 +262,7 @@ pub fn core_bounded_count(self: *Value, args: list.List, env_env: *Env) anyerror
 }
 
 // group-by: group by key function
-pub fn core_group_by(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_group_by(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 2) return error.ArityError;
@@ -325,7 +325,7 @@ pub fn core_group_by(self: *Value, args: list.List, env_env: *Env) anyerror!Valu
 }
 
 // distinct: return distinct elements
-pub fn core_distinct(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_distinct(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 1) return error.ArityError;
@@ -357,7 +357,7 @@ pub fn core_distinct(self: *Value, args: list.List, env_env: *Env) anyerror!Valu
 }
 
 // replace: replace values using map
-pub fn core_replace(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_replace(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 2) return error.ArityError;

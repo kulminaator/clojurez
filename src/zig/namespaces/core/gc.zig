@@ -15,7 +15,7 @@ const Allocator = std.mem.Allocator;
 /// When called from within Clojure evaluation, the mark phase runs immediately
 /// but the sweep (actual freeing) is deferred to the next safe point to avoid
 /// freeing in-flight values referenced only by stack-local pointers.
-pub fn core_gc_sweep(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_gc_sweep(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 0) return error.ArityError;
 
@@ -39,7 +39,7 @@ pub fn core_gc_sweep(self: *Value, args: list.List, _: *Env) anyerror!Value {
 ///   :sweep-count        — number of GC sweeps performed
 ///   :alloc-count        — number of GC allocations performed
 ///   :block-count        — number of live GC blocks
-pub fn core_gc_stats(self: *Value, args: list.List, env: *Env) anyerror!Value {
+pub fn core_gc_stats(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 0) return error.ArityError;
 

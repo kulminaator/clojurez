@@ -26,7 +26,7 @@ fn nextRandom() u64 {
 // rand - returns a random double in [0.0, 1.0)
 // (rand) => random double in [0.0, 1.0)
 // (rand n) => random integer in [0, n)
-pub fn core_rand(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_rand(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     _ = env_env;
     if (args.items.len > 1) return error.ArityError;
@@ -47,7 +47,7 @@ pub fn core_rand(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 }
 
 // rand-int - returns a random integer in [0, n)
-pub fn core_rand_int(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_rand_int(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     _ = env_env;
     if (args.items.len != 1) return error.ArityError;
@@ -72,7 +72,7 @@ test "random::rand: no args returns float in [0.0, 1.0)" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{});
-    var result = core_rand(testSelf(), args, &a) catch unreachable;
+    var result = core_rand(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .float);
     try std.testing.expect(result.float_val >= 0.0);
@@ -83,7 +83,7 @@ test "random::rand: with arg returns int in [0, n)" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(100) });
-    var result = core_rand(testSelf(), args, &a) catch unreachable;
+    var result = core_rand(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val >= 0);
@@ -94,7 +94,7 @@ test "random::rand-int: returns int in [0, n)" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(50) });
-    var result = core_rand_int(testSelf(), args, &a) catch unreachable;
+    var result = core_rand_int(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val >= 0);
@@ -105,5 +105,5 @@ test "random::rand-int: wrong arity" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{});
-    try std.testing.expectError(error.ArityError, core_rand_int(testSelf(), args, &a));
+    try std.testing.expectError(error.ArityError, core_rand_int(testSelf(), &args, &a));
 }

@@ -6,7 +6,7 @@ const Env = Value.Env;
 const eval_helpers = @import("eval_helpers.zig");
 const test_utils = @import("test_utils.zig");
 
-pub fn core_deref(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_deref(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const arg = args.items[0];
@@ -21,13 +21,13 @@ pub fn core_deref(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return try arg.clone(env_env.allocator);
 }
 
-pub fn core_atom(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_atom(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     return try Value.atomValue(env_env.allocator, args.items[0]);
 }
 
-pub fn core_swap_bang(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_swap_bang(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 2) return error.ArityError;
     const atom = args.items[0];
@@ -53,7 +53,7 @@ pub fn core_swap_bang(self: *Value, args: list.List, env_env: *Env) anyerror!Val
     return try new_val.clone(env_env.allocator);
 }
 
-pub fn core_reset_bang(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_reset_bang(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const atom = args.items[0];
@@ -84,7 +84,7 @@ test "atoms::atom: creates atom" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(42) });
-    var result = core_atom(testSelf(), args, &a) catch unreachable;
+    var result = core_atom(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .atom);
     try std.testing.expect(result.atom_val.?.value.int_val == 42);
@@ -96,7 +96,7 @@ test "atoms::deref: gets atom value" {
     var atom = try Value.atomValue(std.heap.page_allocator, Value.intValue(42));
     defer atom.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ atom });
-    var result = core_deref(testSelf(), args, &a) catch unreachable;
+    var result = core_deref(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 42);
@@ -108,7 +108,7 @@ test "atoms::reset_bang: resets atom value" {
     var atom = try Value.atomValue(std.heap.page_allocator, Value.intValue(42));
     defer atom.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ atom, Value.intValue(99) });
-    var result = core_reset_bang(testSelf(), args, &a) catch unreachable;
+    var result = core_reset_bang(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.int_val == 99);
     // Atom should now hold 99
@@ -119,13 +119,13 @@ test "atoms::reset_bang: wrong type returns error" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(1), Value.intValue(2) });
-    try std.testing.expectError(error.TypeError, core_reset_bang(testSelf(), args, &a));
+    try std.testing.expectError(error.TypeError, core_reset_bang(testSelf(), &args, &a));
 }
 
 test "atoms::atom: wrong arity returns error" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{});
-    try std.testing.expectError(error.ArityError, core_atom(testSelf(), args, &a));
+    try std.testing.expectError(error.ArityError, core_atom(testSelf(), &args, &a));
 }
 

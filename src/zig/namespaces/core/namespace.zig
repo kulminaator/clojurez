@@ -114,7 +114,7 @@ fn buildNsMap(allocator: Allocator, ns_name: []const u8, ns_env: *Env, ns_mgr: *
 
 /// find-ns: (find-ns sym-or-ns) → namespace-object or nil
 /// Returns the namespace named by the symbol, or nil if it doesn't exist.
-pub fn core_find_ns(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_find_ns(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 1) return error.ArityError;
@@ -146,7 +146,7 @@ pub fn core_find_ns(self: *Value, args: list.List, env_env: *Env) anyerror!Value
 /// create-ns: (create-ns sym) → namespace-object
 /// Creates a new namespace named by sym if one doesn't exist.
 /// Returns the namespace object (new or existing).
-pub fn core_create_ns(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_create_ns(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 1) return error.ArityError;
@@ -173,7 +173,7 @@ pub fn core_create_ns(self: *Value, args: list.List, env_env: *Env) anyerror!Val
 
 /// all-ns: (all-ns) → sequence-of-namespace-objects
 /// Returns a sequence of all namespace maps.
-pub fn core_all_ns(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_all_ns(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     _ = args;
     const allocator = env_env.allocator;
@@ -198,7 +198,7 @@ pub fn core_all_ns(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
 
 /// the-ns: (the-ns x) → namespace-object or error
 /// Like find-ns but returns an error if not found.
-pub fn core_the_ns(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_the_ns(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 1) return error.ArityError;
@@ -274,7 +274,7 @@ fn buildAliasesMap(allocator: Allocator, ns_name: []const u8, ns_mgr: *Value.Nam
 /// ns-resolve: (ns-resolve ns sym) → value or nil
 /// Resolves a symbol in the given namespace.
 /// Handles unqualified, alias/name, and ns/name qualified symbols.
-pub fn core_ns_resolve(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_ns_resolve(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len < 2 or args.items.len > 3) return error.ArityError;
@@ -315,7 +315,7 @@ pub fn core_ns_resolve(self: *Value, args: list.List, env_env: *Env) anyerror!Va
 /// refer: (refer ns-sym & filters)
 /// Refers vars from ns-sym into the current namespace.
 /// Filters: :exclude [syms], :only [syms], :rename {from to}, :refer :all
-pub fn core_refer(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_refer(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len < 1) return error.ArityError;
@@ -377,7 +377,7 @@ pub fn core_refer(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 
 /// alias: (alias alias-sym namespace-sym)
 /// Adds an alias in the current namespace.
-pub fn core_alias(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_alias(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
 
@@ -394,7 +394,7 @@ pub fn core_alias(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 
 /// ns-aliases: (ns-aliases ns) → map-of-aliases
 /// Returns a map of aliases for the namespace.
-pub fn core_ns_aliases(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_ns_aliases(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 1) return error.ArityError;
@@ -410,7 +410,7 @@ pub fn core_ns_aliases(self: *Value, args: list.List, env_env: *Env) anyerror!Va
 
 /// ns-unalias: (ns-unalias ns sym) → nil
 /// Removes an alias from a namespace.
-pub fn core_ns_unalias(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_ns_unalias(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
 
@@ -428,7 +428,7 @@ pub fn core_ns_unalias(self: *Value, args: list.List, env_env: *Env) anyerror!Va
 
 /// require: (require '& args)
 /// Loads namespaces programmatically.
-pub fn core_require(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_require(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len < 1) return error.ArityError;
@@ -616,7 +616,7 @@ pub fn core_require(self: *Value, args: list.List, env_env: *Env) anyerror!Value
 
 /// loaded-libs: (loaded-libs) → sorted-set-of-symbols
 /// Returns the set of loaded library namespaces.
-pub fn core_loaded_libs(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_loaded_libs(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     _ = args;
     const allocator = env_env.allocator;
@@ -639,7 +639,7 @@ pub fn core_loaded_libs(self: *Value, args: list.List, env_env: *Env) anyerror!V
 
 /// resolve: (resolve sym) → value or nil
 /// Resolves a symbol in the current namespace.
-pub fn core_resolve(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_resolve(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
 
@@ -716,7 +716,7 @@ fn buildRefersMap(allocator: Allocator, ns_env: *const Env) anyerror!Value {
 
 /// ns-publics: (ns-publics ns) → map-of-symbol-to-value
 /// Returns the vars OWNED by the namespace (not referred).
-pub fn core_ns_publics(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_ns_publics(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 1) return error.ArityError;
@@ -732,7 +732,7 @@ pub fn core_ns_publics(self: *Value, args: list.List, env_env: *Env) anyerror!Va
 
 /// ns-interns: (ns-interns ns) → map-of-symbol-to-value
 /// Same as ns-publics in our model (no private vars yet).
-pub fn core_ns_interns(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_ns_interns(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 1) return error.ArityError;
@@ -748,7 +748,7 @@ pub fn core_ns_interns(self: *Value, args: list.List, env_env: *Env) anyerror!Va
 
 /// ns-refers: (ns-refers ns) → map-of-symbol-to-value
 /// Returns the vars referred (imported) into the namespace.
-pub fn core_ns_refers(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_ns_refers(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 1) return error.ArityError;
@@ -764,7 +764,7 @@ pub fn core_ns_refers(self: *Value, args: list.List, env_env: *Env) anyerror!Val
 
 /// ns-map: (ns-map ns) → map-of-all-mappings
 /// Returns ALL mappings (publics + refers + aliases).
-pub fn core_ns_map(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_ns_map(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 1) return error.ArityError;
@@ -817,7 +817,7 @@ pub fn core_ns_map(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
 
 /// ns-unmap: (ns-unmap ns sym) → nil
 /// Removes a var mapping from a namespace.
-pub fn core_ns_unmap(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_ns_unmap(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
 
@@ -854,7 +854,7 @@ pub fn core_ns_unmap(self: *Value, args: list.List, env_env: *Env) anyerror!Valu
 /// intern: (intern ns sym) → var
 ///           (intern ns sym val) → var
 /// Finds or creates a var in ns named sym, optionally setting its value.
-pub fn core_intern(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_intern(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len < 2 or args.items.len > 3) return error.ArityError;
@@ -879,7 +879,7 @@ pub fn core_intern(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
 
 /// load-string: (load-string s) → result-of-last-form
 /// Parses and evaluates a string of Clojure code.
-pub fn core_load_string(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_load_string(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 1) return error.ArityError;
@@ -917,7 +917,7 @@ pub fn core_load_string(self: *Value, args: list.List, env_env: *Env) anyerror!V
 
 /// remove-ns: (remove-ns sym) → nil
 /// Removes a namespace. Cannot remove clojure.core or user.
-pub fn core_remove_ns(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_remove_ns(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
 

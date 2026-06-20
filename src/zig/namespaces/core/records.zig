@@ -104,7 +104,7 @@ fn makeErrorStr(allocator: Allocator, comptime fmt: []const u8, args: anytype) a
 
 /// Internal builtin: create a record from type name, fields map, extmap, and meta.
 /// Args: (full_type_name_string fields_map extmap_or_nil meta_or_nil)
-pub fn core_record_ctor(self: *Value, args: list.List, env: *Env) anyerror!Value {
+pub fn core_record_ctor(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 2) return error.ArityError;
 

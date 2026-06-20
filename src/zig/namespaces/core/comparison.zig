@@ -8,7 +8,7 @@ const test_utils = @import("test_utils.zig");
 
 const toNum = helpers.toNum;
 
-pub fn core_eq(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_eq(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 2) return error.ArityError;
     var i: usize = 1;
@@ -20,7 +20,7 @@ pub fn core_eq(self: *Value, args: list.List, _: *Env) anyerror!Value {
     return Value.boolValue(true);
 }
 
-pub fn core_not_eq(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_not_eq(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 2) return error.ArityError;
     var i: usize = 1;
@@ -32,7 +32,7 @@ pub fn core_not_eq(self: *Value, args: list.List, _: *Env) anyerror!Value {
     return Value.boolValue(true);
 }
 
-pub fn core_less(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_less(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 2) return error.ArityError;
     var i: usize = 1;
@@ -44,7 +44,7 @@ pub fn core_less(self: *Value, args: list.List, _: *Env) anyerror!Value {
     return Value.boolValue(true);
 }
 
-pub fn core_greater(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_greater(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 2) return error.ArityError;
     var i: usize = 1;
@@ -56,7 +56,7 @@ pub fn core_greater(self: *Value, args: list.List, _: *Env) anyerror!Value {
     return Value.boolValue(true);
 }
 
-pub fn core_less_eq(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_less_eq(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 2) return error.ArityError;
     var i: usize = 1;
@@ -68,7 +68,7 @@ pub fn core_less_eq(self: *Value, args: list.List, _: *Env) anyerror!Value {
     return Value.boolValue(true);
 }
 
-pub fn core_greater_eq(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_greater_eq(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 2) return error.ArityError;
     var i: usize = 1;
@@ -81,7 +81,7 @@ pub fn core_greater_eq(self: *Value, args: list.List, _: *Env) anyerror!Value {
 }
 
 // Boolean
-pub fn core_not(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_not(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     return Value.boolValue(!args.items[0].isTruthy());
@@ -90,7 +90,7 @@ pub fn core_not(self: *Value, args: list.List, _: *Env) anyerror!Value {
 // identical? - tests if 2 arguments are the same object (identity comparison)
 // For atoms: compare atom_val pointers
 // For other types: compare by value (our VM uses value semantics for immutable data)
-pub fn core_identical_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_identical_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const a = args.items[0];
@@ -109,7 +109,7 @@ pub fn core_identical_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
 // compare - three-way comparison returning -1, 0, or 1
 // For numbers: type-independent comparison
 // For nil: nil is less than everything else
-pub fn core_compare(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_compare(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const a = args.items[0];
@@ -169,7 +169,7 @@ fn compareStrings(a: []const u8, b: []const u8) i64 {
 
 // == - numeric equality (type-independent)
 // (== 1 1.0) => true
-pub fn core_double_eq(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_double_eq(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len == 0) return Value.boolValue(true);
     if (args.items.len == 1) return Value.boolValue(true);
@@ -222,7 +222,7 @@ test "comparison::eq: equal integers" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(5), Value.intValue(5) });
-    var result = core_eq(testSelf(), args, &a) catch unreachable;
+    var result = core_eq(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -231,7 +231,7 @@ test "comparison::eq: not equal integers" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(5), Value.intValue(6) });
-    var result = core_eq(testSelf(), args, &a) catch unreachable;
+    var result = core_eq(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
 }
@@ -240,7 +240,7 @@ test "comparison::eq: multiple args all equal" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(3), Value.intValue(3), Value.intValue(3) });
-    var result = core_eq(testSelf(), args, &a) catch unreachable;
+    var result = core_eq(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -249,14 +249,14 @@ test "comparison::eq: less than 2 args returns error" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(1) });
-    try std.testing.expectError(error.ArityError, core_eq(testSelf(), args, &a));
+    try std.testing.expectError(error.ArityError, core_eq(testSelf(), &args, &a));
 }
 
 test "comparison::not_eq: different values" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(1), Value.intValue(2) });
-    var result = core_not_eq(testSelf(), args, &a) catch unreachable;
+    var result = core_not_eq(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -265,7 +265,7 @@ test "comparison::less: ascending chain" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(1), Value.intValue(2), Value.intValue(3) });
-    var result = core_less(testSelf(), args, &a) catch unreachable;
+    var result = core_less(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -274,7 +274,7 @@ test "comparison::less: not ascending" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(3), Value.intValue(2) });
-    var result = core_less(testSelf(), args, &a) catch unreachable;
+    var result = core_less(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
 }
@@ -283,7 +283,7 @@ test "comparison::greater: descending chain" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(3), Value.intValue(2), Value.intValue(1) });
-    var result = core_greater(testSelf(), args, &a) catch unreachable;
+    var result = core_greater(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -292,7 +292,7 @@ test "comparison::less_eq: equal values" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(5), Value.intValue(5) });
-    var result = core_less_eq(testSelf(), args, &a) catch unreachable;
+    var result = core_less_eq(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -301,7 +301,7 @@ test "comparison::greater_eq: equal values" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(5), Value.intValue(5) });
-    var result = core_greater_eq(testSelf(), args, &a) catch unreachable;
+    var result = core_greater_eq(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -310,7 +310,7 @@ test "comparison::not: truthy becomes false" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(42) });
-    var result = core_not(testSelf(), args, &a) catch unreachable;
+    var result = core_not(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
 }
@@ -319,7 +319,7 @@ test "comparison::not: nil becomes true" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.nilValue() });
-    var result = core_not(testSelf(), args, &a) catch unreachable;
+    var result = core_not(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -336,7 +336,7 @@ test "comparison::identical_q: same atoms" {
     defer atom2.deinit(alloc);
 
     const args = makeArgs(&[_]Value{ atom, atom2 });
-    var result = core_identical_q(testSelf(), args, &a) catch unreachable;
+    var result = core_identical_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(alloc);
     try std.testing.expect(result.bool_val == true);
 }
@@ -345,7 +345,7 @@ test "comparison::identical_q: equal integers" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(5), Value.intValue(5) });
-    var result = core_identical_q(testSelf(), args, &a) catch unreachable;
+    var result = core_identical_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -354,14 +354,14 @@ test "comparison::identical_q: wrong arity" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(1) });
-    try std.testing.expectError(error.ArityError, core_identical_q(testSelf(), args, &a));
+    try std.testing.expectError(error.ArityError, core_identical_q(testSelf(), &args, &a));
 }
 
 test "comparison::compare: less than" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(1), Value.intValue(2) });
-    var result = core_compare(testSelf(), args, &a) catch unreachable;
+    var result = core_compare(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.int_val == -1);
 }
@@ -370,7 +370,7 @@ test "comparison::compare: greater than" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(2), Value.intValue(1) });
-    var result = core_compare(testSelf(), args, &a) catch unreachable;
+    var result = core_compare(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.int_val == 1);
 }
@@ -379,7 +379,7 @@ test "comparison::compare: equal" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(1), Value.intValue(1) });
-    var result = core_compare(testSelf(), args, &a) catch unreachable;
+    var result = core_compare(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.int_val == 0);
 }
@@ -388,7 +388,7 @@ test "comparison::compare: int float equal" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(1), Value.floatValue(1.0) });
-    var result = core_compare(testSelf(), args, &a) catch unreachable;
+    var result = core_compare(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.int_val == 0);
 }
@@ -397,7 +397,7 @@ test "comparison::compare: nil less than int" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.nilValue(), Value.intValue(1) });
-    var result = core_compare(testSelf(), args, &a) catch unreachable;
+    var result = core_compare(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.int_val == -1);
 }
@@ -406,7 +406,7 @@ test "comparison::compare: nil equals nil" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.nilValue(), Value.nilValue() });
-    var result = core_compare(testSelf(), args, &a) catch unreachable;
+    var result = core_compare(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.int_val == 0);
 }
@@ -415,7 +415,7 @@ test "comparison::double_eq: int float equal" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(1), Value.floatValue(1.0) });
-    var result = core_double_eq(testSelf(), args, &a) catch unreachable;
+    var result = core_double_eq(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -424,7 +424,7 @@ test "comparison::double_eq: int int not equal" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(1), Value.intValue(2) });
-    var result = core_double_eq(testSelf(), args, &a) catch unreachable;
+    var result = core_double_eq(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
 }
@@ -433,7 +433,7 @@ test "comparison::double_eq: zero args" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{});
-    var result = core_double_eq(testSelf(), args, &a) catch unreachable;
+    var result = core_double_eq(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -442,7 +442,7 @@ test "comparison::double_eq: one arg" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(5) });
-    var result = core_double_eq(testSelf(), args, &a) catch unreachable;
+    var result = core_double_eq(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }

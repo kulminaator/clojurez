@@ -8,7 +8,7 @@ const test_utils = @import("test_utils.zig");
 
 const Allocator = std.mem.Allocator;
 
-pub fn core_get(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_get(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 1) return error.ArityError;
     const val = args.items[0];
@@ -43,7 +43,7 @@ pub fn core_get(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return Value.nilValue();
 }
 
-pub fn core_assoc(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_assoc(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 3) return error.ArityError;
     const first = args.items[0];
@@ -67,7 +67,7 @@ pub fn core_assoc(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return assocMap(first, args, env_env);
 }
 
-fn assocVector(orig: Value, args: list.List, env: *Env) anyerror!Value {
+fn assocVector(orig: Value, args: *const list.List, env: *Env) anyerror!Value {
     const allocator = env.allocator;
     var new_vec: vec.Vector = .empty;
     errdefer {
@@ -107,7 +107,7 @@ fn assocVector(orig: Value, args: list.List, env: *Env) anyerror!Value {
     return Value.vectorValue(new_vec);
 }
 
-fn assocMap(map_val: Value, args: list.List, env: *Env) anyerror!Value {
+fn assocMap(map_val: Value, args: *const list.List, env: *Env) anyerror!Value {
     const allocator = env.allocator;
     var new_map: Value.Map = .empty;
     errdefer {
@@ -150,7 +150,7 @@ fn assocMap(map_val: Value, args: list.List, env: *Env) anyerror!Value {
     return Value.mapValue(new_map);
 }
 
-pub fn core_keys(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_keys(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const val = args.items[0];
@@ -173,7 +173,7 @@ pub fn core_keys(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return Value.listValue(result);
 }
 
-pub fn core_vals(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_vals(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const val = args.items[0];
@@ -196,7 +196,7 @@ pub fn core_vals(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return Value.listValue(result);
 }
 
-pub fn core_dissoc(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_dissoc(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 2) return error.ArityError;
     const val = args.items[0];
@@ -234,7 +234,7 @@ pub fn core_dissoc(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
     return Value.mapValue(new_map);
 }
 
-pub fn core_hash_map(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_hash_map(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len % 2 != 0) return error.ArityError;
 
@@ -271,7 +271,7 @@ pub fn core_hash_map(self: *Value, args: list.List, env_env: *Env) anyerror!Valu
     return Value.mapValue(new_map);
 }
 
-pub fn core_merge(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_merge(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len == 0) return Value.mapValue(.empty);
 
@@ -395,7 +395,7 @@ fn recordToMap(record: Value, allocator: Allocator) anyerror!Value {
 }
 
 /// Assoc on a record. Returns a new record (assoc never demotes a record).
-fn assocRecord(record: Value, args: list.List, env: *Env) anyerror!Value {
+fn assocRecord(record: Value, args: *const list.List, env: *Env) anyerror!Value {
     const allocator = env.allocator;
     var current = record;
     defer current.deinit(allocator);
@@ -519,7 +519,7 @@ fn assocRecord(record: Value, args: list.List, env: *Env) anyerror!Value {
 }
 
 /// Dissoc on a record. If a defined field is removed, demote to plain map.
-fn dissocRecord(record: Value, args: list.List, env: *Env) anyerror!Value {
+fn dissocRecord(record: Value, args: *const list.List, env: *Env) anyerror!Value {
     const allocator = env.allocator;
 
     // Check if any key to dissoc is a defined field
@@ -586,7 +586,7 @@ fn dissocRecord(record: Value, args: list.List, env: *Env) anyerror!Value {
 }
 
 /// Dissoc on a plain map (used internally by dissocRecord after demotion).
-fn core_dissocMap(map_val: Value, args: list.List, env: *Env) anyerror!Value {
+fn core_dissocMap(map_val: Value, args: *const list.List, env: *Env) anyerror!Value {
     const allocator = env.allocator;
     var new_map: Value.Map = .empty;
     errdefer {
@@ -721,7 +721,7 @@ test "maps::get: finds key" {
     var m = makeMap(&[_]Value{ Value.intValue(1), Value.intValue(10), Value.intValue(2), Value.intValue(20) });
     defer m.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ m, Value.intValue(1) });
-    var result = core_get(testSelf(), args, &a) catch unreachable;
+    var result = core_get(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.int_val == 10);
 }
@@ -732,7 +732,7 @@ test "maps::get: missing key returns nil" {
     var m = makeMap(&[_]Value{ Value.intValue(1), Value.intValue(10) });
     defer m.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ m, Value.intValue(99) });
-    var result = core_get(testSelf(), args, &a) catch unreachable;
+    var result = core_get(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .nil);
 }
@@ -743,7 +743,7 @@ test "maps::keys: returns all keys" {
     var m = makeMap(&[_]Value{ Value.intValue(1), Value.intValue(10), Value.intValue(2), Value.intValue(20) });
     defer m.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ m });
-    var result = core_keys(testSelf(), args, &a) catch unreachable;
+    var result = core_keys(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .list);
     try std.testing.expect(result.list_val.items.len == 2);
@@ -755,7 +755,7 @@ test "maps::vals: returns all values" {
     var m = makeMap(&[_]Value{ Value.intValue(1), Value.intValue(10), Value.intValue(2), Value.intValue(20) });
     defer m.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ m });
-    var result = core_vals(testSelf(), args, &a) catch unreachable;
+    var result = core_vals(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .list);
     try std.testing.expect(result.list_val.items.len == 2);
@@ -769,7 +769,7 @@ test "maps::merge: merges two maps" {
     var m2 = makeMap(&[_]Value{ Value.intValue(2), Value.intValue(20) });
     defer m2.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ m1, m2 });
-    var result = core_merge(testSelf(), args, &a) catch unreachable;
+    var result = core_merge(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .map);
     try std.testing.expect(result.map_val.items.len == 2);
@@ -779,7 +779,7 @@ test "maps::merge: no args returns empty map" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{});
-    var result = core_merge(testSelf(), args, &a) catch unreachable;
+    var result = core_merge(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .map);
     try std.testing.expect(result.map_val.items.len == 0);

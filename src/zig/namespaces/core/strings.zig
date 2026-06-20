@@ -6,7 +6,7 @@ const Env = Value.Env;
 const helpers = @import("helpers.zig");
 const test_utils = @import("test_utils.zig");
 
-pub fn core_str(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_str(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     var buf: std.ArrayList(u8) = .empty;
     errdefer buf.deinit(env_env.allocator);
@@ -31,7 +31,7 @@ pub fn core_str(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
     return Value.stringValue(env_env.allocator, try buf.toOwnedSlice(env_env.allocator));
 }
 
-pub fn core_utf8_valid_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_utf8_valid_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     if (args.items[0].type != .string) return error.TypeError;
@@ -41,7 +41,7 @@ pub fn core_utf8_valid_q(self: *Value, args: list.List, _: *Env) anyerror!Value 
 /// subs - returns the substring of s beginning at start inclusive, and ending
 /// at end (defaults to length of string), exclusive.
 /// Uses UTF-8 code point indices (consistent with nth on strings).
-pub fn core_subs(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_subs(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 2 or args.items.len > 3) return error.ArityError;
     if (args.items[0].type != .string) return error.TypeError;
@@ -116,7 +116,7 @@ fn isWhitespaceCp(cp: u21) bool {
 }
 
 /// upper-case - converts string to all upper-case.
-pub fn str_upper_case(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn str_upper_case(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const arg = args.items[0];
@@ -139,7 +139,7 @@ pub fn str_upper_case(self: *Value, args: list.List, env_env: *Env) anyerror!Val
 }
 
 /// lower-case - converts string to all lower-case.
-pub fn str_lower_case(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn str_lower_case(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const arg = args.items[0];
@@ -162,7 +162,7 @@ pub fn str_lower_case(self: *Value, args: list.List, env_env: *Env) anyerror!Val
 }
 
 /// capitalize - converts first character to upper-case, all others to lower-case.
-pub fn str_capitalize(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn str_capitalize(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const arg = args.items[0];
@@ -189,7 +189,7 @@ pub fn str_capitalize(self: *Value, args: list.List, env_env: *Env) anyerror!Val
 }
 
 /// trim - removes whitespace from both ends of string.
-pub fn str_trim(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn str_trim(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const arg = args.items[0];
@@ -239,7 +239,7 @@ pub fn str_trim(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 }
 
 /// triml - removes whitespace from the left side of string.
-pub fn str_triml(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn str_triml(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const arg = args.items[0];
@@ -274,7 +274,7 @@ pub fn str_triml(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 }
 
 /// trimr - removes whitespace from the right side of string.
-pub fn str_trimr(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn str_trimr(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const arg = args.items[0];
@@ -310,7 +310,7 @@ pub fn str_trimr(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 }
 
 /// trim-newline - removes trailing \n or \r characters.
-pub fn str_trim_newline(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn str_trim_newline(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const arg = args.items[0];
@@ -336,7 +336,7 @@ pub fn str_trim_newline(self: *Value, args: list.List, env_env: *Env) anyerror!V
 }
 
 /// blank? - true if s is nil, empty, or contains only whitespace.
-pub fn str_blank_q(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn str_blank_q(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     _ = env_env;
     if (args.items.len != 1) return error.ArityError;
@@ -360,7 +360,7 @@ pub fn str_blank_q(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
 
 /// index-of - return index of value (string or char) in s.
 /// Optionally searching forward from from-index. Returns nil if not found.
-pub fn str_index_of(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn str_index_of(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     _ = env_env;
     if (args.items.len < 2 or args.items.len > 3) return error.ArityError;
@@ -444,7 +444,7 @@ pub fn str_index_of(self: *Value, args: list.List, env_env: *Env) anyerror!Value
 
 /// last-index-of - return last index of value (string or char) in s.
 /// Optionally searching backward from from-index. Returns nil if not found.
-pub fn str_last_index_of(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn str_last_index_of(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     _ = env_env;
     if (args.items.len < 2 or args.items.len > 3) return error.ArityError;
@@ -548,7 +548,7 @@ pub fn str_last_index_of(self: *Value, args: list.List, env_env: *Env) anyerror!
 }
 
 /// starts-with? - true if s starts with substr.
-pub fn str_starts_with_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn str_starts_with_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const s_arg = args.items[0];
@@ -560,7 +560,7 @@ pub fn str_starts_with_q(self: *Value, args: list.List, _: *Env) anyerror!Value 
 }
 
 /// ends-with? - true if s ends with substr.
-pub fn str_ends_with_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn str_ends_with_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const s_arg = args.items[0];
@@ -572,7 +572,7 @@ pub fn str_ends_with_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
 }
 
 /// includes? - true if s includes substr.
-pub fn str_includes_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn str_includes_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
     const s_arg = args.items[0];
@@ -611,7 +611,7 @@ test "strings::str: single string strips quotes" {
     var s = try Value.stringValue(std.heap.page_allocator, "hello");
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
-    var result = core_str(testSelf(), args, &a) catch unreachable;
+    var result = core_str(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .string);
     try std.testing.expect(std.mem.eql(u8, result.str_val, "hello"));
@@ -625,7 +625,7 @@ test "strings::str: concatenates multiple values" {
     var s2 = try Value.stringValue(std.heap.page_allocator, "world");
     defer s2.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s1, s2 });
-    var result = core_str(testSelf(), args, &a) catch unreachable;
+    var result = core_str(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(std.mem.eql(u8, result.str_val, "helloworld"));
 }
@@ -634,7 +634,7 @@ test "strings::str: integer converted to string" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(42) });
-    var result = core_str(testSelf(), args, &a) catch unreachable;
+    var result = core_str(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(std.mem.eql(u8, result.str_val, "42"));
 }
@@ -643,7 +643,7 @@ test "strings::str: no args returns empty string" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{});
-    var result = core_str(testSelf(), args, &a) catch unreachable;
+    var result = core_str(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(std.mem.eql(u8, result.str_val, ""));
 }
@@ -654,7 +654,7 @@ test "strings::utf8_valid_q: valid string" {
     var s = try Value.stringValue(std.heap.page_allocator, "hello");
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
-    var result = core_utf8_valid_q(testSelf(), args, &a) catch unreachable;
+    var result = core_utf8_valid_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -663,7 +663,7 @@ test "strings::utf8_valid_q: non-string returns error" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.intValue(1) });
-    try std.testing.expectError(error.TypeError, core_utf8_valid_q(testSelf(), args, &a));
+    try std.testing.expectError(error.TypeError, core_utf8_valid_q(testSelf(), &args, &a));
 }
 
 // ===== clojure.string namespace unit tests =====
@@ -674,7 +674,7 @@ test "strings::upper_case: basic" {
     var s = try Value.stringValue(std.heap.page_allocator, "hello");
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
-    var result = str_upper_case(testSelf(), args, &a) catch unreachable;
+    var result = str_upper_case(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(std.mem.eql(u8, result.str_val, "HELLO"));
 }
@@ -685,7 +685,7 @@ test "strings::lower_case: basic" {
     var s = try Value.stringValue(std.heap.page_allocator, "HELLO");
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
-    var result = str_lower_case(testSelf(), args, &a) catch unreachable;
+    var result = str_lower_case(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(std.mem.eql(u8, result.str_val, "hello"));
 }
@@ -696,7 +696,7 @@ test "strings::capitalize: basic" {
     var s = try Value.stringValue(std.heap.page_allocator, "hELLO");
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
-    var result = str_capitalize(testSelf(), args, &a) catch unreachable;
+    var result = str_capitalize(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(std.mem.eql(u8, result.str_val, "Hello"));
 }
@@ -707,7 +707,7 @@ test "strings::capitalize: empty" {
     var s = try Value.stringValue(std.heap.page_allocator, "");
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
-    var result = str_capitalize(testSelf(), args, &a) catch unreachable;
+    var result = str_capitalize(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(std.mem.eql(u8, result.str_val, ""));
 }
@@ -718,7 +718,7 @@ test "strings::trim: both sides" {
     var s = try Value.stringValue(std.heap.page_allocator, "  hello  ");
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
-    var result = str_trim(testSelf(), args, &a) catch unreachable;
+    var result = str_trim(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(std.mem.eql(u8, result.str_val, "hello"));
 }
@@ -729,7 +729,7 @@ test "strings::trim: empty" {
     var s = try Value.stringValue(std.heap.page_allocator, "");
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
-    var result = str_trim(testSelf(), args, &a) catch unreachable;
+    var result = str_trim(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(std.mem.eql(u8, result.str_val, ""));
 }
@@ -740,7 +740,7 @@ test "strings::trim: all whitespace" {
     var s = try Value.stringValue(std.heap.page_allocator, "   ");
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
-    var result = str_trim(testSelf(), args, &a) catch unreachable;
+    var result = str_trim(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(std.mem.eql(u8, result.str_val, ""));
 }
@@ -751,7 +751,7 @@ test "strings::triml: basic" {
     var s = try Value.stringValue(std.heap.page_allocator, "  hello  ");
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
-    var result = str_triml(testSelf(), args, &a) catch unreachable;
+    var result = str_triml(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(std.mem.eql(u8, result.str_val, "hello  "));
 }
@@ -762,7 +762,7 @@ test "strings::trimr: basic" {
     var s = try Value.stringValue(std.heap.page_allocator, "  hello  ");
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
-    var result = str_trimr(testSelf(), args, &a) catch unreachable;
+    var result = str_trimr(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(std.mem.eql(u8, result.str_val, "  hello"));
 }
@@ -773,7 +773,7 @@ test "strings::trim_newline: basic" {
     var s = try Value.stringValue(std.heap.page_allocator, "hello\n\n");
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
-    var result = str_trim_newline(testSelf(), args, &a) catch unreachable;
+    var result = str_trim_newline(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(std.mem.eql(u8, result.str_val, "hello"));
 }
@@ -784,7 +784,7 @@ test "strings::trim_newline: cr" {
     var s = try Value.stringValue(std.heap.page_allocator, "hello\r");
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
-    var result = str_trim_newline(testSelf(), args, &a) catch unreachable;
+    var result = str_trim_newline(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(std.mem.eql(u8, result.str_val, "hello"));
 }
@@ -793,7 +793,7 @@ test "strings::blank_q: nil" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ Value.nilValue() });
-    var result = str_blank_q(testSelf(), args, &a) catch unreachable;
+    var result = str_blank_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -804,7 +804,7 @@ test "strings::blank_q: empty" {
     var s = try Value.stringValue(std.heap.page_allocator, "");
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
-    var result = str_blank_q(testSelf(), args, &a) catch unreachable;
+    var result = str_blank_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -815,7 +815,7 @@ test "strings::blank_q: whitespace" {
     var s = try Value.stringValue(std.heap.page_allocator, "   ");
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
-    var result = str_blank_q(testSelf(), args, &a) catch unreachable;
+    var result = str_blank_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -826,7 +826,7 @@ test "strings::blank_q: text" {
     var s = try Value.stringValue(std.heap.page_allocator, "hello");
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
-    var result = str_blank_q(testSelf(), args, &a) catch unreachable;
+    var result = str_blank_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
 }
@@ -839,7 +839,7 @@ test "strings::starts_with_q: true" {
     var sub = try Value.stringValue(std.heap.page_allocator, "hel");
     defer sub.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, sub });
-    var result = str_starts_with_q(testSelf(), args, &a) catch unreachable;
+    var result = str_starts_with_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -852,7 +852,7 @@ test "strings::starts_with_q: false" {
     var sub = try Value.stringValue(std.heap.page_allocator, "world");
     defer sub.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, sub });
-    var result = str_starts_with_q(testSelf(), args, &a) catch unreachable;
+    var result = str_starts_with_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
 }
@@ -865,7 +865,7 @@ test "strings::ends_with_q: true" {
     var sub = try Value.stringValue(std.heap.page_allocator, "lo");
     defer sub.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, sub });
-    var result = str_ends_with_q(testSelf(), args, &a) catch unreachable;
+    var result = str_ends_with_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -878,7 +878,7 @@ test "strings::ends_with_q: false" {
     var sub = try Value.stringValue(std.heap.page_allocator, "xyz");
     defer sub.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, sub });
-    var result = str_ends_with_q(testSelf(), args, &a) catch unreachable;
+    var result = str_ends_with_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
 }
@@ -891,7 +891,7 @@ test "strings::includes_q: true" {
     var sub = try Value.stringValue(std.heap.page_allocator, "lo w");
     defer sub.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, sub });
-    var result = str_includes_q(testSelf(), args, &a) catch unreachable;
+    var result = str_includes_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
 }
@@ -904,7 +904,7 @@ test "strings::includes_q: false" {
     var sub = try Value.stringValue(std.heap.page_allocator, "xyz");
     defer sub.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, sub });
-    var result = str_includes_q(testSelf(), args, &a) catch unreachable;
+    var result = str_includes_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
 }
@@ -917,7 +917,7 @@ test "strings::index_of: found" {
     var needle = try Value.stringValue(std.heap.page_allocator, "world");
     defer needle.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, needle });
-    var result = str_index_of(testSelf(), args, &a) catch unreachable;
+    var result = str_index_of(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 6);
@@ -931,7 +931,7 @@ test "strings::index_of: not found" {
     var needle = try Value.stringValue(std.heap.page_allocator, "xyz");
     defer needle.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, needle });
-    var result = str_index_of(testSelf(), args, &a) catch unreachable;
+    var result = str_index_of(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .nil);
 }
@@ -944,7 +944,7 @@ test "strings::last_index_of: found" {
     var needle = try Value.stringValue(std.heap.page_allocator, "hello");
     defer needle.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, needle });
-    var result = str_last_index_of(testSelf(), args, &a) catch unreachable;
+    var result = str_last_index_of(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .integer);
     try std.testing.expect(result.int_val == 6);
@@ -958,7 +958,7 @@ test "strings::last_index_of: not found" {
     var needle = try Value.stringValue(std.heap.page_allocator, "xyz");
     defer needle.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, needle });
-    var result = str_last_index_of(testSelf(), args, &a) catch unreachable;
+    var result = str_last_index_of(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.type == .nil);
 }

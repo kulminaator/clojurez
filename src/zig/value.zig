@@ -80,7 +80,7 @@ pub const AtomData = struct {
     ref_count: usize = 1,
 };
 
-pub const BuiltinFn = *const fn (self: *Self, args: list.List, env: *Env) anyerror!Self;
+pub const BuiltinFn = *const fn (self: *const Self, args: *const list.List, env: *Env) anyerror!Self;
 
 // Record data for defrecord instances.
 // Records behave like maps with a fixed set of known fields.

@@ -29,7 +29,7 @@ const namespace = @import("namespace.zig");
 
 // ---- Collection predicates (empty?, not-empty, seq) ----
 
-pub fn core_empty_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_empty_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const coll = args.items[0];
@@ -45,7 +45,7 @@ pub fn core_empty_q(self: *Value, args: list.List, _: *Env) anyerror!Value {
     return Value.boolValue(len == 0);
 }
 
-pub fn core_not_empty(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_not_empty(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const coll = args.items[0];
@@ -64,7 +64,7 @@ pub fn core_not_empty(self: *Value, args: list.List, env_env: *Env) anyerror!Val
 // ---- Higher-order functions ----
 
 // apply - apply function to a collection of arguments
-pub fn core_apply(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_apply(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 2) return error.ArityError;
     const f = args.items[0];
@@ -92,7 +92,7 @@ pub fn core_apply(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 }
 
 // trampoline - calls f, if result is a fn calls it, repeats until non-fn result
-pub fn core_trampoline(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_trampoline(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
     if (args.items.len < 1) return error.ArityError;
@@ -124,7 +124,7 @@ pub fn core_trampoline(self: *Value, args: list.List, env_env: *Env) anyerror!Va
 }
 
 // if-not - if test is false, evaluate then, else evaluate else (if provided)
-pub fn core_if_not(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_if_not(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 2 or args.items.len > 3) return error.ArityError;
     const cond = args.items[0];
@@ -138,7 +138,7 @@ pub fn core_if_not(self: *Value, args: list.List, env_env: *Env) anyerror!Value 
 }
 
 // partial - return a function that is a partial application of f
-pub fn core_partial(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_partial(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 2) return error.ArityError;
     const f = args.items[0];
@@ -186,7 +186,7 @@ pub fn core_partial(self: *Value, args: list.List, env_env: *Env) anyerror!Value
 }
 
 // comp - compose functions (right to left)
-pub fn core_comp(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_comp(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 1) return error.ArityError;
 
@@ -231,7 +231,7 @@ pub fn core_comp(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 }
 
 // fnil - provide default values for nil arguments
-pub fn core_fnil(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_fnil(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 2) return error.ArityError;
     const f = args.items[0];
@@ -293,7 +293,7 @@ pub fn core_fnil(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
 }
 
 // juxt - juxtaposition of functions
-pub fn core_juxt(self: *Value, args: list.List, env_env: *Env) anyerror!Value {
+pub fn core_juxt(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 1) return error.ArityError;
 
