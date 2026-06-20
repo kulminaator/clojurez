@@ -17,7 +17,7 @@ pub fn evalThreadLast(allocator: Allocator, forms: []const Value, env: *Env, dep
 
     var i: usize = 1;
     while (i < forms.len) : (i += 1) {
-        const form = forms[i];
+        const form = &forms[i];
 
         // Handle non-list forms: (->> x inc) => (inc x)
         if (form.type != .list) {
@@ -62,7 +62,7 @@ pub fn evalThreadFirst(allocator: Allocator, forms: []const Value, env: *Env, de
 
     var i: usize = 1;
     while (i < forms.len) : (i += 1) {
-        const form = forms[i];
+        const form = &forms[i];
 
         // Handle non-list forms: (-> x inc) => (inc x)
         if (form.type != .list) {
@@ -113,7 +113,7 @@ pub fn evalCondThreadFirst(allocator: Allocator, forms: []const Value, env: *Env
     while (i + 1 < forms.len) : (i += 2) {
         const test_ptr = try eval.evalRec(allocator, forms[i], env, depth);
         if (test_ptr.isTruthy()) {
-            const step = forms[i + 1];
+            const step = &forms[i + 1];
             if (step.type == .list and step.list_val.items.len > 0) {
                 // Evaluate operator and args, inserting current as second arg
                 const op_ptr = try eval.evalRec(allocator, step.list_val.items[0], env, depth);
@@ -156,7 +156,7 @@ pub fn evalCondThreadLast(allocator: Allocator, forms: []const Value, env: *Env,
     while (i + 1 < forms.len) : (i += 2) {
         const test_ptr = try eval.evalRec(allocator, forms[i], env, depth);
         if (test_ptr.isTruthy()) {
-            const step = forms[i + 1];
+            const step = &forms[i + 1];
             if (step.type == .list and step.list_val.items.len > 0) {
                 // Evaluate operator and args, then call with current as last arg
                 const op_ptr = try eval.evalRec(allocator, step.list_val.items[0], env, depth);

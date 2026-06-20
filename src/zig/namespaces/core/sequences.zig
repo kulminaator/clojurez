@@ -30,7 +30,9 @@ pub fn forceLazySeqHelper(allocator: Allocator, lazy: Value) anyerror!Value {
             const cloned_body = try list.clone(&thunk.body, allocator);
             var thunk_env = try thunk.env.clone(allocator);
             const body_val = Value.listValue(cloned_body);
-            result = try eval_helpers.evalForm(allocator, body_val, &thunk_env);
+            const result_ptr = try eval_helpers.evalForm(allocator, &body_val, &thunk_env);
+            result = result_ptr.*;
+            allocator.destroy(result_ptr);
         }
 
         // Convert to list, recursively forcing any nested lazy_seq elements
@@ -125,7 +127,9 @@ fn evalLazySeqThunk(allocator: Allocator, lazy: Value) anyerror!Value {
             const cloned_body = try list.clone(&thunk.body, allocator);
             var thunk_env = try thunk.env.clone(allocator);
             const body_val = Value.listValue(cloned_body);
-            result = try eval_helpers.evalForm(allocator, body_val, &thunk_env);
+            const result_ptr = try eval_helpers.evalForm(allocator, &body_val, &thunk_env);
+            result = result_ptr.*;
+            allocator.destroy(result_ptr);
         }
 
         // If the thunk returned a lazy_seq, force it (rare)
@@ -317,7 +321,10 @@ fn forceLazySeqGetResult(allocator: Allocator, lazy: *const Value) anyerror!Valu
 
         // Evaluate the thunk body (already wrapped in 'do') as a list
         const body_val = Value.listValue(cloned_body);
-        return try eval_helpers.evalForm(allocator, body_val, &thunk_env);
+        const result_ptr = try eval_helpers.evalForm(allocator, &body_val, &thunk_env);
+        const result = result_ptr.*;
+        allocator.destroy(result_ptr);
+        return result;
     }
     return Value.listValue(list.empty());
 }
@@ -376,7 +383,9 @@ fn forceMapStepConcrete(allocator: Allocator, f: Value, coll: *const Value, env:
     var arg_list: list.List = .empty;
     defer arg_list.deinit(allocator);
     try arg_list.append(allocator, try items[idx].clone(allocator));
-    const mapped = try eval_helpers.callBuiltin(allocator, f, arg_list, env);
+    const mapped_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env);
+    const mapped = mapped_ptr.*;
+    allocator.destroy(mapped_ptr);
 
     // Create next thunk — share the collection pointer, no clone!
     const thunk = try allocator.create(Value.LazySeqThunk);
@@ -427,7 +436,9 @@ fn forceMapStepLazy(allocator: Allocator, f: Value, coll: Value, env: *Env) anye
     var arg_list: list.List = .empty;
     defer arg_list.deinit(allocator);
     try arg_list.append(allocator, try first_val.clone(allocator));
-    const mapped = try eval_helpers.callBuiltin(allocator, f, arg_list, env);
+    const mapped_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env);
+    const mapped = mapped_ptr.*;
+    allocator.destroy(mapped_ptr);
 
     // Get rest — this consumes s
     const rest_val = try getRestValue(allocator, s);

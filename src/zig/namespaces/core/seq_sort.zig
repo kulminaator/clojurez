@@ -77,7 +77,9 @@ pub fn core_sort_by(self: *const Value, args: *const list.List, env_env: *Env) a
         var arg_list: list.List = .empty;
         defer arg_list.deinit(allocator);
         try arg_list.append(allocator, try items.items[i].clone(allocator));
-        keys[i] = try eval_helpers.callBuiltin(allocator, keyfn, arg_list, env_env);
+        const key_ptr = try eval_helpers.callBuiltin(allocator, &keyfn, &arg_list, env_env);
+        keys[i] = key_ptr.*;
+        allocator.destroy(key_ptr);
     }
 
     // Insertion sort using key comparison
@@ -135,7 +137,9 @@ pub fn core_reductions(self: *const Value, args: *const list.List, env_env: *Env
         if (tmp_items.len == 0) {
             // Empty collection: start with (f)
             const empty_args: list.List = .empty;
-            init_val = try eval_helpers.callBuiltin(allocator, f, empty_args, env_env);
+            const init_ptr = try eval_helpers.callBuiltin(allocator, &f, &empty_args, env_env);
+            init_val = init_ptr.*;
+            allocator.destroy(init_ptr);
         } else {
             // Non-empty: start with first element
             init_val = try tmp_items[0].clone(allocator);
@@ -162,7 +166,9 @@ pub fn core_reductions(self: *const Value, args: *const list.List, env_env: *Env
         defer arg_list.deinit(allocator);
         try arg_list.append(allocator, try acc.clone(allocator));
         try arg_list.append(allocator, try items[i].clone(allocator));
-        const new_acc = try eval_helpers.callBuiltin(allocator, f, arg_list, env_env);
+        const new_acc_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env_env);
+        const new_acc = new_acc_ptr.*;
+        allocator.destroy(new_acc_ptr);
         acc.deinit(allocator);
         acc = new_acc;
         try result.append(allocator, acc);
@@ -196,7 +202,9 @@ pub fn core_map_indexed(self: *const Value, args: *const list.List, env_env: *En
         defer arg_list.deinit(allocator);
         try arg_list.append(allocator, Value.intValue(@as(i64, @intCast(i))));
         try arg_list.append(allocator, try items[i].clone(allocator));
-        const mapped = try eval_helpers.callBuiltin(allocator, f, arg_list, env_env);
+        const mapped_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env_env);
+        const mapped = mapped_ptr.*;
+        allocator.destroy(mapped_ptr);
         try result.append(allocator, mapped);
     }
     return Value.listValue(result);
@@ -226,11 +234,13 @@ pub fn core_keep_indexed(self: *const Value, args: *const list.List, env_env: *E
         defer arg_list.deinit(allocator);
         try arg_list.append(allocator, Value.intValue(@as(i64, @intCast(i))));
         try arg_list.append(allocator, try items[i].clone(allocator));
-        var kept = try eval_helpers.callBuiltin(allocator, f, arg_list, env_env);
-        defer kept.deinit(allocator);
+        const kept_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env_env);
+        const kept = kept_ptr.*;
         if (kept.type != .nil) {
             try result.append(allocator, try kept.clone(allocator));
         }
+        kept_ptr.*.deinit(allocator);
+        allocator.destroy(kept_ptr);
     }
     return Value.listValue(result);
 }
@@ -284,8 +294,9 @@ pub fn core_group_by(self: *const Value, args: *const list.List, env_env: *Env) 
         var arg_list: list.List = .empty;
         defer arg_list.deinit(allocator);
         try arg_list.append(allocator, try item.clone(allocator));
-        var key = try eval_helpers.callBuiltin(allocator, f, arg_list, env_env);
-        defer key.deinit(allocator);
+        const key_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env_env);
+        var key = key_ptr.*;
+        defer { key_ptr.*.deinit(allocator); allocator.destroy(key_ptr); }
 
         // Find existing group or create new one
         var found_idx: ?usize = null;

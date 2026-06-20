@@ -50,24 +50,25 @@ pub fn core_assoc(self: *const Value, args: *const list.List, env_env: *Env) any
 
     // Vector assoc: (assoc vec index val & more-kvs)
     if (first.type == .vector) {
-        return assocVector(first, args, env_env);
+        return assocVector(&first, args, env_env);
     }
 
     // Record assoc: (assoc record key val & more-kvs)
     if (first.type == .record) {
-        return assocRecord(first, args, env_env);
+        return assocRecord(&first, args, env_env);
     }
 
     // Map assoc: (assoc map key val & more-kvs)
     // If map is nil, start with an empty map (Clojure behavior)
     if (first.type == .nil) {
-        return assocMap(Value.mapValue(.empty), args, env_env);
+        const empty_map = Value.mapValue(.empty);
+        return assocMap(&empty_map, args, env_env);
     }
     if (first.type != .map) return error.TypeError;
-    return assocMap(first, args, env_env);
+    return assocMap(&first, args, env_env);
 }
 
-fn assocVector(orig: Value, args: *const list.List, env: *Env) anyerror!Value {
+fn assocVector(orig: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     const allocator = env.allocator;
     var new_vec: vec.Vector = .empty;
     errdefer {
@@ -107,7 +108,7 @@ fn assocVector(orig: Value, args: *const list.List, env: *Env) anyerror!Value {
     return Value.vectorValue(new_vec);
 }
 
-fn assocMap(map_val: Value, args: *const list.List, env: *Env) anyerror!Value {
+fn assocMap(map_val: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     const allocator = env.allocator;
     var new_map: Value.Map = .empty;
     errdefer {
@@ -203,7 +204,7 @@ pub fn core_dissoc(self: *const Value, args: *const list.List, env_env: *Env) an
     if (val.type != .map and val.type != .record) return error.TypeError;
 
     if (val.type == .record) {
-        return dissocRecord(val, args, env_env);
+        return dissocRecord(&val, args, env_env);
     }
 
     var new_map: Value.Map = .empty;
@@ -353,7 +354,7 @@ pub fn core_merge(self: *const Value, args: *const list.List, env_env: *Env) any
 
     // If first arg was a record, try to reconstruct a record
     if (args.items[0].type == .record) {
-        return mergeToRecord(args.items[0], base_map, allocator);
+        return mergeToRecord(&args.items[0], base_map, allocator);
     }
     // Transfer ownership
     const result = base_map;
@@ -370,7 +371,7 @@ pub fn isRecordDefinedField(record: *const Value, key: Value) bool {
 }
 
 /// Convert a record to a plain map (for dissoc of a defined field).
-fn recordToMap(record: Value, allocator: Allocator) anyerror!Value {
+fn recordToMap(record: *const Value, allocator: Allocator) anyerror!Value {
     var new_map: Value.Map = .empty;
     errdefer {
         for (new_map.items) |*entry| {
@@ -395,9 +396,9 @@ fn recordToMap(record: Value, allocator: Allocator) anyerror!Value {
 }
 
 /// Assoc on a record. Returns a new record (assoc never demotes a record).
-fn assocRecord(record: Value, args: *const list.List, env: *Env) anyerror!Value {
+fn assocRecord(record: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     const allocator = env.allocator;
-    var current = record;
+    var current = try record.clone(allocator);
     defer current.deinit(allocator);
 
     var i: usize = 1;
@@ -519,18 +520,18 @@ fn assocRecord(record: Value, args: *const list.List, env: *Env) anyerror!Value 
 }
 
 /// Dissoc on a record. If a defined field is removed, demote to plain map.
-fn dissocRecord(record: Value, args: *const list.List, env: *Env) anyerror!Value {
+fn dissocRecord(record: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     const allocator = env.allocator;
 
     // Check if any key to dissoc is a defined field
     var i: usize = 1;
     while (i < args.items.len) : (i += 1) {
-        if (isRecordDefinedField(&record, args.items[i])) {
+        if (isRecordDefinedField(record, args.items[i])) {
             // Demote to plain map, then dissoc from map
             var plain_map = try recordToMap(record, allocator);
             defer plain_map.deinit(allocator);
             // Now dissoc from the plain map
-            return core_dissocMap(plain_map, args, env);
+            return core_dissocMap(&plain_map, args, env);
         }
     }
 
@@ -586,7 +587,7 @@ fn dissocRecord(record: Value, args: *const list.List, env: *Env) anyerror!Value
 }
 
 /// Dissoc on a plain map (used internally by dissocRecord after demotion).
-fn core_dissocMap(map_val: Value, args: *const list.List, env: *Env) anyerror!Value {
+fn core_dissocMap(map_val: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     const allocator = env.allocator;
     var new_map: Value.Map = .empty;
     errdefer {
@@ -619,7 +620,7 @@ fn core_dissocMap(map_val: Value, args: *const list.List, env: *Env) anyerror!Va
 /// Merge result back to a record if the first arg was a record.
 /// If all keys in the merged map are defined fields, return a record.
 /// Otherwise return a record with extmap for extra keys.
-fn mergeToRecord(original_record: Value, merged_map: Value.Map, allocator: Allocator) anyerror!Value {
+fn mergeToRecord(original_record: *const Value, merged_map: Value.Map, allocator: Allocator) anyerror!Value {
     const rd = original_record.record_val orelse return error.TypeError;
 
     // Build new fields map from merged_map entries that match defined fields

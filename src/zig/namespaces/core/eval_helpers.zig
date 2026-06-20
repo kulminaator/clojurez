@@ -11,7 +11,7 @@ const eval_macro = @import("../../eval_macro.zig");
 const Allocator = std.mem.Allocator;
 
 // Bind a parameter to an argument, supporting destructuring
-fn bindParam(allocator: Allocator, param: Value, arg: Value, env: *Value.Env) anyerror!void {
+fn bindParam(allocator: Allocator, param: *const Value, arg: *const Value, env: *Value.Env) anyerror!void {
     switch (param.type) {
         .symbol => {
             try env.put(param.sym_val, try arg.clone(allocator));
@@ -26,21 +26,21 @@ fn bindParam(allocator: Allocator, param: Value, arg: Value, env: *Value.Env) an
             if (param.vec_val.items.len != arg_items.len) return error.ArityError;
             var i: usize = 0;
             while (i < param.vec_val.items.len) : (i += 1) {
-                try bindParam(allocator, param.vec_val.items[i], arg_items[i], env);
+                try bindParam(allocator, &param.vec_val.items[i], &arg_items[i], env);
             }
         },
         .list => {
             if (param.list_val.items.len != arg.list_val.items.len) return error.ArityError;
             var i: usize = 0;
             while (i < param.list_val.items.len) : (i += 1) {
-                try bindParam(allocator, param.list_val.items[i], arg.list_val.items[i], env);
+                try bindParam(allocator, &param.list_val.items[i], &arg.list_val.items[i], env);
             }
         },
         else => {},
     }
 }
 
-pub fn callBuiltin(allocator: Allocator, f: Value, args_list: list.List, env: *Value.Env) anyerror!Value {
+pub fn callBuiltin(allocator: Allocator, f: *const Value, args_list: *const list.List, env: *Value.Env) anyerror!*Value {
     switch (f.type) {
         .function => {
             const fn_data = f.fn_val orelse return error.TypeError;
@@ -87,20 +87,20 @@ pub fn callBuiltin(allocator: Allocator, f: Value, args_list: list.List, env: *V
                         body_call = list.empty();
                     }
                     if (body_call.items.len == 3) {
-                        const body_op = body_call.items[0];
-                        const body_arg0 = body_call.items[1];
-                        const body_arg1 = body_call.items[2];
+                        const body_op = &body_call.items[0];
+                        const body_arg0 = &body_call.items[1];
+                        const body_arg1 = &body_call.items[2];
                         if (body_arg0.type == .symbol and body_arg1.type == .symbol and
                             std.mem.eql(u8, body_arg0.sym_val, arity.params.items[0].sym_val) and
                             std.mem.eql(u8, body_arg1.sym_val, arity.params.items[1].sym_val))
                         {
-                            var resolved_op = try evalForm(allocator, body_op, env);
-                            defer resolved_op.deinit(allocator);
+                            const resolved_op_ptr = try evalForm(allocator, body_op, env);
+                            defer resolved_op_ptr.*.deinit(allocator);
                             var call_args: list.List = .empty;
                             errdefer call_args.deinit(allocator);
                             try call_args.append(allocator, try args_list.items[0].clone(allocator));
                             try call_args.append(allocator, try args_list.items[1].clone(allocator));
-                            return try callBuiltin(allocator, resolved_op, call_args, env);
+                            return try callBuiltin(allocator, resolved_op_ptr, &call_args, env);
                         }
                     }
                 }
@@ -133,8 +133,8 @@ pub fn callBuiltin(allocator: Allocator, f: Value, args_list: list.List, env: *V
 
             var i: usize = 0;
             while (i < arity.params.items.len) : (i += 1) {
-                const param = arity.params.items[i];
-                try bindParam(allocator, param, args_list.items[i], &new_env);
+                const param = &arity.params.items[i];
+                try bindParam(allocator, param, &args_list.items[i], &new_env);
             }
 
             if (has_rest and args_list.items.len > min_args) {
@@ -149,23 +149,24 @@ pub fn callBuiltin(allocator: Allocator, f: Value, args_list: list.List, env: *V
                 try new_env.put(arity.rest_name.?, Value.listValue(.empty));
             }
 
-            return try evalBody(allocator, arity.body, &new_env);
+            return try evalBody(allocator, &arity.body, &new_env);
         },
         .builtin_fn => {
-            var f_mut = f;
-            return f_mut.builtin_fn_val(&f_mut, &args_list, env);
+            var f_mut = f.*;
+            const result = try f_mut.builtin_fn_val(&f_mut, args_list, env);
+            return try allocBuiltinResult(allocator, result);
         },
         .keyword => {
             // Keyword as function: looks up the keyword in a map
             if (args_list.items.len != 1) return error.ArityError;
-            const coll = args_list.items[0];
-            if (coll.type != .map) return Value.nilValue();
+            const coll = &args_list.items[0];
+            if (coll.type != .map) return try allocBuiltinResult(allocator, Value.nilValue());
             for (coll.map_val.items) |entry| {
                 if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, f.kw_val)) {
-                    return try entry.value.clone(allocator);
+                    return try allocBuiltinResult(allocator, try entry.value.clone(allocator));
                 }
             }
-            return Value.nilValue();
+            return try allocBuiltinResult(allocator, Value.nilValue());
         },
         else => {
             std.debug.print("NotCallable in eval_helpers: type={s}\n", .{@tagName(f.type)});
@@ -174,20 +175,26 @@ pub fn callBuiltin(allocator: Allocator, f: Value, args_list: list.List, env: *V
     }
 }
 
-pub fn evalBody(allocator: Allocator, body: list.List, env: *Value.Env) anyerror!Value {
-    if (body.items.len == 0) return Value.nilValue();
+fn allocBuiltinResult(allocator: Allocator, val: Value) anyerror!*Value {
+    const ptr = try allocator.create(Value);
+    ptr.* = val;
+    return ptr;
+}
+
+pub fn evalBody(allocator: Allocator, body: *const list.List, env: *Value.Env) anyerror!*Value {
+    if (body.items.len == 0) return try allocBuiltinResult(allocator, Value.nilValue());
     var cloned_body: list.List = .empty;
     errdefer cloned_body.deinit(allocator);
     try cloned_body.ensureTotalCapacity(allocator, body.items.len);
     for (body.items) |item| {
         try cloned_body.append(allocator, try item.clone(allocator));
     }
-    return try evalForm(allocator, Value.listValue(cloned_body), env);
+    return try evalForm(allocator, &Value.listValue(cloned_body), env);
 }
 
-pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Value {
+pub fn evalForm(allocator: Allocator, form: *const Value, env: *Value.Env) anyerror!*Value {
     switch (form.type) {
-        .nil, .bool, .integer, .float, .string, .keyword => return try form.clone(allocator),
+        .nil, .bool, .integer, .float, .string, .keyword => return try allocBuiltinResult(allocator, try form.clone(allocator)),
         .symbol => {
             // Handle qualified symbols: alias/name or namespace/name
             if (std.mem.indexOfScalar(u8, form.sym_val, '/')) |slash_idx| {
@@ -195,7 +202,7 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
                 const name = form.sym_val[slash_idx + 1 ..];
                 const ns_mgr = eval_ns.findNsManager(env) orelse {
                     const val2 = env.get(form.sym_val);
-                    if (val2) |v| return try v.clone(allocator);
+                    if (val2) |v| return try allocBuiltinResult(allocator, try v.clone(allocator));
                     std.debug.print("Undefined symbol: '{s}'\n", .{form.sym_val});
                     return error.UndefinedSymbol;
                 };
@@ -203,125 +210,155 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
                 const target_ns = ns_mgr.resolveAlias(current_ns, alias) orelse alias;
                 const target_env = ns_mgr.getNamespace(target_ns) orelse {
                     const val3 = env.get(form.sym_val);
-                    if (val3) |v| return try v.clone(allocator);
+                    if (val3) |v| return try allocBuiltinResult(allocator, try v.clone(allocator));
                     std.debug.print("Undefined symbol: '{s}'\n", .{form.sym_val});
                     return error.UndefinedSymbol;
                 };
                 const val4 = target_env.get(name);
-                if (val4) |v| return try v.clone(allocator);
+                if (val4) |v| return try allocBuiltinResult(allocator, try v.clone(allocator));
                 std.debug.print("Undefined symbol: '{s}'\n", .{form.sym_val});
                     return error.UndefinedSymbol;
             }
-            if (env.get(form.sym_val)) |v| return try v.clone(allocator);
+            if (env.get(form.sym_val)) |v| return try allocBuiltinResult(allocator, try v.clone(allocator));
             std.debug.print("Undefined symbol: '{s}'\n", .{form.sym_val});
                     return error.UndefinedSymbol;
         },
         .list => {
-            if (form.list_val.items.len == 0) return Value.listValue(list.empty());
-            const first = form.list_val.items[0];
+            if (form.list_val.items.len == 0) return try allocBuiltinResult(allocator, Value.listValue(list.empty()));
+            const first = &form.list_val.items[0];
             if (first.type == .symbol) {
                 if (std.mem.eql(u8, first.sym_val, "quote")) {
                     if (form.list_val.items.len != 2) return error.ArityError;
-                    return try form.list_val.items[1].clone(allocator);
+                    return try allocBuiltinResult(allocator, try form.list_val.items[1].clone(allocator));
                 }
                 if (std.mem.eql(u8, first.sym_val, "quasiquote")) {
                     if (form.list_val.items.len != 2) return error.ArityError;
-                    return try eval_macro.unquoteProcess(allocator, form.list_val.items[1], env, 0);
+                    const result = try eval_macro.unquoteProcess(allocator, form.list_val.items[1], env, 0);
+                    return try allocBuiltinResult(allocator, result);
                 }
                 if (std.mem.eql(u8, first.sym_val, "do")) {
-                    var result: Value = Value.nilValue();
-                    errdefer result.deinit(allocator);
-                    for (form.list_val.items[1..]) |arg| {
-                        result.deinit(allocator);
-                        result = try evalForm(allocator, arg, env);
+                    var last_ptr: ?*Value = null;
+                    errdefer {
+                        if (last_ptr) |p| { p.*.deinit(allocator); allocator.destroy(p); }
                     }
-                    return result;
+                    for (form.list_val.items[1..]) |arg| {
+                        if (last_ptr) |p| { p.*.deinit(allocator); allocator.destroy(p); }
+                        last_ptr = try evalForm(allocator, &arg, env);
+                    }
+                    if (last_ptr) |p| {
+                        const result = p.*;
+                        allocator.destroy(p);
+                        return try allocBuiltinResult(allocator, result);
+                    }
+                    return try allocBuiltinResult(allocator, Value.nilValue());
                 }
                 if (std.mem.eql(u8, first.sym_val, "if")) {
                     if (form.list_val.items.len < 3) return error.ArityError;
-                    var test_val = try evalForm(allocator, form.list_val.items[1], env);
-                    defer test_val.deinit(allocator);
-                    if (test_val.isTruthy()) {
-                        return try evalForm(allocator, form.list_val.items[2], env);
+                    const test_ptr = try evalForm(allocator, &form.list_val.items[1], env);
+                    const truthy = test_ptr.isTruthy();
+                    test_ptr.*.deinit(allocator);
+                    allocator.destroy(test_ptr);
+                    if (truthy) {
+                        return try evalForm(allocator, &form.list_val.items[2], env);
                     } else if (form.list_val.items.len >= 4) {
-                        return try evalForm(allocator, form.list_val.items[3], env);
+                        return try evalForm(allocator, &form.list_val.items[3], env);
                     } else {
-                        return Value.nilValue();
+                        return try allocBuiltinResult(allocator, Value.nilValue());
                     }
                 }
                 if (std.mem.eql(u8, first.sym_val, "when")) {
                     if (form.list_val.items.len < 3) return error.ArityError;
-                    var test_val = try evalForm(allocator, form.list_val.items[1], env);
-                    defer test_val.deinit(allocator);
-                    if (test_val.isTruthy()) {
-                        var result: Value = Value.nilValue();
-                        errdefer result.deinit(allocator);
-                        for (form.list_val.items[2..]) |arg| {
-                            result.deinit(allocator);
-                            result = try evalForm(allocator, arg, env);
+                    const test_ptr = try evalForm(allocator, &form.list_val.items[1], env);
+                    const truthy = test_ptr.isTruthy();
+                    test_ptr.*.deinit(allocator);
+                    allocator.destroy(test_ptr);
+                    if (truthy) {
+                        var last_ptr: ?*Value = null;
+                        errdefer {
+                            if (last_ptr) |p| { p.*.deinit(allocator); allocator.destroy(p); }
                         }
-                        return result;
+                        for (form.list_val.items[2..]) |arg| {
+                            if (last_ptr) |p| { p.*.deinit(allocator); allocator.destroy(p); }
+                            last_ptr = try evalForm(allocator, &arg, env);
+                        }
+                        if (last_ptr) |p| {
+                            const result = p.*;
+                            allocator.destroy(p);
+                            return try allocBuiltinResult(allocator, result);
+                        }
+                        return try allocBuiltinResult(allocator, Value.nilValue());
                     }
-                    return Value.nilValue();
+                    return try allocBuiltinResult(allocator, Value.nilValue());
                 }
                 if (std.mem.eql(u8, first.sym_val, "and")) {
-                    if (form.list_val.items.len == 1) return Value.boolValue(true);
+                    if (form.list_val.items.len == 1) return try allocBuiltinResult(allocator, Value.boolValue(true));
                     var i: usize = 1;
                     while (i < form.list_val.items.len) : (i += 1) {
-                        var val = try evalForm(allocator, form.list_val.items[i], env);
-                        if (!val.isTruthy()) {
-                            return val;
+                        const val_ptr = try evalForm(allocator, &form.list_val.items[i], env);
+                        if (!val_ptr.isTruthy()) {
+                            return val_ptr;
                         }
                         if (i == form.list_val.items.len - 1) {
-                            return val;
+                            return val_ptr;
                         }
-                        val.deinit(allocator);
+                        val_ptr.*.deinit(allocator);
+                        allocator.destroy(val_ptr);
                     }
-                    return Value.nilValue();
+                    return try allocBuiltinResult(allocator, Value.nilValue());
                 }
                 if (std.mem.eql(u8, first.sym_val, "or")) {
-                    if (form.list_val.items.len == 0) return Value.nilValue();
+                    if (form.list_val.items.len == 0) return try allocBuiltinResult(allocator, Value.nilValue());
                     var i: usize = 1;
                     while (i < form.list_val.items.len) : (i += 1) {
-                        var val = try evalForm(allocator, form.list_val.items[i], env);
-                        if (val.isTruthy()) return val;
-                        val.deinit(allocator);
+                        const val_ptr = try evalForm(allocator, &form.list_val.items[i], env);
+                        if (val_ptr.isTruthy()) return val_ptr;
+                        val_ptr.*.deinit(allocator);
+                        allocator.destroy(val_ptr);
                     }
-                    return Value.nilValue();
+                    return try allocBuiltinResult(allocator, Value.nilValue());
                 }
                 if (std.mem.eql(u8, first.sym_val, "cond")) {
                     var i: usize = 1;
                     while (i < form.list_val.items.len) : (i += 2) {
                         if (i + 1 >= form.list_val.items.len) return error.ArityError;
-                        var test_val = try evalForm(allocator, form.list_val.items[i], env);
-                        defer test_val.deinit(allocator);
-                        if (test_val.isTruthy()) {
-                            return try evalForm(allocator, form.list_val.items[i + 1], env);
+                        const test_ptr = try evalForm(allocator, &form.list_val.items[i], env);
+                        const truthy = test_ptr.isTruthy();
+                        test_ptr.*.deinit(allocator);
+                        allocator.destroy(test_ptr);
+                        if (truthy) {
+                            return try evalForm(allocator, &form.list_val.items[i + 1], env);
                         }
                     }
-                    return Value.nilValue();
+                    return try allocBuiltinResult(allocator, Value.nilValue());
                 }
                 if (std.mem.eql(u8, first.sym_val, "let")) {
                     if (form.list_val.items.len < 3) return error.ArityError;
-                    const bindings = form.list_val.items[1];
+                    const bindings = &form.list_val.items[1];
                     if (bindings.type != .list and bindings.type != .vector) return error.TypeError;
                     const bind_items = if (bindings.type == .list) bindings.list_val.items else bindings.vec_val.items;
                     var new_env = try env.clone(allocator);
                     defer new_env.deinit(allocator);
                     var bi: usize = 0;
                     while (bi < bind_items.len) : (bi += 2) {
-                        const sym = bind_items[bi];
+                        const sym = &bind_items[bi];
                         if (sym.type != .symbol) return error.TypeError;
-                        const val = try evalForm(allocator, bind_items[bi + 1], &new_env);
-                        try new_env.put(sym.sym_val, val);
+                        const val_ptr = try evalForm(allocator, &bind_items[bi + 1], &new_env);
+                        try new_env.put(sym.sym_val, val_ptr.*);
                     }
-                    var result: Value = Value.nilValue();
-                    errdefer result.deinit(allocator);
+                    var last_ptr: ?*Value = null;
+                    errdefer {
+                        if (last_ptr) |p| { p.*.deinit(allocator); allocator.destroy(p); }
+                    }
                     for (form.list_val.items[2..]) |arg| {
-                        result.deinit(allocator);
-                        result = try evalForm(allocator, arg, &new_env);
+                        if (last_ptr) |p| { p.*.deinit(allocator); allocator.destroy(p); }
+                        last_ptr = try evalForm(allocator, &arg, &new_env);
                     }
-                    return result;
+                    if (last_ptr) |p| {
+                        const result = p.*;
+                        allocator.destroy(p);
+                        return try allocBuiltinResult(allocator, result);
+                    }
+                    return try allocBuiltinResult(allocator, Value.nilValue());
                 }
                 if (std.mem.eql(u8, first.sym_val, "fn")) {
                     if (form.list_val.items.len < 2) return error.ArityError;
@@ -333,7 +370,7 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
                         idx += 1;
                     }
                     if (idx >= form.list_val.items.len) return error.ArityError;
-                    const params = form.list_val.items[idx];
+                    const params = &form.list_val.items[idx];
                     if (params.type != .list and params.type != .vector) return error.TypeError;
                     const params_list = if (params.type == .vector) try helpers.listFromVector(allocator, params.vec_val) else params.list_val;
                     const body = if (form.list_val.items.len >= idx + 1) form.list_val.items[idx + 1 ..] else &[_]Value{};
@@ -346,7 +383,7 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
                     const cloned_params = try params_list.clone(allocator);
                     const cloned_body = try body_list.clone(allocator);
                     const fn_env = try env.clone(allocator);
-                    return try Value.fnValueSingleNamed(allocator, cloned_params, cloned_body, fn_env, null, false, fn_name);
+                    return try allocBuiltinResult(allocator, try Value.fnValueSingleNamed(allocator, cloned_params, cloned_body, fn_env, null, false, fn_name));
                 }
                 if (std.mem.eql(u8, first.sym_val, "lazy-seq")) {
                     if (form.list_val.items.len < 2) return error.ArityError;
@@ -363,14 +400,15 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
                         .body = body,
                         .env = try env.clone(allocator),
                     };
-                    return Value.lazySeqValue(thunk);
+                    return try allocBuiltinResult(allocator, Value.lazySeqValue(thunk));
                 }
             }
-            var op = try evalForm(allocator, first, env);
-            defer op.deinit(allocator);
+            const op_ptr = try evalForm(allocator, first, env);
+            defer op_ptr.*.deinit(allocator);
+            defer allocator.destroy(op_ptr);
 
             // Check if operator is a macro
-            if (op.type == .function and op.fn_val.?.is_macro) {
+            if (op_ptr.type == .function and op_ptr.fn_val.?.is_macro) {
                 // Macro: pass unevaluated arguments
                 var macro_args: list.List = .empty;
                 errdefer macro_args.deinit(allocator);
@@ -378,34 +416,37 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
                     try macro_args.append(allocator, try arg.clone(allocator));
                 }
                 // Call the macro with unevaluated args
-                var expanded = try callBuiltin(allocator, op, macro_args, env);
+                const expanded_ptr = try callBuiltin(allocator, op_ptr, &macro_args, env);
                 // Evaluate the expanded form
-                const result = try evalForm(allocator, expanded, env);
-                expanded.deinit(allocator);
+                const result = try evalForm(allocator, expanded_ptr, env);
+                expanded_ptr.*.deinit(allocator);
+                allocator.destroy(expanded_ptr);
                 return result;
             }
 
             var args: list.List = .empty;
             errdefer args.deinit(allocator);
             for (form.list_val.items[1..]) |arg| {
-                try args.append(allocator, try evalForm(allocator, arg, env));
+                const arg_ptr = try evalForm(allocator, &arg, env);
+                try args.append(allocator, arg_ptr.*);
             }
-            return try callBuiltin(allocator, op, args, env);
+            return try callBuiltin(allocator, op_ptr, &args, env);
         },
         .vector => {
             var new_vec: vec.Vector = .empty;
             errdefer new_vec.deinit(allocator);
             for (form.vec_val.items) |item| {
-                try new_vec.append(allocator, try evalForm(allocator, item, env));
+                const item_ptr = try evalForm(allocator, &item, env);
+                try new_vec.append(allocator, item_ptr.*);
             }
-            return Value.vectorValue(new_vec);
+            return try allocBuiltinResult(allocator, Value.vectorValue(new_vec));
         },
         .cons => {
             // Evaluate cons cell as a function call: (operator arg1 arg2 ... . tail)
             // First, convert cons to list for uniform handling
             var cons_list: list.List = .empty;
             errdefer cons_list.deinit(allocator);
-            var c = form;
+            var c = form.*;
             while (c.type == .cons) {
                 const cdata = c.cons_val.?;
                 try cons_list.append(allocator, try cdata.head.clone(allocator));
@@ -419,12 +460,13 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
             } else if (c.type != .nil) {
                 try cons_list.append(allocator, c);
             }
+            c.deinit(allocator);
             // Now evaluate the list as a function call
             if (cons_list.items.len == 0) {
-                return Value.listValue(list.empty());
+                return try allocBuiltinResult(allocator, Value.listValue(list.empty()));
             }
-            const first = cons_list.items[0];
-            if (first.type == .symbol) {
+            const first_item = &cons_list.items[0];
+            if (first_item.type == .symbol) {
                 // Re-create as a proper list for special form handling
                 var proper_list: list.List = .empty;
                 errdefer proper_list.deinit(allocator);
@@ -432,19 +474,21 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
                     try proper_list.append(allocator, item);
                 }
                 const list_val = Value.listValue(proper_list);
-                return try evalForm(allocator, list_val, env);
+                return try evalForm(allocator, &list_val, env);
             }
             // Non-symbol operator: evaluate normally
-            var op = try evalForm(allocator, first, env);
-            defer op.deinit(allocator);
+            const op_ptr = try evalForm(allocator, first_item, env);
+            defer op_ptr.*.deinit(allocator);
+            defer allocator.destroy(op_ptr);
             var args: list.List = .empty;
             errdefer args.deinit(allocator);
             for (cons_list.items[1..]) |arg| {
-                try args.append(allocator, try evalForm(allocator, arg, env));
+                const arg_ptr = try evalForm(allocator, &arg, env);
+                try args.append(allocator, arg_ptr.*);
             }
-            return try callBuiltin(allocator, op, args, env);
+            return try callBuiltin(allocator, op_ptr, &args, env);
         },
-        else => return try form.clone(allocator),
+        else => return try allocBuiltinResult(allocator, try form.clone(allocator)),
     }
 }
 
@@ -453,7 +497,7 @@ pub fn evalForm(allocator: Allocator, form: Value, env: *Value.Env) anyerror!Val
 pub fn core_macroexpand_1(self: *const Value, args: *const list.List, env_env: *Value.Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
-    const form = args.items[0];
+    const form = &args.items[0];
 
     // Only lists can be macro calls
     if (form.type != .list or form.list_val.items.len == 0) {
@@ -461,7 +505,7 @@ pub fn core_macroexpand_1(self: *const Value, args: *const list.List, env_env: *
     }
 
     const allocator = env_env.allocator;
-    const first = form.list_val.items[0];
+    const first = &form.list_val.items[0];
 
     // Resolve the operator
     var op: Value = undefined;
@@ -487,7 +531,10 @@ pub fn core_macroexpand_1(self: *const Value, args: *const list.List, env_env: *
             try macro_args.append(allocator, try arg.clone(allocator));
         }
         // Call the macro with unevaluated args and return the result WITHOUT evaluating
-        return try callBuiltin(allocator, op, macro_args, env_env);
+        const result_ptr = try callBuiltin(allocator, &op, &macro_args, env_env);
+        const result = result_ptr.*;
+        allocator.destroy(result_ptr);
+        return result;
     }
 
     // Not a macro - return form unchanged

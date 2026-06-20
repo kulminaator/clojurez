@@ -88,7 +88,10 @@ pub fn core_apply(self: *const Value, args: *const list.List, env_env: *Env) any
         try call_args.append(env_env.allocator, try item.clone(env_env.allocator));
     }
 
-    return try eval_helpers.callBuiltin(env_env.allocator, f, call_args, env_env);
+    const result_ptr = try eval_helpers.callBuiltin(env_env.allocator, &f, &call_args, env_env);
+    const result = result_ptr.*;
+    env_env.allocator.destroy(result_ptr);
+    return result;
 }
 
 // trampoline - calls f, if result is a fn calls it, repeats until non-fn result
@@ -106,7 +109,11 @@ pub fn core_trampoline(self: *const Value, args: *const list.List, env_env: *Env
         while (i < args.items.len) : (i += 1) {
             try call_args.append(allocator, try args.items[i].clone(allocator));
         }
-        current = try eval_helpers.callBuiltin(allocator, current, call_args, env_env);
+        const result_ptr = try eval_helpers.callBuiltin(allocator, &current, &call_args, env_env);
+        const new_current = result_ptr.*;
+        allocator.destroy(result_ptr);
+        current.deinit(allocator);
+        current = new_current;
     }
 
     var max_iterations: usize = 10000;
@@ -115,9 +122,11 @@ pub fn core_trampoline(self: *const Value, args: *const list.List, env_env: *Env
             return current;
         }
         const empty_args: list.List = .empty;
-        const result = try eval_helpers.callBuiltin(allocator, current, empty_args, env_env);
+        const result_ptr = try eval_helpers.callBuiltin(allocator, &current, &empty_args, env_env);
+        const new_current = result_ptr.*;
+        allocator.destroy(result_ptr);
         current.deinit(allocator);
-        current = result;
+        current = new_current;
     }
     current.deinit(allocator);
     return error.StackOverflow;

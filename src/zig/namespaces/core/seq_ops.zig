@@ -172,7 +172,9 @@ pub fn core_mapcat(self: *const Value, args: *const list.List, env_env: *Env) an
             var arg_list: list.List = .empty;
             errdefer arg_list.deinit(allocator);
             try arg_list.append(allocator, try item.clone(allocator));
-            const mapped = try eval_helpers.callBuiltin(allocator, f, arg_list, env_env);
+            const mapped_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env_env);
+            const mapped = mapped_ptr.*;
+            allocator.destroy(mapped_ptr);
             switch (mapped.type) {
                 .list => {
                     for (mapped.list_val.items) |mitem| {
@@ -337,7 +339,9 @@ pub fn core_reduce(self: *const Value, args: *const list.List, env_env: *Env) an
         try arg_list.append(env_env.allocator, try acc.clone(env_env.allocator));
         try arg_list.append(env_env.allocator, try items[i].clone(env_env.allocator));
 
-        var new_acc = try eval_helpers.callBuiltin(env_env.allocator, f, arg_list, env_env);
+        const new_acc_ptr = try eval_helpers.callBuiltin(env_env.allocator, &f, &arg_list, env_env);
+        var new_acc = new_acc_ptr.*;
+        env_env.allocator.destroy(new_acc_ptr);
         acc.deinit(env_env.allocator);
         // Check for early reduction termination
         if (new_acc.type == .reduced) {
@@ -485,9 +489,12 @@ pub fn core_filter(self: *const Value, args: *const list.List, env_env: *Env) an
         var arg_list: list.List = .empty;
         defer arg_list.deinit(env_env.allocator);
         try arg_list.append(env_env.allocator, try item.clone(env_env.allocator));
-        var pred_result = try eval_helpers.callBuiltin(env_env.allocator, f, arg_list, env_env);
-        defer pred_result.deinit(env_env.allocator);
-        if (pred_result.isTruthy()) {
+        const pred_result_ptr = try eval_helpers.callBuiltin(env_env.allocator, &f, &arg_list, env_env);
+        const pred_result = pred_result_ptr.*;
+        const truthy = pred_result.isTruthy();
+        pred_result_ptr.*.deinit(env_env.allocator);
+        env_env.allocator.destroy(pred_result_ptr);
+        if (truthy) {
             try result.append(env_env.allocator, try item.clone(env_env.allocator));
         }
     }
@@ -514,9 +521,12 @@ pub fn core_remove(self: *const Value, args: *const list.List, env_env: *Env) an
         var arg_list: list.List = .empty;
         defer arg_list.deinit(env_env.allocator);
         try arg_list.append(env_env.allocator, try item.clone(env_env.allocator));
-        var pred_result = try eval_helpers.callBuiltin(env_env.allocator, f, arg_list, env_env);
-        defer pred_result.deinit(env_env.allocator);
-        if (!pred_result.isTruthy()) {
+        const pred_result_ptr = try eval_helpers.callBuiltin(env_env.allocator, &f, &arg_list, env_env);
+        const pred_result = pred_result_ptr.*;
+        const truthy = pred_result.isTruthy();
+        pred_result_ptr.*.deinit(env_env.allocator);
+        env_env.allocator.destroy(pred_result_ptr);
+        if (!truthy) {
             try result.append(env_env.allocator, try item.clone(env_env.allocator));
         }
     }
@@ -541,9 +551,12 @@ pub fn core_every_q(self: *const Value, args: *const list.List, env_env: *Env) a
         var arg_list: list.List = .empty;
         defer arg_list.deinit(env_env.allocator);
         try arg_list.append(env_env.allocator, try item.clone(env_env.allocator));
-        var pred_result = try eval_helpers.callBuiltin(env_env.allocator, f, arg_list, env_env);
-        defer pred_result.deinit(env_env.allocator);
-        if (!pred_result.isTruthy()) return Value.boolValue(false);
+        const pred_result_ptr = try eval_helpers.callBuiltin(env_env.allocator, &f, &arg_list, env_env);
+        const pred_result = pred_result_ptr.*;
+        const truthy = pred_result.isTruthy();
+        pred_result_ptr.*.deinit(env_env.allocator);
+        env_env.allocator.destroy(pred_result_ptr);
+        if (!truthy) return Value.boolValue(false);
     }
     return Value.boolValue(true);
 }
@@ -566,9 +579,14 @@ pub fn core_some(self: *const Value, args: *const list.List, env_env: *Env) anye
         var arg_list: list.List = .empty;
         defer arg_list.deinit(env_env.allocator);
         try arg_list.append(env_env.allocator, try item.clone(env_env.allocator));
-        var result = try eval_helpers.callBuiltin(env_env.allocator, f, arg_list, env_env);
-        if (result.isTruthy()) return result;
-        result.deinit(env_env.allocator);
+        const result_ptr = try eval_helpers.callBuiltin(env_env.allocator, &f, &arg_list, env_env);
+        if (result_ptr.isTruthy()) {
+            const result = result_ptr.*;
+            env_env.allocator.destroy(result_ptr);
+            return result;
+        }
+        result_ptr.*.deinit(env_env.allocator);
+        env_env.allocator.destroy(result_ptr);
     }
     return Value.nilValue();
 }
@@ -766,12 +784,15 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
                 var thunk_env = try thunk.env.clone(allocator);
 
                 const fn_val = try Value.fnValueSingle(allocator, cloned_params, cloned_body, thunk_env, null, false);
-                var result = try eval_helpers.callBuiltin(
+                var empty_args: list.List = .empty;
+                const result_ptr = try eval_helpers.callBuiltin(
                     allocator,
-                    fn_val,
-                    list.empty(),
+                    &fn_val,
+                    &empty_args,
                     &thunk_env,
                 );
+                var result = result_ptr.*;
+                allocator.destroy(result_ptr);
 
                 // Force each element of the result
                 switch (result.type) {
