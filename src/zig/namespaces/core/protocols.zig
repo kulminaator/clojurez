@@ -124,8 +124,7 @@ pub fn dispatchProtocolMethod(
 
     // Call the implementation function with all arguments
     const call_env: *Env = @constCast(proto_env);
-    const result_ptr = try eval.call(allocator, impl_fn, &args, call_env, depth);
-    return result_ptr.*;
+    return try eval.call(allocator, impl_fn, &args, call_env, depth);
 }
 
 /// Evaluate a (defprotocol ...) form.

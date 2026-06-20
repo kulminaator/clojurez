@@ -424,11 +424,11 @@ fn evalFunctionCall(allocator: Allocator, l: *const list.List, env: *Env, depth:
         for (l.items[1..]) |arg| {
             try macro_args.append(allocator, try arg.clone(allocator));
         }
-        // Call the macro with unevaluated args
-        const expanded_ptr = try call(allocator, op_ptr.*, &macro_args, env, depth);
+        // Call the macro with unevaluated args — returns Value by value
+        var expanded = try call(allocator, op_ptr.*, &macro_args, env, depth);
         // Evaluate the expanded form
-        const result = try evalRec(allocator, expanded_ptr.*, env, depth);
-        expanded_ptr.*.deinit(allocator);
+        const result = try evalRec(allocator, expanded, env, depth);
+        expanded.deinit(allocator);
         return result;
     }
 
@@ -440,8 +440,9 @@ fn evalFunctionCall(allocator: Allocator, l: *const list.List, env: *Env, depth:
         try args.append(allocator, ptr.*);
     }
 
-    // Call the function (caller owns args, deinit above)
-    return try call(allocator, op_ptr.*, &args, env, depth);
+    // Call the function — returns Value by value, allocate once for return
+    const result = try call(allocator, op_ptr.*, &args, env, depth);
+    return try allocValue(allocator, result);
 }
 
 fn evalLet(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
@@ -722,7 +723,7 @@ fn evalLoop(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) 
     }
 }
 
-pub fn call(allocator: Allocator, op: Value, args_list: *const list.List, env: *Env, depth: usize) anyerror!*Value {
+pub fn call(allocator: Allocator, op: Value, args_list: *const list.List, env: *Env, depth: usize) anyerror!Value {
     switch (op.type) {
         .function => return callFunction(allocator, op, args_list, env, depth),
         .builtin_fn => return callBuiltinFn(allocator, op, args_list, env),
@@ -739,7 +740,7 @@ pub fn call(allocator: Allocator, op: Value, args_list: *const list.List, env: *
 }
 
 /// Call a user-defined function: match arity, bind params, evaluate body.
-fn callFunction(allocator: Allocator, op: Value, args: *const list.List, env: *Env, depth: usize) anyerror!*Value {
+fn callFunction(allocator: Allocator, op: Value, args: *const list.List, env: *Env, depth: usize) anyerror!Value {
     _ = env;
     const fn_data = op.fn_val orelse return error.TypeError;
     const arity = try matchArity(fn_data, args.items.len);
@@ -767,12 +768,14 @@ fn callFunction(allocator: Allocator, op: Value, args: *const list.List, env: *E
         arity.body.items[0].type == .symbol and
         std.mem.eql(u8, arity.body.items[0].sym_val, "__protocol_dispatch__"))
     {
-        const result = try protocols.dispatchProtocolMethod(allocator, args.*, new_env, depth);
-        return try allocValue(allocator, result);
+        return try protocols.dispatchProtocolMethod(allocator, args.*, new_env, depth);
     }
 
-    // Evaluate the function body
-    return try evalRec(allocator, Value.listValue(arity.body), new_env, depth);
+    // Evaluate the function body — take ownership from evalRec's *Value
+    const result_ptr = try evalRec(allocator, Value.listValue(arity.body), new_env, depth);
+    const result = result_ptr.*;
+    allocator.destroy(result_ptr);
+    return result;
 }
 
 /// Find the matching arity for a given argument count.
@@ -834,86 +837,88 @@ fn bindArityParams(allocator: Allocator, arity: *const Value.Arity, args: *const
 }
 
 /// Call a built-in function registered with the VM.
-fn callBuiltinFn(allocator: Allocator, op: Value, args: *const list.List, env: *Env) anyerror!*Value {
+fn callBuiltinFn(_: Allocator, op: Value, args: *const list.List, env: *Env) anyerror!Value {
     var op_mut = op;
-    const result = try op_mut.builtin_fn_val(&op_mut, args, env);
-    return try allocValue(allocator, result);
+    return op_mut.builtin_fn_val(&op_mut, args, env);
 }
 
 /// Call a set as a function: returns the element if found, nil otherwise.
-fn callSet(allocator: Allocator, op: Value, args: *const list.List) anyerror!*Value {
+fn callSet(allocator: Allocator, op: Value, args: *const list.List) anyerror!Value {
     if (args.items.len != 1) return error.ArityError;
     for (op.set_val.items) |item| {
         if (item.equals(args.items[0])) {
-            return try item.cloneGC(allocator);
+            return try item.clone(allocator);
         }
     }
-    return try allocValue(allocator, Value.nilValue());
+    return Value.nilValue();
 }
 
 /// Call a keyword as a function: looks up the keyword in a map or record.
-fn callKeyword(allocator: Allocator, op: Value, args: *const list.List) anyerror!*Value {
+fn callKeyword(allocator: Allocator, op: Value, args: *const list.List) anyerror!Value {
     if (args.items.len != 1) return error.ArityError;
     const coll = args.items[0];
     if (coll.type == .map) {
         for (coll.map_val.items) |entry| {
             if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, op.kw_val)) {
-                return try entry.value.cloneGC(allocator);
+                return try entry.value.clone(allocator);
             }
         }
     } else if (coll.type == .record) {
         for (coll.record_val.?.fields.items) |entry| {
             if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, op.kw_val)) {
-                return try entry.value.cloneGC(allocator);
+                return try entry.value.clone(allocator);
             }
         }
         for (coll.record_val.?.extmap.items) |entry| {
             if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, op.kw_val)) {
-                return try entry.value.cloneGC(allocator);
+                return try entry.value.clone(allocator);
             }
         }
     }
-    return try allocValue(allocator, Value.nilValue());
+    return Value.nilValue();
 }
 
 /// Call a map as a function: returns value for key, or not-found if provided.
-fn callMap(allocator: Allocator, op: Value, args: *const list.List) anyerror!*Value {
+fn callMap(allocator: Allocator, op: Value, args: *const list.List) anyerror!Value {
     if (args.items.len < 1 or args.items.len > 2) return error.ArityError;
     const key = args.items[0];
     for (op.map_val.items) |entry| {
         if (entry.key.equals(key)) {
-            return try entry.value.cloneGC(allocator);
+            return try entry.value.clone(allocator);
         }
     }
     if (args.items.len == 2) {
-        return try args.items[1].cloneGC(allocator);
+        return try args.items[1].clone(allocator);
     }
-    return try allocValue(allocator, Value.nilValue());
+    return Value.nilValue();
 }
 
 /// Call a record as a function: returns value for key (fields first, then extmap).
-fn callRecord(allocator: Allocator, op: Value, args: *const list.List) anyerror!*Value {
+fn callRecord(allocator: Allocator, op: Value, args: *const list.List) anyerror!Value {
     if (args.items.len < 1 or args.items.len > 2) return error.ArityError;
     const key = args.items[0];
     for (op.record_val.?.fields.items) |entry| {
         if (entry.key.equals(key)) {
-            return try entry.value.cloneGC(allocator);
+            return try entry.value.clone(allocator);
         }
     }
     for (op.record_val.?.extmap.items) |entry| {
         if (entry.key.equals(key)) {
-            return try entry.value.cloneGC(allocator);
+            return try entry.value.clone(allocator);
         }
     }
     if (args.items.len == 2) {
-        return try args.items[1].cloneGC(allocator);
+        return try args.items[1].clone(allocator);
     }
-    return try allocValue(allocator, Value.nilValue());
+    return Value.nilValue();
 }
 
 /// Call a lazy-seq as a function: forces its evaluation (no args allowed).
-fn callLazySeq(allocator: Allocator, op: Value, env: *Env, depth: usize) anyerror!*Value {
-    return try forceLazySeq(allocator, op, env, depth);
+fn callLazySeq(allocator: Allocator, op: Value, env: *Env, depth: usize) anyerror!Value {
+    const result_ptr = try forceLazySeq(allocator, op, env, depth);
+    const result = result_ptr.*;
+    allocator.destroy(result_ptr);
+    return result;
 }
 
 // Flatten a cons chain into a list for doall/dorun.
