@@ -17,6 +17,8 @@ const gc_mod = @import("gc.zig");
 
 const Allocator = std.mem.Allocator;
 
+
+
 /// Allocate a Value on the GC heap and initialize it from a stack Value.
 /// Used for Values constructed directly (not cloned), e.g. Value.nilValue(), Value.listValue(...).
 pub fn allocValue(allocator: Allocator, val: Value) anyerror!*Value {
@@ -425,7 +427,7 @@ fn evalFunctionCall(allocator: Allocator, l: *const list.List, env: *Env, depth:
             try macro_args.append(allocator, try arg.clone(allocator));
         }
         // Call the macro with unevaluated args — returns Value by value
-        var expanded = try call(allocator, op_ptr.*, &macro_args, env, depth);
+        var expanded = try call(allocator, op_ptr, &macro_args, env, depth);
         // Evaluate the expanded form
         const result = try evalRec(allocator, expanded, env, depth);
         expanded.deinit(allocator);
@@ -441,13 +443,13 @@ fn evalFunctionCall(allocator: Allocator, l: *const list.List, env: *Env, depth:
     }
 
     // Call the function — returns Value by value, allocate once for return
-    const result = try call(allocator, op_ptr.*, &args, env, depth);
+    const result = try call(allocator, op_ptr, &args, env, depth);
     return try allocValue(allocator, result);
 }
 
 fn evalLet(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     if (l.items.len < 2) return error.ArityError;
-    const bindings = l.items[1];
+    const bindings = &l.items[1];
     if (bindings.type != .list and bindings.type != .vector) return error.TypeError;
     const body = l.items[2..];
 
@@ -468,21 +470,35 @@ fn evalLet(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) a
 
     var i: usize = 0;
     while (i < items.len) : (i += 2) {
-        const sym = items[i];
+        const sym = &items[i];
         // Evaluate binding value in new_env so later bindings can reference earlier ones
         const val_ptr = try evalRec(allocator, items[i + 1], new_env, depth);
         // Bind using destructuring if sym is a vector pattern
-        try bindPattern(allocator, sym, val_ptr.*, new_env, depth);
+        try bindPattern(allocator, sym.*, val_ptr.*, new_env, depth);
     }
 
-    var do_result: Value = Value.nilValue();
-    errdefer do_result.deinit(allocator);
-    for (body) |form| {
-        const result_ptr = try evalRec(allocator, form, new_env, depth);
-        do_result.deinit(allocator);
-        do_result = result_ptr.*;
+    // Evaluate body forms, returning the last result.
+    // Keep a *Value pointer instead of copying Value onto the stack.
+    var last_ptr: ?*Value = null;
+    errdefer {
+        if (last_ptr) |p| {
+            p.*.deinit(allocator);
+            allocator.destroy(p);
+        }
     }
-    return try allocValue(allocator, do_result);
+    for (body) |form| {
+        if (last_ptr) |p| {
+            p.*.deinit(allocator);
+            allocator.destroy(p);
+        }
+        last_ptr = try evalRec(allocator, form, new_env, depth);
+    }
+    if (last_ptr) |p| {
+        const result = p.*;
+        allocator.destroy(p);
+        return try allocValue(allocator, result);
+    }
+    return try allocValue(allocator, Value.nilValue());
 }
 
 fn evalLetFn(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
@@ -723,7 +739,7 @@ fn evalLoop(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) 
     }
 }
 
-pub fn call(allocator: Allocator, op: Value, args_list: *const list.List, env: *Env, depth: usize) anyerror!Value {
+pub fn call(allocator: Allocator, op: *const Value, args_list: *const list.List, env: *Env, depth: usize) anyerror!Value {
     switch (op.type) {
         .function => return callFunction(allocator, op, args_list, env, depth),
         .builtin_fn => return callBuiltinFn(allocator, op, args_list, env),
@@ -740,7 +756,7 @@ pub fn call(allocator: Allocator, op: Value, args_list: *const list.List, env: *
 }
 
 /// Call a user-defined function: match arity, bind params, evaluate body.
-fn callFunction(allocator: Allocator, op: Value, args: *const list.List, env: *Env, depth: usize) anyerror!Value {
+fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, env: *Env, depth: usize) anyerror!Value {
     _ = env;
     const fn_data = op.fn_val orelse return error.TypeError;
     const arity = try matchArity(fn_data, args.items.len);
@@ -837,13 +853,13 @@ fn bindArityParams(allocator: Allocator, arity: *const Value.Arity, args: *const
 }
 
 /// Call a built-in function registered with the VM.
-fn callBuiltinFn(_: Allocator, op: Value, args: *const list.List, env: *Env) anyerror!Value {
-    var op_mut = op;
+fn callBuiltinFn(_: Allocator, op: *const Value, args: *const list.List, env: *Env) anyerror!Value {
+    var op_mut = op.*;
     return op_mut.builtin_fn_val(&op_mut, args, env);
 }
 
 /// Call a set as a function: returns the element if found, nil otherwise.
-fn callSet(allocator: Allocator, op: Value, args: *const list.List) anyerror!Value {
+fn callSet(allocator: Allocator, op: *const Value, args: *const list.List) anyerror!Value {
     if (args.items.len != 1) return error.ArityError;
     for (op.set_val.items) |item| {
         if (item.equals(args.items[0])) {
@@ -854,7 +870,7 @@ fn callSet(allocator: Allocator, op: Value, args: *const list.List) anyerror!Val
 }
 
 /// Call a keyword as a function: looks up the keyword in a map or record.
-fn callKeyword(allocator: Allocator, op: Value, args: *const list.List) anyerror!Value {
+fn callKeyword(allocator: Allocator, op: *const Value, args: *const list.List) anyerror!Value {
     if (args.items.len != 1) return error.ArityError;
     const coll = args.items[0];
     if (coll.type == .map) {
@@ -879,7 +895,7 @@ fn callKeyword(allocator: Allocator, op: Value, args: *const list.List) anyerror
 }
 
 /// Call a map as a function: returns value for key, or not-found if provided.
-fn callMap(allocator: Allocator, op: Value, args: *const list.List) anyerror!Value {
+fn callMap(allocator: Allocator, op: *const Value, args: *const list.List) anyerror!Value {
     if (args.items.len < 1 or args.items.len > 2) return error.ArityError;
     const key = args.items[0];
     for (op.map_val.items) |entry| {
@@ -894,7 +910,7 @@ fn callMap(allocator: Allocator, op: Value, args: *const list.List) anyerror!Val
 }
 
 /// Call a record as a function: returns value for key (fields first, then extmap).
-fn callRecord(allocator: Allocator, op: Value, args: *const list.List) anyerror!Value {
+fn callRecord(allocator: Allocator, op: *const Value, args: *const list.List) anyerror!Value {
     if (args.items.len < 1 or args.items.len > 2) return error.ArityError;
     const key = args.items[0];
     for (op.record_val.?.fields.items) |entry| {
@@ -914,8 +930,8 @@ fn callRecord(allocator: Allocator, op: Value, args: *const list.List) anyerror!
 }
 
 /// Call a lazy-seq as a function: forces its evaluation (no args allowed).
-fn callLazySeq(allocator: Allocator, op: Value, env: *Env, depth: usize) anyerror!Value {
-    const result_ptr = try forceLazySeq(allocator, op, env, depth);
+fn callLazySeq(allocator: Allocator, op: *const Value, env: *Env, depth: usize) anyerror!Value {
+    const result_ptr = try forceLazySeq(allocator, op.*, env, depth);
     const result = result_ptr.*;
     allocator.destroy(result_ptr);
     return result;
@@ -1258,14 +1274,26 @@ fn evalWhen(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) 
 
 /// (do body...) — evaluate a sequence of forms
 fn evalDo(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
-    var do_result: Value = Value.nilValue();
-    errdefer do_result.deinit(allocator);
-    for (l.items[1..]) |form| {
-        const result_ptr = try evalRec(allocator, form, env, depth + 1);
-        do_result.deinit(allocator);
-        do_result = result_ptr.*;
+    var last_ptr: ?*Value = null;
+    errdefer {
+        if (last_ptr) |p| {
+            p.*.deinit(allocator);
+            allocator.destroy(p);
+        }
     }
-    return try allocValue(allocator, do_result);
+    for (l.items[1..]) |form| {
+        if (last_ptr) |p| {
+            p.*.deinit(allocator);
+            allocator.destroy(p);
+        }
+        last_ptr = try evalRec(allocator, form, env, depth + 1);
+    }
+    if (last_ptr) |p| {
+        const result = p.*;
+        allocator.destroy(p);
+        return try allocValue(allocator, result);
+    }
+    return try allocValue(allocator, Value.nilValue());
 }
 
 /// (defn name docstring? ([params] body...)+) — define named function
@@ -1442,18 +1470,34 @@ fn evalDeref(allocator: Allocator, l: *const list.List, env: *Env, depth: usize)
 
 /// (or form*) — short-circuit or
 fn evalOr(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
-    var last_val: Value = Value.nilValue();
-    errdefer last_val.deinit(allocator);
+    var last_ptr: ?*Value = null;
+    errdefer {
+        if (last_ptr) |p| {
+            p.*.deinit(allocator);
+            allocator.destroy(p);
+        }
+    }
     for (l.items[1..]) |form_item| {
         const val_ptr = try evalRec(allocator, form_item, env, depth + 1);
         if (val_ptr.isTruthy()) {
-            last_val.deinit(allocator);
+            if (last_ptr) |p| {
+                p.*.deinit(allocator);
+                allocator.destroy(p);
+            }
             return val_ptr;
         }
-        last_val.deinit(allocator);
-        last_val = val_ptr.*;
+        if (last_ptr) |p| {
+            p.*.deinit(allocator);
+            allocator.destroy(p);
+        }
+        last_ptr = val_ptr;
     }
-    return try allocValue(allocator, last_val);
+    if (last_ptr) |p| {
+        const result = p.*;
+        allocator.destroy(p);
+        return try allocValue(allocator, result);
+    }
+    return try allocValue(allocator, Value.nilValue());
 }
 
 /// (and form*) — short-circuit and

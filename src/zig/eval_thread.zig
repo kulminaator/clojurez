@@ -126,7 +126,7 @@ pub fn evalCondThreadFirst(allocator: Allocator, forms: []const Value, env: *Env
                     const arg_ptr = try eval.evalRec(allocator, step.list_val.items[j], env, depth);
                     try args.append(allocator, arg_ptr.*);
                 }
-                const next = try eval.call(allocator, op_ptr.*, &args, env, depth);
+                const next = try eval.call(allocator, op_ptr, &args, env, depth);
                 current.deinit(allocator);
                 current = next;
             } else {
@@ -169,7 +169,7 @@ pub fn evalCondThreadLast(allocator: Allocator, forms: []const Value, env: *Env,
                     try args.append(allocator, arg_ptr.*);
                 }
                 try args.append(allocator, try current.clone(allocator));
-                const next = try eval.call(allocator, op_ptr.*, &args, env, depth);
+                const next = try eval.call(allocator, op_ptr, &args, env, depth);
                 current.deinit(allocator);
                 current = next;
             } else {
