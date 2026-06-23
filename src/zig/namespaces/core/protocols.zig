@@ -728,7 +728,7 @@ pub fn evalExtendType(
 
     while (idx < l.items.len) {
         // Evaluate the protocol
-        const proto_ptr = try eval.evalRec(allocator, l.items[idx], env, depth + 1);
+        const proto_ptr = try eval.evalRec(allocator, &l.items[idx], env, depth + 1);
         try extend_args.append(allocator, proto_ptr.*);
 
         // Collect method definitions until next protocol or end
@@ -819,7 +819,7 @@ pub fn evalExtendType(
             }
 
             // Evaluate to get a function value
-            const fn_ptr = try eval.evalRec(allocator, Value.listValue(fn_form), env, depth + 1);
+            const fn_ptr = try eval.evalRec(allocator, &Value.listValue(fn_form), env, depth + 1);
             fn_form = .empty;
             const persistent_fn = try fn_ptr.*.clone(allocator);
             fn_ptr.*.deinit(allocator);
@@ -854,7 +854,7 @@ pub fn evalExtendProtocol(
     if (l.items.len < 3) return error.ArityError;
 
     // Evaluate the protocol (index 1)
-    const proto_ptr = try eval.evalRec(allocator, l.items[1], env, depth + 1);
+    const proto_ptr = try eval.evalRec(allocator, &l.items[1], env, depth + 1);
     defer proto_ptr.*.deinit(allocator);
 
     // Validate it's a protocol
@@ -947,7 +947,7 @@ pub fn evalExtendProtocol(
                 arity_form = .empty;
             }
 
-            const fn_ptr = try eval.evalRec(allocator, Value.listValue(fn_form), env, depth + 1);
+            const fn_ptr = try eval.evalRec(allocator, &Value.listValue(fn_form), env, depth + 1);
             fn_form = .empty;
             const persistent_fn = try fn_ptr.*.clone(allocator);
             fn_ptr.*.deinit(allocator);
