@@ -199,58 +199,15 @@ pub fn evalRec(allocator: Allocator, form: *const Value, env: *Env, depth: usize
             return try evalList(allocator, &form.*.list_val, env, depth);
         },
         .vector => {
-            // Vectors evaluate element-wise
-            var new_vec: vec.Vector = .empty;
-            errdefer new_vec.deinit(allocator);
-            for (form.*.vec_val.items) |item| {
-                const ptr = try evalRec(allocator, &item, env, depth + 1);
-                try new_vec.append(allocator, ptr.*);
-            }
-            return try allocValue(allocator, Value.vectorValue(new_vec));
+            return try evalVector(allocator, form, env, depth);
         },
         .map => {
-            // Maps evaluate key-value pairs element-wise
-            var new_map: Value.Map = .empty;
-            errdefer {
-                for (new_map.items) |*entry| {
-                    entry.key.deinit(allocator);
-                    entry.value.deinit(allocator);
-                }
-                allocator.free(new_map.items);
-            }
-            for (form.*.map_val.items) |entry| {
-                const key_ptr = try evalRec(allocator, &entry.key, env, depth + 1);
-                const val_ptr = try evalRec(allocator, &entry.value, env, depth + 1);
-                try new_map.append(allocator, .{
-                    .key = key_ptr.*,
-                    .value = val_ptr.*,
-                });
-            }
-            return try allocValue(allocator, Value.mapValue(new_map));
+            return try evalMap(allocator, form, env, depth);
         },
         .function, .builtin_fn => return try form.*.cloneGC(allocator),
         .lazy_seq => return try form.*.cloneGC(allocator),
         .cons => {
-            // Evaluate cons cells as forms (like lists)
-            // Convert cons chain to a list, then evaluate
-            var new_list: list.List = .empty;
-            errdefer new_list.deinit(allocator);
-            var current = form.*;
-            while (current.type == .cons) {
-                const cdata = current.cons_val orelse break;
-                try new_list.append(allocator, try cdata.head.clone(allocator));
-                current = cdata.tail;
-            }
-            // If tail is a list, splice in its elements
-            if (current.type == .list) {
-                for (current.list_val.items) |item| {
-                    try new_list.append(allocator, try item.clone(allocator));
-                }
-            } else if (current.type != .nil) {
-                // Improper list - append the tail as a final element
-                try new_list.append(allocator, try current.clone(allocator));
-            }
-            return try evalList(allocator, &new_list, env, depth);
+            return try evalCons(allocator, form, env, depth);
         },
     }
     unreachable;
@@ -409,6 +366,63 @@ fn evalList(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) 
 
     // Non-special-form: evaluate as function call
     return try evalFunctionCall(allocator, l, env, depth + 1);
+}
+
+/// Evaluate a vector element-wise.
+/// Extracted from evalRec to isolate its stack frame.
+fn evalVector(allocator: Allocator, form: *const Value, env: *Env, depth: usize) anyerror!*Value {
+    var new_vec: vec.Vector = .empty;
+    errdefer new_vec.deinit(allocator);
+    for (form.*.vec_val.items) |item| {
+        const ptr = try evalRec(allocator, &item, env, depth + 1);
+        try new_vec.append(allocator, ptr.*);
+    }
+    return try allocValue(allocator, Value.vectorValue(new_vec));
+}
+
+/// Evaluate a map key-value pairs element-wise.
+/// Extracted from evalRec to isolate its stack frame.
+fn evalMap(allocator: Allocator, form: *const Value, env: *Env, depth: usize) anyerror!*Value {
+    var new_map: Value.Map = .empty;
+    errdefer {
+        for (new_map.items) |*entry| {
+            entry.key.deinit(allocator);
+            entry.value.deinit(allocator);
+        }
+        allocator.free(new_map.items);
+    }
+    for (form.*.map_val.items) |entry| {
+        const key_ptr = try evalRec(allocator, &entry.key, env, depth + 1);
+        const val_ptr = try evalRec(allocator, &entry.value, env, depth + 1);
+        try new_map.append(allocator, .{
+            .key = key_ptr.*,
+            .value = val_ptr.*,
+        });
+    }
+    return try allocValue(allocator, Value.mapValue(new_map));
+}
+
+/// Evaluate a cons cell as a form: convert cons chain to list, then evaluate.
+/// Extracted from evalRec to isolate its stack frame (cons evaluation needs a Value copy).
+fn evalCons(allocator: Allocator, form: *const Value, env: *Env, depth: usize) anyerror!*Value {
+    var new_list: list.List = .empty;
+    errdefer new_list.deinit(allocator);
+    var current_val = form.*;
+    while (current_val.type == .cons) {
+        const cdata = current_val.cons_val orelse break;
+        try new_list.append(allocator, try cdata.head.clone(allocator));
+        current_val = cdata.tail;
+    }
+    // If tail is a list, splice in its elements
+    if (current_val.type == .list) {
+        for (current_val.list_val.items) |item| {
+            try new_list.append(allocator, try item.clone(allocator));
+        }
+    } else if (current_val.type != .nil) {
+        // Improper list - append the tail as a final element
+        try new_list.append(allocator, try current_val.clone(allocator));
+    }
+    return try evalList(allocator, &new_list, env, depth);
 }
 
 fn evalFunctionCall(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
@@ -853,8 +867,9 @@ fn bindArityParams(allocator: Allocator, arity: *const Value.Arity, args: *const
 
 /// Call a built-in function registered with the VM.
 fn callBuiltinFn(_: Allocator, op: *const Value, args: *const list.List, env: *Env) anyerror!Value {
-    var op_mut = op.*;
-    return op_mut.builtin_fn_val(&op_mut, args, env);
+    // Use cast to avoid copying the large Value struct onto the stack
+    const op_mut = @constCast(op);
+    return op_mut.builtin_fn_val(op_mut, args, env);
 }
 
 /// Call a set as a function: returns the element if found, nil otherwise.
