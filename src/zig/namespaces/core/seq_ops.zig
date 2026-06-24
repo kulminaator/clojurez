@@ -1,10 +1,11 @@
 // Higher-order sequence operations: map, mapcat, reduce, flatten, filter,
 // remove, every?, some, distinct?, next, nthnext, drop
 const std = @import("std");
-const Value = @import("../../value.zig");
+const vm = @import("../../value.zig");
+const Value = vm.Value;
 const list = @import("../../list.zig");
 const vec = @import("../../vector.zig");
-const Env = Value.Env;
+const Env = vm.Env;
 const phm = @import("../../persistent_hash_map.zig");
 const helpers = @import("helpers.zig");
 const eval_helpers = @import("eval_helpers.zig");
@@ -25,7 +26,7 @@ pub fn forceLazySeqToConcreteList(allocator: Allocator, val: Value) anyerror!lis
 
 // Force any lazy value (lazy_seq) into a concrete list
 pub fn forceToConcreteList(allocator: Allocator, val: Value) anyerror!list.List {
-    return switch (val.type) {
+    return switch (std.meta.activeTag(val)) {
         .lazy_seq => return forceLazySeqToConcreteList(allocator, val),
         .cons => {
             // Flatten cons chain to a list
@@ -34,7 +35,7 @@ pub fn forceToConcreteList(allocator: Allocator, val: Value) anyerror!list.List 
             var current = val;
             errdefer current.deinit(allocator);
             while (true) {
-                switch (current.type) {
+                switch (std.meta.activeTag(current)) {
                     .cons => {
                         const cdata = current.cons_val.?;
                         try result.append(allocator, try cdata.head.clone(allocator));
@@ -59,7 +60,7 @@ pub fn forceToConcreteList(allocator: Allocator, val: Value) anyerror!list.List 
                     },
                     else => {
                         try result.append(allocator, current);
-                        current = Value.nilValue();
+                        current = vm.nilValue();
                         break;
                     },
                 }
@@ -70,7 +71,7 @@ pub fn forceToConcreteList(allocator: Allocator, val: Value) anyerror!list.List 
         else => {
             var result: list.List = .empty;
             errdefer result.deinit(allocator);
-            switch (val.type) {
+            switch (std.meta.activeTag(val)) {
                 .list => return try list.clone(&val.list_val, allocator),
                 .vector => {
                     for (val.vec_val.items) |item| {
@@ -92,7 +93,7 @@ pub fn core_map(self: *const Value, args: *const list.List, env_env: *Env) anyer
     const coll = args.items[1];
 
     // Validate collection type
-    switch (coll.type) {
+    switch (std.meta.activeTag(coll)) {
         .list, .vector, .lazy_seq => {},
         else => return error.TypeError,
     }
@@ -100,7 +101,7 @@ pub fn core_map(self: *const Value, args: *const list.List, env_env: *Env) anyer
     // Create thunk with custom handler — bypasses the Clojure evaluator
     // for per-element processing.
     // Use a thin self-contained env — no parent chain, no cloning of namespace.
-    const thunk = try allocator.create(Value.LazySeqThunk);
+    const thunk = try allocator.create(vm.LazySeqThunk);
     thunk.* = .{
         .params = list.empty(),
         .body = list.empty(),
@@ -121,11 +122,11 @@ pub fn core_map(self: *const Value, args: *const list.List, env_env: *Env) anyer
     // won't move if the env's HashMap resizes. The GC scan marks shared_coll
     // to keep it alive.
     const cloned_coll = try coll.clone(allocator);
-    if (coll.type == .list or coll.type == .vector) {
+    if (std.meta.activeTag(coll) == .list or std.meta.activeTag(coll) == .vector) {
         const stable_coll = try allocator.create(Value);
         stable_coll.* = cloned_coll;
         thunk.shared_coll = stable_coll;
-        try thunk.env.put("idx", Value.intValue(0));
+        try thunk.env.put("idx", vm.intValue(0));
         // Clone again for env storage — put() will deinit the passed value,
         // which would corrupt stable_coll if we passed cloned_coll directly.
         try thunk.env.put("coll", try cloned_coll.clone(allocator));
@@ -136,7 +137,7 @@ pub fn core_map(self: *const Value, args: *const list.List, env_env: *Env) anyer
         try thunk.env.put("coll", cloned_coll);
     }
 
-    return Value.lazySeqValue(thunk);
+    return vm.lazySeqValue(thunk);
 }
 
 pub fn core_mapcat(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
@@ -154,7 +155,7 @@ pub fn core_mapcat(self: *const Value, args: *const list.List, env_env: *Env) an
         // Force lazy_seq to concrete list
         var items_list: list.List = .empty;
         errdefer items_list.deinit(allocator);
-        switch (coll.type) {
+        switch (std.meta.activeTag(coll)) {
             .list => items_list = try list.clone(&coll.list_val, allocator),
             .vector => {
                 for (coll.vec_val.items) |item| {
@@ -175,7 +176,7 @@ pub fn core_mapcat(self: *const Value, args: *const list.List, env_env: *Env) an
             const mapped_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env_env);
             const mapped = mapped_ptr.*;
             allocator.destroy(mapped_ptr);
-            switch (mapped.type) {
+            switch (std.meta.activeTag(mapped)) {
                 .list => {
                     for (mapped.list_val.items) |mitem| {
                         try result.append(allocator, try mitem.clone(allocator));
@@ -204,7 +205,7 @@ pub fn core_mapcat(self: *const Value, args: *const list.List, env_env: *Env) an
             }
         }
     }
-    return Value.listValue(result);
+    return vm.listValue(result);
 }
 
 pub fn core_reduce(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
@@ -229,13 +230,13 @@ pub fn core_reduce(self: *const Value, args: *const list.List, env_env: *Env) an
             coll.deinit(env_env.allocator);
         }
     }
-    switch (coll.type) {
+    switch (std.meta.activeTag(coll)) {
         .lazy_seq => {
             const concrete_list = try forceToConcreteList(env_env.allocator, coll);
             // Null out the thunk before deinit so we don't free caller-owned data
             coll.lazy_seq_val.thunk = null;
             coll.deinit(env_env.allocator);
-            coll = Value.listValue(concrete_list);
+            coll = vm.listValue(concrete_list);
             owned_coll = true;
         },
         else => {},
@@ -245,7 +246,7 @@ pub fn core_reduce(self: *const Value, args: *const list.List, env_env: *Env) an
     var owned_items: ?list.List = null;
     defer if (owned_items) |*ol| ol.deinit(env_env.allocator);
 
-    switch (coll.type) {
+    switch (std.meta.activeTag(coll)) {
         .list => items = coll.list_val.items,
         .vector => items = coll.vec_val.items,
         .set => items = coll.set_val.items,
@@ -258,7 +259,7 @@ pub fn core_reduce(self: *const Value, args: *const list.List, env_env: *Env) an
                 var pair: vec.Vector = .empty;
                 try pair.append(env_env.allocator, try entry.key.clone(env_env.allocator));
                 try pair.append(env_env.allocator, try entry.value.clone(env_env.allocator));
-                try pairs.append(env_env.allocator, Value.vectorValue(pair));
+                try pairs.append(env_env.allocator, vm.vectorValue(pair));
             }
             items = pairs.items;
             owned_items = pairs;
@@ -271,13 +272,13 @@ pub fn core_reduce(self: *const Value, args: *const list.List, env_env: *Env) an
                 var pair: vec.Vector = .empty;
                 try pair.append(env_env.allocator, try entry.key.clone(env_env.allocator));
                 try pair.append(env_env.allocator, try entry.value.clone(env_env.allocator));
-                try pairs.append(env_env.allocator, Value.vectorValue(pair));
+                try pairs.append(env_env.allocator, vm.vectorValue(pair));
             }
             for (coll.record_val.?.extmap.items) |entry| {
                 var pair: vec.Vector = .empty;
                 try pair.append(env_env.allocator, try entry.key.clone(env_env.allocator));
                 try pair.append(env_env.allocator, try entry.value.clone(env_env.allocator));
-                try pairs.append(env_env.allocator, Value.vectorValue(pair));
+                try pairs.append(env_env.allocator, vm.vectorValue(pair));
             }
             items = pairs.items;
             owned_items = pairs;
@@ -287,34 +288,34 @@ pub fn core_reduce(self: *const Value, args: *const list.List, env_env: *Env) an
 
     if (items.len == 0) {
         if (init_val) |iv| return try iv.clone(env_env.allocator);
-        return Value.nilValue();
+        return vm.nilValue();
     }
 
     // Fast path: reduce with + on integer lists
-    if (f.type == .builtin_fn and f.builtin_fn_val == arithmetic.core_plus) {
+    if (std.meta.activeTag(f) == .builtin_fn and f.builtin_fn_val == arithmetic.core_plus) {
         var all_ints = true;
         for (items) |item| {
-            if (item.type != .integer) { all_ints = false; break; }
+            if (std.meta.activeTag(item) != .integer) { all_ints = false; break; }
         }
         if (all_ints) {
             if (init_val) |iv| {
-                if (iv.type == .integer or iv.type == .float) {
-                    var acc: i64 = if (iv.type == .integer) iv.int_val else @as(i64, @intFromFloat(iv.float_val));
+                if (std.meta.activeTag(iv) == .integer or std.meta.activeTag(iv) == .float) {
+                    var acc: i64 = if (std.meta.activeTag(iv) == .integer) iv.int_val else @as(i64, @intFromFloat(iv.float_val));
                     var idx: usize = 0;
                     while (idx < items.len) : (idx += 1) {
                         acc += items[idx].int_val;
                     }
-                    return Value.intValue(acc);
+                    return vm.intValue(acc);
                 }
             } else if (items.len == 1) {
-                return Value.intValue(items[0].int_val);
+                return vm.intValue(items[0].int_val);
             } else {
                 var acc: i64 = items[0].int_val;
                 var idx: usize = 1;
                 while (idx < items.len) : (idx += 1) {
                     acc += items[idx].int_val;
                 }
-                return Value.intValue(acc);
+                return vm.intValue(acc);
             }
         }
     }
@@ -344,7 +345,7 @@ pub fn core_reduce(self: *const Value, args: *const list.List, env_env: *Env) an
         env_env.allocator.destroy(new_acc_ptr);
         acc.deinit(env_env.allocator);
         // Check for early reduction termination
-        if (new_acc.type == .reduced) {
+        if (std.meta.activeTag(new_acc) == .reduced) {
             if (new_acc.reduced_val) |data| {
                 acc = data.*;
                 // Null out pointer before deinit to avoid double-free
@@ -362,7 +363,7 @@ pub fn core_reduce(self: *const Value, args: *const list.List, env_env: *Env) an
 pub fn core_reduced(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
-    return Value.reducedValue(env_env.allocator, args.items[0]);
+    return vm.reducedValue(env_env.allocator, args.items[0]);
 }
 
 // reduced? - check if value is a reduced wrapper
@@ -370,7 +371,7 @@ pub fn core_reduced_q(self: *const Value, args: *const list.List, env_env: *Env)
     _ = self;
     _ = env_env;
     if (args.items.len != 1) return error.ArityError;
-    return Value.boolValue(args.items[0].isReduced());
+    return vm.boolValue(args.items[0].isReduced());
 }
 
 // ensure-reduced - if already reduced, return as-is; else wrap in reduced
@@ -380,7 +381,7 @@ pub fn core_ensure_reduced(self: *const Value, args: *const list.List, env_env: 
     if (args.items[0].isReduced()) {
         return try args.items[0].clone(env_env.allocator);
     }
-    return Value.reducedValue(env_env.allocator, args.items[0]);
+    return vm.reducedValue(env_env.allocator, args.items[0]);
 }
 
 // unreduced - unwrap reduced value if reduced, else return as-is
@@ -400,11 +401,11 @@ fn doFlatten(allocator: Allocator, val: Value, env: *Env) anyerror!Value {
     var result: list.List = .empty;
     errdefer result.deinit(allocator);
 
-    switch (val.type) {
+    switch (std.meta.activeTag(val)) {
         .list => {
             for (val.list_val.items) |item| {
                 var flattened = try doFlatten(allocator, item, env);
-                if (flattened.type == .list) {
+                if (std.meta.activeTag(flattened) == .list) {
                     for (flattened.list_val.items) |elem| {
                         try result.append(allocator, try elem.clone(allocator));
                     }
@@ -417,7 +418,7 @@ fn doFlatten(allocator: Allocator, val: Value, env: *Env) anyerror!Value {
         .vector => {
             for (val.vec_val.items) |item| {
                 var flattened = try doFlatten(allocator, item, env);
-                if (flattened.type == .list) {
+                if (std.meta.activeTag(flattened) == .list) {
                     for (flattened.list_val.items) |elem| {
                         try result.append(allocator, try elem.clone(allocator));
                     }
@@ -431,15 +432,15 @@ fn doFlatten(allocator: Allocator, val: Value, env: *Env) anyerror!Value {
             try result.append(allocator, try val.clone(allocator));
         },
     }
-    return Value.listValue(result);
+    return vm.listValue(result);
 }
 
 pub fn core_next(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     if (args.items.len != 1) return error.ArityError;
     var rest = try sequences_mod.core_rest(self, args, env_env);
-    if (rest.type == .list and rest.list_val.items.len == 0) {
+    if (std.meta.activeTag(rest) == .list and rest.list_val.items.len == 0) {
         rest.deinit(env_env.allocator);
-        return Value.nilValue();
+        return vm.nilValue();
     }
     return rest;
 }
@@ -451,13 +452,13 @@ pub fn core_nthnext(self: *const Value, args: *const list.List, env_env: *Env) a
 
     const coll = args.items[1];
     var items: []const Value = undefined;
-    switch (coll.type) {
+    switch (std.meta.activeTag(coll)) {
         .list => items = coll.list_val.items,
         .vector => items = coll.vec_val.items,
         else => return error.TypeError,
     }
 
-    if (@as(usize, @intCast(n)) >= items.len) return Value.nilValue();
+    if (@as(usize, @intCast(n)) >= items.len) return vm.nilValue();
 
     var result: list.List = .empty;
     try result.ensureTotalCapacity(env_env.allocator, items.len - @as(usize, @intCast(n)));
@@ -466,7 +467,7 @@ pub fn core_nthnext(self: *const Value, args: *const list.List, env_env: *Env) a
     while (i < items.len) : (i += 1) {
         try result.append(env_env.allocator, try items[i].clone(env_env.allocator));
     }
-    return Value.listValue(result);
+    return vm.listValue(result);
 }
 
 pub fn core_filter(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
@@ -476,7 +477,7 @@ pub fn core_filter(self: *const Value, args: *const list.List, env_env: *Env) an
     const coll = args.items[1];
 
     var items: []const Value = undefined;
-    switch (coll.type) {
+    switch (std.meta.activeTag(coll)) {
         .list => items = coll.list_val.items,
         .vector => items = coll.vec_val.items,
         else => return error.TypeError,
@@ -498,7 +499,7 @@ pub fn core_filter(self: *const Value, args: *const list.List, env_env: *Env) an
             try result.append(env_env.allocator, try item.clone(env_env.allocator));
         }
     }
-    return Value.listValue(result);
+    return vm.listValue(result);
 }
 
 pub fn core_remove(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
@@ -508,7 +509,7 @@ pub fn core_remove(self: *const Value, args: *const list.List, env_env: *Env) an
     const coll = args.items[1];
 
     var items: []const Value = undefined;
-    switch (coll.type) {
+    switch (std.meta.activeTag(coll)) {
         .list => items = coll.list_val.items,
         .vector => items = coll.vec_val.items,
         else => return error.TypeError,
@@ -530,7 +531,7 @@ pub fn core_remove(self: *const Value, args: *const list.List, env_env: *Env) an
             try result.append(env_env.allocator, try item.clone(env_env.allocator));
         }
     }
-    return Value.listValue(result);
+    return vm.listValue(result);
 }
 
 pub fn core_every_q(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
@@ -540,7 +541,7 @@ pub fn core_every_q(self: *const Value, args: *const list.List, env_env: *Env) a
     const coll = args.items[1];
 
     var items: []const Value = undefined;
-    switch (coll.type) {
+    switch (std.meta.activeTag(coll)) {
         .list => items = coll.list_val.items,
         .vector => items = coll.vec_val.items,
         .set => items = coll.set_val.items,
@@ -556,9 +557,9 @@ pub fn core_every_q(self: *const Value, args: *const list.List, env_env: *Env) a
         const truthy = pred_result.isTruthy();
         pred_result_ptr.*.deinit(env_env.allocator);
         env_env.allocator.destroy(pred_result_ptr);
-        if (!truthy) return Value.boolValue(false);
+        if (!truthy) return vm.boolValue(false);
     }
-    return Value.boolValue(true);
+    return vm.boolValue(true);
 }
 
 pub fn core_some(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
@@ -568,7 +569,7 @@ pub fn core_some(self: *const Value, args: *const list.List, env_env: *Env) anye
     const coll = args.items[1];
 
     var items: []const Value = undefined;
-    switch (coll.type) {
+    switch (std.meta.activeTag(coll)) {
         .list => items = coll.list_val.items,
         .vector => items = coll.vec_val.items,
         .set => items = coll.set_val.items,
@@ -588,7 +589,7 @@ pub fn core_some(self: *const Value, args: *const list.List, env_env: *Env) anye
         result_ptr.*.deinit(env_env.allocator);
         env_env.allocator.destroy(result_ptr);
     }
-    return Value.nilValue();
+    return vm.nilValue();
 }
 
 pub fn core_distinct_q(_: *const Value, args: *const list.List, _: *Env) anyerror!Value {
@@ -596,7 +597,7 @@ pub fn core_distinct_q(_: *const Value, args: *const list.List, _: *Env) anyerro
     const coll = args.items[0];
 
     var items: []const Value = undefined;
-    switch (coll.type) {
+    switch (std.meta.activeTag(coll)) {
         .list => items = coll.list_val.items,
         .vector => items = coll.vec_val.items,
         else => return error.TypeError,
@@ -605,10 +606,10 @@ pub fn core_distinct_q(_: *const Value, args: *const list.List, _: *Env) anyerro
     for (items, 0..) |item, i| {
         var j: usize = i + 1;
         while (j < items.len) : (j += 1) {
-            if (item.equals(items[j])) return Value.boolValue(false);
+            if (item.equals(items[j])) return vm.boolValue(false);
         }
     }
-    return Value.boolValue(true);
+    return vm.boolValue(true);
 }
 
 pub fn core_drop(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
@@ -621,14 +622,14 @@ pub fn core_drop(self: *const Value, args: *const list.List, env_env: *Env) anye
     // For lazy_seq and cons, return a lazy-seq that preserves laziness
     // Mirrors Clojure: (lazy-seq (when (pos? n) (when-let [s (seq coll)]
     //   (if (zero? (dec n)) s (drop (dec n) (rest s))))))
-    if (coll.type == .lazy_seq or coll.type == .cons) {
+    if (std.meta.activeTag(coll) == .lazy_seq or std.meta.activeTag(coll) == .cons) {
         if (n <= 0) return try coll.clone(allocator);
         return dropLazySeq(allocator, n, coll, env_env);
     }
 
     var items: []const Value = undefined;
     var is_list: bool = false;
-    switch (coll.type) {
+    switch (std.meta.activeTag(coll)) {
         .list => { items = coll.list_val.items; is_list = true; },
         .vector => { items = coll.vec_val.items; is_list = false; },
         else => return error.TypeError,
@@ -636,8 +637,8 @@ pub fn core_drop(self: *const Value, args: *const list.List, env_env: *Env) anye
 
     if (n <= 0) return try coll.clone(env_env.allocator);
     if (@as(usize, @intCast(n)) >= items.len) {
-        if (is_list) return Value.listValue(list.empty());
-        return Value.vectorValue(vec.Vector.empty);
+        if (is_list) return vm.listValue(list.empty());
+        return vm.vectorValue(vec.Vector.empty);
     }
 
     const start: usize = @as(usize, @intCast(n));
@@ -648,7 +649,7 @@ pub fn core_drop(self: *const Value, args: *const list.List, env_env: *Env) anye
         while (i < items.len) : (i += 1) {
             try result.append(env_env.allocator, try items[i].clone(env_env.allocator));
         }
-        return Value.listValue(result);
+        return vm.listValue(result);
     } else {
         var result: vec.Vector = .empty;
         errdefer result.deinit(env_env.allocator);
@@ -656,23 +657,23 @@ pub fn core_drop(self: *const Value, args: *const list.List, env_env: *Env) anye
         while (i < items.len) : (i += 1) {
             try result.append(env_env.allocator, try items[i].clone(env_env.allocator));
         }
-        return Value.vectorValue(result);
+        return vm.vectorValue(result);
     }
 }
 
 /// Build a lazy-seq for (drop n coll) where coll is lazy_seq or cons.
 /// Uses a self-referencing thunk so recursive calls go through core_drop directly.
 fn dropLazySeq(allocator: Allocator, n: i64, coll: Value, env: *Env) anyerror!Value {
-    const thunk = try allocator.create(Value.LazySeqThunk);
+    const thunk = try allocator.create(vm.LazySeqThunk);
     thunk.* = .{
         .params = list.empty(),
         .body = list.empty(),
         .env = try env.clone(allocator),
     };
-    try thunk.env.put("n", Value.intValue(n));
+    try thunk.env.put("n", vm.intValue(n));
     try thunk.env.put("coll", try coll.clone(allocator));
     // Self-reference: thunk calls core_drop directly
-    try thunk.env.put("__zig_drop", Value.builtinFnValue(core_drop));
+    try thunk.env.put("__zig_drop", vm.builtinFnValue(core_drop));
 
     // Build thunk body:
     // (if (pos? n)
@@ -682,18 +683,18 @@ fn dropLazySeq(allocator: Allocator, n: i64, coll: Value, env: *Env) anyerror!Va
     //       nil))
     //   coll)
     const a = allocator;
-    const sym_if = try Value.symValue(a, "if");
-    const sym_pos_q = try Value.symValue(a, "pos?");
-    const sym_n = try Value.symValue(a, "n");
-    const sym_coll = try Value.symValue(a, "coll");
-    const sym_let = try Value.symValue(a, "let");
-    const sym_s = try Value.symValue(a, "s");
-    const sym_seq = try Value.symValue(a, "seq");
-    const sym_zero_q = try Value.symValue(a, "zero?");
-    const sym_dec = try Value.symValue(a, "dec");
-    const sym_rest = try Value.symValue(a, "rest");
-    const sym_zig_drop = try Value.symValue(a, "__zig_drop");
-    const sym_nil = Value.nilValue();
+    const sym_if = try vm.symValue(a, "if");
+    const sym_pos_q = try vm.symValue(a, "pos?");
+    const sym_n = try vm.symValue(a, "n");
+    const sym_coll = try vm.symValue(a, "coll");
+    const sym_let = try vm.symValue(a, "let");
+    const sym_s = try vm.symValue(a, "s");
+    const sym_seq = try vm.symValue(a, "seq");
+    const sym_zero_q = try vm.symValue(a, "zero?");
+    const sym_dec = try vm.symValue(a, "dec");
+    const sym_rest = try vm.symValue(a, "rest");
+    const sym_zig_drop = try vm.symValue(a, "__zig_drop");
+    const sym_nil = vm.nilValue();
 
     // (pos? n)
     var pos_call: list.List = .empty;
@@ -708,7 +709,7 @@ fn dropLazySeq(allocator: Allocator, n: i64, coll: Value, env: *Env) anyerror!Va
     // [s (seq coll)]
     var bindings: list.List = .empty;
     try bindings.append(a, sym_s);
-    try bindings.append(a, Value.listValue(seq_call));
+    try bindings.append(a, vm.listValue(seq_call));
 
     // (dec n)
     var dec_call: list.List = .empty;
@@ -718,7 +719,7 @@ fn dropLazySeq(allocator: Allocator, n: i64, coll: Value, env: *Env) anyerror!Va
     // (zero? (dec n))
     var zero_call: list.List = .empty;
     try zero_call.append(a, sym_zero_q);
-    try zero_call.append(a, Value.listValue(dec_call));
+    try zero_call.append(a, vm.listValue(dec_call));
 
     // (rest s)
     var rest_call: list.List = .empty;
@@ -728,38 +729,38 @@ fn dropLazySeq(allocator: Allocator, n: i64, coll: Value, env: *Env) anyerror!Va
     // (__zig_drop (dec n) (rest s))
     var drop_call: list.List = .empty;
     try drop_call.append(a, sym_zig_drop);
-    try drop_call.append(a, Value.listValue(dec_call));
-    try drop_call.append(a, Value.listValue(rest_call));
+    try drop_call.append(a, vm.listValue(dec_call));
+    try drop_call.append(a, vm.listValue(rest_call));
 
     // (if (zero? (dec n)) (rest s) (__zig_drop (dec n) (rest s)))
     var inner_if: list.List = .empty;
     try inner_if.append(a, sym_if);
-    try inner_if.append(a, Value.listValue(zero_call));
-    try inner_if.append(a, Value.listValue(rest_call));
-    try inner_if.append(a, Value.listValue(drop_call));
+    try inner_if.append(a, vm.listValue(zero_call));
+    try inner_if.append(a, vm.listValue(rest_call));
+    try inner_if.append(a, vm.listValue(drop_call));
 
     // (if s (inner_if) nil)
     var s_check: list.List = .empty;
     try s_check.append(a, sym_if);
     try s_check.append(a, sym_s);
-    try s_check.append(a, Value.listValue(inner_if));
+    try s_check.append(a, vm.listValue(inner_if));
     try s_check.append(a, sym_nil);
 
     // (let [s (seq coll)] (if s ... nil))
     var let_form: list.List = .empty;
     try let_form.append(a, sym_let);
-    try let_form.append(a, Value.listValue(bindings));
-    try let_form.append(a, Value.listValue(s_check));
+    try let_form.append(a, vm.listValue(bindings));
+    try let_form.append(a, vm.listValue(s_check));
 
     // (if (pos? n) (let ...) coll)
     var body: list.List = .empty;
     try body.append(a, sym_if);
-    try body.append(a, Value.listValue(pos_call));
-    try body.append(a, Value.listValue(let_form));
+    try body.append(a, vm.listValue(pos_call));
+    try body.append(a, vm.listValue(let_form));
     try body.append(a, sym_coll);
 
     thunk.body = body;
-    return Value.lazySeqValue(thunk);
+    return vm.lazySeqValue(thunk);
 }
 
 // doall* - realizes a lazy sequence and returns the realized list
@@ -775,7 +776,7 @@ pub fn core_doall_star(self: *const Value, args: *const list.List, env_env: *Env
 }
 
 fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
-    const result = switch (val.type) {
+    const result = switch (std.meta.activeTag(val)) {
         .lazy_seq => {
             // Evaluate the thunk
             if (val.lazy_seq_val.thunk) |thunk| {
@@ -795,16 +796,16 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
                 allocator.destroy(result_ptr);
 
                 // Force each element of the result
-                switch (result.type) {
+                switch (std.meta.activeTag(result)) {
                     .list => {
                         var forced_list: list.List = .empty;
                         errdefer forced_list.deinit(allocator);
                         // Handle cons cell pattern: [head, lazy_seq_tail]
                         // forceLazySeqHelper returns at most 2 items from a cons
-                        if (result.list_val.items.len == 2 and result.list_val.items[1].type == .lazy_seq) {
+                        if (result.list_val.items.len == 2 and std.meta.activeTag(result.list_val.items[1]) == .lazy_seq) {
                             // Force the head if it's a lazy_seq, otherwise clone
                             const head_item = result.list_val.items[0];
-                            if (head_item.type == .lazy_seq) {
+                            if (std.meta.activeTag(head_item) == .lazy_seq) {
                                 const head_forced = try forceValue(allocator, head_item);
                                 // Append the forced head as a single element (don't flatten)
                                 try forced_list.append(allocator, head_forced);
@@ -813,7 +814,7 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
                             }
                             // Force the tail lazy_seq recursively
                             var tail_forced = try forceValue(allocator, result.list_val.items[1]);
-                            if (tail_forced.type == .list) {
+                            if (std.meta.activeTag(tail_forced) == .list) {
                                 for (tail_forced.list_val.items) |fi| {
                                     try forced_list.append(allocator, try fi.clone(allocator));
                                 }
@@ -822,9 +823,9 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
                         } else {
                             for (result.list_val.items) |item| {
                                 // Only force lazy_seq items; clone everything else
-                                if (item.type == .lazy_seq) {
+                                if (std.meta.activeTag(item) == .lazy_seq) {
                                     var forced = try forceValue(allocator, item);
-                                    if (forced.type == .list) {
+                                    if (std.meta.activeTag(forced) == .list) {
                                         for (forced.list_val.items) |fi| {
                                             try forced_list.append(allocator, try fi.clone(allocator));
                                         }
@@ -838,16 +839,16 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
                             }
                         }
                         result.deinit(allocator);
-                        return Value.listValue(forced_list);
+                        return vm.listValue(forced_list);
                     },
                     .vector => {
                         var forced_vec: vec.Vector = .empty;
                         errdefer forced_vec.deinit(allocator);
                         for (result.vec_val.items) |item| {
                             // Only force lazy_seq items; clone everything else
-                            if (item.type == .lazy_seq) {
+                            if (std.meta.activeTag(item) == .lazy_seq) {
                                 var forced = try forceValue(allocator, item);
-                                if (forced.type == .list) {
+                                if (std.meta.activeTag(forced) == .list) {
                                     for (forced.list_val.items) |fi| {
                                         try forced_vec.append(allocator, try fi.clone(allocator));
                                     }
@@ -860,12 +861,12 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
                             }
                         }
                         result.deinit(allocator);
-                        return Value.vectorValue(forced_vec);
+                        return vm.vectorValue(forced_vec);
                     },
                     .nil => {
                         // Thunk returned nil (empty sequence)
                         result.deinit(allocator);
-                        return Value.listValue(list.empty());
+                        return vm.listValue(list.empty());
                     },
                     .lazy_seq => {
                         // Thunk returned a lazy_seq (e.g., from cons). Recursively force it.
@@ -881,9 +882,9 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
                         var forced_list: list.List = .empty;
                         errdefer forced_list.deinit(allocator);
                         for (concrete.items) |item| {
-                            if (item.type == .lazy_seq) {
+                            if (std.meta.activeTag(item) == .lazy_seq) {
                                 var forced = try forceValue(allocator, item);
-                                if (forced.type == .list) {
+                                if (std.meta.activeTag(forced) == .list) {
                                     for (forced.list_val.items) |fi| {
                                         try forced_list.append(allocator, try fi.clone(allocator));
                                     }
@@ -896,7 +897,7 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
                             }
                         }
                         concrete.deinit(allocator);
-                        return Value.listValue(forced_list);
+                        return vm.listValue(forced_list);
                     },
                     else => {
                         const forced = try forceValue(allocator, result);
@@ -905,7 +906,7 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
                     },
                 }
             }
-            return Value.listValue(list.empty());
+            return vm.listValue(list.empty());
         },
         .list => {
             // For standalone lists, just clone them (they're data, not thunk results)
@@ -916,7 +917,7 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
             errdefer forced_vec.deinit(allocator);
             for (val.vec_val.items) |item| {
                 // Flatten lazy_seq elements
-                if (item.type == .lazy_seq) {
+                if (std.meta.activeTag(item) == .lazy_seq) {
                     var forced = try sequences_mod.forceLazySeqHelper(allocator, item);
                     defer forced.deinit(allocator);
                     for (forced.list_val.items) |fi| {
@@ -928,7 +929,7 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
                     try forced_vec.append(allocator, forced_item);
                 }
             }
-            return Value.vectorValue(forced_vec);
+            return vm.vectorValue(forced_vec);
         },
         .cons => {
             // Force cons cells: walk the chain and force nested lazy_seqs
@@ -937,13 +938,13 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
             errdefer forced_list.deinit(allocator);
             var current: Value = val;
             while (true) {
-                switch (current.type) {
+                switch (std.meta.activeTag(current)) {
                     .cons => {
                         const cdata = current.cons_val.?;
                         // Force the head if it's a lazy_seq
-                        if (cdata.head.type == .lazy_seq) {
+                        if (std.meta.activeTag(cdata.head) == .lazy_seq) {
                             var head_forced = try forceValue(allocator, cdata.head);
-                            if (head_forced.type == .list) {
+                            if (std.meta.activeTag(head_forced) == .list) {
                                 for (head_forced.list_val.items) |fi| {
                                     try forced_list.append(allocator, try fi.clone(allocator));
                                 }
@@ -960,9 +961,9 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
                     },
                     .list => {
                         for (current.list_val.items) |item| {
-                            if (item.type == .lazy_seq) {
+                            if (std.meta.activeTag(item) == .lazy_seq) {
                                 var forced = try forceValue(allocator, item);
-                                if (forced.type == .list) {
+                                if (std.meta.activeTag(forced) == .list) {
                                     for (forced.list_val.items) |fi| {
                                         try forced_list.append(allocator, try fi.clone(allocator));
                                     }
@@ -983,7 +984,7 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
                     },
                     .lazy_seq => {
                         var forced = try forceValue(allocator, current);
-                        if (forced.type == .list) {
+                        if (std.meta.activeTag(forced) == .list) {
                             for (forced.list_val.items) |fi| {
                                 try forced_list.append(allocator, try fi.clone(allocator));
                             }
@@ -999,7 +1000,7 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
                     },
                 }
             }
-            return Value.listValue(forced_list);
+            return vm.listValue(forced_list);
         },
         else => try val.clone(allocator),
     };
@@ -1019,7 +1020,7 @@ pub fn core_iterate(self: *const Value, args: *const list.List, env_env: *Env) a
     // We use __zig_iterate (a private self-reference) instead of the global
     // "iterate" symbol, so the thunk calls this Zig function directly without
     // going through any Clojure wrapper (e.g. core.clj defn delegating to zig.core/iterate).
-    const thunk = try allocator.create(Value.LazySeqThunk);
+    const thunk = try allocator.create(vm.LazySeqThunk);
     thunk.* = .{
         .params = list.empty(),
         .body = list.empty(),
@@ -1028,14 +1029,14 @@ pub fn core_iterate(self: *const Value, args: *const list.List, env_env: *Env) a
     try thunk.env.put("f", try f.clone(allocator));
     try thunk.env.put("x", try x.clone(allocator));
     // Store a self-reference so the thunk body calls core_iterate directly
-    try thunk.env.put("__zig_iterate", Value.builtinFnValue(core_iterate));
+    try thunk.env.put("__zig_iterate", vm.builtinFnValue(core_iterate));
 
     // Build thunk body: (cons x (__zig_iterate f (f x)))
     const a = allocator;
-    const sym_cons = try Value.symValue(a, "cons");
-    const sym_x = try Value.symValue(a, "x");
-    const sym_f = try Value.symValue(a, "f");
-    const sym_zig_iterate = try Value.symValue(a, "__zig_iterate");
+    const sym_cons = try vm.symValue(a, "cons");
+    const sym_x = try vm.symValue(a, "x");
+    const sym_f = try vm.symValue(a, "f");
+    const sym_zig_iterate = try vm.symValue(a, "__zig_iterate");
 
     // (f x)
     var f_call: list.List = .empty;
@@ -1046,16 +1047,16 @@ pub fn core_iterate(self: *const Value, args: *const list.List, env_env: *Env) a
     var iterate_call: list.List = .empty;
     try iterate_call.append(a, sym_zig_iterate);
     try iterate_call.append(a, sym_f);
-    try iterate_call.append(a, Value.listValue(f_call));
+    try iterate_call.append(a, vm.listValue(f_call));
 
     // (cons x (__zig_iterate f (f x)))
     var cons_call: list.List = .empty;
     try cons_call.append(a, sym_cons);
     try cons_call.append(a, sym_x);
-    try cons_call.append(a, Value.listValue(iterate_call));
+    try cons_call.append(a, vm.listValue(iterate_call));
 
     thunk.body = cons_call;
-    return Value.lazySeqValue(thunk);
+    return vm.lazySeqValue(thunk);
 }
 
 // cycle: returns a lazy (infinite) sequence of repetitions of the items in coll
@@ -1068,24 +1069,24 @@ pub fn core_cycle(self: *const Value, args: *const list.List, env_env: *Env) any
     const coll = args.items[0];
 
     // Return a lazy-seq: (lazy-seq (let [s (seq coll)] (when s (cons (first s) (__zig_cycle (conj (vec (rest s)) (first s)))))))
-    const thunk = try allocator.create(Value.LazySeqThunk);
+    const thunk = try allocator.create(vm.LazySeqThunk);
     thunk.* = .{ .params = list.empty(), .body = list.empty(), .env = try env_env.clone(allocator) };
     try thunk.env.put("coll", try coll.clone(allocator));
     // Self-reference: thunk calls core_cycle directly, not via global symbol
-    try thunk.env.put("__zig_cycle", Value.builtinFnValue(core_cycle));
+    try thunk.env.put("__zig_cycle", vm.builtinFnValue(core_cycle));
 
     const a = allocator;
-    const sym_let = try Value.symValue(a, "let");
-    const sym_s = try Value.symValue(a, "s");
-    const sym_seq = try Value.symValue(a, "seq");
-    const sym_coll = try Value.symValue(a, "coll");
-    const sym_when = try Value.symValue(a, "when");
-    const sym_cons = try Value.symValue(a, "cons");
-    const sym_first = try Value.symValue(a, "first");
-    const sym_zig_cycle = try Value.symValue(a, "__zig_cycle");
-    const sym_conj = try Value.symValue(a, "conj");
-    const sym_vec = try Value.symValue(a, "vec");
-    const sym_rest = try Value.symValue(a, "rest");
+    const sym_let = try vm.symValue(a, "let");
+    const sym_s = try vm.symValue(a, "s");
+    const sym_seq = try vm.symValue(a, "seq");
+    const sym_coll = try vm.symValue(a, "coll");
+    const sym_when = try vm.symValue(a, "when");
+    const sym_cons = try vm.symValue(a, "cons");
+    const sym_first = try vm.symValue(a, "first");
+    const sym_zig_cycle = try vm.symValue(a, "__zig_cycle");
+    const sym_conj = try vm.symValue(a, "conj");
+    const sym_vec = try vm.symValue(a, "vec");
+    const sym_rest = try vm.symValue(a, "rest");
 
     // (seq coll)
     var seq_call: list.List = .empty;
@@ -1095,7 +1096,7 @@ pub fn core_cycle(self: *const Value, args: *const list.List, env_env: *Env) any
     // [s (seq coll)]
     var bindings: list.List = .empty;
     try bindings.append(a, sym_s);
-    try bindings.append(a, Value.listValue(seq_call));
+    try bindings.append(a, vm.listValue(seq_call));
 
     // (first s)
     var first_call: list.List = .empty;
@@ -1110,63 +1111,63 @@ pub fn core_cycle(self: *const Value, args: *const list.List, env_env: *Env) any
     // (vec (rest s))
     var vec_call: list.List = .empty;
     try vec_call.append(a, sym_vec);
-    try vec_call.append(a, Value.listValue(rest_call));
+    try vec_call.append(a, vm.listValue(rest_call));
 
     // (conj (vec (rest s)) (first s))
     var conj_call: list.List = .empty;
     try conj_call.append(a, sym_conj);
-    try conj_call.append(a, Value.listValue(vec_call));
-    try conj_call.append(a, Value.listValue(first_call));
+    try conj_call.append(a, vm.listValue(vec_call));
+    try conj_call.append(a, vm.listValue(first_call));
 
     // (__zig_cycle (conj (vec (rest s)) (first s)))
     var cycle_call: list.List = .empty;
     try cycle_call.append(a, sym_zig_cycle);
-    try cycle_call.append(a, Value.listValue(conj_call));
+    try cycle_call.append(a, vm.listValue(conj_call));
 
     // (cons (first s) (cycle ...))
     var cons_call: list.List = .empty;
     try cons_call.append(a, sym_cons);
-    try cons_call.append(a, Value.listValue(first_call));
-    try cons_call.append(a, Value.listValue(cycle_call));
+    try cons_call.append(a, vm.listValue(first_call));
+    try cons_call.append(a, vm.listValue(cycle_call));
 
     // (when s (cons ...))
     var when_call: list.List = .empty;
     try when_call.append(a, sym_when);
     try when_call.append(a, sym_s);
-    try when_call.append(a, Value.listValue(cons_call));
+    try when_call.append(a, vm.listValue(cons_call));
 
     // (let [s (seq coll)] (when s (cons ...)))
     var body: list.List = .empty;
     try body.append(a, sym_let);
-    try body.append(a, Value.listValue(bindings));
-    try body.append(a, Value.listValue(when_call));
+    try body.append(a, vm.listValue(bindings));
+    try body.append(a, vm.listValue(when_call));
 
     thunk.body = body;
-    return Value.lazySeqValue(thunk);
+    return vm.lazySeqValue(thunk);
 }
 
 pub fn registerSequenceOpFunctions(env: *Env) anyerror!void {
-    try env.put("map", Value.builtinFnValue(core_map));
-    try env.put("mapcat", Value.builtinFnValue(core_mapcat));
-    try env.put("reduce", Value.builtinFnValue(core_reduce));
-    try env.put("flatten", Value.builtinFnValue(core_flatten));
-    try env.put("filter", Value.builtinFnValue(core_filter));
-    try env.put("remove", Value.builtinFnValue(core_remove));
-    try env.put("every?", Value.builtinFnValue(core_every_q));
-    try env.put("some", Value.builtinFnValue(core_some));
-    try env.put("distinct?", Value.builtinFnValue(core_distinct_q));
-    try env.put("next", Value.builtinFnValue(core_next));
-    try env.put("nthnext", Value.builtinFnValue(core_nthnext));
-    try env.put("drop", Value.builtinFnValue(core_drop));
-    try env.put("doall*", Value.builtinFnValue(core_doall_star));
-    try env.put("iterate", Value.builtinFnValue(core_iterate));
-    try env.put("cycle", Value.builtinFnValue(core_cycle));
+    try env.put("map", vm.builtinFnValue(core_map));
+    try env.put("mapcat", vm.builtinFnValue(core_mapcat));
+    try env.put("reduce", vm.builtinFnValue(core_reduce));
+    try env.put("flatten", vm.builtinFnValue(core_flatten));
+    try env.put("filter", vm.builtinFnValue(core_filter));
+    try env.put("remove", vm.builtinFnValue(core_remove));
+    try env.put("every?", vm.builtinFnValue(core_every_q));
+    try env.put("some", vm.builtinFnValue(core_some));
+    try env.put("distinct?", vm.builtinFnValue(core_distinct_q));
+    try env.put("next", vm.builtinFnValue(core_next));
+    try env.put("nthnext", vm.builtinFnValue(core_nthnext));
+    try env.put("drop", vm.builtinFnValue(core_drop));
+    try env.put("doall*", vm.builtinFnValue(core_doall_star));
+    try env.put("iterate", vm.builtinFnValue(core_iterate));
+    try env.put("cycle", vm.builtinFnValue(core_cycle));
 
     // Reduced wrapper functions
-    try env.put("reduced", Value.builtinFnValue(core_reduced));
-    try env.put("reduced?", Value.builtinFnValue(core_reduced_q));
-    try env.put("ensure-reduced", Value.builtinFnValue(core_ensure_reduced));
-    try env.put("unreduced", Value.builtinFnValue(core_unreduced));
+    try env.put("reduced", vm.builtinFnValue(core_reduced));
+    try env.put("reduced?", vm.builtinFnValue(core_reduced_q));
+    try env.put("ensure-reduced", vm.builtinFnValue(core_ensure_reduced));
+    try env.put("unreduced", vm.builtinFnValue(core_unreduced));
 }
 
 const testEnv = test_utils.testEnv;
@@ -1178,17 +1179,17 @@ test "seq_ops::flatten: nested list" {
     defer a.deinit(std.heap.page_allocator);
     // Build: (1 (2 3) 4)
     var inner: list.List = .empty;
-    _ = inner.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
-    _ = inner.append(std.heap.page_allocator, Value.intValue(3)) catch unreachable;
+    _ = inner.append(std.heap.page_allocator, vm.intValue(2)) catch unreachable;
+    _ = inner.append(std.heap.page_allocator, vm.intValue(3)) catch unreachable;
     var outer: list.List = .empty;
-    _ = outer.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
-    _ = outer.append(std.heap.page_allocator, Value.listValue(inner)) catch unreachable;
-    _ = outer.append(std.heap.page_allocator, Value.intValue(4)) catch unreachable;
-    const lv = Value.listValue(outer);
+    _ = outer.append(std.heap.page_allocator, vm.intValue(1)) catch unreachable;
+    _ = outer.append(std.heap.page_allocator, vm.listValue(inner)) catch unreachable;
+    _ = outer.append(std.heap.page_allocator, vm.intValue(4)) catch unreachable;
+    const lv = vm.listValue(outer);
     const args = makeArgs(&[_]Value{ lv });
     var result = core_flatten(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .list);
+    try std.testing.expect(std.meta.activeTag(result) == .list);
     try std.testing.expect(result.list_val.items.len == 4);
     try std.testing.expect(result.list_val.items[0].int_val == 1);
     try std.testing.expect(result.list_val.items[1].int_val == 2);
@@ -1200,10 +1201,10 @@ test "seq_ops::distinct_q: all distinct" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var l: list.List = .empty;
-    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
-    _ = l.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
-    _ = l.append(std.heap.page_allocator, Value.intValue(3)) catch unreachable;
-    const lv = Value.listValue(l);
+    _ = l.append(std.heap.page_allocator, vm.intValue(1)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, vm.intValue(2)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, vm.intValue(3)) catch unreachable;
+    const lv = vm.listValue(l);
     const args = makeArgs(&[_]Value{ lv });
     var result = core_distinct_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
@@ -1214,10 +1215,10 @@ test "seq_ops::distinct_q: has duplicates" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var l: list.List = .empty;
-    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
-    _ = l.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
-    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
-    const lv = Value.listValue(l);
+    _ = l.append(std.heap.page_allocator, vm.intValue(1)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, vm.intValue(2)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, vm.intValue(1)) catch unreachable;
+    const lv = vm.listValue(l);
     const args = makeArgs(&[_]Value{ lv });
     var result = core_distinct_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
@@ -1228,15 +1229,15 @@ test "seq_ops::drop: list" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var l: list.List = .empty;
-    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
-    _ = l.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
-    _ = l.append(std.heap.page_allocator, Value.intValue(3)) catch unreachable;
-    _ = l.append(std.heap.page_allocator, Value.intValue(4)) catch unreachable;
-    const lv = Value.listValue(l);
-    const args = makeArgs(&[_]Value{ Value.intValue(2), lv });
+    _ = l.append(std.heap.page_allocator, vm.intValue(1)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, vm.intValue(2)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, vm.intValue(3)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, vm.intValue(4)) catch unreachable;
+    const lv = vm.listValue(l);
+    const args = makeArgs(&[_]Value{ vm.intValue(2), lv });
     var result = core_drop(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .list);
+    try std.testing.expect(std.meta.activeTag(result) == .list);
     try std.testing.expect(result.list_val.items.len == 2);
     try std.testing.expect(result.list_val.items[0].int_val == 3);
 }
@@ -1245,12 +1246,12 @@ test "seq_ops::drop: more than length returns empty" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var l: list.List = .empty;
-    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
-    const lv = Value.listValue(l);
-    const args = makeArgs(&[_]Value{ Value.intValue(5), lv });
+    _ = l.append(std.heap.page_allocator, vm.intValue(1)) catch unreachable;
+    const lv = vm.listValue(l);
+    const args = makeArgs(&[_]Value{ vm.intValue(5), lv });
     var result = core_drop(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .list);
+    try std.testing.expect(std.meta.activeTag(result) == .list);
     try std.testing.expect(result.list_val.items.len == 0);
 }
 
@@ -1258,14 +1259,14 @@ test "seq_ops::next: list" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var l: list.List = .empty;
-    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
-    _ = l.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
-    _ = l.append(std.heap.page_allocator, Value.intValue(3)) catch unreachable;
-    const lv = Value.listValue(l);
+    _ = l.append(std.heap.page_allocator, vm.intValue(1)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, vm.intValue(2)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, vm.intValue(3)) catch unreachable;
+    const lv = vm.listValue(l);
     const args = makeArgs(&[_]Value{ lv });
     var result = core_next(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .list);
+    try std.testing.expect(std.meta.activeTag(result) == .list);
     try std.testing.expect(result.list_val.items.len == 2);
     try std.testing.expect(result.list_val.items[0].int_val == 2);
 }
@@ -1274,27 +1275,27 @@ test "seq_ops::next: single element returns nil" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var l: list.List = .empty;
-    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
-    const lv = Value.listValue(l);
+    _ = l.append(std.heap.page_allocator, vm.intValue(1)) catch unreachable;
+    const lv = vm.listValue(l);
     const args = makeArgs(&[_]Value{ lv });
     var result = core_next(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .nil);
+    try std.testing.expect(std.meta.activeTag(result) == .nil);
 }
 
 test "seq_ops::nthnext: list" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var l: list.List = .empty;
-    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
-    _ = l.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
-    _ = l.append(std.heap.page_allocator, Value.intValue(3)) catch unreachable;
-    _ = l.append(std.heap.page_allocator, Value.intValue(4)) catch unreachable;
-    const lv = Value.listValue(l);
-    const args = makeArgs(&[_]Value{ Value.intValue(2), lv });
+    _ = l.append(std.heap.page_allocator, vm.intValue(1)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, vm.intValue(2)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, vm.intValue(3)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, vm.intValue(4)) catch unreachable;
+    const lv = vm.listValue(l);
+    const args = makeArgs(&[_]Value{ vm.intValue(2), lv });
     var result = core_nthnext(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .list);
+    try std.testing.expect(std.meta.activeTag(result) == .list);
     try std.testing.expect(result.list_val.items.len == 2);
     try std.testing.expect(result.list_val.items[0].int_val == 3);
 }
@@ -1303,85 +1304,85 @@ test "seq_ops::nthnext: out of range returns nil" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var l: list.List = .empty;
-    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
-    const lv = Value.listValue(l);
-    const args = makeArgs(&[_]Value{ Value.intValue(5), lv });
+    _ = l.append(std.heap.page_allocator, vm.intValue(1)) catch unreachable;
+    const lv = vm.listValue(l);
+    const args = makeArgs(&[_]Value{ vm.intValue(5), lv });
     var result = core_nthnext(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .nil);
+    try std.testing.expect(std.meta.activeTag(result) == .nil);
 }
 
 
 test "seq_ops::reduced: wraps value" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
-    const args = makeArgs(&[_]Value{ Value.intValue(42) });
+    const args = makeArgs(&[_]Value{ vm.intValue(42) });
     var result = core_reduced(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .reduced);
+    try std.testing.expect(std.meta.activeTag(result) == .reduced);
     try std.testing.expect(result.reduced_val.?.int_val == 42);
 }
 
 test "seq_ops::reduced_q: true for reduced" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
-    var reduced_val = Value.reducedValue(std.heap.page_allocator, Value.intValue(42)) catch unreachable;
+    var reduced_val = vm.reducedValue(std.heap.page_allocator, vm.intValue(42)) catch unreachable;
     defer reduced_val.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ reduced_val });
     var result = core_reduced_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .bool);
+    try std.testing.expect(std.meta.activeTag(result) == .bool);
     try std.testing.expect(result.bool_val == true);
 }
 
 test "seq_ops::reduced_q: false for non-reduced" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
-    const args = makeArgs(&[_]Value{ Value.intValue(42) });
+    const args = makeArgs(&[_]Value{ vm.intValue(42) });
     var result = core_reduced_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .bool);
+    try std.testing.expect(std.meta.activeTag(result) == .bool);
     try std.testing.expect(result.bool_val == false);
 }
 
 test "seq_ops::ensure_reduced: wraps non-reduced" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
-    const args = makeArgs(&[_]Value{ Value.intValue(42) });
+    const args = makeArgs(&[_]Value{ vm.intValue(42) });
     var result = core_ensure_reduced(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .reduced);
+    try std.testing.expect(std.meta.activeTag(result) == .reduced);
 }
 
 test "seq_ops::ensure_reduced: passes through reduced" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
-    var reduced_val = Value.reducedValue(std.heap.page_allocator, Value.intValue(42)) catch unreachable;
+    var reduced_val = vm.reducedValue(std.heap.page_allocator, vm.intValue(42)) catch unreachable;
     defer reduced_val.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ reduced_val });
     var result = core_ensure_reduced(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .reduced);
+    try std.testing.expect(std.meta.activeTag(result) == .reduced);
 }
 
 test "seq_ops::unreduced: unwraps reduced" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
-    var reduced_val = Value.reducedValue(std.heap.page_allocator, Value.intValue(42)) catch unreachable;
+    var reduced_val = vm.reducedValue(std.heap.page_allocator, vm.intValue(42)) catch unreachable;
     defer reduced_val.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ reduced_val });
     var result = core_unreduced(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .integer);
+    try std.testing.expect(std.meta.activeTag(result) == .integer);
     try std.testing.expect(result.int_val == 42);
 }
 
 test "seq_ops::unreduced: passes through non-reduced" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
-    const args = makeArgs(&[_]Value{ Value.intValue(42) });
+    const args = makeArgs(&[_]Value{ vm.intValue(42) });
     var result = core_unreduced(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .integer);
+    try std.testing.expect(std.meta.activeTag(result) == .integer);
     try std.testing.expect(result.int_val == 42);
 }

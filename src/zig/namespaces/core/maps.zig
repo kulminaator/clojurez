@@ -1,9 +1,10 @@
 // Map built-in functions: get, assoc, keys, vals, dissoc, merge, hash-map
 const std = @import("std");
-const Value = @import("../../value.zig");
+const vm = @import("../../value.zig");
+const Value = vm.Value;
 const list = @import("../../list.zig");
 const vec = @import("../../vector.zig");
-const Env = Value.Env;
+const Env = vm.Env;
 const test_utils = @import("test_utils.zig");
 
 const Allocator = std.mem.Allocator;
@@ -12,11 +13,11 @@ pub fn core_get(self: *const Value, args: *const list.List, env_env: *Env) anyer
     _ = self;
     if (args.items.len < 1) return error.ArityError;
     const val = args.items[0];
-    if (val.type != .map and val.type != .record) return error.TypeError;
-    if (args.items.len == 1) return Value.nilValue();
+    if (std.meta.activeTag(val) != .map and std.meta.activeTag(val) != .record) return error.TypeError;
+    if (args.items.len == 1) return vm.nilValue();
     const key = args.items[1];
 
-    if (val.type == .record) {
+    if (std.meta.activeTag(val) == .record) {
         // Look up in fields map first
         for (val.record_val.?.fields.items) |entry| {
             if (entry.key.equals(key)) {
@@ -40,7 +41,7 @@ pub fn core_get(self: *const Value, args: *const list.List, env_env: *Env) anyer
     if (args.items.len >= 3) {
         return try args.items[2].clone(env_env.allocator);
     }
-    return Value.nilValue();
+    return vm.nilValue();
 }
 
 pub fn core_assoc(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
@@ -49,22 +50,22 @@ pub fn core_assoc(self: *const Value, args: *const list.List, env_env: *Env) any
     const first = args.items[0];
 
     // Vector assoc: (assoc vec index val & more-kvs)
-    if (first.type == .vector) {
+    if (std.meta.activeTag(first) == .vector) {
         return assocVector(&first, args, env_env);
     }
 
     // Record assoc: (assoc record key val & more-kvs)
-    if (first.type == .record) {
+    if (std.meta.activeTag(first) == .record) {
         return assocRecord(&first, args, env_env);
     }
 
     // Map assoc: (assoc map key val & more-kvs)
     // If map is nil, start with an empty map (Clojure behavior)
-    if (first.type == .nil) {
-        const empty_map = Value.mapValue(.empty);
+    if (std.meta.activeTag(first) == .nil) {
+        const empty_map = vm.mapValue(.empty);
         return assocMap(&empty_map, args, env_env);
     }
-    if (first.type != .map) return error.TypeError;
+    if (std.meta.activeTag(first) != .map) return error.TypeError;
     return assocMap(&first, args, env_env);
 }
 
@@ -90,7 +91,7 @@ fn assocVector(orig: *const Value, args: *const list.List, env: *Env) anyerror!V
         const value = args.items[i + 1];
 
         // Key must be an integer index
-        if (key.type != .integer) return error.TypeError;
+        if (std.meta.activeTag(key) != .integer) return error.TypeError;
         const idx: usize = @intCast(key.int_val);
         if (key.int_val < 0) return error.TypeError;
         if (idx > new_vec.items.len) return error.TypeError;
@@ -105,12 +106,12 @@ fn assocVector(orig: *const Value, args: *const list.List, env: *Env) anyerror!V
         }
     }
 
-    return Value.vectorValue(new_vec);
+    return vm.vectorValue(new_vec);
 }
 
 fn assocMap(map_val: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     const allocator = env.allocator;
-    var new_map: Value.Map = .empty;
+    var new_map: vm.Map = .empty;
     errdefer {
         for (new_map.items) |*entry| {
             entry.key.deinit(allocator);
@@ -148,18 +149,18 @@ fn assocMap(map_val: *const Value, args: *const list.List, env: *Env) anyerror!V
         }
     }
 
-    return Value.mapValue(new_map);
+    return vm.mapValue(new_map);
 }
 
 pub fn core_keys(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const val = args.items[0];
-    if (val.type != .map and val.type != .record) return error.TypeError;
+    if (std.meta.activeTag(val) != .map and std.meta.activeTag(val) != .record) return error.TypeError;
 
     var result: list.List = .empty;
     errdefer result.deinit(env_env.allocator);
-    if (val.type == .record) {
+    if (std.meta.activeTag(val) == .record) {
         for (val.record_val.?.fields.items) |entry| {
             try result.append(env_env.allocator, try entry.key.clone(env_env.allocator));
         }
@@ -171,18 +172,18 @@ pub fn core_keys(self: *const Value, args: *const list.List, env_env: *Env) anye
             try result.append(env_env.allocator, try entry.key.clone(env_env.allocator));
         }
     }
-    return Value.listValue(result);
+    return vm.listValue(result);
 }
 
 pub fn core_vals(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const val = args.items[0];
-    if (val.type != .map and val.type != .record) return error.TypeError;
+    if (std.meta.activeTag(val) != .map and std.meta.activeTag(val) != .record) return error.TypeError;
 
     var result: list.List = .empty;
     errdefer result.deinit(env_env.allocator);
-    if (val.type == .record) {
+    if (std.meta.activeTag(val) == .record) {
         for (val.record_val.?.fields.items) |entry| {
             try result.append(env_env.allocator, try entry.value.clone(env_env.allocator));
         }
@@ -194,20 +195,20 @@ pub fn core_vals(self: *const Value, args: *const list.List, env_env: *Env) anye
             try result.append(env_env.allocator, try entry.value.clone(env_env.allocator));
         }
     }
-    return Value.listValue(result);
+    return vm.listValue(result);
 }
 
 pub fn core_dissoc(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len < 2) return error.ArityError;
     const val = args.items[0];
-    if (val.type != .map and val.type != .record) return error.TypeError;
+    if (std.meta.activeTag(val) != .map and std.meta.activeTag(val) != .record) return error.TypeError;
 
-    if (val.type == .record) {
+    if (std.meta.activeTag(val) == .record) {
         return dissocRecord(&val, args, env_env);
     }
 
-    var new_map: Value.Map = .empty;
+    var new_map: vm.Map = .empty;
     errdefer {
         for (new_map.items) |*entry| {
             entry.key.deinit(env_env.allocator);
@@ -232,14 +233,14 @@ pub fn core_dissoc(self: *const Value, args: *const list.List, env_env: *Env) an
             });
         }
     }
-    return Value.mapValue(new_map);
+    return vm.mapValue(new_map);
 }
 
 pub fn core_hash_map(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len % 2 != 0) return error.ArityError;
 
-    var new_map: Value.Map = .empty;
+    var new_map: vm.Map = .empty;
     errdefer {
         for (new_map.items) |*entry| {
             entry.key.deinit(env_env.allocator);
@@ -269,16 +270,16 @@ pub fn core_hash_map(self: *const Value, args: *const list.List, env_env: *Env) 
             });
         }
     }
-    return Value.mapValue(new_map);
+    return vm.mapValue(new_map);
 }
 
 pub fn core_merge(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
-    if (args.items.len == 0) return Value.mapValue(.empty);
+    if (args.items.len == 0) return vm.mapValue(.empty);
 
     const allocator = env_env.allocator;
     // If first arg is a record, start with record's fields as base
-    var base_map: Value.Map = .empty;
+    var base_map: vm.Map = .empty;
     errdefer {
         for (base_map.items) |*entry| {
             entry.key.deinit(allocator);
@@ -289,7 +290,7 @@ pub fn core_merge(self: *const Value, args: *const list.List, env_env: *Env) any
 
     // Collect all key-value pairs from all args into base_map
     for (args.items) |arg| {
-        switch (arg.type) {
+        switch (std.meta.activeTag(arg)) {
             .map => {
                 for (arg.map_val.items) |entry| {
                     var found = false;
@@ -353,13 +354,13 @@ pub fn core_merge(self: *const Value, args: *const list.List, env_env: *Env) any
     }
 
     // If first arg was a record, try to reconstruct a record
-    if (args.items[0].type == .record) {
+    if (std.meta.activeTag(args.items[0]) == .record) {
         return mergeToRecord(&args.items[0], base_map, allocator);
     }
     // Transfer ownership
     const result = base_map;
     base_map = .empty;
-    return Value.mapValue(result);
+    return vm.mapValue(result);
 }
 
 /// Check if a key is a defined field of a record (exists in fields map).
@@ -372,7 +373,7 @@ pub fn isRecordDefinedField(record: *const Value, key: Value) bool {
 
 /// Convert a record to a plain map (for dissoc of a defined field).
 fn recordToMap(record: *const Value, allocator: Allocator) anyerror!Value {
-    var new_map: Value.Map = .empty;
+    var new_map: vm.Map = .empty;
     errdefer {
         for (new_map.items) |*entry| {
             entry.key.deinit(allocator);
@@ -392,7 +393,7 @@ fn recordToMap(record: *const Value, allocator: Allocator) anyerror!Value {
             .value = try entry.value.clone(allocator),
         });
     }
-    return Value.mapValue(new_map);
+    return vm.mapValue(new_map);
 }
 
 /// Assoc on a record. Returns a new record (assoc never demotes a record).
@@ -409,7 +410,7 @@ fn assocRecord(record: *const Value, args: *const list.List, env: *Env) anyerror
 
         if (isRecordDefinedField(&current, key)) {
             // Update field value - create new record with updated field
-            var new_fields: Value.Map = .empty;
+            var new_fields: vm.Map = .empty;
             errdefer {
                 for (new_fields.items) |*entry| {
                     entry.key.deinit(allocator);
@@ -453,11 +454,11 @@ fn assocRecord(record: *const Value, args: *const list.List, env: *Env) anyerror
             errdefer allocator.free(new_type_name);
 
             current.deinit(allocator);
-            current = try Value.recordValue(allocator, new_type_name, new_fields, cloned_extmap, cloned_meta);
+            current = try vm.recordValue(allocator, new_type_name, new_fields, cloned_extmap, cloned_meta);
             new_fields = .empty;
         } else {
             // Add/update in extmap - create new record with updated extmap
-            var new_extmap: Value.Map = .empty;
+            var new_extmap: vm.Map = .empty;
             errdefer {
                 for (new_extmap.items) |*entry| {
                     entry.key.deinit(allocator);
@@ -509,13 +510,13 @@ fn assocRecord(record: *const Value, args: *const list.List, env: *Env) anyerror
             errdefer allocator.free(new_type_name);
 
             current.deinit(allocator);
-            current = try Value.recordValue(allocator, new_type_name, cloned_fields, new_extmap, cloned_meta);
+            current = try vm.recordValue(allocator, new_type_name, cloned_fields, new_extmap, cloned_meta);
             new_extmap = .empty;
         }
     }
 
     const result = current;
-    current = Value.nilValue();
+    current = vm.nilValue();
     return result;
 }
 
@@ -536,7 +537,7 @@ fn dissocRecord(record: *const Value, args: *const list.List, env: *Env) anyerro
     }
 
     // All keys are in extmap - create new record with updated extmap
-    var new_extmap: Value.Map = .empty;
+    var new_extmap: vm.Map = .empty;
     errdefer {
         for (new_extmap.items) |*entry| {
             entry.key.deinit(allocator);
@@ -583,13 +584,13 @@ fn dissocRecord(record: *const Value, args: *const list.List, env: *Env) anyerro
     const new_type_name = try allocator.dupe(u8, record.record_val.?.type_name);
     errdefer allocator.free(new_type_name);
 
-    return try Value.recordValue(allocator, new_type_name, cloned_fields, new_extmap, cloned_meta);
+    return try vm.recordValue(allocator, new_type_name, cloned_fields, new_extmap, cloned_meta);
 }
 
 /// Dissoc on a plain map (used internally by dissocRecord after demotion).
 fn core_dissocMap(map_val: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     const allocator = env.allocator;
-    var new_map: Value.Map = .empty;
+    var new_map: vm.Map = .empty;
     errdefer {
         for (new_map.items) |*entry| {
             entry.key.deinit(allocator);
@@ -614,17 +615,17 @@ fn core_dissocMap(map_val: *const Value, args: *const list.List, env: *Env) anye
             });
         }
     }
-    return Value.mapValue(new_map);
+    return vm.mapValue(new_map);
 }
 
 /// Merge result back to a record if the first arg was a record.
 /// If all keys in the merged map are defined fields, return a record.
 /// Otherwise return a record with extmap for extra keys.
-fn mergeToRecord(original_record: *const Value, merged_map: Value.Map, allocator: Allocator) anyerror!Value {
+fn mergeToRecord(original_record: *const Value, merged_map: vm.Map, allocator: Allocator) anyerror!Value {
     const rd = original_record.record_val orelse return error.TypeError;
 
     // Build new fields map from merged_map entries that match defined fields
-    var new_fields: Value.Map = .empty;
+    var new_fields: vm.Map = .empty;
     errdefer {
         for (new_fields.items) |*entry| {
             entry.key.deinit(allocator);
@@ -632,7 +633,7 @@ fn mergeToRecord(original_record: *const Value, merged_map: Value.Map, allocator
         }
         allocator.free(new_fields.items);
     }
-    var new_extmap: Value.Map = .empty;
+    var new_extmap: vm.Map = .empty;
     errdefer {
         for (new_extmap.items) |*entry| {
             entry.key.deinit(allocator);
@@ -688,17 +689,17 @@ fn mergeToRecord(original_record: *const Value, merged_map: Value.Map, allocator
     const new_type_name = try allocator.dupe(u8, rd.type_name);
     errdefer allocator.free(new_type_name);
 
-    return try Value.recordValue(allocator, new_type_name, new_fields, new_extmap, cloned_meta);
+    return try vm.recordValue(allocator, new_type_name, new_fields, new_extmap, cloned_meta);
 }
 
 pub fn registerMapFunctions(env: *Env) anyerror!void {
-    try env.put("get", Value.builtinFnValue(core_get));
-    try env.put("assoc", Value.builtinFnValue(core_assoc));
-    try env.put("keys", Value.builtinFnValue(core_keys));
-    try env.put("vals", Value.builtinFnValue(core_vals));
-    try env.put("dissoc", Value.builtinFnValue(core_dissoc));
-    try env.put("merge", Value.builtinFnValue(core_merge));
-    try env.put("hash-map", Value.builtinFnValue(core_hash_map));
+    try env.put("get", vm.builtinFnValue(core_get));
+    try env.put("assoc", vm.builtinFnValue(core_assoc));
+    try env.put("keys", vm.builtinFnValue(core_keys));
+    try env.put("vals", vm.builtinFnValue(core_vals));
+    try env.put("dissoc", vm.builtinFnValue(core_dissoc));
+    try env.put("merge", vm.builtinFnValue(core_merge));
+    try env.put("hash-map", vm.builtinFnValue(core_hash_map));
 }
 
 // ===== Unit Tests =====
@@ -708,20 +709,20 @@ const testSelf = test_utils.testSelf;
 
 fn makeMap(kvs: []const Value) Value {
     const a = std.heap.page_allocator;
-    var m: Value.Map = .empty;
+    var m: vm.Map = .empty;
     var i: usize = 0;
     while (i + 1 < kvs.len) : (i += 2) {
         _ = m.append(a, .{ .key = kvs[i], .value = kvs[i + 1] }) catch unreachable;
     }
-    return Value.mapValue(m);
+    return vm.mapValue(m);
 }
 
 test "maps::get: finds key" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
-    var m = makeMap(&[_]Value{ Value.intValue(1), Value.intValue(10), Value.intValue(2), Value.intValue(20) });
+    var m = makeMap(&[_]Value{ vm.intValue(1), vm.intValue(10), vm.intValue(2), vm.intValue(20) });
     defer m.deinit(std.heap.page_allocator);
-    const args = makeArgs(&[_]Value{ m, Value.intValue(1) });
+    const args = makeArgs(&[_]Value{ m, vm.intValue(1) });
     var result = core_get(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.int_val == 10);
@@ -730,49 +731,49 @@ test "maps::get: finds key" {
 test "maps::get: missing key returns nil" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
-    var m = makeMap(&[_]Value{ Value.intValue(1), Value.intValue(10) });
+    var m = makeMap(&[_]Value{ vm.intValue(1), vm.intValue(10) });
     defer m.deinit(std.heap.page_allocator);
-    const args = makeArgs(&[_]Value{ m, Value.intValue(99) });
+    const args = makeArgs(&[_]Value{ m, vm.intValue(99) });
     var result = core_get(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .nil);
+    try std.testing.expect(std.meta.activeTag(result) == .nil);
 }
 
 test "maps::keys: returns all keys" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
-    var m = makeMap(&[_]Value{ Value.intValue(1), Value.intValue(10), Value.intValue(2), Value.intValue(20) });
+    var m = makeMap(&[_]Value{ vm.intValue(1), vm.intValue(10), vm.intValue(2), vm.intValue(20) });
     defer m.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ m });
     var result = core_keys(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .list);
+    try std.testing.expect(std.meta.activeTag(result) == .list);
     try std.testing.expect(result.list_val.items.len == 2);
 }
 
 test "maps::vals: returns all values" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
-    var m = makeMap(&[_]Value{ Value.intValue(1), Value.intValue(10), Value.intValue(2), Value.intValue(20) });
+    var m = makeMap(&[_]Value{ vm.intValue(1), vm.intValue(10), vm.intValue(2), vm.intValue(20) });
     defer m.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ m });
     var result = core_vals(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .list);
+    try std.testing.expect(std.meta.activeTag(result) == .list);
     try std.testing.expect(result.list_val.items.len == 2);
 }
 
 test "maps::merge: merges two maps" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
-    var m1 = makeMap(&[_]Value{ Value.intValue(1), Value.intValue(10) });
+    var m1 = makeMap(&[_]Value{ vm.intValue(1), vm.intValue(10) });
     defer m1.deinit(std.heap.page_allocator);
-    var m2 = makeMap(&[_]Value{ Value.intValue(2), Value.intValue(20) });
+    var m2 = makeMap(&[_]Value{ vm.intValue(2), vm.intValue(20) });
     defer m2.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ m1, m2 });
     var result = core_merge(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .map);
+    try std.testing.expect(std.meta.activeTag(result) == .map);
     try std.testing.expect(result.map_val.items.len == 2);
 }
 
@@ -782,7 +783,7 @@ test "maps::merge: no args returns empty map" {
     const args = makeArgs(&[_]Value{});
     var result = core_merge(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .map);
+    try std.testing.expect(std.meta.activeTag(result) == .map);
     try std.testing.expect(result.map_val.items.len == 0);
 }
 

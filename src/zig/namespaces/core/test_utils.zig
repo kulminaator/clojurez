@@ -1,12 +1,13 @@
 // Shared test utilities for unit tests in core/ modules.
 // Eliminates duplicated testEnv(), testSelf(), makeArgs() across files.
 const std = @import("std");
-const Value = @import("../../value.zig");
+const vm = @import("../../value.zig");
+const Value = vm.Value;
 const list = @import("../../list.zig");
 
 /// Create a fresh empty environment for testing.
-pub fn testEnv() Value.Env {
-    return Value.Env.init(std.heap.page_allocator);
+pub fn testEnv() vm.Env {
+    return vm.Env.init(std.heap.page_allocator);
 }
 
 /// Create a list of Value arguments from a slice.
@@ -21,7 +22,7 @@ pub fn makeArgs(args: []const Value) list.List {
 
 /// A nil Value used as `self` for builtin function tests.
 pub fn testSelf() *const Value {
-    _testSelf = Value.nilValue();
+    _testSelf = vm.nilValue();
     return &_testSelf;
 }
-var _testSelf: Value = Value.nilValue();
+var _testSelf: Value = vm.nilValue();

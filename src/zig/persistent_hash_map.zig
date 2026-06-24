@@ -17,7 +17,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Value = @import("value.zig");
+const vm = @import("value.zig");
+const Value = vm.Value;
 const gc = @import("gc.zig");
 const list = @import("list.zig");
 
@@ -78,52 +79,37 @@ fn newSubNodesArrayLen(allocator: Allocator, len: usize) []?*Node {
 
 /// Compute a 32-bit hash code for a Value, matching Clojure's hasheq semantics.
 pub fn valueHash(val: Value) i32 {
-    return switch (val.type) {
+    return switch (val) {
         .nil => 0,
-        .bool => if (val.bool_val) 1 else 0,
-        .integer => hashInt(val.int_val),
-        .float => hashFloat(val.float_val),
-        .bigint => {
-            if (val.bigint_val) |bi| return hashBigInt(bi.*);
-            return 0;
-        },
-        .ratio => {
-            if (val.ratio_val) |r| {
-                return hashBigInt(r.num) ^ hashBigInt(r.den);
-            }
-            return 0;
-        },
-        .decimal => {
-            if (val.decimal_val) |d| return hashBigInt(d.unscaled);
-            return 0;
-        },
-        .string => hashString(val.str_val),
-        .regex => hashString(val.re_pattern),
-        .character => @as(i32, @intCast(val.char_val)),
-        .symbol => hashString(val.sym_val),
-        .keyword => hashKeyword(val.kw_val),
-        .list => hashCollection(val.list_val.items),
-        .vector => hashCollection(val.vec_val.items),
-        .map => hashMapEntries(val.map_val.items),
-        .set => hashCollection(val.set_val.items),
-        .queue => hashCollection(val.queue_val.items),
+        .bool => |b| if (b) 1 else 0,
+        .integer => |i| hashInt(i),
+        .float => |f| hashFloat(f),
+        .bigint => |bi| hashBigInt(bi.*),
+        .ratio => |r| hashBigInt(r.num) ^ hashBigInt(r.den),
+        .decimal => |d| hashBigInt(d.unscaled),
+        .string => |s| hashString(s),
+        .regex => |s| hashString(s),
+        .character => |c| @as(i32, @intCast(c)),
+        .symbol => |s| hashString(s),
+        .keyword => |s| hashKeyword(s),
+        .list => |data| hashCollection(data.items.items),
+        .vector => |data| hashCollection(data.items.items),
+        .map => |data| hashMapEntries(data.entries.items),
+        .set => |data| hashCollection(data.items.items),
+        .queue => |data| hashCollection(data.items.items),
         .function => hashIdentity(),
         .builtin_fn => hashIdentity(),
         .lazy_seq => hashIdentity(),
         .cons => hashIdentity(),
         .atom => hashIdentity(),
-        .wrapped => @as(i32, @intCast(val.wrapped_val)),
-        .reduced => {
-            if (val.reduced_val) |data| return valueHash(data.*);
-            return 0;
-        },
-        .record => {
-            // Hash record: XOR type name hash with field values hash
-            var h: i32 = hashString(val.record_val.?.type_name);
-            for (val.record_val.?.fields.items) |entry| {
+        .wrapped => |w| @as(i32, @intCast(w)),
+        .reduced => |data| valueHash(data.*),
+        .record => |rd| {
+            var h: i32 = hashString(rd.type_name);
+            for (rd.fields.items) |entry| {
                 h ^= valueHash(entry.key) + valueHash(entry.value);
             }
-            for (val.record_val.?.extmap.items) |entry| {
+            for (rd.extmap.items) |entry| {
                 h ^= valueHash(entry.key) + valueHash(entry.value);
             }
             return h;
@@ -168,7 +154,7 @@ fn hashCollection(items: []const Value) i32 {
     return h;
 }
 
-fn hashMapEntries(entries: []const Value.MapEntry) i32 {
+fn hashMapEntries(entries: []const vm.MapEntry) i32 {
     var h: i32 = 0;
     for (entries) |entry| {
         h = h + (valueHash(entry.key) ^ valueHash(entry.value));
@@ -283,10 +269,10 @@ const BitmapIndexedNode = struct {
         const idx = indexBelow(self.bitmap, bit);
         const kvp = &self.array[idx];
 
-        if (kvp.key.type == .nil) {
+        if (vm.getType(kvp.key) == .nil) {
             return nodeFindLeaf(self.sub_nodes[idx].?, shift + SHIFT_BITS, hash, key);
         }
-        if (kvp.key.equals(key)) return kvp.val;
+        if (vm.equals(kvp.key, key)) return kvp.val;
         return null;
     }
 
@@ -295,10 +281,10 @@ const BitmapIndexedNode = struct {
         if ((self.bitmap & bit) == 0) return null;
         const idx = indexBelow(self.bitmap, bit);
         const kvp = &self.array[idx];
-        if (kvp.key.type == .nil) {
+        if (vm.getType(kvp.key) == .nil) {
             return nodeFindPtr(self.sub_nodes[idx].?, shift + SHIFT_BITS, hash, key);
         }
-        if (kvp.key.equals(key)) return &kvp.val;
+        if (vm.equals(kvp.key, key)) return &kvp.val;
         return null;
     }
 
@@ -310,7 +296,7 @@ const BitmapIndexedNode = struct {
             const idx = indexBelow(self.bitmap, bit);
             const existing_kvp = &self.array[idx];
 
-            if (existing_kvp.key.type == .nil) {
+            if (vm.getType(existing_kvp.key) == .nil) {
                 // Sub-node collision — recurse
                 const sub_node = self.sub_nodes[idx].?;
                 const new_sub = try nodeAssoc(sub_node, allocator, shift + SHIFT_BITS, hash, key, val, addedLeaf);
@@ -318,8 +304,8 @@ const BitmapIndexedNode = struct {
                 return createBitmapWithSub(allocator, self, idx, new_sub);
             }
 
-            if (existing_kvp.key.equals(key)) {
-                if (existing_kvp.val.equals(val)) return self.cloneNode(allocator);
+            if (vm.equals(existing_kvp.key, key)) {
+                if (vm.equals(existing_kvp.val, val)) return self.cloneNode(allocator);
                 return createBitmapWithValue(allocator, self, idx, val);
             }
 
@@ -346,7 +332,7 @@ const BitmapIndexedNode = struct {
         const idx = indexBelow(self.bitmap, bit);
         const kvp = &self.array[idx];
 
-        if (kvp.key.type == .nil) {
+        if (vm.getType(kvp.key) == .nil) {
             const sub_node = self.sub_nodes[idx].?;
             const new_sub = try nodeWithout(sub_node, allocator, shift + SHIFT_BITS, hash, key, removedLeaf);
             if (sub_node == new_sub and !removedLeaf.get()) return self.cloneNode(allocator);
@@ -358,7 +344,7 @@ const BitmapIndexedNode = struct {
             return createBitmapWithSub(allocator, self, idx, new_sub.?);
         }
 
-        if (kvp.key.equals(key)) {
+        if (vm.equals(kvp.key, key)) {
             removedLeaf.set(true);
             if (self.bitmap == bit) return null;
             return createBitmapWithout(allocator, self, idx);
@@ -370,7 +356,7 @@ const BitmapIndexedNode = struct {
     pub fn appendKeys(self: *const BitmapIndexedNode, allocator: Allocator, result: *list.List) anyerror!void {
         var i: usize = 0;
         while (i < self.array.len) : (i += 1) {
-            if (self.array[i].key.type == .nil) {
+            if (vm.getType(self.array[i].key) == .nil) {
                 try nodeAppendKeys(self.sub_nodes[i].?, allocator, result);
             } else {
                 try result.append(allocator, self.array[i].key);
@@ -381,7 +367,7 @@ const BitmapIndexedNode = struct {
     pub fn appendVals(self: *const BitmapIndexedNode, allocator: Allocator, result: *list.List) anyerror!void {
         var i: usize = 0;
         while (i < self.array.len) : (i += 1) {
-            if (self.array[i].key.type == .nil) {
+            if (vm.getType(self.array[i].key) == .nil) {
                 try nodeAppendVals(self.sub_nodes[i].?, allocator, result);
             } else {
                 try result.append(allocator, self.array[i].val);
@@ -392,7 +378,7 @@ const BitmapIndexedNode = struct {
     pub fn appendEntries(self: *const BitmapIndexedNode, allocator: Allocator, result: *list.List) anyerror!void {
         var i: usize = 0;
         while (i < self.array.len) : (i += 1) {
-            if (self.array[i].key.type == .nil) {
+            if (vm.getType(self.array[i].key) == .nil) {
                 try nodeAppendEntries(self.sub_nodes[i].?, allocator, result);
             } else {
                 try result.append(allocator, self.array[i].key);
@@ -407,8 +393,8 @@ const BitmapIndexedNode = struct {
         var i: usize = 0;
         while (i < self.array.len) : (i += 1) {
             new_kvs[i] = .{
-                .key = self.array[i].key.clone(allocator) catch @panic("OOM"),
-                .val = self.array[i].val.clone(allocator) catch @panic("OOM"),
+                .key = vm.clone(&self.array[i].key, allocator) catch @panic("OOM"),
+                .val = vm.clone(&self.array[i].val, allocator) catch @panic("OOM"),
             };
         }
         const new_subs = newSubNodesArray(allocator, self.sub_nodes);
@@ -423,8 +409,8 @@ const BitmapIndexedNode = struct {
 
     fn deinitNode(self: *BitmapIndexedNode, allocator: Allocator) void {
         for (self.array) |*kvp| {
-            kvp.key.deinit(allocator);
-            kvp.val.deinit(allocator);
+            vm.valueDeinit(&kvp.key, allocator);
+            vm.valueDeinit(&kvp.val, allocator);
         }
         allocator.free(self.array);
         allocator.free(self.sub_nodes);
@@ -545,7 +531,7 @@ const HashCollisionNode = struct {
         _ = hash;
         var i: usize = 0;
         while (i < self.kvs.len) : (i += 1) {
-            if (self.kvs[i].key.equals(key)) return self.kvs[i].val;
+            if (vm.equals(self.kvs[i].key, key)) return self.kvs[i].val;
         }
         return null;
     }
@@ -554,7 +540,7 @@ const HashCollisionNode = struct {
         _ = hash;
         var i: usize = 0;
         while (i < self.kvs.len) : (i += 1) {
-            if (self.kvs[i].key.equals(key)) return &self.kvs[i].val;
+            if (vm.equals(self.kvs[i].key, key)) return &self.kvs[i].val;
         }
         return null;
     }
@@ -563,8 +549,8 @@ const HashCollisionNode = struct {
         if (hash == self.hash or shift >= MAX_SHIFT) {
             var i: usize = 0;
             while (i < self.kvs.len) : (i += 1) {
-                if (self.kvs[i].key.equals(key)) {
-                    if (self.kvs[i].val.equals(val)) return self.cloneNode(allocator);
+                if (vm.equals(self.kvs[i].key, key)) {
+                    if (vm.equals(self.kvs[i].val, val)) return self.cloneNode(allocator);
                     return createCollisionNodeWithValue(allocator, self, i, val);
                 }
             }
@@ -583,7 +569,7 @@ const HashCollisionNode = struct {
         _ = hash;
         var i: usize = 0;
         while (i < self.kvs.len) : (i += 1) {
-            if (self.kvs[i].key.equals(key)) {
+            if (vm.equals(self.kvs[i].key, key)) {
                 removedLeaf.set(true);
                 if (self.kvs.len == 1) return null;
                 return createCollisionNodeWithout(allocator, self, i);
@@ -617,8 +603,8 @@ const HashCollisionNode = struct {
         var i: usize = 0;
         while (i < self.kvs.len) : (i += 1) {
             new_kvs[i] = .{
-                .key = self.kvs[i].key.clone(allocator) catch @panic("OOM"),
-                .val = self.kvs[i].val.clone(allocator) catch @panic("OOM"),
+                .key = vm.clone(&self.kvs[i].key, allocator) catch @panic("OOM"),
+                .val = vm.clone(&self.kvs[i].val, allocator) catch @panic("OOM"),
             };
         }
         return newNode(allocator, Node{
@@ -631,8 +617,8 @@ const HashCollisionNode = struct {
 
     fn deinitNode(self: *HashCollisionNode, allocator: Allocator) void {
         for (self.kvs) |*kvp| {
-            kvp.key.deinit(allocator);
-            kvp.val.deinit(allocator);
+            vm.valueDeinit(&kvp.key, allocator);
+            vm.valueDeinit(&kvp.val, allocator);
         }
         allocator.free(self.kvs);
     }
@@ -718,7 +704,7 @@ pub const PersistentHashMap = struct {
         .count = 0,
         .root = null,
         .has_null = false,
-        .null_value = Value.nilValue(),
+        .null_value = vm.nilValue(),
     };
 
     /// Create a new empty PersistentHashMap.
@@ -738,7 +724,7 @@ pub const PersistentHashMap = struct {
 
     /// Check if the map contains the given key.
     pub fn containsKey(self: PersistentHashMap, key: Value) bool {
-        if (key.type == .nil) return self.has_null;
+        if (vm.getType(key) == .nil) return self.has_null;
         if (self.root == null) return false;
         const h = valueHash(key);
         return nodeFindLeaf(self.root.?, 0, h, key) != null;
@@ -746,7 +732,7 @@ pub const PersistentHashMap = struct {
 
     /// Look up a value by key. Returns the value or null if not found.
     pub fn find(self: PersistentHashMap, key: Value) ?Value {
-        if (key.type == .nil) {
+        if (vm.getType(key) == .nil) {
             if (self.has_null) return self.null_value;
             return null;
         }
@@ -766,7 +752,7 @@ pub const PersistentHashMap = struct {
     /// Look up a value by key, returning a pointer to the stored Value.
     /// The pointer is valid as long as the HAMT node containing it is alive.
     pub fn findPtr(self: PersistentHashMap, key: Value) ?*const Value {
-        if (key.type == .nil) {
+        if (vm.getType(key) == .nil) {
             if (self.has_null) return &self.null_value;
             return null;
         }
@@ -777,8 +763,8 @@ pub const PersistentHashMap = struct {
 
     /// Associate a key-value pair. Returns a new PersistentHashMap.
     pub fn mapAssoc(self: PersistentHashMap, allocator: Allocator, key: Value, val: Value) anyerror!PersistentHashMap {
-        if (key.type == .nil) {
-            if (self.has_null and self.null_value.equals(val)) return self;
+        if (vm.getType(key) == .nil) {
+            if (self.has_null and vm.equals(self.null_value, val)) return self;
             return PersistentHashMap{
                 .count = if (self.has_null) self.count else self.count + 1,
                 .root = self.root,
@@ -806,15 +792,15 @@ pub const PersistentHashMap = struct {
 
     /// Remove a key. Returns a new PersistentHashMap.
     pub fn mapWithout(self: PersistentHashMap, allocator: Allocator, key: Value) anyerror!PersistentHashMap {
-        if (key.type == .nil) {
+        if (vm.getType(key) == .nil) {
             if (!self.has_null) return self;
             var nv = self.null_value;
-            defer nv.deinit(allocator);
+            vm.valueDeinit(&nv, allocator);
             return PersistentHashMap{
                 .count = self.count - 1,
                 .root = self.root,
                 .has_null = false,
-                .null_value = Value.nilValue(),
+                .null_value = vm.nilValue(),
             };
         }
         if (self.root == null) return self;
@@ -839,7 +825,7 @@ pub const PersistentHashMap = struct {
         errdefer result.deinit(allocator);
 
         if (self.has_null) {
-            try result.append(allocator, Value.nilValue());
+            try result.append(allocator, vm.nilValue());
         }
 
         if (self.root) |root| {
@@ -871,7 +857,7 @@ pub const PersistentHashMap = struct {
         errdefer result.deinit(allocator);
 
         if (self.has_null) {
-            try result.append(allocator, Value.nilValue());
+            try result.append(allocator, vm.nilValue());
             try result.append(allocator, self.null_value);
         }
 
@@ -894,7 +880,7 @@ pub const PersistentHashMap = struct {
         while (it.next()) |entry| {
             const found = other.find(entry.key);
             if (found == null) return false;
-            if (!entry.val.equals(found.?)) return false;
+            if (!vm.equals(entry.val, found.?)) return false;
         }
         return true;
     }
@@ -929,7 +915,7 @@ pub const PersistentHashMap = struct {
         pub fn next(self: *EntryIterator) ?Kvp {
             if (!self.null_done and self.map.has_null) {
                 self.null_done = true;
-                return Kvp{ .key = Value.nilValue(), .val = self.map.null_value };
+                return Kvp{ .key = vm.nilValue(), .val = self.map.null_value };
             }
             if (self.map.root == null) return null;
             if (self.root_iter == null) {
@@ -980,7 +966,7 @@ const NodeEntryIterator = struct {
                     }
                     const i = frame.idx;
                     frame.idx += 1;
-                    if (bnode.array[i].key.type == .nil) {
+                    if (vm.getType(bnode.array[i].key) == .nil) {
                         _ = self.stack.append(std.heap.page_allocator, NodeIterFrame{
                             .node = bnode.sub_nodes[i].?,
                             .phase = getPhase(bnode.sub_nodes[i].?),
@@ -1039,8 +1025,8 @@ fn createBitmapLeaf(allocator: Allocator, shift: u6, hash: i32, key: Value, val:
     const bit = bitpos(hash, shift);
     addedLeaf.set(true);
 
-    const cloned_key = try key.clone(allocator);
-    const cloned_val = try val.clone(allocator);
+    const cloned_key = try vm.clone(&key, allocator);
+    const cloned_val = try vm.clone(&val, allocator);
     var kvs: [1]Kvp = .{ .{ .key = cloned_key, .val = cloned_val } };
     var subs: [1]?*Node = .{null};
 
@@ -1059,8 +1045,8 @@ fn createSubNode(allocator: Allocator, shift: u6, key1: Value, val1: Value, hash
     if (hash1 == hash2) {
         addedLeaf.set(true);
         var kvs: [2]Kvp = .{
-            .{ .key = try key1.clone(allocator), .val = try val1.clone(allocator) },
-            .{ .key = try key2.clone(allocator), .val = try val2.clone(allocator) },
+            .{ .key = try vm.clone(&key1, allocator), .val = try vm.clone(&val1, allocator) },
+            .{ .key = try vm.clone(&key2, allocator), .val = try vm.clone(&val2, allocator) },
         };
         return newNode(allocator, Node{
             .hash_collision = HashCollisionNode{
@@ -1085,8 +1071,8 @@ fn createSubNode(allocator: Allocator, shift: u6, key1: Value, val1: Value, hash
         if (shift >= MAX_SHIFT) {
             // Can't go deeper — treat as hash collision
             var kvs: [2]Kvp = .{
-                .{ .key = try key1.clone(allocator), .val = try val1.clone(allocator) },
-                .{ .key = try key2.clone(allocator), .val = try val2.clone(allocator) },
+                .{ .key = try vm.clone(&key1, allocator), .val = try vm.clone(&val1, allocator) },
+                .{ .key = try vm.clone(&key2, allocator), .val = try vm.clone(&val2, allocator) },
             };
             return newNode(allocator, Node{
                 .hash_collision = HashCollisionNode{
@@ -1098,7 +1084,7 @@ fn createSubNode(allocator: Allocator, shift: u6, key1: Value, val1: Value, hash
         // Recurse to create the deeper sub-node, then wrap it in a
         // BitmapIndexedNode at the current shift level.
         const deeper_sub = createSubNode(allocator, shift + SHIFT_BITS, key1, val1, hash2, key2, val2, addedLeaf) catch @panic("OOM");
-        var kvs: [1]Kvp = .{ .{ .key = Value.nilValue(), .val = Value.nilValue() } };
+        var kvs: [1]Kvp = .{ .{ .key = vm.nilValue(), .val = vm.nilValue() } };
         var subs: [1]?*Node = .{deeper_sub};
         return newNode(allocator, Node{
             .bitmap_indexed = BitmapIndexedNode{
@@ -1116,11 +1102,11 @@ fn createSubNode(allocator: Allocator, shift: u6, key1: Value, val1: Value, hash
     var subs: [2]?*Node = .{ null, null };
 
     if (idx1 < idx2) {
-        kvs[0] = .{ .key = try key1.clone(allocator), .val = try val1.clone(allocator) };
-        kvs[1] = .{ .key = try key2.clone(allocator), .val = try val2.clone(allocator) };
+        kvs[0] = .{ .key = try vm.clone(&key1, allocator), .val = try vm.clone(&val1, allocator) };
+        kvs[1] = .{ .key = try vm.clone(&key2, allocator), .val = try vm.clone(&val2, allocator) };
     } else {
-        kvs[0] = .{ .key = try key2.clone(allocator), .val = try val2.clone(allocator) };
-        kvs[1] = .{ .key = try key1.clone(allocator), .val = try val1.clone(allocator) };
+        kvs[0] = .{ .key = try vm.clone(&key2, allocator), .val = try vm.clone(&val2, allocator) };
+        kvs[1] = .{ .key = try vm.clone(&key1, allocator), .val = try vm.clone(&val1, allocator) };
     }
 
     return newNode(allocator, Node{
@@ -1137,20 +1123,20 @@ fn createBitmapWithValue(allocator: Allocator, src: *const BitmapIndexedNode, id
     // Deep clone all Kvp entries to avoid sharing Value pointers with src.
     const new_len = src.array.len;
     var new_kvs = newKvpArrayLen(allocator, new_len);
-    errdefer { for (new_kvs) |*kvp| { kvp.key.deinit(allocator); kvp.val.deinit(allocator); } allocator.free(new_kvs); }
+    errdefer { for (new_kvs) |*kvp| { vm.valueDeinit(&kvp.key, allocator); vm.valueDeinit(&kvp.val, allocator); } allocator.free(new_kvs); }
     _ = newSubNodesArray(allocator, src.sub_nodes); // register with GC
 
     var i: usize = 0;
     while (i < new_len) : (i += 1) {
         if (i == idx) {
             new_kvs[i] = .{
-                .key = try src.array[i].key.clone(allocator),
-                .val = try new_val.clone(allocator),
+                .key = try vm.clone(&src.array[i].key, allocator),
+                .val = try vm.clone(&new_val, allocator),
             };
         } else {
             new_kvs[i] = .{
-                .key = try src.array[i].key.clone(allocator),
-                .val = try src.array[i].val.clone(allocator),
+                .key = try vm.clone(&src.array[i].key, allocator),
+                .val = try vm.clone(&src.array[i].val, allocator),
             };
         }
     }
@@ -1178,15 +1164,15 @@ fn createBitmapWithSub(allocator: Allocator, src: *const BitmapIndexedNode, idx:
     while (i < new_len) : (i += 1) {
         if (i == idx) {
             // Replace with nil key (marks this slot as holding a sub-node)
-            new_kvs[i] = .{ .key = Value.nilValue(), .val = Value.nilValue() };
+            new_kvs[i] = .{ .key = vm.nilValue(), .val = vm.nilValue() };
             new_subs[i] = new_sub;
             // DON'T deinit old_sub here - it's still referenced by the old HAMT
             // via structural sharing. The GC will free it when unreachable.
         } else {
             // Deep clone the Kvp
             new_kvs[i] = .{
-                .key = try src.array[i].key.clone(allocator),
-                .val = try src.array[i].val.clone(allocator),
+                .key = try vm.clone(&src.array[i].key, allocator),
+                .val = try vm.clone(&src.array[i].val, allocator),
             };
             new_subs[i] = src.sub_nodes[i];
         }
@@ -1205,25 +1191,25 @@ fn createBitmapWithSub(allocator: Allocator, src: *const BitmapIndexedNode, idx:
 fn createBitmapWithLeaf(allocator: Allocator, src: *const BitmapIndexedNode, insert_idx: usize, bit: u32, key: Value, val: Value) anyerror!*Node {
     const new_len = src.array.len + 1;
     var new_kvs = newKvpArrayLen(allocator, new_len);
-    errdefer { for (new_kvs) |*kvp| { kvp.key.deinit(allocator); kvp.val.deinit(allocator); } allocator.free(new_kvs); }
+    errdefer { for (new_kvs) |*kvp| { vm.valueDeinit(&kvp.key, allocator); vm.valueDeinit(&kvp.val, allocator); } allocator.free(new_kvs); }
     var new_subs = newSubNodesArrayLen(allocator, new_len);
     errdefer allocator.free(new_subs);
 
     var i: usize = 0;
     while (i < insert_idx) : (i += 1) {
         new_kvs[i] = .{
-            .key = try src.array[i].key.clone(allocator),
-            .val = try src.array[i].val.clone(allocator),
+            .key = try vm.clone(&src.array[i].key, allocator),
+            .val = try vm.clone(&src.array[i].val, allocator),
         };
         new_subs[i] = src.sub_nodes[i];
     }
-    new_kvs[insert_idx] = .{ .key = try key.clone(allocator), .val = try val.clone(allocator) };
+    new_kvs[insert_idx] = .{ .key = try vm.clone(&key, allocator), .val = try vm.clone(&val, allocator) };
     new_subs[insert_idx] = null;
     var j: usize = insert_idx + 1;
     while (i < src.array.len) : ({ i += 1; j += 1; }) {
         new_kvs[j] = .{
-            .key = try src.array[i].key.clone(allocator),
-            .val = try src.array[i].val.clone(allocator),
+            .key = try vm.clone(&src.array[i].key, allocator),
+            .val = try vm.clone(&src.array[i].val, allocator),
         };
         new_subs[j] = src.sub_nodes[i];
     }
@@ -1241,7 +1227,7 @@ fn createBitmapWithLeaf(allocator: Allocator, src: *const BitmapIndexedNode, ins
 fn createBitmapWithout(allocator: Allocator, src: *const BitmapIndexedNode, remove_idx: usize) anyerror!*Node {
     const new_len = src.array.len - 1;
     var new_kvs = newKvpArrayLen(allocator, new_len);
-    errdefer { for (new_kvs) |*kvp| { kvp.key.deinit(allocator); kvp.val.deinit(allocator); } allocator.free(new_kvs); }
+    errdefer { for (new_kvs) |*kvp| { vm.valueDeinit(&kvp.key, allocator); vm.valueDeinit(&kvp.val, allocator); } allocator.free(new_kvs); }
     var new_subs = newSubNodesArrayLen(allocator, new_len);
     errdefer allocator.free(new_subs);
 
@@ -1255,8 +1241,8 @@ fn createBitmapWithout(allocator: Allocator, src: *const BitmapIndexedNode, remo
         }
         // Deep clone Kvp to avoid sharing Value pointers with src.
         new_kvs[j] = .{
-            .key = try src.array[i].key.clone(allocator),
-            .val = try src.array[i].val.clone(allocator),
+            .key = try vm.clone(&src.array[i].key, allocator),
+            .val = try vm.clone(&src.array[i].val, allocator),
         };
         // Sub-node pointers are shared (both old and new trees reference the same immutable sub-nodes).
         new_subs[j] = src.sub_nodes[i];
@@ -1298,7 +1284,7 @@ fn createArrayNode(allocator: Allocator, count: usize, nodes: *[32]?*Node) *Node
 
 /// Create a BitmapIndexedNode wrapping a HashCollisionNode as a sub-node.
 fn createBitmapWithCollisionSub(allocator: Allocator, bit: u32, collision: *const HashCollisionNode) *Node {
-    var kvs: [1]Kvp = .{ .{ .key = Value.nilValue(), .val = Value.nilValue() } };
+    var kvs: [1]Kvp = .{ .{ .key = vm.nilValue(), .val = vm.nilValue() } };
     var subs: [1]?*Node = undefined;
 
     const coll_node = newNode(allocator, Node{
@@ -1331,7 +1317,7 @@ fn upgradeToArrayAndAssoc(allocator: Allocator, src: *const BitmapIndexedNode, s
     // Migrate existing entries
     var i: usize = 0;
     while (i < src.array.len) : (i += 1) {
-        if (src.array[i].key.type == .nil) {
+        if (vm.getType(src.array[i].key) == .nil) {
             // Sub-node — re-insert at the correct slot
             const sub = src.sub_nodes[i].?;
             const sub_slot = getSubNodeSlot(sub, shift);
@@ -1364,7 +1350,7 @@ fn getSubNodeSlot(sub: *const Node, shift: u6) usize {
             // All entries in this sub-node share the same parent-level slot.
             var j: usize = 0;
             while (j < bnode.array.len) : (j += 1) {
-                if (bnode.array[j].key.type != .nil) {
+                if (vm.getType(bnode.array[j].key) != .nil) {
                     return mask(valueHash(bnode.array[j].key), shift);
                 }
             }
@@ -1396,7 +1382,7 @@ fn mergeIntoSlot(allocator: Allocator, target: *Node, source: *Node, shift: u6, 
             var result = target;
             var i: usize = 0;
             while (i < bnode.array.len) : (i += 1) {
-                if (bnode.array[i].key.type != .nil) {
+                if (vm.getType(bnode.array[i].key) != .nil) {
                     result = try nodeAssoc(result, allocator, shift, valueHash(bnode.array[i].key), bnode.array[i].key, bnode.array[i].val, addedLeaf);
                 }
             }
@@ -1427,8 +1413,8 @@ fn packToBitmap(allocator: Allocator, src: *const ArrayNode, empty_idx: usize) a
     var kvs: std.ArrayListUnmanaged(Kvp) = .empty;
     defer {
         for (kvs.items) |*kvp| {
-            kvp.key.deinit(allocator);
-            kvp.val.deinit(allocator);
+            vm.valueDeinit(&kvp.key, allocator);
+            vm.valueDeinit(&kvp.val, allocator);
         }
         allocator.free(kvs.items);
     }
@@ -1439,7 +1425,7 @@ fn packToBitmap(allocator: Allocator, src: *const ArrayNode, empty_idx: usize) a
     while (i < 32) : (i += 1) {
         if (i == empty_idx) continue;
         if (src.nodes[i]) |node| {
-            try kvs.append(allocator, .{ .key = Value.nilValue(), .val = Value.nilValue() });
+            try kvs.append(allocator, .{ .key = vm.nilValue(), .val = vm.nilValue() });
             try subs.append(allocator, node);
         }
     }
@@ -1476,19 +1462,19 @@ fn createCollisionNodeWithValue(allocator: Allocator, src: *const HashCollisionN
     // Deep clone all Kvp entries to avoid sharing Value pointers with src.
     const new_len = src.kvs.len;
     var new_kvs = newKvpArrayLen(allocator, new_len);
-    errdefer { for (new_kvs) |*kvp| { kvp.key.deinit(allocator); kvp.val.deinit(allocator); } allocator.free(new_kvs); }
+    errdefer { for (new_kvs) |*kvp| { vm.valueDeinit(&kvp.key, allocator); vm.valueDeinit(&kvp.val, allocator); } allocator.free(new_kvs); }
 
     var i: usize = 0;
     while (i < new_len) : (i += 1) {
         if (i == idx) {
             new_kvs[i] = .{
-                .key = try src.kvs[i].key.clone(allocator),
-                .val = try new_val.clone(allocator),
+                .key = try vm.clone(&src.kvs[i].key, allocator),
+                .val = try vm.clone(&new_val, allocator),
             };
         } else {
             new_kvs[i] = .{
-                .key = try src.kvs[i].key.clone(allocator),
-                .val = try src.kvs[i].val.clone(allocator),
+                .key = try vm.clone(&src.kvs[i].key, allocator),
+                .val = try vm.clone(&src.kvs[i].val, allocator),
             };
         }
     }
@@ -1505,16 +1491,16 @@ fn createCollisionNodeWithValue(allocator: Allocator, src: *const HashCollisionN
 fn createCollisionNodeAppend(allocator: Allocator, src: *const HashCollisionNode, key: Value, val: Value) anyerror!*Node {
     const new_len = src.kvs.len + 1;
     var new_kvs = newKvpArrayLen(allocator, new_len);
-    errdefer { for (new_kvs) |*kvp| { kvp.key.deinit(allocator); kvp.val.deinit(allocator); } allocator.free(new_kvs); }
+    errdefer { for (new_kvs) |*kvp| { vm.valueDeinit(&kvp.key, allocator); vm.valueDeinit(&kvp.val, allocator); } allocator.free(new_kvs); }
 
     var i: usize = 0;
     while (i < src.kvs.len) : (i += 1) {
         new_kvs[i] = .{
-            .key = try src.kvs[i].key.clone(allocator),
-            .val = try src.kvs[i].val.clone(allocator),
+            .key = try vm.clone(&src.kvs[i].key, allocator),
+            .val = try vm.clone(&src.kvs[i].val, allocator),
         };
     }
-    new_kvs[new_len - 1] = .{ .key = try key.clone(allocator), .val = try val.clone(allocator) };
+    new_kvs[new_len - 1] = .{ .key = try vm.clone(&key, allocator), .val = try vm.clone(&val, allocator) };
 
     return newNode(allocator, Node{
         .hash_collision = HashCollisionNode{
@@ -1528,7 +1514,7 @@ fn createCollisionNodeAppend(allocator: Allocator, src: *const HashCollisionNode
 fn createCollisionNodeWithout(allocator: Allocator, src: *const HashCollisionNode, remove_idx: usize) anyerror!*Node {
     const new_len = src.kvs.len - 1;
     var new_kvs = newKvpArrayLen(allocator, new_len);
-    errdefer { for (new_kvs) |*kvp| { kvp.key.deinit(allocator); kvp.val.deinit(allocator); } allocator.free(new_kvs); }
+    errdefer { for (new_kvs) |*kvp| { vm.valueDeinit(&kvp.key, allocator); vm.valueDeinit(&kvp.val, allocator); } allocator.free(new_kvs); }
 
     var j: usize = 0;
     var i: usize = 0;
@@ -1540,8 +1526,8 @@ fn createCollisionNodeWithout(allocator: Allocator, src: *const HashCollisionNod
         }
         // Deep clone to avoid sharing Value pointers with src.
         new_kvs[j] = .{
-            .key = try src.kvs[i].key.clone(allocator),
-            .val = try src.kvs[i].val.clone(allocator),
+            .key = try vm.clone(&src.kvs[i].key, allocator),
+            .val = try vm.clone(&src.kvs[i].val, allocator),
         };
         j += 1;
     }
@@ -1570,9 +1556,9 @@ pub fn sym(s: []const u8) Value {
     }
     const allocator = std.heap.page_allocator;
     // Duplicate the key string so sym_cache owns it (original may be GC-allocated)
-    const key_copy = allocator.dupe(u8, s) catch return Value{ .type = .symbol, .sym_val = s };
-    const owned = allocator.dupe(u8, s) catch return Value{ .type = .symbol, .sym_val = s };
-    const val = Value{ .type = .symbol, .sym_val = owned };
+    const key_copy = allocator.dupe(u8, s) catch return Value{ .symbol = s };
+    const owned = allocator.dupe(u8, s) catch return Value{ .symbol = s };
+    const val = Value{ .symbol = owned };
     sym_cache.put(allocator, key_copy, val) catch { allocator.free(key_copy); return val; };
     return val;
 }
@@ -1593,12 +1579,12 @@ pub fn scanHashMapNode(node_ptr: *anyopaque, ctx: *gc.ScanContext) void {
                 ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(bnode.sub_nodes.ptr))), ctx);
             }
             for (bnode.array) |kvp| {
-                if (kvp.key.type != .nil) {
+                if (vm.getType(kvp.key) != .nil) {
                     ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(&kvp.key))), ctx);
                     ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(&kvp.val))), ctx);
                     // Mark wrapped pointers (e.g., *Env stored in NamespaceManager)
-                    if (kvp.val.type == .wrapped and kvp.val.wrapped_val != 0) {
-                        const ptr = @as(*anyopaque, @ptrFromInt(kvp.val.wrapped_val));
+                    if (vm.getType(kvp.val) == .wrapped and kvp.val.wrapped != 0) {
+                        const ptr = @as(*anyopaque, @ptrFromInt(kvp.val.wrapped));
                         ctx.gc.markRecursive(ptr, ctx);
                     }
                 }
@@ -1624,8 +1610,8 @@ pub fn scanHashMapNode(node_ptr: *anyopaque, ctx: *gc.ScanContext) void {
                 ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(&kvp.key))), ctx);
                 ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(&kvp.val))), ctx);
                 // Mark wrapped pointers
-                if (kvp.val.type == .wrapped and kvp.val.wrapped_val != 0) {
-                    const ptr = @as(*anyopaque, @ptrFromInt(kvp.val.wrapped_val));
+                if (vm.getType(kvp.val) == .wrapped and kvp.val.wrapped != 0) {
+                    const ptr = @as(*anyopaque, @ptrFromInt(kvp.val.wrapped));
                     ctx.gc.markRecursive(ptr, ctx);
                 }
             }
@@ -1641,23 +1627,23 @@ test "persistent_hash_map::empty map" {
     const m = PersistentHashMap.empty();
     try std.testing.expect(m.isEmpty());
     try std.testing.expect(m.mapCount() == 0);
-    try std.testing.expect(!m.containsKey(Value.intValue(1)));
-    try std.testing.expectEqual(null, m.find(Value.intValue(1)));
+    try std.testing.expect(!m.containsKey(vm.intValue(1)));
+    try std.testing.expectEqual(null, m.find(vm.intValue(1)));
 }
 
 test "persistent_hash_map::assoc and find" {
     const a = std.heap.page_allocator;
     var m = PersistentHashMap.empty();
 
-    m = try m.mapAssoc(a, Value.intValue(1), Value.intValue(10));
+    m = try m.mapAssoc(a, vm.intValue(1), vm.intValue(10));
     try std.testing.expect(m.mapCount() == 1);
-    try std.testing.expect(m.containsKey(Value.intValue(1)));
-    try std.testing.expect(m.find(Value.intValue(1)).?.int_val == 10);
+    try std.testing.expect(m.containsKey(vm.intValue(1)));
+    try std.testing.expect(m.find(vm.intValue(1)).?.integer == 10);
 
-    m = try m.mapAssoc(a, Value.intValue(2), Value.intValue(20));
+    m = try m.mapAssoc(a, vm.intValue(2), vm.intValue(20));
     try std.testing.expect(m.mapCount() == 2);
-    try std.testing.expect(m.find(Value.intValue(1)).?.int_val == 10);
-    try std.testing.expect(m.find(Value.intValue(2)).?.int_val == 20);
+    try std.testing.expect(m.find(vm.intValue(1)).?.integer == 10);
+    try std.testing.expect(m.find(vm.intValue(2)).?.integer == 20);
 
     // m.deinit(a); // skip deinit for standalone test (shallow copy in path copying)
 }
@@ -1666,11 +1652,11 @@ test "persistent_hash_map::assoc updates existing key" {
     const a = std.heap.page_allocator;
     var m = PersistentHashMap.empty();
 
-    m = try m.mapAssoc(a, Value.intValue(1), Value.intValue(10));
-    m = try m.mapAssoc(a, Value.intValue(1), Value.intValue(99));
+    m = try m.mapAssoc(a, vm.intValue(1), vm.intValue(10));
+    m = try m.mapAssoc(a, vm.intValue(1), vm.intValue(99));
 
     try std.testing.expect(m.mapCount() == 1);
-    try std.testing.expect(m.find(Value.intValue(1)).?.int_val == 99);
+    try std.testing.expect(m.find(vm.intValue(1)).?.integer == 99);
 
     // m.deinit(a); // skip deinit for standalone test (shallow copy in path copying)
 }
@@ -1679,15 +1665,15 @@ test "persistent_hash_map::without" {
     const a = std.heap.page_allocator;
     var m = PersistentHashMap.empty();
 
-    m = try m.mapAssoc(a, Value.intValue(1), Value.intValue(10));
-    m = try m.mapAssoc(a, Value.intValue(2), Value.intValue(20));
-    m = try m.mapAssoc(a, Value.intValue(3), Value.intValue(30));
+    m = try m.mapAssoc(a, vm.intValue(1), vm.intValue(10));
+    m = try m.mapAssoc(a, vm.intValue(2), vm.intValue(20));
+    m = try m.mapAssoc(a, vm.intValue(3), vm.intValue(30));
 
-    m = try m.mapWithout(a, Value.intValue(2));
+    m = try m.mapWithout(a, vm.intValue(2));
     try std.testing.expect(m.mapCount() == 2);
-    try std.testing.expect(m.find(Value.intValue(1)).?.int_val == 10);
-    try std.testing.expectEqual(null, m.find(Value.intValue(2)));
-    try std.testing.expect(m.find(Value.intValue(3)).?.int_val == 30);
+    try std.testing.expect(m.find(vm.intValue(1)).?.integer == 10);
+    try std.testing.expectEqual(null, m.find(vm.intValue(2)));
+    try std.testing.expect(m.find(vm.intValue(3)).?.integer == 30);
 
     // m.deinit(a); // skip deinit for standalone test (shallow copy in path copying)
 }
@@ -1695,23 +1681,23 @@ test "persistent_hash_map::without" {
 test "persistent_hash_map::immutability" {
     const a = std.heap.page_allocator;
     var m1 = PersistentHashMap.empty();
-    m1 = try m1.mapAssoc(a, Value.intValue(1), Value.intValue(10));
-    m1 = try m1.mapAssoc(a, Value.intValue(2), Value.intValue(20));
+    m1 = try m1.mapAssoc(a, vm.intValue(1), vm.intValue(10));
+    m1 = try m1.mapAssoc(a, vm.intValue(2), vm.intValue(20));
 
-    var m2 = try m1.mapAssoc(a, Value.intValue(2), Value.intValue(99));
-    var m3 = try m1.mapWithout(a, Value.intValue(1));
+    var m2 = try m1.mapAssoc(a, vm.intValue(2), vm.intValue(99));
+    var m3 = try m1.mapWithout(a, vm.intValue(1));
 
     // m1 should be unchanged
     try std.testing.expect(m1.mapCount() == 2);
-    try std.testing.expect(m1.find(Value.intValue(1)).?.int_val == 10);
-    try std.testing.expect(m1.find(Value.intValue(2)).?.int_val == 20);
+    try std.testing.expect(m1.find(vm.intValue(1)).?.integer == 10);
+    try std.testing.expect(m1.find(vm.intValue(2)).?.integer == 20);
 
     // m2 has updated value
-    try std.testing.expect(m2.find(Value.intValue(2)).?.int_val == 99);
+    try std.testing.expect(m2.find(vm.intValue(2)).?.integer == 99);
 
     // m3 has removed key
     try std.testing.expect(m3.mapCount() == 1);
-    try std.testing.expectEqual(null, m3.find(Value.intValue(1)));
+    try std.testing.expectEqual(null, m3.find(vm.intValue(1)));
 
     // m1.deinit(a);
     // m2.deinit(a);
@@ -1722,14 +1708,14 @@ test "persistent_hash_map::nil key" {
     const a = std.heap.page_allocator;
     var m = PersistentHashMap.empty();
 
-    m = try m.mapAssoc(a, Value.nilValue(), Value.intValue(42));
+    m = try m.mapAssoc(a, vm.nilValue(), vm.intValue(42));
     try std.testing.expect(m.mapCount() == 1);
-    try std.testing.expect(m.containsKey(Value.nilValue()));
-    try std.testing.expect(m.find(Value.nilValue()).?.int_val == 42);
+    try std.testing.expect(m.containsKey(vm.nilValue()));
+    try std.testing.expect(m.find(vm.nilValue()).?.integer == 42);
 
-    m = try m.mapWithout(a, Value.nilValue());
+    m = try m.mapWithout(a, vm.nilValue());
     try std.testing.expect(m.mapCount() == 0);
-    try std.testing.expect(!m.containsKey(Value.nilValue()));
+    try std.testing.expect(!m.containsKey(vm.nilValue()));
 
     // m.deinit(a); // skip deinit for standalone test (shallow copy in path copying)
 }
@@ -1738,13 +1724,13 @@ test "persistent_hash_map::string keys" {
     const a = std.heap.page_allocator;
     var m = PersistentHashMap.empty();
 
-    var key1 = try Value.stringValue(a, "hello");
-    var key2 = try Value.stringValue(a, "world");
+    var key1 = try vm.stringValue(a, "hello");
+    var key2 = try vm.stringValue(a, "world");
     defer key1.deinit(a);
     defer key2.deinit(a);
 
-    m = try m.mapAssoc(a, key1, Value.intValue(1));
-    m = try m.mapAssoc(a, key2, Value.intValue(2));
+    m = try m.mapAssoc(a, key1, vm.intValue(1));
+    m = try m.mapAssoc(a, key2, vm.intValue(2));
 
     try std.testing.expect(m.mapCount() == 2);
 
@@ -1755,13 +1741,13 @@ test "persistent_hash_map::keyword keys" {
     const a = std.heap.page_allocator;
     var m = PersistentHashMap.empty();
 
-    var kw1 = try Value.keywordValue(a, "foo");
-    var kw2 = try Value.keywordValue(a, "bar");
+    var kw1 = try vm.keywordValue(a, "foo");
+    var kw2 = try vm.keywordValue(a, "bar");
     defer kw1.deinit(a);
     defer kw2.deinit(a);
 
-    m = try m.mapAssoc(a, kw1, Value.intValue(100));
-    m = try m.mapAssoc(a, kw2, Value.intValue(200));
+    m = try m.mapAssoc(a, kw1, vm.intValue(100));
+    m = try m.mapAssoc(a, kw2, vm.intValue(200));
 
     try std.testing.expect(m.mapCount() == 2);
 
@@ -1772,9 +1758,9 @@ test "persistent_hash_map::keys and vals" {
     const a = std.heap.page_allocator;
     var m = PersistentHashMap.empty();
 
-    m = try m.mapAssoc(a, Value.intValue(1), Value.intValue(10));
-    m = try m.mapAssoc(a, Value.intValue(2), Value.intValue(20));
-    m = try m.mapAssoc(a, Value.intValue(3), Value.intValue(30));
+    m = try m.mapAssoc(a, vm.intValue(1), vm.intValue(10));
+    m = try m.mapAssoc(a, vm.intValue(2), vm.intValue(20));
+    m = try m.mapAssoc(a, vm.intValue(3), vm.intValue(30));
 
     var keys_list = try m.mapKeys(a);
     defer keys_list.deinit(a);
@@ -1791,8 +1777,8 @@ test "persistent_hash_map::entries" {
     const a = std.heap.page_allocator;
     var m = PersistentHashMap.empty();
 
-    m = try m.mapAssoc(a, Value.intValue(1), Value.intValue(10));
-    m = try m.mapAssoc(a, Value.intValue(2), Value.intValue(20));
+    m = try m.mapAssoc(a, vm.intValue(1), vm.intValue(10));
+    m = try m.mapAssoc(a, vm.intValue(2), vm.intValue(20));
 
     var entries_list = try m.mapEntries(a);
     defer entries_list.deinit(a);
@@ -1806,11 +1792,11 @@ test "persistent_hash_map::equals" {
     var m1 = PersistentHashMap.empty();
     var m2 = PersistentHashMap.empty();
 
-    m1 = try m1.mapAssoc(a, Value.intValue(1), Value.intValue(10));
-    m1 = try m1.mapAssoc(a, Value.intValue(2), Value.intValue(20));
+    m1 = try m1.mapAssoc(a, vm.intValue(1), vm.intValue(10));
+    m1 = try m1.mapAssoc(a, vm.intValue(2), vm.intValue(20));
 
-    m2 = try m2.mapAssoc(a, Value.intValue(1), Value.intValue(10));
-    m2 = try m2.mapAssoc(a, Value.intValue(2), Value.intValue(20));
+    m2 = try m2.mapAssoc(a, vm.intValue(1), vm.intValue(10));
+    m2 = try m2.mapAssoc(a, vm.intValue(2), vm.intValue(20));
 
     try std.testing.expect(m1.mapEquals(m2));
 
@@ -1823,17 +1809,17 @@ test "persistent_hash_map::merge" {
     var m1 = PersistentHashMap.empty();
     var m2 = PersistentHashMap.empty();
 
-    m1 = try m1.mapAssoc(a, Value.intValue(1), Value.intValue(10));
-    m1 = try m1.mapAssoc(a, Value.intValue(2), Value.intValue(20));
+    m1 = try m1.mapAssoc(a, vm.intValue(1), vm.intValue(10));
+    m1 = try m1.mapAssoc(a, vm.intValue(2), vm.intValue(20));
 
-    m2 = try m2.mapAssoc(a, Value.intValue(2), Value.intValue(99));
-    m2 = try m2.mapAssoc(a, Value.intValue(3), Value.intValue(30));
+    m2 = try m2.mapAssoc(a, vm.intValue(2), vm.intValue(99));
+    m2 = try m2.mapAssoc(a, vm.intValue(3), vm.intValue(30));
 
     var merged = try m1.mapMerge(a, m2);
     try std.testing.expect(merged.mapCount() == 3);
-    try std.testing.expect(merged.find(Value.intValue(1)).?.int_val == 10);
-    try std.testing.expect(merged.find(Value.intValue(2)).?.int_val == 99);
-    try std.testing.expect(merged.find(Value.intValue(3)).?.int_val == 30);
+    try std.testing.expect(merged.find(vm.intValue(1)).?.integer == 10);
+    try std.testing.expect(merged.find(vm.intValue(2)).?.integer == 99);
+    try std.testing.expect(merged.find(vm.intValue(3)).?.integer == 30);
 
     // m1.deinit(a);
     // m2.deinit(a);
@@ -1846,8 +1832,8 @@ test "persistent_hash_map::many entries (triggers ArrayNode)" {
 
     var i: usize = 0;
     while (i < 50) : (i += 1) {
-        const key = Value.intValue(@as(i64, @intCast(i)));
-        const val = Value.intValue(@as(i64, @intCast(i * 10)));
+        const key = vm.intValue(@as(i64, @intCast(i)));
+        const val = vm.intValue(@as(i64, @intCast(i * 10)));
         m = try m.mapAssoc(a, key, val);
     }
 
@@ -1855,10 +1841,10 @@ test "persistent_hash_map::many entries (triggers ArrayNode)" {
 
     i = 0;
     while (i < 50) : (i += 1) {
-        const key = Value.intValue(@as(i64, @intCast(i)));
+        const key = vm.intValue(@as(i64, @intCast(i)));
         const found = m.find(key);
         try std.testing.expect(found != null);
-        try std.testing.expect(found.?.int_val == @as(i64, @intCast(i * 10)));
+        try std.testing.expect(found.?.integer == @as(i64, @intCast(i * 10)));
     }
 
     // m.deinit(a); // skip deinit for standalone test (shallow copy in path copying)
@@ -1870,12 +1856,12 @@ test "persistent_hash_map::remove all entries" {
 
     var i: usize = 0;
     while (i < 10) : (i += 1) {
-        m = try m.mapAssoc(a, Value.intValue(@as(i64, @intCast(i))), Value.intValue(@as(i64, @intCast(i * 10))));
+        m = try m.mapAssoc(a, vm.intValue(@as(i64, @intCast(i))), vm.intValue(@as(i64, @intCast(i * 10))));
     }
 
     i = 0;
     while (i < 10) : (i += 1) {
-        m = try m.mapWithout(a, Value.intValue(@as(i64, @intCast(i))));
+        m = try m.mapWithout(a, vm.intValue(@as(i64, @intCast(i))));
     }
 
     try std.testing.expect(m.isEmpty());
@@ -1885,8 +1871,8 @@ test "persistent_hash_map::remove all entries" {
 }
 
 test "persistent_hash_map::hash consistency" {
-    const v1 = Value.intValue(42);
-    const v2 = Value.intValue(42);
+    const v1 = vm.intValue(42);
+    const v2 = vm.intValue(42);
     try std.testing.expect(valueHash(v1) == valueHash(v2));
 
     const s = "hello";
@@ -1895,18 +1881,18 @@ test "persistent_hash_map::hash consistency" {
     defer std.heap.page_allocator.free(sv1);
     defer std.heap.page_allocator.free(sv2);
 
-    const str1 = Value{ .type = .string, .str_val = sv1 };
-    const str2 = Value{ .type = .string, .str_val = sv2 };
+    const str1 = Value{ .string = sv1 };
+    const str2 = Value{ .string = sv2 };
     try std.testing.expect(valueHash(str1) == valueHash(str2));
 }
 
 test "persistent_hash_map::findDefault" {
     const a = std.heap.page_allocator;
     var m = PersistentHashMap.empty();
-    m = try m.mapAssoc(a, Value.intValue(1), Value.intValue(10));
+    m = try m.mapAssoc(a, vm.intValue(1), vm.intValue(10));
 
-    try std.testing.expect(m.findDefault(Value.intValue(1), Value.nilValue()).int_val == 10);
-    try std.testing.expect(m.findDefault(Value.intValue(99), Value.nilValue()).type == .nil);
+    try std.testing.expect(m.findDefault(vm.intValue(1), vm.nilValue()).integer == 10);
+    try std.testing.expect(m.findDefault(vm.intValue(99), vm.nilValue()).type == .nil);
 
     // m.deinit(a); // skip deinit for standalone test (shallow copy in path copying)
 }
@@ -1917,15 +1903,15 @@ test "persistent_hash_map::structural sharing" {
 
     var i: usize = 0;
     while (i < 100) : (i += 1) {
-        m1 = try m1.mapAssoc(a, Value.intValue(@as(i64, @intCast(i))), Value.intValue(@as(i64, @intCast(i * 10))));
+        m1 = try m1.mapAssoc(a, vm.intValue(@as(i64, @intCast(i))), vm.intValue(@as(i64, @intCast(i * 10))));
     }
 
-    var m2 = try m1.mapAssoc(a, Value.intValue(50), Value.intValue(999));
+    var m2 = try m1.mapAssoc(a, vm.intValue(50), vm.intValue(999));
 
-    try std.testing.expect(m1.find(Value.intValue(50)).?.int_val == 500);
-    try std.testing.expect(m2.find(Value.intValue(50)).?.int_val == 999);
-    try std.testing.expect(m1.find(Value.intValue(0)).?.int_val == 0);
-    try std.testing.expect(m2.find(Value.intValue(0)).?.int_val == 0);
+    try std.testing.expect(m1.find(vm.intValue(50)).?.integer == 500);
+    try std.testing.expect(m2.find(vm.intValue(50)).?.integer == 999);
+    try std.testing.expect(m1.find(vm.intValue(0)).?.integer == 0);
+    try std.testing.expect(m2.find(vm.intValue(0)).?.integer == 0);
 
     // m1.deinit(a);
     // m2.deinit(a);
@@ -1935,9 +1921,9 @@ test "persistent_hash_map::entry iterator" {
     const a = std.heap.page_allocator;
     var m = PersistentHashMap.empty();
 
-    m = try m.mapAssoc(a, Value.intValue(1), Value.intValue(10));
-    m = try m.mapAssoc(a, Value.intValue(2), Value.intValue(20));
-    m = try m.mapAssoc(a, Value.intValue(3), Value.intValue(30));
+    m = try m.mapAssoc(a, vm.intValue(1), vm.intValue(10));
+    m = try m.mapAssoc(a, vm.intValue(2), vm.intValue(20));
+    m = try m.mapAssoc(a, vm.intValue(3), vm.intValue(30));
 
     var it = m.entryIterator();
     var count: usize = 0;
@@ -1953,8 +1939,8 @@ test "persistent_hash_map::entry iterator with nil key" {
     const a = std.heap.page_allocator;
     var m = PersistentHashMap.empty();
 
-    m = try m.mapAssoc(a, Value.nilValue(), Value.intValue(0));
-    m = try m.mapAssoc(a, Value.intValue(1), Value.intValue(10));
+    m = try m.mapAssoc(a, vm.nilValue(), vm.intValue(0));
+    m = try m.mapAssoc(a, vm.intValue(1), vm.intValue(10));
 
     var it = m.entryIterator();
     var count: usize = 0;
@@ -1981,7 +1967,7 @@ test "persistent_hash_map::upgradeToArrayAndAssoc preserves entries" {
     var i: usize = 0;
     while (i < test_names.len) : (i += 1) {
         const key = sym(test_names[i]);
-        const val = Value.intValue(@as(i64, @intCast(i)));
+        const val = vm.intValue(@as(i64, @intCast(i)));
         m = try m.mapAssoc(a, key, val);
     }
 
@@ -1993,7 +1979,7 @@ test "persistent_hash_map::upgradeToArrayAndAssoc preserves entries" {
         const key = sym(test_names[i]);
         const found = m.find(key);
         try std.testing.expect(found != null);
-        try std.testing.expectEqual(@as(i64, @intCast(i)), found.?.int_val);
+        try std.testing.expectEqual(@as(i64, @intCast(i)), found.?.integer);
     }
 }
 
@@ -2045,7 +2031,7 @@ test "persistent_hash_map::string symbol keys stress test" {
     var i: usize = 0;
     while (i < names.len) : (i += 1) {
         const key = sym(names[i]);
-        const val = Value.intValue(@as(i64, @intCast(i)));
+        const val = vm.intValue(@as(i64, @intCast(i)));
         m = try m.mapAssoc(a, key, val);
     }
 
@@ -2057,7 +2043,7 @@ test "persistent_hash_map::string symbol keys stress test" {
         const key = sym(names[i]);
         const found = m.find(key);
         try std.testing.expect(found != null);
-        try std.testing.expectEqual(@as(i64, @intCast(i)), found.?.int_val);
+        try std.testing.expectEqual(@as(i64, @intCast(i)), found.?.integer);
     }
 
     // Verify entry iterator returns all entries
@@ -2071,7 +2057,7 @@ test "persistent_hash_map::string symbol keys stress test" {
 
 test "persistent_hash_map::env clone and put stress" {
     const a = std.heap.page_allocator;
-    var env1: Value.Env = Value.Env.init(a);
+    var env1: vm.Env = vm.Env.init(a);
 
     // Register many entries
     const names = [_][]const u8{
@@ -2086,7 +2072,7 @@ test "persistent_hash_map::env clone and put stress" {
 
     var i: usize = 0;
     while (i < names.len) : (i += 1) {
-        try env1.put(names[i], Value.intValue(@as(i64, @intCast(i))));
+        try env1.put(names[i], vm.intValue(@as(i64, @intCast(i))));
     }
 
     // Verify all entries in env1
@@ -2094,20 +2080,20 @@ test "persistent_hash_map::env clone and put stress" {
     while (i < names.len) : (i += 1) {
         const found = env1.get(names[i]);
         try std.testing.expect(found != null);
-        try std.testing.expectEqual(@as(i64, @intCast(i)), found.?.int_val);
+        try std.testing.expectEqual(@as(i64, @intCast(i)), found.?.integer);
     }
 
     // Clone env1 and add more entries to the clone
     var env2 = try env1.clone(a);
-    try env2.put("extra1", Value.intValue(999));
-    try env2.put("extra2", Value.intValue(888));
+    try env2.put("extra1", vm.intValue(999));
+    try env2.put("extra2", vm.intValue(888));
 
     // Verify env1 is unchanged (structural sharing)
     i = 0;
     while (i < names.len) : (i += 1) {
         const found = env1.get(names[i]);
         try std.testing.expect(found != null);
-        try std.testing.expectEqual(@as(i64, @intCast(i)), found.?.int_val);
+        try std.testing.expectEqual(@as(i64, @intCast(i)), found.?.integer);
     }
     try std.testing.expect(env1.get("extra1") == null);
     try std.testing.expect(env1.get("extra2") == null);
@@ -2117,10 +2103,10 @@ test "persistent_hash_map::env clone and put stress" {
     while (i < names.len) : (i += 1) {
         const found = env2.get(names[i]);
         try std.testing.expect(found != null);
-        try std.testing.expectEqual(@as(i64, @intCast(i)), found.?.int_val);
+        try std.testing.expectEqual(@as(i64, @intCast(i)), found.?.integer);
     }
-    try std.testing.expectEqual(@as(i64, 999), env2.get("extra1").?.int_val);
-    try std.testing.expectEqual(@as(i64, 888), env2.get("extra2").?.int_val);
+    try std.testing.expectEqual(@as(i64, 999), env2.get("extra1").?.integer);
+    try std.testing.expectEqual(@as(i64, 888), env2.get("extra2").?.integer);
 }
 
 

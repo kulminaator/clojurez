@@ -1,8 +1,9 @@
 // Threading macro implementations: ->, ->>, cond->, cond->>
 const std = @import("std");
-const Value = @import("value.zig");
+const vm = @import("value.zig");
+const Value = vm.Value;
 const list = @import("list.zig");
-const Env = Value.Env;
+const Env = vm.Env;
 const eval = @import("eval.zig");
 
 const Allocator = std.mem.Allocator;
@@ -10,7 +11,7 @@ const Allocator = std.mem.Allocator;
 // Thread-last macro: (->> x (f 1) (g 2 3)) => (g 2 3 (f 1 x))
 // Inserts value as the LAST argument
 pub fn evalThreadLast(allocator: Allocator, forms: []const Value, env: *Env, depth: usize) anyerror!Value {
-    if (forms.len == 0) return Value.nilValue();
+    if (forms.len == 0) return vm.nilValue();
 
     const first_ptr = try eval.evalRec(allocator, &forms[0], env, depth);
     var current = first_ptr.*;
@@ -20,12 +21,12 @@ pub fn evalThreadLast(allocator: Allocator, forms: []const Value, env: *Env, dep
         const form = &forms[i];
 
         // Handle non-list forms: (->> x inc) => (inc x)
-        if (form.type != .list) {
+        if (std.meta.activeTag(form) != .list) {
             var new_call: list.List = .empty;
             errdefer new_call.deinit(allocator);
             try new_call.append(allocator, try form.clone(allocator));
             try new_call.append(allocator, try current.clone(allocator));
-            const next_ptr = try eval.evalRec(allocator, &Value.listValue(new_call), env, depth);
+            const next_ptr = try eval.evalRec(allocator, &vm.listValue(new_call), env, depth);
             current.deinit(allocator);
             current = next_ptr.*;
             continue;
@@ -46,7 +47,7 @@ pub fn evalThreadLast(allocator: Allocator, forms: []const Value, env: *Env, dep
         }
         try new_call.append(allocator, try current.clone(allocator));
 
-        const next_ptr = try eval.evalRec(allocator, &Value.listValue(new_call), env, depth);
+        const next_ptr = try eval.evalRec(allocator, &vm.listValue(new_call), env, depth);
         current.deinit(allocator);
         current = next_ptr.*;
     }
@@ -55,7 +56,7 @@ pub fn evalThreadLast(allocator: Allocator, forms: []const Value, env: *Env, dep
 
 // Thread-first macro: (-> x (f 1) (g 2 3)) => (g (f 1 x) 2 3)
 pub fn evalThreadFirst(allocator: Allocator, forms: []const Value, env: *Env, depth: usize) anyerror!Value {
-    if (forms.len == 0) return Value.nilValue();
+    if (forms.len == 0) return vm.nilValue();
 
     const first_ptr = try eval.evalRec(allocator, &forms[0], env, depth);
     var current = first_ptr.*;
@@ -65,12 +66,12 @@ pub fn evalThreadFirst(allocator: Allocator, forms: []const Value, env: *Env, de
         const form = &forms[i];
 
         // Handle non-list forms: (-> x inc) => (inc x)
-        if (form.type != .list) {
+        if (std.meta.activeTag(form) != .list) {
             var new_call: list.List = .empty;
             errdefer new_call.deinit(allocator);
             try new_call.append(allocator, try form.clone(allocator));
             try new_call.append(allocator, try current.clone(allocator));
-            const next_ptr = try eval.evalRec(allocator, &Value.listValue(new_call), env, depth);
+            const next_ptr = try eval.evalRec(allocator, &vm.listValue(new_call), env, depth);
             current.deinit(allocator);
             current = next_ptr.*;
             continue;
@@ -94,7 +95,7 @@ pub fn evalThreadFirst(allocator: Allocator, forms: []const Value, env: *Env, de
             try new_call.append(allocator, try form.list_val.items[j].clone(allocator));
         }
 
-        const next_ptr = try eval.evalRec(allocator, &Value.listValue(new_call), env, depth);
+        const next_ptr = try eval.evalRec(allocator, &vm.listValue(new_call), env, depth);
         current.deinit(allocator);
         current = next_ptr.*;
     }
@@ -104,7 +105,7 @@ pub fn evalThreadFirst(allocator: Allocator, forms: []const Value, env: *Env, de
 // cond-> - thread-first with conditions
 // (cond-> expr test1 step1 test2 step2 ...)
 pub fn evalCondThreadFirst(allocator: Allocator, forms: []const Value, env: *Env, depth: usize) anyerror!Value {
-    if (forms.len == 0) return Value.nilValue();
+    if (forms.len == 0) return vm.nilValue();
 
     const first_ptr = try eval.evalRec(allocator, &forms[0], env, depth);
     var current = first_ptr.*;
@@ -114,7 +115,7 @@ pub fn evalCondThreadFirst(allocator: Allocator, forms: []const Value, env: *Env
         const test_ptr = try eval.evalRec(allocator, &forms[i], env, depth);
         if (test_ptr.isTruthy()) {
             const step = &forms[i + 1];
-            if (step.type == .list and step.list_val.items.len > 0) {
+            if (std.meta.activeTag(step) == .list and step.list_val.items.len > 0) {
                 // Evaluate operator and args, inserting current as second arg
                 const op_ptr = try eval.evalRec(allocator, &step.list_val.items[0], env, depth);
                 defer op_ptr.*.deinit(allocator);
@@ -134,7 +135,7 @@ pub fn evalCondThreadFirst(allocator: Allocator, forms: []const Value, env: *Env
                 errdefer new_call.deinit(allocator);
                 try new_call.append(allocator, try step.clone(allocator));
                 try new_call.append(allocator, try current.clone(allocator));
-                const next_ptr = try eval.evalRec(allocator, &Value.listValue(new_call), env, depth);
+                const next_ptr = try eval.evalRec(allocator, &vm.listValue(new_call), env, depth);
                 current.deinit(allocator);
                 current = next_ptr.*;
             }
@@ -147,7 +148,7 @@ pub fn evalCondThreadFirst(allocator: Allocator, forms: []const Value, env: *Env
 // cond->> - thread-last with conditions
 // (cond->> expr test1 step1 test2 step2 ...)
 pub fn evalCondThreadLast(allocator: Allocator, forms: []const Value, env: *Env, depth: usize) anyerror!Value {
-    if (forms.len == 0) return Value.nilValue();
+    if (forms.len == 0) return vm.nilValue();
 
     const first_ptr = try eval.evalRec(allocator, &forms[0], env, depth);
     var current = first_ptr.*;
@@ -157,7 +158,7 @@ pub fn evalCondThreadLast(allocator: Allocator, forms: []const Value, env: *Env,
         const test_ptr = try eval.evalRec(allocator, &forms[i], env, depth);
         if (test_ptr.isTruthy()) {
             const step = &forms[i + 1];
-            if (step.type == .list and step.list_val.items.len > 0) {
+            if (std.meta.activeTag(step) == .list and step.list_val.items.len > 0) {
                 // Evaluate operator and args, then call with current as last arg
                 const op_ptr = try eval.evalRec(allocator, &step.list_val.items[0], env, depth);
                 defer op_ptr.*.deinit(allocator);
@@ -177,7 +178,7 @@ pub fn evalCondThreadLast(allocator: Allocator, forms: []const Value, env: *Env,
                 errdefer new_call.deinit(allocator);
                 try new_call.append(allocator, try step.clone(allocator));
                 try new_call.append(allocator, try current.clone(allocator));
-                const next_ptr = try eval.evalRec(allocator, &Value.listValue(new_call), env, depth);
+                const next_ptr = try eval.evalRec(allocator, &vm.listValue(new_call), env, depth);
                 current.deinit(allocator);
                 current = next_ptr.*;
             }

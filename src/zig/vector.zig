@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Value = @import("value.zig");
+const vm = @import("value.zig");
+const Value = vm.Value;
 
 pub const Vector = std.ArrayListUnmanaged(Value);
 
@@ -12,14 +13,14 @@ pub fn clone(self: *const Vector, allocator: Allocator) anyerror!Vector {
     var result: Vector = .{};
     try result.ensureTotalCapacity(allocator, self.items.len);
     for (self.items) |item| {
-        try result.append(allocator, try item.clone(allocator));
+        try result.append(allocator, try vm.clone(&item, allocator));
     }
     return result;
 }
 
 pub fn deinit(self: *Vector, allocator: Allocator) void {
     for (self.items) |*item| {
-        item.deinit(allocator);
+        vm.deinit(item, allocator);
     }
     allocator.free(self.items);
     self.* = .{};
@@ -34,7 +35,7 @@ pub fn fmt(self: Vector, allocator: Allocator) anyerror![]const u8 {
     try buf.append(allocator, '[');
     for (self.items, 0..) |item, i| {
         if (i > 0) try buf.append(allocator, ' ');
-        const s = try item.fmt(allocator);
+        const s = try vm.fmt(item, allocator);
         defer allocator.free(s);
         try buf.appendSlice(allocator, s);
     }
@@ -59,8 +60,8 @@ test "vector::fmt: empty vector" {
 test "vector::fmt: vector with integers" {
     const a = std.heap.page_allocator;
     var v: Vector = .empty;
-    _ = v.append(a, Value.intValue(1)) catch unreachable;
-    _ = v.append(a, Value.intValue(2)) catch unreachable;
+    _ = v.append(a, vm.intValue(1)) catch unreachable;
+    _ = v.append(a, vm.intValue(2)) catch unreachable;
     const s = try fmt(v, a);
     defer v.deinit(a);
     defer a.free(s);
@@ -70,8 +71,8 @@ test "vector::fmt: vector with integers" {
 test "vector::clone: round-trip" {
     const a = std.heap.page_allocator;
     var v: Vector = .empty;
-    _ = v.append(a, Value.intValue(10)) catch unreachable;
-    _ = v.append(a, Value.intValue(20)) catch unreachable;
+    _ = v.append(a, vm.intValue(10)) catch unreachable;
+    _ = v.append(a, vm.intValue(20)) catch unreachable;
     var cloned = try v.clone(a);
     defer v.deinit(a);
     defer cloned.deinit(a);

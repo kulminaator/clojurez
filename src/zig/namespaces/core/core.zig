@@ -1,10 +1,11 @@
 // Core built-in functions coordinator
 // Imports from domain modules and provides higher-order functions (apply, partial, comp, fnil, juxt, etc.)
 const std = @import("std");
-const Value = @import("../../value.zig");
+const vm = @import("../../value.zig");
+const Value = vm.Value;
 const list = @import("../../list.zig");
 const vec = @import("../../vector.zig");
-const Env = Value.Env;
+const Env = vm.Env;
 
 // Domain modules
 const arithmetic = @import("arithmetic.zig");
@@ -33,7 +34,7 @@ pub fn core_empty_q(self: *const Value, args: *const list.List, _: *Env) anyerro
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const coll = args.items[0];
-    const len: usize = switch (coll.type) {
+    const len: usize = switch (std.meta.activeTag(coll)) {
         .list => coll.list_val.items.len,
         .vector => coll.vec_val.items.len,
         .map => coll.map_val.items.len,
@@ -42,22 +43,22 @@ pub fn core_empty_q(self: *const Value, args: *const list.List, _: *Env) anyerro
         .string => coll.str_val.len,
         else => return error.TypeError,
     };
-    return Value.boolValue(len == 0);
+    return vm.boolValue(len == 0);
 }
 
 pub fn core_not_empty(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const coll = args.items[0];
-    const len: usize = switch (coll.type) {
+    const len: usize = switch (std.meta.activeTag(coll)) {
         .list => coll.list_val.items.len,
         .vector => coll.vec_val.items.len,
         .map => coll.map_val.items.len,
         .set => coll.set_val.items.len,
         .queue => coll.queue_val.items.len,
-        else => return Value.nilValue(),
+        else => return vm.nilValue(),
     };
-    if (len == 0) return Value.nilValue();
+    if (len == 0) return vm.nilValue();
     return try coll.clone(env_env.allocator);
 }
 
@@ -79,7 +80,7 @@ pub fn core_apply(self: *const Value, args: *const list.List, env_env: *Env) any
 
     const coll = args.items[args.items.len - 1];
     var items: []const Value = undefined;
-    switch (coll.type) {
+    switch (std.meta.activeTag(coll)) {
         .list => items = coll.list_val.items,
         .vector => items = coll.vec_val.items,
         else => return error.TypeError,
@@ -118,7 +119,7 @@ pub fn core_trampoline(self: *const Value, args: *const list.List, env_env: *Env
 
     var max_iterations: usize = 10000;
     while (max_iterations > 0) : (max_iterations -= 1) {
-        if (current.type != .function and current.type != .builtin_fn) {
+        if (std.meta.activeTag(current) != .function and std.meta.activeTag(current) != .builtin_fn) {
             return current;
         }
         const empty_args: list.List = .empty;
@@ -143,7 +144,7 @@ pub fn core_if_not(self: *const Value, args: *const list.List, env_env: *Env) an
     if (args.items.len == 3) {
         return try args.items[2].clone(env_env.allocator);
     }
-    return Value.nilValue();
+    return vm.nilValue();
 }
 
 // partial - return a function that is a partial application of f
@@ -162,22 +163,22 @@ pub fn core_partial(self: *const Value, args: *const list.List, env_env: *Env) a
     while (i < args.items.len) : (i += 1) {
         try partial_args.append(env_env.allocator, try args.items[i].clone(env_env.allocator));
     }
-    try fn_env.put("__partial_args", Value.listValue(partial_args));
+    try fn_env.put("__partial_args", vm.listValue(partial_args));
 
     var params_list: list.List = .empty;
     errdefer params_list.deinit(env_env.allocator);
-    try params_list.append(env_env.allocator, try Value.symValue(env_env.allocator, "args"));
+    try params_list.append(env_env.allocator, try vm.symValue(env_env.allocator, "args"));
 
     var body: list.List = .empty;
     errdefer body.deinit(env_env.allocator);
-    try body.append(env_env.allocator, try Value.symValue(env_env.allocator, "apply"));
-    try body.append(env_env.allocator, try Value.symValue(env_env.allocator, "__partial_fn"));
+    try body.append(env_env.allocator, try vm.symValue(env_env.allocator, "apply"));
+    try body.append(env_env.allocator, try vm.symValue(env_env.allocator, "__partial_fn"));
     var concat_call: list.List = .empty;
     errdefer concat_call.deinit(env_env.allocator);
-    try concat_call.append(env_env.allocator, try Value.symValue(env_env.allocator, "concat"));
-    try concat_call.append(env_env.allocator, try Value.symValue(env_env.allocator, "__partial_args"));
-    try concat_call.append(env_env.allocator, try Value.symValue(env_env.allocator, "args"));
-    try body.append(env_env.allocator, Value.listValue(concat_call));
+    try concat_call.append(env_env.allocator, try vm.symValue(env_env.allocator, "concat"));
+    try concat_call.append(env_env.allocator, try vm.symValue(env_env.allocator, "__partial_args"));
+    try concat_call.append(env_env.allocator, try vm.symValue(env_env.allocator, "args"));
+    try body.append(env_env.allocator, vm.listValue(concat_call));
 
     const cloned_params = try params_list.clone(env_env.allocator);
     const cloned_body = try body.clone(env_env.allocator);
@@ -189,7 +190,7 @@ pub fn core_partial(self: *const Value, args: *const list.List, env_env: *Env) a
     while (i < args.items.len) : (i += 1) {
         try stored_args.append(env_env.allocator, try args.items[i].clone(env_env.allocator));
     }
-    try final_env.put("__partial_args", Value.listValue(stored_args));
+    try final_env.put("__partial_args", vm.listValue(stored_args));
 
     return try Value.fnValueSingle(env_env.allocator, cloned_params, cloned_body, final_env, null, false);
 }
@@ -212,22 +213,22 @@ pub fn core_comp(self: *const Value, args: *const list.List, env_env: *Env) anye
 
     var params: list.List = .empty;
     errdefer params.deinit(env_env.allocator);
-    try params.append(env_env.allocator, try Value.symValue(env_env.allocator, "x"));
+    try params.append(env_env.allocator, try vm.symValue(env_env.allocator, "x"));
 
     var body: list.List = .empty;
     errdefer body.deinit(env_env.allocator);
-    try body.append(env_env.allocator, try Value.symValue(env_env.allocator, "do"));
+    try body.append(env_env.allocator, try vm.symValue(env_env.allocator, "do"));
 
-    var current: Value = try Value.symValue(env_env.allocator, "x");
+    var current: Value = try vm.symValue(env_env.allocator, "x");
     var j: usize = args.items.len;
     while (j > 0) {
         j -= 1;
         const key = try std.fmt.allocPrint(env_env.allocator, "__comp_fn_{d}", .{j});
         var call: list.List = .empty;
         errdefer call.deinit(env_env.allocator);
-        try call.append(env_env.allocator, try Value.symValue(env_env.allocator, key));
+        try call.append(env_env.allocator, try vm.symValue(env_env.allocator, key));
         try call.append(env_env.allocator, current);
-        current = Value.listValue(call);
+        current = vm.listValue(call);
     }
 
     try body.append(env_env.allocator, current);
@@ -262,17 +263,17 @@ pub fn core_fnil(self: *const Value, args: *const list.List, env_env: *Env) anye
     d = 0;
     while (d < defaults_count) : (d += 1) {
         const key = try std.fmt.allocPrint(env_env.allocator, "a{d}", .{d});
-        try params.append(env_env.allocator, try Value.symValue(env_env.allocator, key));
+        try params.append(env_env.allocator, try vm.symValue(env_env.allocator, key));
     }
 
     var body: list.List = .empty;
     errdefer body.deinit(env_env.allocator);
-    try body.append(env_env.allocator, try Value.symValue(env_env.allocator, "apply"));
-    try body.append(env_env.allocator, try Value.symValue(env_env.allocator, "__fnil_fn"));
+    try body.append(env_env.allocator, try vm.symValue(env_env.allocator, "apply"));
+    try body.append(env_env.allocator, try vm.symValue(env_env.allocator, "__fnil_fn"));
 
     var list_call: list.List = .empty;
     errdefer list_call.deinit(env_env.allocator);
-    try list_call.append(env_env.allocator, try Value.symValue(env_env.allocator, "list"));
+    try list_call.append(env_env.allocator, try vm.symValue(env_env.allocator, "list"));
     d = 0;
     while (d < defaults_count) : (d += 1) {
         const param_key = try std.fmt.allocPrint(env_env.allocator, "a{d}", .{d});
@@ -280,19 +281,19 @@ pub fn core_fnil(self: *const Value, args: *const list.List, env_env: *Env) anye
 
         var if_call: list.List = .empty;
         errdefer if_call.deinit(env_env.allocator);
-        try if_call.append(env_env.allocator, try Value.symValue(env_env.allocator, "if"));
+        try if_call.append(env_env.allocator, try vm.symValue(env_env.allocator, "if"));
 
         var nil_q_call: list.List = .empty;
         errdefer nil_q_call.deinit(env_env.allocator);
-        try nil_q_call.append(env_env.allocator, try Value.symValue(env_env.allocator, "nil?"));
-        try nil_q_call.append(env_env.allocator, try Value.symValue(env_env.allocator, param_key));
-        try if_call.append(env_env.allocator, Value.listValue(nil_q_call));
-        try if_call.append(env_env.allocator, try Value.symValue(env_env.allocator, default_key));
-        try if_call.append(env_env.allocator, try Value.symValue(env_env.allocator, param_key));
+        try nil_q_call.append(env_env.allocator, try vm.symValue(env_env.allocator, "nil?"));
+        try nil_q_call.append(env_env.allocator, try vm.symValue(env_env.allocator, param_key));
+        try if_call.append(env_env.allocator, vm.listValue(nil_q_call));
+        try if_call.append(env_env.allocator, try vm.symValue(env_env.allocator, default_key));
+        try if_call.append(env_env.allocator, try vm.symValue(env_env.allocator, param_key));
 
-        try list_call.append(env_env.allocator, Value.listValue(if_call));
+        try list_call.append(env_env.allocator, vm.listValue(if_call));
     }
-    try body.append(env_env.allocator, Value.listValue(list_call));
+    try body.append(env_env.allocator, vm.listValue(list_call));
 
     const cloned_params = try params.clone(env_env.allocator);
     const cloned_body = try body.clone(env_env.allocator);
@@ -317,25 +318,25 @@ pub fn core_juxt(self: *const Value, args: *const list.List, env_env: *Env) anye
 
     var params: list.List = .empty;
     errdefer params.deinit(env_env.allocator);
-    try params.append(env_env.allocator, try Value.symValue(env_env.allocator, "x"));
+    try params.append(env_env.allocator, try vm.symValue(env_env.allocator, "x"));
 
     var body: list.List = .empty;
     errdefer body.deinit(env_env.allocator);
-    try body.append(env_env.allocator, try Value.symValue(env_env.allocator, "do"));
+    try body.append(env_env.allocator, try vm.symValue(env_env.allocator, "do"));
 
     var vec_call: list.List = .empty;
     errdefer vec_call.deinit(env_env.allocator);
-    try vec_call.append(env_env.allocator, try Value.symValue(env_env.allocator, "vec"));
+    try vec_call.append(env_env.allocator, try vm.symValue(env_env.allocator, "vec"));
     i = 0;
     while (i < args.items.len) : (i += 1) {
         const key = try std.fmt.allocPrint(env_env.allocator, "__juxt_fn_{d}", .{i});
         var call: list.List = .empty;
         errdefer call.deinit(env_env.allocator);
-        try call.append(env_env.allocator, try Value.symValue(env_env.allocator, key));
-        try call.append(env_env.allocator, try Value.symValue(env_env.allocator, "x"));
-        try vec_call.append(env_env.allocator, Value.listValue(call));
+        try call.append(env_env.allocator, try vm.symValue(env_env.allocator, key));
+        try call.append(env_env.allocator, try vm.symValue(env_env.allocator, "x"));
+        try vec_call.append(env_env.allocator, vm.listValue(call));
     }
-    try body.append(env_env.allocator, Value.listValue(vec_call));
+    try body.append(env_env.allocator, vm.listValue(vec_call));
 
     const cloned_params = try params.clone(env_env.allocator);
     const cloned_body = try body.clone(env_env.allocator);
@@ -367,35 +368,35 @@ pub fn registerCoreFunctions(env: *Env) anyerror!void {
     try regexp_core.registerRegexpFunctions(env);
 
     // Collection predicates (kept here)
-    try env.put("empty?", Value.builtinFnValue(core_empty_q));
-    try env.put("not-empty", Value.builtinFnValue(core_not_empty));
+    try env.put("empty?", vm.builtinFnValue(core_empty_q));
+    try env.put("not-empty", vm.builtinFnValue(core_not_empty));
 
     // Higher-order functions (kept here)
-    try env.put("apply", Value.builtinFnValue(core_apply));
-    try env.put("trampoline", Value.builtinFnValue(core_trampoline));
-    try env.put("record-ctor", Value.builtinFnValue(records.core_record_ctor));
-    try env.put("if-not", Value.builtinFnValue(core_if_not));
-    try env.put("partial", Value.builtinFnValue(core_partial));
-    try env.put("comp", Value.builtinFnValue(core_comp));
-    try env.put("fnil", Value.builtinFnValue(core_fnil));
-    try env.put("juxt", Value.builtinFnValue(core_juxt));
+    try env.put("apply", vm.builtinFnValue(core_apply));
+    try env.put("trampoline", vm.builtinFnValue(core_trampoline));
+    try env.put("record-ctor", vm.builtinFnValue(records.core_record_ctor));
+    try env.put("if-not", vm.builtinFnValue(core_if_not));
+    try env.put("partial", vm.builtinFnValue(core_partial));
+    try env.put("comp", vm.builtinFnValue(core_comp));
+    try env.put("fnil", vm.builtinFnValue(core_fnil));
+    try env.put("juxt", vm.builtinFnValue(core_juxt));
 
     // Clojure-style aliases (re-registered for convenience)
-    try env.put("not", Value.builtinFnValue(comparison.core_not));
-    try env.put("str", Value.builtinFnValue(strings.core_str));
-    try env.put("count", Value.builtinFnValue(sequences.core_count));
-    try env.put("first", Value.builtinFnValue(sequences.core_first));
-    try env.put("rest", Value.builtinFnValue(sequences.core_rest));
-    try env.put("nth", Value.builtinFnValue(sequences.core_nth));
-    try env.put("concat", Value.builtinFnValue(sequences.core_concat));
-    try env.put("list", Value.builtinFnValue(sequences.core_list));
-    try env.put("vec", Value.builtinFnValue(sequences.core_vec));
-    try env.put("subs", Value.builtinFnValue(strings.core_subs));
-    try env.put("subvec", Value.builtinFnValue(sequences.core_subvec));
+    try env.put("not", vm.builtinFnValue(comparison.core_not));
+    try env.put("str", vm.builtinFnValue(strings.core_str));
+    try env.put("count", vm.builtinFnValue(sequences.core_count));
+    try env.put("first", vm.builtinFnValue(sequences.core_first));
+    try env.put("rest", vm.builtinFnValue(sequences.core_rest));
+    try env.put("nth", vm.builtinFnValue(sequences.core_nth));
+    try env.put("concat", vm.builtinFnValue(sequences.core_concat));
+    try env.put("list", vm.builtinFnValue(sequences.core_list));
+    try env.put("vec", vm.builtinFnValue(sequences.core_vec));
+    try env.put("subs", vm.builtinFnValue(strings.core_subs));
+    try env.put("subvec", vm.builtinFnValue(sequences.core_subvec));
 
     // Metaprogramming
-    try env.put("macroexpand-1", Value.builtinFnValue(eval_helpers.core_macroexpand_1));
-    try env.put("macroexpand", Value.builtinFnValue(eval_helpers.core_macroexpand));
+    try env.put("macroexpand-1", vm.builtinFnValue(eval_helpers.core_macroexpand_1));
+    try env.put("macroexpand", vm.builtinFnValue(eval_helpers.core_macroexpand));
 
     // Namespace functions (from namespace.zig)
     try namespace.registerNamespaceFunctions(env);

@@ -205,11 +205,11 @@ test "persistent_string_hash_map::assoc and find" {
     const a = std.heap.page_allocator;
     var m = StringHashMap.empty();
 
-    m = try m.assoc(a, "one", Value.intValue(1));
+    m = try m.assoc(a, "one", vm.intValue(1));
     try std.testing.expect(m.mapCount() == 1);
     try std.testing.expect(m.find("one").?.int_val == 1);
 
-    m = try m.assoc(a, "two", Value.intValue(2));
+    m = try m.assoc(a, "two", vm.intValue(2));
     try std.testing.expect(m.mapCount() == 2);
     try std.testing.expect(m.find("one").?.int_val == 1);
     try std.testing.expect(m.find("two").?.int_val == 2);
@@ -219,8 +219,8 @@ test "persistent_string_hash_map::update existing key" {
     const a = std.heap.page_allocator;
     var m = StringHashMap.empty();
 
-    m = try m.assoc(a, "x", Value.intValue(10));
-    m = try m.assoc(a, "x", Value.intValue(99));
+    m = try m.assoc(a, "x", vm.intValue(10));
+    m = try m.assoc(a, "x", vm.intValue(99));
     try std.testing.expect(m.mapCount() == 1);
     try std.testing.expect(m.find("x").?.int_val == 99);
 }
@@ -229,9 +229,9 @@ test "persistent_string_hash_map::without" {
     const a = std.heap.page_allocator;
     var m = StringHashMap.empty();
 
-    m = try m.assoc(a, "a", Value.intValue(1));
-    m = try m.assoc(a, "b", Value.intValue(2));
-    m = try m.assoc(a, "c", Value.intValue(3));
+    m = try m.assoc(a, "a", vm.intValue(1));
+    m = try m.assoc(a, "b", vm.intValue(2));
+    m = try m.assoc(a, "c", vm.intValue(3));
     m = try m.without(a, "b");
     try std.testing.expect(m.mapCount() == 2);
     try std.testing.expect(m.find("a").?.int_val == 1);
@@ -246,7 +246,7 @@ test "persistent_string_hash_map::many entries" {
     var i: usize = 0;
     while (i < 50) : (i += 1) {
         const key = try std.fmt.allocPrint(a, "key_{d}", .{i});
-        m = try m.assoc(a, key, Value.intValue(@as(i64, @intCast(i))));
+        m = try m.assoc(a, key, vm.intValue(@as(i64, @intCast(i))));
     }
     try std.testing.expect(m.mapCount() == 50);
 
@@ -263,8 +263,8 @@ test "persistent_string_hash_map::hash collision" {
     const a = std.heap.page_allocator;
     var m = StringHashMap.empty();
 
-    m = try m.assoc(a, "hello", Value.intValue(1));
-    m = try m.assoc(a, "world", Value.intValue(2));
+    m = try m.assoc(a, "hello", vm.intValue(1));
+    m = try m.assoc(a, "world", vm.intValue(2));
     try std.testing.expect(m.mapCount() == 2);
     try std.testing.expect(m.find("hello").?.int_val == 1);
     try std.testing.expect(m.find("world").?.int_val == 2);
@@ -274,8 +274,8 @@ test "persistent_string_hash_map::keys" {
     const a = std.heap.page_allocator;
     var m = StringHashMap.empty();
 
-    m = try m.assoc(a, "alpha", Value.intValue(1));
-    m = try m.assoc(a, "beta", Value.intValue(2));
+    m = try m.assoc(a, "alpha", vm.intValue(1));
+    m = try m.assoc(a, "beta", vm.intValue(2));
 
     const keys = try m.mapKeys(a);
     defer a.free(keys.items);

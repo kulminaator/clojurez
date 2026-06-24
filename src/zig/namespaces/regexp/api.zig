@@ -2,12 +2,13 @@
 // These functions are registered as built-in functions in the zig.regexp namespace.
 
 const std = @import("std");
-const Value = @import("../../value.zig");
+const vm = @import("../../value.zig");
+const Value = vm.Value;
 const list = @import("../../list.zig");
 const vec = @import("../../vector.zig");
 const eval_mod = @import("../../eval.zig");
 const regexp = @import("regexp.zig");
-const Env = Value.Env;
+const Env = vm.Env;
 const Allocator = std.mem.Allocator;
 
 // ============================================================
@@ -19,16 +20,16 @@ pub fn core_re_pattern(self: *const Value, args: *const list.List, env: *Env) an
     if (args.items.len != 1) return error.ArityError;
     const arg = args.items[0];
     // If already a regex, return it as-is
-    if (arg.type == .regex) return try arg.clone(env.allocator);
+    if (std.meta.activeTag(arg) == .regex) return try arg.clone(env.allocator);
     // If already a map with :pattern, return it as-is
-    if (arg.type == .map) {
+    if (std.meta.activeTag(arg) == .map) {
         for (arg.map_val.items) |entry| {
-            if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, "pattern")) {
+            if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.kw_val, "pattern")) {
                 return try arg.clone(env.allocator);
             }
         }
     }
-    if (arg.type != .string) return error.TypeError;
+    if (std.meta.activeTag(arg) != .string) return error.TypeError;
 
     const allocator = env.allocator;
     const s = arg.str_val;
@@ -38,13 +39,13 @@ pub fn core_re_pattern(self: *const Value, args: *const list.List, env: *Env) an
     ast.deinit(allocator);
 
     // Return a map with :pattern key (for compatibility with map? check)
-    var m: Value.Map = .empty;
+    var m: vm.Map = .empty;
     errdefer m.deinit(allocator);
     try m.append(allocator, .{
-        .key = try Value.keywordValue(allocator, "pattern"),
-        .value = try Value.stringValue(allocator, s),
+        .key = try vm.keywordValue(allocator, "pattern"),
+        .value = try vm.stringValue(allocator, s),
     });
-    return Value.mapValue(m);
+    return vm.mapValue(m);
 }
 
 // ============================================================
@@ -56,16 +57,16 @@ pub fn core_re_matches(self: *const Value, args: *const list.List, env: *Env) an
     if (args.items.len != 2) return error.ArityError;
     const pattern = args.items[0];
     const s = args.items[1];
-    if (s.type != .string) return error.TypeError;
+    if (std.meta.activeTag(s) != .string) return error.TypeError;
 
     const allocator = env.allocator;
     var nfa = try getNfaFromPattern(allocator, pattern);
     defer nfa.deinit(allocator);
 
     if (try regexp.nfaMatch(&nfa, s.str_val, allocator)) {
-        return try Value.stringValue(allocator, s.str_val);
+        return try vm.stringValue(allocator, s.str_val);
     }
-    return Value.nilValue();
+    return vm.nilValue();
 }
 
 // ============================================================
@@ -77,7 +78,7 @@ pub fn core_re_find(self: *const Value, args: *const list.List, env: *Env) anyer
     if (args.items.len != 2) return error.ArityError;
     const pattern = args.items[0];
     const s = args.items[1];
-    if (s.type != .string) return error.TypeError;
+    if (std.meta.activeTag(s) != .string) return error.TypeError;
 
     const allocator = env.allocator;
     var nfa = try getNfaFromPattern(allocator, pattern);
@@ -92,10 +93,10 @@ pub fn core_re_find(self: *const Value, args: *const list.List, env: *Env) anyer
         const match_len = try regexp.nfaMatchLen(&nfa, remaining, allocator);
         if (match_len > 0) {
             const match_str = remaining[0..match_len];
-            return try Value.stringValue(allocator, match_str);
+            return try vm.stringValue(allocator, match_str);
         }
     }
-    return Value.nilValue();
+    return vm.nilValue();
 }
 
 // ============================================================
@@ -107,7 +108,7 @@ pub fn core_re_seq(self: *const Value, args: *const list.List, env: *Env) anyerr
     if (args.items.len != 2) return error.ArityError;
     const pattern = args.items[0];
     const s = args.items[1];
-    if (s.type != .string) return error.TypeError;
+    if (std.meta.activeTag(s) != .string) return error.TypeError;
 
     const allocator = env.allocator;
     var nfa = try getNfaFromPattern(allocator, pattern);
@@ -127,7 +128,7 @@ pub fn core_re_seq(self: *const Value, args: *const list.List, env: *Env) anyerr
         const match_len = try regexp.nfaMatchLen(&nfa, remaining, allocator);
         if (match_len > 0) {
             const match_str = remaining[0..match_len];
-            try matches.append(allocator, try Value.stringValue(allocator, match_str));
+            try matches.append(allocator, try vm.stringValue(allocator, match_str));
             // Advance past the match (by byte length / code point count)
             const cp_count = Value.utf8CodepointCount(match_str);
             start += cp_count;
@@ -142,7 +143,7 @@ pub fn core_re_seq(self: *const Value, args: *const list.List, env: *Env) anyerr
     for (matches.items) |m| {
         try v.append(allocator, m);
     }
-    return Value.vectorValue(v);
+    return vm.vectorValue(v);
 }
 
 // ============================================================
@@ -154,7 +155,7 @@ pub fn core_re_split(self: *const Value, args: *const list.List, env: *Env) anye
     if (args.items.len != 2) return error.ArityError;
     const pattern = args.items[0];
     const s = args.items[1];
-    if (s.type != .string) return error.TypeError;
+    if (std.meta.activeTag(s) != .string) return error.TypeError;
 
     const allocator = env.allocator;
     var nfa = try getNfaFromPattern(allocator, pattern);
@@ -175,14 +176,14 @@ pub fn core_re_split(self: *const Value, args: *const list.List, env: *Env) anye
         const match_len = try regexp.nfaMatchLen(&nfa, remaining, allocator);
         if (match_len > 0) {
             const before_str = regexp.substringRange(str, last_end, start);
-            try parts.append(allocator, try Value.stringValue(allocator, before_str));
+            try parts.append(allocator, try vm.stringValue(allocator, before_str));
             last_end = start + Value.utf8CodepointCount(remaining[0..match_len]);
             start = last_end - 1; // -1 because loop increments
         }
     }
     // Add final part
     const final_str = regexp.substringFrom(str, last_end);
-    try parts.append(allocator, try Value.stringValue(allocator, final_str));
+    try parts.append(allocator, try vm.stringValue(allocator, final_str));
 
     // Convert to vector
     var v = vec.Vector.empty;
@@ -190,7 +191,7 @@ pub fn core_re_split(self: *const Value, args: *const list.List, env: *Env) anye
     for (parts.items) |p| {
         try v.append(allocator, p);
     }
-    return Value.vectorValue(v);
+    return vm.vectorValue(v);
 }
 
 // ============================================================
@@ -203,7 +204,7 @@ pub fn core_re_replace(self: *const Value, args: *const list.List, env: *Env) an
     const pattern = args.items[0];
     const s = args.items[1];
     const replacement = args.items[2];
-    if (s.type != .string) return error.TypeError;
+    if (std.meta.activeTag(s) != .string) return error.TypeError;
 
     const allocator = env.allocator;
     var nfa = try getNfaFromPattern(allocator, pattern);
@@ -222,8 +223,8 @@ pub fn core_re_replace(self: *const Value, args: *const list.List, env: *Env) an
 
             // Get replacement string
             var repl_str: []const u8 = undefined;
-            if (replacement.type == .function or replacement.type == .builtin_fn) {
-                var match_val = try Value.stringValue(allocator, match_str);
+            if (std.meta.activeTag(replacement) == .function or std.meta.activeTag(replacement) == .builtin_fn) {
+                var match_val = try vm.stringValue(allocator, match_str);
                 defer match_val.deinit(allocator);
                 var call_args = list.List.empty;
                 errdefer call_args.deinit(allocator);
@@ -241,10 +242,10 @@ pub fn core_re_replace(self: *const Value, args: *const list.List, env: *Env) an
             try buf.appendSlice(allocator, repl_str);
             try buf.appendSlice(allocator, after);
 
-            return try Value.stringValue(allocator, try buf.toOwnedSlice(allocator));
+            return try vm.stringValue(allocator, try buf.toOwnedSlice(allocator));
         }
     }
-    return try Value.stringValue(allocator, str);
+    return try vm.stringValue(allocator, str);
 }
 
 // ============================================================
@@ -257,7 +258,7 @@ pub fn core_re_replace_all(self: *const Value, args: *const list.List, env: *Env
     const pattern = args.items[0];
     const s = args.items[1];
     const replacement = args.items[2];
-    if (s.type != .string) return error.TypeError;
+    if (std.meta.activeTag(s) != .string) return error.TypeError;
 
     const allocator = env.allocator;
     var nfa = try getNfaFromPattern(allocator, pattern);
@@ -278,8 +279,8 @@ pub fn core_re_replace_all(self: *const Value, args: *const list.List, env: *Env
 
             // Get replacement string
             var repl_str: []const u8 = undefined;
-            if (replacement.type == .function or replacement.type == .builtin_fn) {
-                var match_val = try Value.stringValue(allocator, match_str);
+            if (std.meta.activeTag(replacement) == .function or std.meta.activeTag(replacement) == .builtin_fn) {
+                var match_val = try vm.stringValue(allocator, match_str);
                 defer match_val.deinit(allocator);
                 var call_args = list.List.empty;
                 errdefer call_args.deinit(allocator);
@@ -299,7 +300,7 @@ pub fn core_re_replace_all(self: *const Value, args: *const list.List, env: *Env
         }
     }
 
-    return try Value.stringValue(allocator, try buf.toOwnedSlice(allocator));
+    return try vm.stringValue(allocator, try buf.toOwnedSlice(allocator));
 }
 
 // ============================================================
@@ -319,7 +320,7 @@ fn getNfaFromPattern(allocator: Allocator, pattern: Value) anyerror!regexp.Nfa {
 // ============================================================
 
 fn getReplacementString(allocator: Allocator, v: Value) anyerror![]const u8 {
-    if (v.type == .string) return v.str_val;
+    if (std.meta.activeTag(v) == .string) return v.str_val;
     return v.fmt(allocator);
 }
 
@@ -336,11 +337,11 @@ fn callBuiltin(allocator: Allocator, op: Value, args: list.List, env: *Env) anye
 // ============================================================
 
 pub fn registerRegexpFunctions(env: *Env) anyerror!void {
-    try env.put("re-pattern", Value.builtinFnValue(core_re_pattern));
-    try env.put("re-matches", Value.builtinFnValue(core_re_matches));
-    try env.put("re-find", Value.builtinFnValue(core_re_find));
-    try env.put("re-seq", Value.builtinFnValue(core_re_seq));
-    try env.put("re-split", Value.builtinFnValue(core_re_split));
-    try env.put("re-replace", Value.builtinFnValue(core_re_replace));
-    try env.put("re-replace-all", Value.builtinFnValue(core_re_replace_all));
+    try env.put("re-pattern", vm.builtinFnValue(core_re_pattern));
+    try env.put("re-matches", vm.builtinFnValue(core_re_matches));
+    try env.put("re-find", vm.builtinFnValue(core_re_find));
+    try env.put("re-seq", vm.builtinFnValue(core_re_seq));
+    try env.put("re-split", vm.builtinFnValue(core_re_split));
+    try env.put("re-replace", vm.builtinFnValue(core_re_replace));
+    try env.put("re-replace-all", vm.builtinFnValue(core_re_replace_all));
 }

@@ -2,7 +2,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Token = @import("lexer.zig").Token;
 const Lexer = @import("lexer.zig").Lexer;
-const Value = @import("value.zig");
+const vm = @import("value.zig");
+const Value = vm.Value;
 const list = @import("list.zig");
 const vec = @import("vector.zig");
 const BI = @import("big_int.zig");
@@ -139,7 +140,7 @@ pub const Parser = struct {
                 errdefer quoted.deinit(self.allocator);
                 try quoted.append(self.allocator, try self.symValue("quote"));
                 try quoted.append(self.allocator, form);
-                return Value.listValue(quoted);
+                return vm.listValue(quoted);
             },
             .backtick => {
                 // `x is shorthand for (quasiquote x)
@@ -151,7 +152,7 @@ pub const Parser = struct {
                 errdefer qq.deinit(self.allocator);
                 try qq.append(self.allocator, try self.symValue("quasiquote"));
                 try qq.append(self.allocator, form);
-                return Value.listValue(qq);
+                return vm.listValue(qq);
             },
             .deref => {
                 // @x is shorthand for (deref x)
@@ -163,7 +164,7 @@ pub const Parser = struct {
                 errdefer deref_list.deinit(self.allocator);
                 try deref_list.append(self.allocator, try self.symValue("deref"));
                 try deref_list.append(self.allocator, form);
-                return Value.listValue(deref_list);
+                return vm.listValue(deref_list);
             },
             .unquote => {
                 // ~x is shorthand for (unquote x)
@@ -175,7 +176,7 @@ pub const Parser = struct {
                 errdefer uq.deinit(self.allocator);
                 try uq.append(self.allocator, try self.symValue("unquote"));
                 try uq.append(self.allocator, form);
-                return Value.listValue(uq);
+                return vm.listValue(uq);
             },
             .unquote_splicing => {
                 // ~@x is shorthand for (unquote-splicing x)
@@ -187,24 +188,24 @@ pub const Parser = struct {
                 errdefer uqs.deinit(self.allocator);
                 try uqs.append(self.allocator, try self.symValue("unquote-splicing"));
                 try uqs.append(self.allocator, form);
-                return Value.listValue(uqs);
+                return vm.listValue(uqs);
             },
             .string => |s| {
-                const val = try Value.stringValue(self.allocator, s);
+                const val = try vm.stringValue(self.allocator, s);
                 self.current.deinit(self.allocator);
                 self.current = .{ .eof = {} };
                 try self.advance();
                 return val;
             },
             .regex => |s| {
-                const val = try Value.regexValue(self.allocator, s);
+                const val = try vm.regexValue(self.allocator, s);
                 self.current.deinit(self.allocator);
                 self.current = .{ .eof = {} };
                 try self.advance();
                 return val;
             },
             .character => |c| {
-                const val = Value.charValue(c);
+                const val = vm.charValue(c);
                 self.current.deinit(self.allocator);
                 self.current = .{ .eof = {} };
                 try self.advance();
@@ -225,7 +226,7 @@ pub const Parser = struct {
                 return val;
             },
             .keyword => |s| {
-                const val = try Value.keywordValue(self.allocator, s);
+                const val = try vm.keywordValue(self.allocator, s);
                 self.current.deinit(self.allocator);
                 self.current = .{ .eof = {} };
                 try self.advance();
@@ -266,7 +267,7 @@ pub const Parser = struct {
                 .close_paren => {
                     self.debugCloseForm("list");
                     try self.advance();
-                    return Value.listValue(items);
+                    return vm.listValue(items);
                 },
                 .eof => return error.UnexpectedEof,
                 else => {},
@@ -287,7 +288,7 @@ pub const Parser = struct {
                 .close_bracket => {
                     self.debugCloseForm("vector");
                     try self.advance();
-                    return Value.vectorValue(items);
+                    return vm.vectorValue(items);
                 },
                 .eof => return error.UnexpectedEof,
                 .comma => {
@@ -303,7 +304,7 @@ pub const Parser = struct {
 
     fn readMap(self: *Parser) anyerror!Value {
         try self.advance(); // consume '{'
-        var entries: Value.Map = .empty;
+        var entries: vm.Map = .empty;
         errdefer {
             for (entries.items) |*entry| {
                 entry.key.deinit(self.allocator);
@@ -318,7 +319,7 @@ pub const Parser = struct {
                 .close_brace => {
                     self.debugCloseForm("map");
                     try self.advance();
-                    return Value.mapValue(entries);
+                    return vm.mapValue(entries);
                 },
                 .eof => return error.UnexpectedEof,
                 .comma => {
@@ -335,7 +336,7 @@ pub const Parser = struct {
 
     fn readSet(self: *Parser) anyerror!Value {
         try self.advance(); // consume 'set_open' (which already consumed '#{')
-        var items: Value.Set = .empty;
+        var items: vm.Set = .empty;
         errdefer {
             for (items.items) |*item| {
                 item.deinit(self.allocator);
@@ -349,7 +350,7 @@ pub const Parser = struct {
                 .close_brace => {
                     self.debugCloseForm("set");
                     try self.advance();
-                    return Value.setValue(items);
+                    return vm.setValue(items);
                 },
                 .eof => return error.UnexpectedEof,
                 .comma => {
@@ -377,7 +378,7 @@ pub const Parser = struct {
 
     fn readQueue(self: *Parser) anyerror!Value {
         try self.advance(); // consume 'queue_tag' (which already consumed '#queue(')
-        var items: Value.Queue = .empty;
+        var items: vm.Queue = .empty;
         errdefer {
             for (items.items) |*item| {
                 item.deinit(self.allocator);
@@ -389,7 +390,7 @@ pub const Parser = struct {
             switch (self.current) {
                 .close_paren => {
                     try self.advance();
-                    return Value.queueValue(items);
+                    return vm.queueValue(items);
                 },
                 .eof => return error.UnexpectedEof,
                 .comma => {
@@ -408,25 +409,25 @@ pub const Parser = struct {
         // Check for BigDecimal suffix 'M' (e.g., "123.456M")
         if (s.len > 1 and s[s.len - 1] == 'M') {
             const bd = try BD.BigDecimal.fromString(allocator, s[0 .. s.len - 1]);
-            return try Value.decimalValue(allocator, bd);
+            return try vm.decimalValue(allocator, bd);
         }
         // Check for BigInt suffix 'N' (e.g., "12345678901234567890N")
         if (s.len > 1 and s[s.len - 1] == 'N') {
             const bi = try BI.bigIntFromString(allocator, s[0 .. s.len - 1]);
-            return try Value.bigIntValue(allocator, bi);
+            return try vm.bigIntValue(allocator, bi);
         }
         // Check for float (contains '.')
         if (std.mem.indexOfScalar(u8, s, '.')) |_| {
             const f = try std.fmt.parseFloat(f64, s);
-            return Value.floatValue(f);
+            return vm.floatValue(f);
         }
         // Try to parse as i64
         if (std.fmt.parseInt(i64, s, 10)) |i| {
-            return Value.intValue(i);
+            return vm.intValue(i);
         } else |_| {
             // Overflow: parse as BigInt
             const bi = try BI.bigIntFromString(allocator, s);
-            return try Value.bigIntValue(allocator, bi);
+            return try vm.bigIntValue(allocator, bi);
         }
     }
 
@@ -446,9 +447,9 @@ pub const Parser = struct {
             }
         }
         // Handle special literal symbols
-        if (std.mem.eql(u8, s, "true")) return Value.boolValue(true);
-        if (std.mem.eql(u8, s, "false")) return Value.boolValue(false);
-        if (std.mem.eql(u8, s, "nil")) return Value.nilValue();
+        if (std.mem.eql(u8, s, "true")) return vm.boolValue(true);
+        if (std.mem.eql(u8, s, "false")) return vm.boolValue(false);
+        if (std.mem.eql(u8, s, "nil")) return vm.nilValue();
         // Copy via stack buffer to avoid aliasing with page_allocator
         var tmp_buf: [256]u8 = undefined;
         const copy_len = if (s.len < tmp_buf.len) s.len else tmp_buf.len;
@@ -506,11 +507,11 @@ pub const Parser = struct {
         var params_vec: vec.Vector = .empty;
         try args.buildParams(self.allocator, &params_vec);
 
-        try fn_form.append(self.allocator, Value.vectorValue(params_vec));
+        try fn_form.append(self.allocator, vm.vectorValue(params_vec));
         // Don't deinit params_vec — items transferred to fn_form
         try fn_form.append(self.allocator, body_form);
 
-        return Value.listValue(fn_form);
+        return vm.listValue(fn_form);
     }
 
     /// Tracks % arg references during fn shorthand parsing.
@@ -586,7 +587,7 @@ test "parser: empty list" {
     var form = try p.parse();
     defer form.deinit(allocator);
 
-    try std.testing.expect(form.type == .list);
+    try std.testing.expect(std.meta.activeTag(form) == .list);
     try std.testing.expect(form.list_val.items.len == 0);
 }
 
@@ -601,7 +602,7 @@ test "parser: simple list" {
     var form = try p.parse();
     defer form.deinit(allocator);
 
-    try std.testing.expect(form.type == .list);
+    try std.testing.expect(std.meta.activeTag(form) == .list);
     try std.testing.expect(form.list_val.items.len == 3);
 }
 
@@ -616,7 +617,7 @@ test "parser: nested list" {
     var form = try p.parse();
     defer form.deinit(allocator);
 
-    try std.testing.expect(form.type == .list);
+    try std.testing.expect(std.meta.activeTag(form) == .list);
     try std.testing.expect(form.list_val.items.len == 2);
 }
 
@@ -631,7 +632,7 @@ test "parser: vector" {
     var form = try p.parse();
     defer form.deinit(allocator);
 
-    try std.testing.expect(form.type == .vector);
+    try std.testing.expect(std.meta.activeTag(form) == .vector);
     try std.testing.expect(form.vec_val.items.len == 3);
 }
 
@@ -646,7 +647,7 @@ test "parser: string" {
     var form = try p.parse();
     defer form.deinit(allocator);
 
-    try std.testing.expect(form.type == .string);
+    try std.testing.expect(std.meta.activeTag(form) == .string);
     try std.testing.expect(std.mem.eql(u8, form.str_val, "hello"));
 }
 
@@ -661,7 +662,7 @@ test "parser: keyword" {
     var form = try p.parse();
     defer form.deinit(allocator);
 
-    try std.testing.expect(form.type == .keyword);
+    try std.testing.expect(std.meta.activeTag(form) == .keyword);
     try std.testing.expect(std.mem.eql(u8, form.kw_val, "foo"));
 }
 
@@ -676,7 +677,7 @@ test "parser: integer" {
     var form = try p.parse();
     defer form.deinit(allocator);
 
-    try std.testing.expect(form.type == .integer);
+    try std.testing.expect(std.meta.activeTag(form) == .integer);
     try std.testing.expect(form.int_val == 42);
 }
 
@@ -691,7 +692,7 @@ test "parser: float" {
     var form = try p.parse();
     defer form.deinit(allocator);
 
-    try std.testing.expect(form.type == .float);
+    try std.testing.expect(std.meta.activeTag(form) == .float);
 }
 
 test "parser: booleans" {
@@ -703,14 +704,14 @@ test "parser: booleans" {
     defer p.deinit();
     var form = try p.parse();
     defer form.deinit(allocator);
-    try std.testing.expect(form.type == .bool);
+    try std.testing.expect(std.meta.activeTag(form) == .bool);
     try std.testing.expect(form.bool_val == true);
 
     var p2 = try Parser.init(allocator, "false");
     defer p2.deinit();
     var form2 = try p2.parse();
     defer form2.deinit(allocator);
-    try std.testing.expect(form2.type == .bool);
+    try std.testing.expect(std.meta.activeTag(form2) == .bool);
     try std.testing.expect(form2.bool_val == false);
 }
 
@@ -723,7 +724,7 @@ test "parser: nil" {
     defer p.deinit();
     var form = try p.parse();
     defer form.deinit(allocator);
-    try std.testing.expect(form.type == .nil);
+    try std.testing.expect(std.meta.activeTag(form) == .nil);
 }
 
 test "parser: fn shorthand single arg" {
@@ -737,14 +738,14 @@ test "parser: fn shorthand single arg" {
     defer form.deinit(allocator);
 
     // Should expand to (fn [%1] (identity %1))
-    try std.testing.expect(form.type == .list);
+    try std.testing.expect(std.meta.activeTag(form) == .list);
     try std.testing.expect(form.list_val.items.len == 3);
     try std.testing.expect(std.mem.eql(u8, form.list_val.items[0].sym_val, "fn"));
-    try std.testing.expect(form.list_val.items[1].type == .vector);
+    try std.testing.expect(std.meta.activeTag(form.list_val.items[1]) == .vector);
     try std.testing.expect(form.list_val.items[1].vec_val.items.len == 1);
     try std.testing.expect(std.mem.eql(u8, form.list_val.items[1].vec_val.items[0].sym_val, "%1"));
     // Check body: (identity %1)
-    try std.testing.expect(form.list_val.items[2].type == .list);
+    try std.testing.expect(std.meta.activeTag(form.list_val.items[2]) == .list);
     try std.testing.expect(form.list_val.items[2].list_val.items.len == 2);
     try std.testing.expect(std.mem.eql(u8, form.list_val.items[2].list_val.items[1].sym_val, "%1"));
 }
@@ -760,10 +761,10 @@ test "parser: fn shorthand no args" {
     defer form.deinit(allocator);
 
     // Should expand to (fn [] (identity 42))
-    try std.testing.expect(form.type == .list);
+    try std.testing.expect(std.meta.activeTag(form) == .list);
     try std.testing.expect(form.list_val.items.len == 3);
     try std.testing.expect(std.mem.eql(u8, form.list_val.items[0].sym_val, "fn"));
-    try std.testing.expect(form.list_val.items[1].type == .vector);
+    try std.testing.expect(std.meta.activeTag(form.list_val.items[1]) == .vector);
     try std.testing.expect(form.list_val.items[1].vec_val.items.len == 0);
 }
 
@@ -777,13 +778,13 @@ test "parser: fn shorthand two args" {
     var form = try p.parse();
     defer form.deinit(allocator);
 
-    try std.testing.expect(form.type == .list);
+    try std.testing.expect(std.meta.activeTag(form) == .list);
     try std.testing.expect(form.list_val.items.len == 3);
     try std.testing.expect(form.list_val.items[1].vec_val.items.len == 2);
     try std.testing.expect(std.mem.eql(u8, form.list_val.items[1].vec_val.items[0].sym_val, "%1"));
     try std.testing.expect(std.mem.eql(u8, form.list_val.items[1].vec_val.items[1].sym_val, "%2"));
     // Check body: (+ %1 %2)
-    try std.testing.expect(form.list_val.items[2].type == .list);
+    try std.testing.expect(std.meta.activeTag(form.list_val.items[2]) == .list);
     try std.testing.expect(form.list_val.items[2].list_val.items.len == 3);
     try std.testing.expect(std.mem.eql(u8, form.list_val.items[2].list_val.items[1].sym_val, "%1"));
     try std.testing.expect(std.mem.eql(u8, form.list_val.items[2].list_val.items[2].sym_val, "%2"));
@@ -798,7 +799,7 @@ test "parser: char literal" {
     defer p.deinit();
     var form = try p.parse();
     defer form.deinit(allocator);
-    try std.testing.expect(form.type == .character);
+    try std.testing.expect(std.meta.activeTag(form) == .character);
     try std.testing.expect(form.char_val == 'A');
 }
 
@@ -811,7 +812,7 @@ test "parser: char newline" {
     defer p.deinit();
     var form = try p.parse();
     defer form.deinit(allocator);
-    try std.testing.expect(form.type == .character);
+    try std.testing.expect(std.meta.activeTag(form) == .character);
     try std.testing.expect(form.char_val == 10);
 }
 
@@ -824,7 +825,7 @@ test "parser: char unicode escape" {
     defer p.deinit();
     var form = try p.parse();
     defer form.deinit(allocator);
-    try std.testing.expect(form.type == .character);
+    try std.testing.expect(std.meta.activeTag(form) == .character);
     try std.testing.expect(form.char_val == 65);
 }
 
@@ -837,9 +838,9 @@ test "parser: char in list" {
     defer p.deinit();
     var form = try p.parse();
     defer form.deinit(allocator);
-    try std.testing.expect(form.type == .list);
+    try std.testing.expect(std.meta.activeTag(form) == .list);
     try std.testing.expect(form.list_val.items.len == 3);
-    try std.testing.expect(form.list_val.items[0].type == .character);
+    try std.testing.expect(std.meta.activeTag(form.list_val.items[0]) == .character);
     try std.testing.expect(form.list_val.items[0].char_val == 'A');
     try std.testing.expect(form.list_val.items[1].char_val == 'B');
     try std.testing.expect(form.list_val.items[2].char_val == 'C');

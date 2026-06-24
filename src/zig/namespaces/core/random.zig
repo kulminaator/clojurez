@@ -1,8 +1,9 @@
 // Random number generation: rand, rand-int
 const std = @import("std");
-const Value = @import("../../value.zig");
+const vm = @import("../../value.zig");
+const Value = vm.Value;
 const list = @import("../../list.zig");
-const Env = Value.Env;
+const Env = vm.Env;
 const helpers = @import("helpers.zig");
 const test_utils = @import("test_utils.zig");
 
@@ -36,14 +37,14 @@ pub fn core_rand(self: *const Value, args: *const list.List, env_env: *Env) anye
         // Mask to 53 bits (f64 mantissa precision), then divide by 2^53
         const bits = nextRandom() & 0x001F_FFFF_FFFF_FFFF;
         const frac = @as(f64, @floatFromInt(bits)) / 9007199254740992.0;
-        return Value.floatValue(frac);
+        return vm.floatValue(frac);
     }
 
     // (rand n) => random integer in [0, n)
     const n = try toInt(args.items[0]);
     if (n <= 0) return error.ArgumentError;
     const r = nextRandom() % @as(u64, @intCast(n));
-    return Value.intValue(@as(i64, @intCast(r)));
+    return vm.intValue(@as(i64, @intCast(r)));
 }
 
 // rand-int - returns a random integer in [0, n)
@@ -54,13 +55,13 @@ pub fn core_rand_int(self: *const Value, args: *const list.List, env_env: *Env) 
     const n = try toInt(args.items[0]);
     if (n <= 0) return error.ArgumentError;
     const r = nextRandom() % @as(u64, @intCast(n));
-    return Value.intValue(@as(i64, @intCast(r)));
+    return vm.intValue(@as(i64, @intCast(r)));
 }
 
 pub fn registerRandomFunctions(env: *Env) anyerror!void {
     initRandom();
-    try env.put("rand", Value.builtinFnValue(core_rand));
-    try env.put("rand-int", Value.builtinFnValue(core_rand_int));
+    try env.put("rand", vm.builtinFnValue(core_rand));
+    try env.put("rand-int", vm.builtinFnValue(core_rand_int));
 }
 
 // ===== Unit Tests =====
@@ -74,7 +75,7 @@ test "random::rand: no args returns float in [0.0, 1.0)" {
     const args = makeArgs(&[_]Value{});
     var result = core_rand(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .float);
+    try std.testing.expect(std.meta.activeTag(result) == .float);
     try std.testing.expect(result.float_val >= 0.0);
     try std.testing.expect(result.float_val < 1.0);
 }
@@ -82,10 +83,10 @@ test "random::rand: no args returns float in [0.0, 1.0)" {
 test "random::rand: with arg returns int in [0, n)" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
-    const args = makeArgs(&[_]Value{ Value.intValue(100) });
+    const args = makeArgs(&[_]Value{ vm.intValue(100) });
     var result = core_rand(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .integer);
+    try std.testing.expect(std.meta.activeTag(result) == .integer);
     try std.testing.expect(result.int_val >= 0);
     try std.testing.expect(result.int_val < 100);
 }
@@ -93,10 +94,10 @@ test "random::rand: with arg returns int in [0, n)" {
 test "random::rand-int: returns int in [0, n)" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
-    const args = makeArgs(&[_]Value{ Value.intValue(50) });
+    const args = makeArgs(&[_]Value{ vm.intValue(50) });
     var result = core_rand_int(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .integer);
+    try std.testing.expect(std.meta.activeTag(result) == .integer);
     try std.testing.expect(result.int_val >= 0);
     try std.testing.expect(result.int_val < 50);
 }

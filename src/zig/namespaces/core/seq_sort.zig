@@ -2,10 +2,11 @@
 // sort, sort-by, reductions, map-indexed, keep-indexed, bounded-count,
 // group-by, distinct, replace
 const std = @import("std");
-const Value = @import("../../value.zig");
+const vm = @import("../../value.zig");
+const Value = vm.Value;
 const list = @import("../../list.zig");
 const vec = @import("../../vector.zig");
-const Env = Value.Env;
+const Env = vm.Env;
 const helpers = @import("helpers.zig");
 const eval_helpers = @import("eval_helpers.zig");
 const seq_ops = @import("seq_ops.zig");
@@ -53,7 +54,7 @@ pub fn core_sort(self: *const Value, args: *const list.List, env_env: *Env) anye
         try result.append(allocator, sorted[i]);
     }
     allocator.free(sorted);
-    return Value.listValue(result);
+    return vm.listValue(result);
 }
 
 // sort-by: returns a sorted sequence of coll, sorted by the comparison of (keyfn item)
@@ -106,7 +107,7 @@ pub fn core_sort_by(self: *const Value, args: *const list.List, env_env: *Env) a
     }
     allocator.free(sorted);
     allocator.free(keys);
-    return Value.listValue(result);
+    return vm.listValue(result);
 }
 
 // reductions: return all intermediate reduce results
@@ -129,7 +130,7 @@ pub fn core_reductions(self: *const Value, args: *const list.List, env_env: *Env
         coll = args.items[1];
         // First get the items to check if collection is empty
         var tmp_items: []const Value = undefined;
-        switch (coll.type) {
+        switch (std.meta.activeTag(coll)) {
             .list => tmp_items = coll.list_val.items,
             .vector => tmp_items = coll.vec_val.items,
             else => return error.TypeError,
@@ -149,7 +150,7 @@ pub fn core_reductions(self: *const Value, args: *const list.List, env_env: *Env
 
     // Force collection to list
     var items: []const Value = undefined;
-    switch (coll.type) {
+    switch (std.meta.activeTag(coll)) {
         .list => items = coll.list_val.items,
         .vector => items = coll.vec_val.items,
         else => { init_val.deinit(allocator); return error.TypeError; }
@@ -175,7 +176,7 @@ pub fn core_reductions(self: *const Value, args: *const list.List, env_env: *Env
         acc = try acc.clone(allocator);
     }
     acc.deinit(allocator);
-    return Value.listValue(result);
+    return vm.listValue(result);
 }
 
 // map-indexed: map with index
@@ -187,7 +188,7 @@ pub fn core_map_indexed(self: *const Value, args: *const list.List, env_env: *En
     const coll = args.items[1];
 
     var items: []const Value = undefined;
-    switch (coll.type) {
+    switch (std.meta.activeTag(coll)) {
         .list => items = coll.list_val.items,
         .vector => items = coll.vec_val.items,
         else => return error.TypeError,
@@ -200,14 +201,14 @@ pub fn core_map_indexed(self: *const Value, args: *const list.List, env_env: *En
     while (i < items.len) : (i += 1) {
         var arg_list: list.List = .empty;
         defer arg_list.deinit(allocator);
-        try arg_list.append(allocator, Value.intValue(@as(i64, @intCast(i))));
+        try arg_list.append(allocator, vm.intValue(@as(i64, @intCast(i))));
         try arg_list.append(allocator, try items[i].clone(allocator));
         const mapped_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env_env);
         const mapped = mapped_ptr.*;
         allocator.destroy(mapped_ptr);
         try result.append(allocator, mapped);
     }
-    return Value.listValue(result);
+    return vm.listValue(result);
 }
 
 // keep-indexed: keep with index
@@ -219,7 +220,7 @@ pub fn core_keep_indexed(self: *const Value, args: *const list.List, env_env: *E
     const coll = args.items[1];
 
     var items: []const Value = undefined;
-    switch (coll.type) {
+    switch (std.meta.activeTag(coll)) {
         .list => items = coll.list_val.items,
         .vector => items = coll.vec_val.items,
         else => return error.TypeError,
@@ -232,17 +233,17 @@ pub fn core_keep_indexed(self: *const Value, args: *const list.List, env_env: *E
     while (i < items.len) : (i += 1) {
         var arg_list: list.List = .empty;
         defer arg_list.deinit(allocator);
-        try arg_list.append(allocator, Value.intValue(@as(i64, @intCast(i))));
+        try arg_list.append(allocator, vm.intValue(@as(i64, @intCast(i))));
         try arg_list.append(allocator, try items[i].clone(allocator));
         const kept_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env_env);
         const kept = kept_ptr.*;
-        if (kept.type != .nil) {
+        if (std.meta.activeTag(kept) != .nil) {
             try result.append(allocator, try kept.clone(allocator));
         }
         kept_ptr.*.deinit(allocator);
         allocator.destroy(kept_ptr);
     }
-    return Value.listValue(result);
+    return vm.listValue(result);
 }
 
 // bounded-count: count with upper bound
@@ -254,9 +255,9 @@ pub fn core_bounded_count(self: *const Value, args: *const list.List, env_env: *
     const coll = args.items[1];
 
     // For collections with known count, just return it
-    switch (coll.type) {
+    switch (std.meta.activeTag(coll)) {
         .list, .vector, .map, .set, .queue => {
-            const c: usize = switch (coll.type) {
+            const c: usize = switch (std.meta.activeTag(coll)) {
                 .list => coll.list_val.items.len,
                 .vector => coll.vec_val.items.len,
                 .map => coll.map_val.items.len,
@@ -264,8 +265,8 @@ pub fn core_bounded_count(self: *const Value, args: *const list.List, env_env: *
                 .queue => coll.queue_val.items.len,
                 else => unreachable,
             };
-            if (c <= @as(usize, @intCast(n))) return Value.intValue(@as(i64, @intCast(c)));
-            return Value.intValue(n);
+            if (c <= @as(usize, @intCast(n))) return vm.intValue(@as(i64, @intCast(c)));
+            return vm.intValue(n);
         },
         else => return error.TypeError,
     }
@@ -280,14 +281,14 @@ pub fn core_group_by(self: *const Value, args: *const list.List, env_env: *Env) 
     const coll = args.items[1];
 
     var items: []const Value = undefined;
-    switch (coll.type) {
+    switch (std.meta.activeTag(coll)) {
         .list => items = coll.list_val.items,
         .vector => items = coll.vec_val.items,
         else => return error.TypeError,
     }
 
     // Build result map
-    var result_map: Value.Map = .empty;
+    var result_map: vm.Map = .empty;
     errdefer result_map.deinit(allocator);
 
     for (items) |item| {
@@ -311,7 +312,7 @@ pub fn core_group_by(self: *const Value, args: *const list.List, env_env: *Env) 
         if (found_idx) |idx| {
             // Append to existing vector
             const vec_val = result_map.items[idx].value;
-            if (vec_val.type == .vector) {
+            if (std.meta.activeTag(vec_val) == .vector) {
                 var new_vec: vec.Vector = .empty;
                 errdefer new_vec.deinit(allocator);
                 for (vec_val.vec_val.items) |vitem| {
@@ -319,7 +320,7 @@ pub fn core_group_by(self: *const Value, args: *const list.List, env_env: *Env) 
                 }
                 try new_vec.append(allocator, try item.clone(allocator));
                 result_map.items[idx].value.deinit(allocator);
-                result_map.items[idx].value = Value.vectorValue(new_vec);
+                result_map.items[idx].value = vm.vectorValue(new_vec);
             }
         } else {
             // Create new group
@@ -328,11 +329,11 @@ pub fn core_group_by(self: *const Value, args: *const list.List, env_env: *Env) 
             try new_vec.append(allocator, try item.clone(allocator));
             try result_map.append(allocator, .{
                 .key = try key.clone(allocator),
-                .value = Value.vectorValue(new_vec),
+                .value = vm.vectorValue(new_vec),
             });
         }
     }
-    return Value.mapValue(result_map);
+    return vm.mapValue(result_map);
 }
 
 // distinct: return distinct elements
@@ -343,13 +344,13 @@ pub fn core_distinct(self: *const Value, args: *const list.List, env_env: *Env) 
     const coll = args.items[0];
 
     var items: []const Value = undefined;
-    switch (coll.type) {
+    switch (std.meta.activeTag(coll)) {
         .list => items = coll.list_val.items,
         .vector => items = coll.vec_val.items,
         else => return error.TypeError,
     }
 
-    var seen: Value.Set = .empty;
+    var seen: vm.Set = .empty;
     errdefer seen.deinit(allocator);
     var result: list.List = .empty;
     errdefer result.deinit(allocator);
@@ -364,7 +365,7 @@ pub fn core_distinct(self: *const Value, args: *const list.List, env_env: *Env) 
             try result.append(allocator, try item.clone(allocator));
         }
     }
-    return Value.listValue(result);
+    return vm.listValue(result);
 }
 
 // replace: replace values using map
@@ -373,11 +374,11 @@ pub fn core_replace(self: *const Value, args: *const list.List, env_env: *Env) a
     const allocator = env_env.allocator;
     if (args.items.len != 2) return error.ArityError;
     const smap = args.items[0];
-    if (smap.type != .map) return error.TypeError;
+    if (std.meta.activeTag(smap) != .map) return error.TypeError;
     const coll = args.items[1];
 
     var items: []const Value = undefined;
-    switch (coll.type) {
+    switch (std.meta.activeTag(coll)) {
         .list => items = coll.list_val.items,
         .vector => items = coll.vec_val.items,
         else => return error.TypeError,
@@ -399,19 +400,19 @@ pub fn core_replace(self: *const Value, args: *const list.List, env_env: *Env) a
             try result.append(allocator, try item.clone(allocator));
         }
     }
-    return Value.listValue(result);
+    return vm.listValue(result);
 }
 
 
 
 pub fn registerSeqSortFunctions(env: *Env) anyerror!void {
-    try env.put("sort", Value.builtinFnValue(core_sort));
-    try env.put("sort-by", Value.builtinFnValue(core_sort_by));
-    try env.put("reductions", Value.builtinFnValue(core_reductions));
-    try env.put("map-indexed", Value.builtinFnValue(core_map_indexed));
-    try env.put("keep-indexed", Value.builtinFnValue(core_keep_indexed));
-    try env.put("bounded-count", Value.builtinFnValue(core_bounded_count));
-    try env.put("group-by", Value.builtinFnValue(core_group_by));
-    try env.put("distinct", Value.builtinFnValue(core_distinct));
-    try env.put("replace", Value.builtinFnValue(core_replace));
+    try env.put("sort", vm.builtinFnValue(core_sort));
+    try env.put("sort-by", vm.builtinFnValue(core_sort_by));
+    try env.put("reductions", vm.builtinFnValue(core_reductions));
+    try env.put("map-indexed", vm.builtinFnValue(core_map_indexed));
+    try env.put("keep-indexed", vm.builtinFnValue(core_keep_indexed));
+    try env.put("bounded-count", vm.builtinFnValue(core_bounded_count));
+    try env.put("group-by", vm.builtinFnValue(core_group_by));
+    try env.put("distinct", vm.builtinFnValue(core_distinct));
+    try env.put("replace", vm.builtinFnValue(core_replace));
 }

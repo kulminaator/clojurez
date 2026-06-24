@@ -1,37 +1,38 @@
 // Unit tests for value.zig — extracted to keep value.zig under 1000 lines.
 const std = @import("std");
-const Value = @import("value.zig");
+const vm = @import("value.zig");
+const Value = vm.Value;
 const list = @import("list.zig");
 const vec = @import("vector.zig");
 
 const Allocator = std.mem.Allocator;
 
 // Re-export constructors and types for test use
-const nilValue = Value.nilValue;
-const boolValue = Value.boolValue;
-const intValue = Value.intValue;
-const floatValue = Value.floatValue;
-const bigIntValue = Value.bigIntValue;
-const ratioValue = Value.ratioValue;
-const decimalValue = Value.decimalValue;
-const stringValue = Value.stringValue;
-const charValue = Value.charValue;
-const symValue = Value.symValue;
-const keywordValue = Value.keywordValue;
-const listValue = Value.listValue;
-const vectorValue = Value.vectorValue;
-const mapValue = Value.mapValue;
-const setValue = Value.setValue;
-const queueValue = Value.queueValue;
-const atomValue = Value.atomValue;
+const nilValue = vm.nilValue;
+const boolValue = vm.boolValue;
+const intValue = vm.intValue;
+const floatValue = vm.floatValue;
+const bigIntValue = vm.bigIntValue;
+const ratioValue = vm.ratioValue;
+const decimalValue = vm.decimalValue;
+const stringValue = vm.stringValue;
+const charValue = vm.charValue;
+const symValue = vm.symValue;
+const keywordValue = vm.keywordValue;
+const listValue = vm.listValue;
+const vectorValue = vm.vectorValue;
+const mapValue = vm.mapValue;
+const setValue = vm.setValue;
+const queueValue = vm.queueValue;
+const atomValue = vm.atomValue;
 const atomValueShared = Value.atomValueShared;
 const utf8CodepointCount = Value.utf8CodepointCount;
 const utf8CodepointByteOffset = Value.utf8CodepointByteOffset;
 const utf8CodepointAt = Value.utf8CodepointAt;
-const Env = Value.Env;
-const Set = Value.Set;
-const Map = Value.Map;
-const Queue = Value.Queue;
+const Env = vm.Env;
+const Set = vm.Set;
+const Map = vm.Map;
+const Queue = vm.Queue;
 
 test "value::intValue: creates integer value" {
     const v = intValue(42);
@@ -778,21 +779,21 @@ test "value::Env: function closures with captured envs survive GC" {
 
     // Create a function that captures the root env
     // The fn's env is heap-allocated *Env — this is what the GC bug affected
-    var arities: std.ArrayListUnmanaged(Value.Arity) = .empty;
+    var arities: std.ArrayListUnmanaged(vm.Arity) = .empty;
     errdefer gc_alloc.free(arities.items);
-    try arities.append(gc_alloc, Value.Arity{
+    try arities.append(gc_alloc, vm.Arity{
         .params = list.empty(),
         .body = list.empty(),
         .rest_name = null,
     });
 
     const fn_env = try root_env.clone(gc_alloc);
-    var fn_val = try Value.fnValue(gc_alloc, arities, fn_env, false);
+    var fn_val = try vm.fnValue(gc_alloc, arities, fn_env, false);
     errdefer fn_val.deinit(gc_alloc);
 
     // Store the function in root env
     try root_env.put("my_fn", fn_val);
-    fn_val = Value.nilValue(); // transfer ownership
+    fn_val = vm.nilValue(); // transfer ownership
 
     // Run GC — the fn's captured env must survive
     gc.collect(gc_scan.valueScanFn);

@@ -1,6 +1,7 @@
 const std = @import("std");
-const Value = @import("value.zig");
-const Env = Value.Env;
+const vm = @import("value.zig");
+const Value = vm.Value;
+const Env = vm.Env;
 const list = @import("list.zig");
 const core = @import("namespaces/core/core.zig");
 const io_mod = @import("namespaces/core/io.zig");
@@ -23,7 +24,7 @@ const Allocator = std.mem.Allocator;
 
 /// Fully realize a lazy-seq into a concrete list for printing.
 fn fullyRealizeLazySeq(allocator: Allocator, val: Value) anyerror!Value {
-    if (val.type != .lazy_seq) return try val.clone(allocator);
+    if (std.meta.activeTag(val) != .lazy_seq) return try val.clone(allocator);
 
     var result: list.List = .empty;
     errdefer result.deinit(allocator);
@@ -31,20 +32,20 @@ fn fullyRealizeLazySeq(allocator: Allocator, val: Value) anyerror!Value {
     var current: Value = val;
     var max_iter: usize = 100000;
     while (max_iter > 0) : (max_iter -= 1) {
-        if (current.type != .lazy_seq) break;
+        if (std.meta.activeTag(current) != .lazy_seq) break;
 
         var forced = try sequences.forceLazySeqHelper(allocator, current);
         current.deinit(allocator);
 
-        if (forced.type != .list) {
+        if (std.meta.activeTag(forced) != .list) {
             forced.deinit(allocator);
             break;
         }
 
         for (forced.list_val.items) |item| {
-            if (item.type == .lazy_seq) {
+            if (std.meta.activeTag(item) == .lazy_seq) {
                 const realized = try fullyRealizeLazySeq(allocator, item);
-                if (realized.type == .list) {
+                if (std.meta.activeTag(realized) == .list) {
                     for (realized.list_val.items) |ri| {
                         try result.append(allocator, try ri.clone(allocator));
                     }
@@ -57,16 +58,16 @@ fn fullyRealizeLazySeq(allocator: Allocator, val: Value) anyerror!Value {
         }
         forced.deinit(allocator);
 
-        if (result.items.len > 0 and result.items[result.items.len - 1].type == .lazy_seq) {
+        if (result.items.len > 0 and std.meta.activeTag(result.items[result.items.len - 1]) == .lazy_seq) {
             current = result.pop() orelse break;
         } else {
             break;
         }
     }
-    if (current.type != .lazy_seq) {
+    if (std.meta.activeTag(current) != .lazy_seq) {
         current.deinit(allocator);
     }
-    return Value.listValue(result);
+    return vm.listValue(result);
 }
 
 pub fn main(init: std.process.Init.Minimal) anyerror!void {
@@ -129,7 +130,7 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     io_mod.env_vars = std.process.Environ.createMap(init.environ, allocator) catch std.process.Environ.Map.init(allocator);
 
     // Create namespace manager
-    var ns_mgr = try Value.NamespaceManager.init(allocator);
+    var ns_mgr = try vm.NamespaceManager.init(allocator);
     // No defer deinit — GC handles cleanup at program exit.
     // Calling deinit after GC sweep would access freed memory.
 
@@ -282,12 +283,12 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
 fn copyBuiltinsToNamespace(root_env: *Env, target_env: *Env) anyerror!void {
     var it = root_env.entries.entryIterator();
     while (it.next()) |entry| {
-        if (entry.val.type == .builtin_fn) {
+        if (std.meta.activeTag(entry.val) == .builtin_fn) {
             // Skip zig-only functions that should not leak into clojure.core
-            if (entry.key.type == .symbol and std.mem.eql(u8, entry.key.sym_val, "temp-dir")) continue;
+            if (std.meta.activeTag(entry.key) == .symbol and std.mem.eql(u8, entry.key.sym_val, "temp-dir")) continue;
             // builtinFnValue is just a function pointer — clone is trivial
-            if (entry.key.type == .symbol) {
-                try target_env.put(entry.key.sym_val, Value.builtinFnValue(entry.val.builtin_fn_val));
+            if (std.meta.activeTag(entry.key) == .symbol) {
+                try target_env.put(entry.key.sym_val, vm.builtinFnValue(entry.val.builtin_fn_val));
             }
         }
     }
@@ -374,8 +375,8 @@ fn runExpression(allocator: Allocator, expr: []const u8, env: *Env) anyerror!voi
         const eval_env = getCurrentNsEnv(env) orelse env;
         const result_ptr = try eval.eval(allocator, form, eval_env);
 
-        if (!result_ptr.equals(Value.nilValue())) {
-            const print_val = if (result_ptr.type == .lazy_seq) blk: {
+        if (!result_ptr.equals(vm.nilValue())) {
+            const print_val = if (std.meta.activeTag(result_ptr) == .lazy_seq) blk: {
                 const realized = try fullyRealizeLazySeq(allocator, result_ptr.*);
                 break :blk realized;
             } else result_ptr.*;
@@ -431,8 +432,8 @@ fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void 
         const eval_env = getCurrentNsEnv(env) orelse env;
         const result_ptr = try eval.eval(allocator, form, eval_env);
 
-        if (print_results and !result_ptr.equals(Value.nilValue())) {
-            const print_val = if (result_ptr.type == .lazy_seq) blk: {
+        if (print_results and !result_ptr.equals(vm.nilValue())) {
+            const print_val = if (std.meta.activeTag(result_ptr) == .lazy_seq) blk: {
                 const realized = try fullyRealizeLazySeq(allocator, result_ptr.*);
                 break :blk realized;
             } else result_ptr.*;
@@ -570,7 +571,7 @@ fn runMain(allocator: Allocator, env: *Env, ns_name: []const u8) anyerror!void {
     var call_list: list.List = .empty;
     defer call_list.deinit(allocator);
     try call_list.append(allocator, try main_fn.clone(allocator));
-    const call_result_ptr = try eval.eval(allocator, Value.listValue(call_list), ns_env);
+    const call_result_ptr = try eval.eval(allocator, vm.listValue(call_list), ns_env);
     call_result_ptr.*.deinit(allocator);
 
 }
@@ -647,10 +648,10 @@ fn scanEnvEntriesDirect(env: *Env, gc_inst: *gc_mod.GC) void {
 
 // Static pointers for root callback
 var gc_root_env: ?*Env = null;
-var gc_root_ns_mgr: ?*Value.NamespaceManager = null;
+var gc_root_ns_mgr: ?*vm.NamespaceManager = null;
 
 /// Register GC roots: main env entries + namespace env entries.
-fn registerGcRoots(gc_inst: *gc_mod.GC, env: *Env, ns_mgr: *Value.NamespaceManager) void {
+fn registerGcRoots(gc_inst: *gc_mod.GC, env: *Env, ns_mgr: *vm.NamespaceManager) void {
     gc_root_env = env;
     gc_root_ns_mgr = ns_mgr;
     gc_inst.root_fn = gcRootCallback;

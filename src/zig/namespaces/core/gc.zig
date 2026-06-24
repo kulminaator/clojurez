@@ -2,9 +2,10 @@
 // Provides gc-sweep and gc-stats for manual GC control and monitoring.
 
 const std = @import("std");
-const Value = @import("../../value.zig");
+const vm = @import("../../value.zig");
+const Value = vm.Value;
 const list = @import("../../list.zig");
-const Env = Value.Env;
+const Env = vm.Env;
 const gc_mod = @import("../../gc.zig");
 const gc_scan = @import("../../gc_scan.zig");
 
@@ -27,7 +28,7 @@ pub fn core_gc_sweep(self: *const Value, args: *const list.List, _: *Env) anyerr
         gc.setSweepEnabled(true);
         gc.manual_sweep_pending = true;
     }
-    return Value.nilValue();
+    return vm.nilValue();
 }
 
 /// zig.core/gc-stats — return a map of GC statistics.
@@ -47,7 +48,7 @@ pub fn core_gc_stats(self: *const Value, args: *const list.List, env: *Env) anye
     const s = if (gc_mod.current_gc) |gc| gc.stats() else gc_mod.GC.Stats{};
 
     // Build a map: {:current-allocated N, :peak-allocated N, ...}
-    var entries: std.ArrayListUnmanaged(Value.MapEntry) = .empty;
+    var entries: std.ArrayListUnmanaged(vm.MapEntry) = .empty;
     errdefer {
         for (entries.items) |*e| {
             e.key.deinit(allocator);
@@ -67,16 +68,16 @@ pub fn core_gc_stats(self: *const Value, args: *const list.List, env: *Env) anye
     };
 
     for (fields) |f| {
-        const key = try Value.keywordValue(allocator, f.key);
-        const val = Value.intValue(@as(i64, @intCast(f.val)));
+        const key = try vm.keywordValue(allocator, f.key);
+        const val = vm.intValue(@as(i64, @intCast(f.val)));
         try entries.append(allocator, .{ .key = key, .value = val });
     }
 
-    return Value.mapValue(entries);
+    return vm.mapValue(entries);
 }
 
 /// Register GC functions in the zig.core namespace.
 pub fn registerGCFunctions(env: *Env) anyerror!void {
-    try env.put("gc-sweep", Value.builtinFnValue(core_gc_sweep));
-    try env.put("gc-stats", Value.builtinFnValue(core_gc_stats));
+    try env.put("gc-sweep", vm.builtinFnValue(core_gc_sweep));
+    try env.put("gc-stats", vm.builtinFnValue(core_gc_stats));
 }

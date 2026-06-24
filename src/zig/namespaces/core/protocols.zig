@@ -1,8 +1,9 @@
 // Protocol support: dispatch helper and defprotocol evaluation support
 const std = @import("std");
-const Value = @import("../../value.zig");
+const vm = @import("../../value.zig");
+const Value = vm.Value;
 const list = @import("../../list.zig");
-const Env = Value.Env;
+const Env = vm.Env;
 const phm = @import("../../persistent_hash_map.zig");
 const eval = @import("../../eval.zig");
 const eval_helpers = @import("eval_helpers.zig");
@@ -11,7 +12,7 @@ const Allocator = std.mem.Allocator;
 
 /// Look up a key in a map value. Returns the value if found, null otherwise.
 pub fn getMapEntry(map_val: Value, key: Value) ?Value {
-    if (map_val.type != .map) return null;
+    if (std.meta.activeTag(map_val) != .map) return null;
     for (map_val.map_val.items) |entry| {
         if (entry.key.equals(key)) {
             return entry.value;
@@ -22,7 +23,7 @@ pub fn getMapEntry(map_val: Value, key: Value) ?Value {
 
 /// Get the type keyword string for a value's runtime type.
 pub fn typeKeyword(v: Value) []const u8 {
-    return switch (v.type) {
+    return switch (std.meta.activeTag(v)) {
         .nil => "nil",
         .bool => "bool",
         .integer => "integer",
@@ -54,7 +55,7 @@ pub fn typeKeyword(v: Value) []const u8 {
 /// Helper to build an error string and return it as a string value.
 fn makeErrorStr(allocator: Allocator, comptime fmt: []const u8, args: anytype) anyerror!Value {
     const msg = std.fmt.allocPrint(allocator, fmt, args) catch return error.OutOfMemory;
-    return Value.stringValue(allocator, msg);
+    return vm.stringValue(allocator, msg);
 }
 
 /// Dispatch a protocol method call.
@@ -101,7 +102,7 @@ pub fn dispatchProtocolMethod(
         return makeErrorStr(allocator, "error: protocol '{s}' not found in namespace '{s}'", .{proto_name, proto_ns});
 
     // Get :impls from protocol map
-    const impls_kw = try Value.keywordValue(allocator, "impls");
+    const impls_kw = try vm.keywordValue(allocator, "impls");
     const impls_map = getMapEntry(protocol_map_val, impls_kw) orelse {
         const type_kw = typeKeyword(target);
         return makeErrorStr(allocator, "No implementation of method: :{s} of protocol: #{{'{s}/{s} found for type: {s}", .{ method_kw, proto_ns, proto_name, type_kw });
@@ -109,7 +110,7 @@ pub fn dispatchProtocolMethod(
 
     // Get type keyword for the dispatch target
     const type_kw_str = typeKeyword(target);
-    const type_kw = try Value.keywordValue(allocator, type_kw_str);
+    const type_kw = try vm.keywordValue(allocator, type_kw_str);
 
     // Look up impl for this type in the impls map
     const type_impls = getMapEntry(impls_map, type_kw) orelse {
@@ -117,7 +118,7 @@ pub fn dispatchProtocolMethod(
     };
 
     // Look up the method function in the type's impl map
-    const method_kw_full = try Value.keywordValue(allocator, method_kw);
+    const method_kw_full = try vm.keywordValue(allocator, method_kw);
     const impl_fn = getMapEntry(type_impls, method_kw_full) orelse {
         return makeErrorStr(allocator, "No implementation of method: :{s} of protocol: #{{'{s}/{s} found for type: {s}", .{ method_kw, proto_ns, proto_name, type_kw_str });
     };
@@ -140,7 +141,7 @@ pub fn evalDefProtocol(
     if (l.items.len < 2) return error.ArityError;
 
     const name_sym = l.items[1];
-    if (name_sym.type != .symbol) return error.TypeError;
+    if (std.meta.activeTag(name_sym) != .symbol) return error.TypeError;
     const proto_name = name_sym.sym_val;
 
     // Parse opts+sigs
@@ -148,7 +149,7 @@ pub fn evalDefProtocol(
     var docstring: ?[]const u8 = null;
 
     // Skip optional docstring
-    if (idx < l.items.len and l.items[idx].type == .string) {
+    if (idx < l.items.len and std.meta.activeTag(l.items[idx]) == .string) {
         docstring = try allocator.dupe(u8, l.items[idx].str_val);
         idx += 1;
     }
@@ -156,7 +157,7 @@ pub fn evalDefProtocol(
     // Skip optional keyword options (pairs)
     while (idx < l.items.len) {
         const item = l.items[idx];
-        if (item.type == .keyword) {
+        if (std.meta.activeTag(item) == .keyword) {
             if (idx + 1 >= l.items.len) return error.ArityError;
             idx += 2;
         } else {
@@ -172,7 +173,7 @@ pub fn evalDefProtocol(
     }
 
     // sigs entries: method-kw -> sig-map
-    var sigs: std.ArrayListUnmanaged(Value.MapEntry) = .empty;
+    var sigs: std.ArrayListUnmanaged(vm.MapEntry) = .empty;
     errdefer {
         for (sigs.items) |*entry| {
             entry.key.deinit(allocator);
@@ -183,11 +184,11 @@ pub fn evalDefProtocol(
 
     while (idx < l.items.len) {
         const sig = l.items[idx];
-        if (sig.type != .list or sig.list_val.items.len < 2) return error.TypeError;
+        if (std.meta.activeTag(sig) != .list or sig.list_val.items.len < 2) return error.TypeError;
 
         const sig_list = sig.list_val;
         const mname_sym = sig_list.items[0];
-        if (mname_sym.type != .symbol) return error.TypeError;
+        if (std.meta.activeTag(mname_sym) != .symbol) return error.TypeError;
         const mname = mname_sym.sym_val;
 
         // Check for duplicate method names
@@ -210,7 +211,7 @@ pub fn evalDefProtocol(
         var ai: usize = 1;
         while (ai < sig_list.items.len) : (ai += 1) {
             const item = sig_list.items[ai];
-            if (item.type == .vector) {
+            if (std.meta.activeTag(item) == .vector) {
                 // Build arglist like "(this x y)"
                 var buf: std.ArrayListUnmanaged(u8) = .empty;
                 defer allocator.free(buf.items);
@@ -219,7 +220,7 @@ pub fn evalDefProtocol(
                 for (item.vec_val.items) |param| {
                     if (!first_param) try buf.append(allocator, ' ');
                     first_param = false;
-                    if (param.type == .symbol) {
+                    if (std.meta.activeTag(param) == .symbol) {
                         try buf.appendSlice(allocator, param.sym_val);
                     } else {
                         try buf.appendSlice(allocator, "x");
@@ -227,7 +228,7 @@ pub fn evalDefProtocol(
                 }
                 try buf.append(allocator, ')');
                 try arglists.append(allocator, try allocator.dupe(u8, buf.items));
-            } else if (item.type == .string) {
+            } else if (std.meta.activeTag(item) == .string) {
                 method_doc = try allocator.dupe(u8, item.str_val);
             }
         }
@@ -257,7 +258,7 @@ pub fn evalDefProtocol(
         }
 
         // Build sig map: {:name sym, :arglists ((sym ...) (sym ...)), :doc string}
-        var sig_map: Value.Map = .empty;
+        var sig_map: vm.Map = .empty;
         defer {
             for (sig_map.items) |*entry| {
                 entry.key.deinit(allocator);
@@ -268,8 +269,8 @@ pub fn evalDefProtocol(
 
         // :name
         try sig_map.append(allocator, .{
-            .key = try Value.keywordValue(allocator, "name"),
-            .value = try Value.symValue(allocator, mname),
+            .key = try vm.keywordValue(allocator, "name"),
+            .value = try vm.symValue(allocator, mname),
         });
 
         // :arglists — list of lists of symbols
@@ -291,7 +292,7 @@ pub fn evalDefProtocol(
                 } else if (is_sep and in_token) {
                     const token = al_str[start..i];
                     if (token.len > 0) {
-                        try al_list.append(allocator, try Value.symValue(allocator, token));
+                        try al_list.append(allocator, try vm.symValue(allocator, token));
                     }
                     in_token = false;
                 }
@@ -299,32 +300,32 @@ pub fn evalDefProtocol(
             if (in_token) {
                 const token = al_str[start..];
                 if (token.len > 0) {
-                    try al_list.append(allocator, try Value.symValue(allocator, token));
+                    try al_list.append(allocator, try vm.symValue(allocator, token));
                 }
             }
-            try arglists_list.append(allocator, Value.listValue(al_list));
+            try arglists_list.append(allocator, vm.listValue(al_list));
             // Transfer ownership: clear al_list so its defer doesn't double-free
             al_list = .empty;
         }
         try sig_map.append(allocator, .{
-            .key = try Value.keywordValue(allocator, "arglists"),
-            .value = Value.listValue(arglists_list),
+            .key = try vm.keywordValue(allocator, "arglists"),
+            .value = vm.listValue(arglists_list),
         });
         // Transfer ownership: clear arglists_list so its defer doesn't double-free
         arglists_list = .empty;
 
         // :doc
         try sig_map.append(allocator, .{
-            .key = try Value.keywordValue(allocator, "doc"),
+            .key = try vm.keywordValue(allocator, "doc"),
             .value = if (method_doc) |doc|
-                try Value.stringValue(allocator, doc)
+                try vm.stringValue(allocator, doc)
             else
-                Value.nilValue(),
+                vm.nilValue(),
         });
 
         try sigs.append(allocator, .{
-            .key = try Value.keywordValue(allocator, mname),
-            .value = Value.mapValue(sig_map),
+            .key = try vm.keywordValue(allocator, mname),
+            .value = vm.mapValue(sig_map),
         });
         // Transfer ownership: clear sig_map so its defer doesn't double-free
         sig_map = .empty;
@@ -337,7 +338,7 @@ pub fn evalDefProtocol(
     const current_ns = ns_mgr.getCurrentNamespace();
 
     // Build the protocol map
-    var protocol_map: Value.Map = .empty;
+    var protocol_map: vm.Map = .empty;
     errdefer {
         for (protocol_map.items) |*entry| {
             entry.key.deinit(allocator);
@@ -350,13 +351,13 @@ pub fn evalDefProtocol(
     if (docstring) |doc| {
         defer allocator.free(doc);
         try protocol_map.append(allocator, .{
-            .key = try Value.keywordValue(allocator, "doc"),
-            .value = try Value.stringValue(allocator, doc),
+            .key = try vm.keywordValue(allocator, "doc"),
+            .value = try vm.stringValue(allocator, doc),
         });
     }
 
     // :sigs
-    var sigs_map: Value.Map = .empty;
+    var sigs_map: vm.Map = .empty;
     errdefer {
         for (sigs_map.items) |*entry| {
             entry.key.deinit(allocator);
@@ -371,18 +372,18 @@ pub fn evalDefProtocol(
         });
     }
     try protocol_map.append(allocator, .{
-        .key = try Value.keywordValue(allocator, "sigs"),
-        .value = Value.mapValue(sigs_map),
+        .key = try vm.keywordValue(allocator, "sigs"),
+        .value = vm.mapValue(sigs_map),
     });
 
     // :var
     try protocol_map.append(allocator, .{
-        .key = try Value.keywordValue(allocator, "var"),
-        .value = try Value.symValue(allocator, proto_name),
+        .key = try vm.keywordValue(allocator, "var"),
+        .value = try vm.symValue(allocator, proto_name),
     });
 
     // :method-map
-    var method_map: Value.Map = .empty;
+    var method_map: vm.Map = .empty;
     errdefer {
         for (method_map.items) |*entry| {
             entry.key.deinit(allocator);
@@ -392,23 +393,23 @@ pub fn evalDefProtocol(
     }
     for (method_names.items) |mname| {
         try method_map.append(allocator, .{
-            .key = try Value.keywordValue(allocator, mname),
-            .value = try Value.keywordValue(allocator, mname),
+            .key = try vm.keywordValue(allocator, mname),
+            .value = try vm.keywordValue(allocator, mname),
         });
     }
     try protocol_map.append(allocator, .{
-        .key = try Value.keywordValue(allocator, "method-map"),
-        .value = Value.mapValue(method_map),
+        .key = try vm.keywordValue(allocator, "method-map"),
+        .value = vm.mapValue(method_map),
     });
 
     // :impls — empty map (populated by extend)
     try protocol_map.append(allocator, .{
-        .key = try Value.keywordValue(allocator, "impls"),
-        .value = Value.mapValue(.empty),
+        .key = try vm.keywordValue(allocator, "impls"),
+        .value = vm.mapValue(.empty),
     });
 
     // Bind the protocol map
-    const persistent_proto = Value.mapValue(protocol_map);
+    const persistent_proto = vm.mapValue(protocol_map);
     try env.put(proto_name, persistent_proto);
 
     // Create dispatch functions for each method
@@ -422,14 +423,14 @@ pub fn evalDefProtocol(
             .parent = env,
             .ns_manager = null,
         };
-        try dispatch_env.put("__proto_ns", try Value.stringValue(allocator, current_ns));
-        try dispatch_env.put("__proto_name", try Value.stringValue(allocator, proto_name));
-        try dispatch_env.put("__method_kw", try Value.stringValue(allocator, mname));
+        try dispatch_env.put("__proto_ns", try vm.stringValue(allocator, current_ns));
+        try dispatch_env.put("__proto_name", try vm.stringValue(allocator, proto_name));
+        try dispatch_env.put("__method_kw", try vm.stringValue(allocator, mname));
 
         // Look up this method's :arglists from the sigs
         const sig_entry = sigs.items[method_idx];
         const sig_map_val = sig_entry.value;
-        const arglists_entry = getMapEntry(sig_map_val, try Value.keywordValue(allocator, "arglists"));
+        const arglists_entry = getMapEntry(sig_map_val, try vm.keywordValue(allocator, "arglists"));
         var arglists_val: ?Value = null;
         if (arglists_entry) |ae| {
             arglists_val = ae;
@@ -438,9 +439,9 @@ pub fn evalDefProtocol(
         // Body: (__protocol_dispatch__) — marker for the evaluator
         var body_list: list.List = .empty;
         defer body_list.deinit(allocator);
-        try body_list.append(allocator, try Value.symValue(allocator, "__protocol_dispatch__"));
+        try body_list.append(allocator, try vm.symValue(allocator, "__protocol_dispatch__"));
 
-        var arities: std.ArrayListUnmanaged(Value.Arity) = .empty;
+        var arities: std.ArrayListUnmanaged(vm.Arity) = .empty;
         errdefer {
             for (arities.items) |*a| {
                 a.params.deinit(allocator);
@@ -453,7 +454,7 @@ pub fn evalDefProtocol(
         if (arglists_val) |al_val| {
             // Create one arity per arglist from :sigs
             for (al_val.list_val.items) |al_item| {
-                if (al_item.type != .list) continue;
+                if (std.meta.activeTag(al_item) != .list) continue;
                 // Build params from the arglist (list of symbols)
                 var params_list: list.List = .empty;
                 defer params_list.deinit(allocator);
@@ -463,7 +464,7 @@ pub fn evalDefProtocol(
 
                 const cloned_params = try params_list.clone(allocator);
                 const cloned_body = try body_list.clone(allocator);
-                try arities.append(allocator, Value.Arity{
+                try arities.append(allocator, vm.Arity{
                     .params = cloned_params,
                     .body = cloned_body,
                     .rest_name = null,
@@ -475,18 +476,18 @@ pub fn evalDefProtocol(
         if (arities.items.len == 0) {
             var params_list: list.List = .empty;
             defer params_list.deinit(allocator);
-            try params_list.append(allocator, try Value.symValue(allocator, "this"));
+            try params_list.append(allocator, try vm.symValue(allocator, "this"));
             const rest_name = try allocator.dupe(u8, "__rest");
             const cloned_params = try params_list.clone(allocator);
             const cloned_body = try body_list.clone(allocator);
-            try arities.append(allocator, Value.Arity{
+            try arities.append(allocator, vm.Arity{
                 .params = cloned_params,
                 .body = cloned_body,
                 .rest_name = rest_name,
             });
         }
 
-        var fn_val = try Value.fnValue(allocator, arities, dispatch_env, false);
+        var fn_val = try vm.fnValue(allocator, arities, dispatch_env, false);
         const persistent_fn = try fn_val.clone(allocator);
         fn_val.deinit(allocator);
 
@@ -494,7 +495,7 @@ pub fn evalDefProtocol(
         method_idx += 1;
     }
 
-    return try Value.symValue(allocator, proto_name);
+    return try vm.symValue(allocator, proto_name);
 }
 
 /// Evaluate a (extend atype protocol mmap & more...) form.
@@ -513,8 +514,8 @@ pub fn evalExtend(
 
     // Parse: atype (index 0), then pairs of (protocol mmap) at indices 1,2, 3,4, ...
     const atype = l.items[0];
-    if (atype.type != .keyword) {
-        return makeErrorStr(allocator, "extend: first argument must be a type keyword, got {s}", .{@tagName(atype.type)});
+    if (std.meta.activeTag(atype) != .keyword) {
+        return makeErrorStr(allocator, "extend: first argument must be a type keyword, got {s}", .{@tagName(std.meta.activeTag(atype))});
     }
 
     var idx: usize = 1;
@@ -523,19 +524,19 @@ pub fn evalExtend(
         const mmap = l.items[idx + 1];
 
         // Validate protocol is a protocol (has :sigs key)
-        var sigs_kw = try Value.keywordValue(allocator, "sigs");
+        var sigs_kw = try vm.keywordValue(allocator, "sigs");
         defer sigs_kw.deinit(allocator);
         if (getMapEntry(protocol_val, sigs_kw) == null) {
             return makeErrorStr(allocator, "extend: {s} is not a protocol", .{formatValueShort(protocol_val)});
         }
 
         // Get protocol var name from :var
-        var var_kw = try Value.keywordValue(allocator, "var");
+        var var_kw = try vm.keywordValue(allocator, "var");
         defer var_kw.deinit(allocator);
         const var_sym_val = getMapEntry(protocol_val, var_kw) orelse {
             return makeErrorStr(allocator, "extend: protocol missing :var metadata", .{});
         };
-        if (var_sym_val.type != .symbol) {
+        if (std.meta.activeTag(var_sym_val) != .symbol) {
             return makeErrorStr(allocator, "extend: protocol :var is not a symbol", .{});
         }
         const proto_name = var_sym_val.sym_val;
@@ -550,12 +551,12 @@ pub fn evalExtend(
         var it = ns_mgr.namespaces.entryIterator();
         while (it.next()) |ns_entry| {
             // ns_entry.key is Value.symbol (namespace name), ns_entry.val is Value.wrapped (*Env)
-            if (ns_entry.val.type == .wrapped) {
+            if (std.meta.activeTag(ns_entry.val) == .wrapped) {
                 const ns_env_ptr: *Env = Value.unwrapPtr(*Env, ns_entry.val);
                 if (ns_env_ptr.get(proto_name)) |found| {
                     _ = found;
                     proto_ns_env = ns_env_ptr;
-                    if (ns_entry.key.type == .symbol) {
+                    if (std.meta.activeTag(ns_entry.key) == .symbol) {
                         proto_ns_name = ns_entry.key.sym_val;
                     }
                     break;
@@ -578,7 +579,7 @@ pub fn evalExtend(
         try proto_ns_env.?.put(proto_name, new_proto);
     }
 
-    return Value.nilValue();
+    return vm.nilValue();
 }
 
 /// Update a protocol map's :impls with new implementations for a type.
@@ -589,15 +590,15 @@ fn updateProtocolImpls(
     atype: Value,
     mmap: Value,
 ) anyerror!Value {
-    if (protocol_val.type != .map) return error.TypeError;
+    if (std.meta.activeTag(protocol_val) != .map) return error.TypeError;
 
     // Get current :impls map
-    var impls_kw = try Value.keywordValue(allocator, "impls");
+    var impls_kw = try vm.keywordValue(allocator, "impls");
     const current_impls = getMapEntry(protocol_val, impls_kw);
     // Don't deinit impls_kw — GC manages it, and the keyword may be referenced
-    var impls: Value.Map = .empty;
+    var impls: vm.Map = .empty;
     if (current_impls) |impls_val| {
-        if (impls_val.type == .map) {
+        if (std.meta.activeTag(impls_val) == .map) {
             // Clone existing impls
             for (impls_val.map_val.items) |entry| {
                 try impls.append(allocator, .{
@@ -611,10 +612,10 @@ fn updateProtocolImpls(
 
     // Get or create the type's method map
     const atype_clone = try atype.clone(allocator);
-    const existing_type_methods = getMapEntry(Value.mapValue(impls), atype_clone);
-    var type_methods: Value.Map = .empty;
+    const existing_type_methods = getMapEntry(vm.mapValue(impls), atype_clone);
+    var type_methods: vm.Map = .empty;
     if (existing_type_methods) |tm| {
-        if (tm.type == .map) {
+        if (std.meta.activeTag(tm) == .map) {
             for (tm.map_val.items) |entry| {
                 try type_methods.append(allocator, .{
                     .key = try entry.key.clone(allocator),
@@ -625,7 +626,7 @@ fn updateProtocolImpls(
     }
 
     // Merge new method implementations from mmap
-    if (mmap.type == .map) {
+    if (std.meta.activeTag(mmap) == .map) {
         for (mmap.map_val.items) |entry| {
             try type_methods.append(allocator, .{
                 .key = try entry.key.clone(allocator),
@@ -636,7 +637,7 @@ fn updateProtocolImpls(
 
     // Update impls with the type's methods
     // First remove existing entry for this type if any
-    var new_impls: Value.Map = .empty;
+    var new_impls: vm.Map = .empty;
     errdefer {
         for (new_impls.items) |*entry| {
             entry.key.deinit(allocator);
@@ -655,13 +656,13 @@ fn updateProtocolImpls(
     // Add the updated type methods
     try new_impls.append(allocator, .{
         .key = atype_clone,
-        .value = Value.mapValue(type_methods),
+        .value = vm.mapValue(type_methods),
     });
     // impls items are now owned by new_impls or abandoned (same allocator)
     impls = .empty;
 
     // Build new protocol map
-    var new_protocol: Value.Map = .empty;
+    var new_protocol: vm.Map = .empty;
     errdefer {
         for (new_protocol.items) |*entry| {
             entry.key.deinit(allocator);
@@ -671,7 +672,7 @@ fn updateProtocolImpls(
     }
     for (protocol_val.map_val.items) |entry| {
         // Skip :impls — we'll add our own
-        const is_impls = entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, "impls");
+        const is_impls = std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.kw_val, "impls");
         if (!is_impls) {
             try new_protocol.append(allocator, .{
                 .key = try entry.key.clone(allocator),
@@ -680,23 +681,23 @@ fn updateProtocolImpls(
         }
     }
     try new_protocol.append(allocator, .{
-        .key = try Value.keywordValue(allocator, "impls"),
-        .value = Value.mapValue(new_impls),
+        .key = try vm.keywordValue(allocator, "impls"),
+        .value = vm.mapValue(new_impls),
     });
     new_impls = .empty;
 
-    return Value.mapValue(new_protocol);
+    return vm.mapValue(new_protocol);
 }
 
 /// Format a value briefly for error messages.
 fn formatValueShort(v: Value) []const u8 {
-    return switch (v.type) {
+    return switch (std.meta.activeTag(v)) {
         .nil => "nil",
         .bool => if (v.bool_val) "true" else "false",
         .string => "(string)",
         .symbol => v.sym_val,
         .keyword => v.kw_val,
-        else => @tagName(v.type),
+        else => @tagName(std.meta.activeTag(v)),
     };
 }
 
@@ -713,7 +714,7 @@ pub fn evalExtendType(
 
     // atype is unevaluated (a keyword)
     const atype = l.items[1];
-    if (atype.type != .keyword) {
+    if (std.meta.activeTag(atype) != .keyword) {
         return makeErrorStr(allocator, "extend-type: first argument must be a type keyword", .{});
     }
 
@@ -740,8 +741,8 @@ pub fn evalExtendType(
             const item = l.items[idx];
             // Check if this looks like a method def (list starting with a symbol)
             // or a protocol reference (symbol, keyword, or evaluated value)
-            if (item.type == .list and item.list_val.items.len >= 1 and
-                item.list_val.items[0].type == .symbol)
+            if (std.meta.activeTag(item) == .list and item.list_val.items.len >= 1 and
+                std.meta.activeTag(item.list_val.items[0]) == .symbol)
             {
                 // Check if next item after this is also a method def or a protocol
                 // A method def is a list starting with a symbol
@@ -755,7 +756,7 @@ pub fn evalExtendType(
 
         // Build method map for this protocol
         // Group method definitions by name to support multi-arity methods
-        var mmap: Value.Map = .empty;
+        var mmap: vm.Map = .empty;
         errdefer {
             for (mmap.items) |*entry| {
                 entry.key.deinit(allocator);
@@ -773,9 +774,9 @@ pub fn evalExtendType(
 
         for (method_defs.items) |mi| {
             const mdef = l.items[mi];
-            if (mdef.type != .list or mdef.list_val.items.len < 2) return error.TypeError;
+            if (std.meta.activeTag(mdef) != .list or mdef.list_val.items.len < 2) return error.TypeError;
             const mname_sym = mdef.list_val.items[0];
-            if (mname_sym.type != .symbol) return error.TypeError;
+            if (std.meta.activeTag(mname_sym) != .symbol) return error.TypeError;
             const mname = mname_sym.sym_val;
 
             // Add to unique names if not already present
@@ -796,13 +797,13 @@ pub fn evalExtendType(
             // fn form: (fn arity1 arity2 ...) where arity = ([params] body...)
             var fn_form: list.List = .empty;
             defer fn_form.deinit(allocator);
-            try fn_form.append(allocator, try Value.symValue(allocator, "fn"));
+            try fn_form.append(allocator, try vm.symValue(allocator, "fn"));
 
             // For each method definition of this name, build an arity form
             for (method_defs.items) |mi| {
                 const mdef = l.items[mi];
                 const mname_sym = mdef.list_val.items[0];
-                if (mname_sym.type != .symbol) continue;
+                if (std.meta.activeTag(mname_sym) != .symbol) continue;
                 if (!std.mem.eql(u8, mname_sym.sym_val, mname)) continue;
 
                 // items[1:] of the method def: [params] body...
@@ -814,23 +815,23 @@ pub fn evalExtendType(
                     try arity_form.append(allocator, try item.clone(allocator));
                 }
                 // Append arity form directly to fn_form (not wrapped)
-                try fn_form.append(allocator, Value.listValue(arity_form));
+                try fn_form.append(allocator, vm.listValue(arity_form));
                 arity_form = .empty;
             }
 
             // Evaluate to get a function value
-            const fn_ptr = try eval.evalRec(allocator, &Value.listValue(fn_form), env, depth + 1);
+            const fn_ptr = try eval.evalRec(allocator, &vm.listValue(fn_form), env, depth + 1);
             fn_form = .empty;
             const persistent_fn = try fn_ptr.*.clone(allocator);
             fn_ptr.*.deinit(allocator);
 
             try mmap.append(allocator, .{
-                .key = try Value.keywordValue(allocator, mname),
+                .key = try vm.keywordValue(allocator, mname),
                 .value = persistent_fn,
             });
         }
 
-        try extend_args.append(allocator, Value.mapValue(mmap));
+        try extend_args.append(allocator, vm.mapValue(mmap));
         mmap = .empty;
     }
 
@@ -858,7 +859,7 @@ pub fn evalExtendProtocol(
     defer proto_ptr.*.deinit(allocator);
 
     // Validate it's a protocol
-    var sigs_kw = try Value.keywordValue(allocator, "sigs");
+    var sigs_kw = try vm.keywordValue(allocator, "sigs");
     defer sigs_kw.deinit(allocator);
     if (getMapEntry(proto_ptr.*, sigs_kw) == null) {
         return makeErrorStr(allocator, "extend-protocol: {s} is not a protocol", .{formatValueShort(proto_ptr.*)});
@@ -866,13 +867,13 @@ pub fn evalExtendProtocol(
 
     // Parse: alternating type-keyword and method definitions
     var idx: usize = 2;
-    var result: Value = Value.nilValue();
+    var result: Value = vm.nilValue();
 
     while (idx < l.items.len) {
         // Get the type keyword (unevaluated)
         const atype = l.items[idx];
-        if (atype.type != .keyword) {
-            return makeErrorStr(allocator, "extend-protocol: type must be a keyword, got {s}", .{@tagName(atype.type)});
+        if (std.meta.activeTag(atype) != .keyword) {
+            return makeErrorStr(allocator, "extend-protocol: type must be a keyword, got {s}", .{@tagName(std.meta.activeTag(atype))});
         }
         idx += 1;
 
@@ -880,7 +881,7 @@ pub fn evalExtendProtocol(
         const method_start = idx;
         while (idx < l.items.len) {
             const item = l.items[idx];
-            if (item.type == .keyword) {
+            if (std.meta.activeTag(item) == .keyword) {
                 break;
             }
             idx += 1;
@@ -889,7 +890,7 @@ pub fn evalExtendProtocol(
 
         // Build a method map by evaluating method definitions into fns
         // Group method definitions by name to support multi-arity methods
-        var mmap: Value.Map = .empty;
+        var mmap: vm.Map = .empty;
         errdefer {
             for (mmap.items) |*entry| {
                 entry.key.deinit(allocator);
@@ -908,9 +909,9 @@ pub fn evalExtendProtocol(
         var mi: usize = method_start;
         while (mi < method_end) : (mi += 1) {
             const mdef = l.items[mi];
-            if (mdef.type != .list or mdef.list_val.items.len < 2) return error.TypeError;
+            if (std.meta.activeTag(mdef) != .list or mdef.list_val.items.len < 2) return error.TypeError;
             const mname_sym = mdef.list_val.items[0];
-            if (mname_sym.type != .symbol) return error.TypeError;
+            if (std.meta.activeTag(mname_sym) != .symbol) return error.TypeError;
             const mname = mname_sym.sym_val;
 
             var found = false;
@@ -927,13 +928,13 @@ pub fn evalExtendProtocol(
             // fn form: (fn arity1 arity2 ...) where arity = ([params] body...)
             var fn_form: list.List = .empty;
             defer fn_form.deinit(allocator);
-            try fn_form.append(allocator, try Value.symValue(allocator, "fn"));
+            try fn_form.append(allocator, try vm.symValue(allocator, "fn"));
 
             mi = method_start;
             while (mi < method_end) : (mi += 1) {
                 const mdef = l.items[mi];
                 const mname_sym = mdef.list_val.items[0];
-                if (mname_sym.type != .symbol) continue;
+                if (std.meta.activeTag(mname_sym) != .symbol) continue;
                 if (!std.mem.eql(u8, mname_sym.sym_val, mname)) continue;
 
                 // items[1:] of the method def: [params] body...
@@ -943,17 +944,17 @@ pub fn evalExtendProtocol(
                 for (def_items) |item| {
                     try arity_form.append(allocator, try item.clone(allocator));
                 }
-                try fn_form.append(allocator, Value.listValue(arity_form));
+                try fn_form.append(allocator, vm.listValue(arity_form));
                 arity_form = .empty;
             }
 
-            const fn_ptr = try eval.evalRec(allocator, &Value.listValue(fn_form), env, depth + 1);
+            const fn_ptr = try eval.evalRec(allocator, &vm.listValue(fn_form), env, depth + 1);
             fn_form = .empty;
             const persistent_fn = try fn_ptr.*.clone(allocator);
             fn_ptr.*.deinit(allocator);
 
             try mmap.append(allocator, .{
-                .key = try Value.keywordValue(allocator, mname),
+                .key = try vm.keywordValue(allocator, mname),
                 .value = persistent_fn,
             });
         }
@@ -963,7 +964,7 @@ pub fn evalExtendProtocol(
         defer ext_args.deinit(allocator);
         try ext_args.append(allocator, try atype.clone(allocator));
         try ext_args.append(allocator, try proto_ptr.*.clone(allocator));
-        try ext_args.append(allocator, Value.mapValue(mmap));
+        try ext_args.append(allocator, vm.mapValue(mmap));
         mmap = .empty;
 
         // Call evalExtend directly

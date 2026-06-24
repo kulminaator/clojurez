@@ -1,9 +1,10 @@
 // General collection operations: conj, pop, last, reverse, peek, contains?
 const std = @import("std");
-const Value = @import("../../value.zig");
+const vm = @import("../../value.zig");
+const Value = vm.Value;
 const list = @import("../../list.zig");
 const vec = @import("../../vector.zig");
-const Env = Value.Env;
+const Env = vm.Env;
 const sequences = @import("sequences.zig");
 const maps = @import("maps.zig");
 const helpers = @import("helpers.zig");
@@ -15,7 +16,7 @@ pub fn core_conj(self: *const Value, args: *const list.List, env_env: *Env) anye
     _ = self;
     if (args.items.len < 2) return error.ArityError;
     const coll = args.items[0];
-    switch (coll.type) {
+    switch (std.meta.activeTag(coll)) {
         .vector => {
             var new_vec: vec.Vector = .empty;
             errdefer new_vec.deinit(env_env.allocator);
@@ -25,7 +26,7 @@ pub fn core_conj(self: *const Value, args: *const list.List, env_env: *Env) anye
             for (args.items[1..]) |item| {
                 try new_vec.append(env_env.allocator, try item.clone(env_env.allocator));
             }
-            return Value.vectorValue(new_vec);
+            return vm.vectorValue(new_vec);
         },
         .list => {
             var new_list: list.List = .empty;
@@ -39,10 +40,10 @@ pub fn core_conj(self: *const Value, args: *const list.List, env_env: *Env) anye
             for (coll.list_val.items) |item| {
                 try new_list.append(env_env.allocator, try item.clone(env_env.allocator));
             }
-            return Value.listValue(new_list);
+            return vm.listValue(new_list);
         },
         .set => {
-            var new_set: Value.Set = .empty;
+            var new_set: vm.Set = .empty;
             errdefer {
                 for (new_set.items) |*item| {
                     item.deinit(env_env.allocator);
@@ -64,10 +65,10 @@ pub fn core_conj(self: *const Value, args: *const list.List, env_env: *Env) anye
                     try new_set.append(env_env.allocator, try item.clone(env_env.allocator));
                 }
             }
-            return Value.setValue(new_set);
+            return vm.setValue(new_set);
         },
         .queue => {
-            var new_queue: Value.Queue = .empty;
+            var new_queue: vm.Queue = .empty;
             errdefer {
                 for (new_queue.items) |*item| {
                     item.deinit(env_env.allocator);
@@ -80,10 +81,10 @@ pub fn core_conj(self: *const Value, args: *const list.List, env_env: *Env) anye
             for (args.items[1..]) |item| {
                 try new_queue.append(env_env.allocator, try item.clone(env_env.allocator));
             }
-            return Value.queueValue(new_queue);
+            return vm.queueValue(new_queue);
         },
         .map => {
-            var new_map: Value.Map = .empty;
+            var new_map: vm.Map = .empty;
             errdefer {
                 for (new_map.items) |*entry| {
                     entry.key.deinit(env_env.allocator);
@@ -99,7 +100,7 @@ pub fn core_conj(self: *const Value, args: *const list.List, env_env: *Env) anye
             }
             for (args.items[1..]) |item| {
                 var entry_items: []const Value = undefined;
-                switch (item.type) {
+                switch (std.meta.activeTag(item)) {
                     .vector => entry_items = item.vec_val.items,
                     .list => entry_items = item.list_val.items,
                     else => { new_map.deinit(env_env.allocator); return error.TypeError; },
@@ -122,7 +123,7 @@ pub fn core_conj(self: *const Value, args: *const list.List, env_env: *Env) anye
                     });
                 }
             }
-            return Value.mapValue(new_map);
+            return vm.mapValue(new_map);
         },
         .record => {
             // conj on record with map entries: (conj record [k v]) or (conj record {k v})
@@ -133,7 +134,7 @@ pub fn core_conj(self: *const Value, args: *const list.List, env_env: *Env) anye
 
             for (args.items[1..]) |item| {
                 var entry_items: []const Value = undefined;
-                switch (item.type) {
+                switch (std.meta.activeTag(item)) {
                     .vector => entry_items = item.vec_val.items,
                     .list => entry_items = item.list_val.items,
                     else => return error.TypeError,
@@ -154,7 +155,7 @@ pub fn core_conj(self: *const Value, args: *const list.List, env_env: *Env) anye
             }
 
             const result = current;
-            current = Value.nilValue();
+            current = vm.nilValue();
             return result;
         },
         else => return error.TypeError,
@@ -165,9 +166,9 @@ pub fn core_pop(self: *const Value, args: *const list.List, env_env: *Env) anyer
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const coll = args.items[0];
-    switch (coll.type) {
+    switch (std.meta.activeTag(coll)) {
         .vector => {
-            if (coll.vec_val.items.len == 0) return Value.vectorValue(.empty);
+            if (coll.vec_val.items.len == 0) return vm.vectorValue(.empty);
             var new_vec: vec.Vector = .empty;
             errdefer new_vec.deinit(env_env.allocator);
             const len = coll.vec_val.items.len - 1;
@@ -175,10 +176,10 @@ pub fn core_pop(self: *const Value, args: *const list.List, env_env: *Env) anyer
             while (i < len) : (i += 1) {
                 try new_vec.append(env_env.allocator, try coll.vec_val.items[i].clone(env_env.allocator));
             }
-            return Value.vectorValue(new_vec);
+            return vm.vectorValue(new_vec);
         },
         .list => {
-            if (coll.list_val.items.len == 0) return Value.listValue(.empty);
+            if (coll.list_val.items.len == 0) return vm.listValue(.empty);
             var new_list: list.List = .empty;
             errdefer new_list.deinit(env_env.allocator);
             const len = coll.list_val.items.len - 1;
@@ -186,11 +187,11 @@ pub fn core_pop(self: *const Value, args: *const list.List, env_env: *Env) anyer
             while (i < len) : (i += 1) {
                 try new_list.append(env_env.allocator, try coll.list_val.items[i].clone(env_env.allocator));
             }
-            return Value.listValue(new_list);
+            return vm.listValue(new_list);
         },
         .queue => {
-            if (coll.queue_val.items.len == 0) return Value.queueValue(.empty);
-            var new_queue: Value.Queue = .empty;
+            if (coll.queue_val.items.len == 0) return vm.queueValue(.empty);
+            var new_queue: vm.Queue = .empty;
             errdefer {
                 for (new_queue.items) |*item| {
                     item.deinit(env_env.allocator);
@@ -201,7 +202,7 @@ pub fn core_pop(self: *const Value, args: *const list.List, env_env: *Env) anyer
             while (i < coll.queue_val.items.len) : (i += 1) {
                 try new_queue.append(env_env.allocator, try coll.queue_val.items[i].clone(env_env.allocator));
             }
-            return Value.queueValue(new_queue);
+            return vm.queueValue(new_queue);
         },
         else => return error.TypeError,
     }
@@ -215,27 +216,27 @@ pub fn core_last(self: *const Value, args: *const list.List, env_env: *Env) anye
     defer coll.deinit(allocator);
 
     // Force lazy_seq
-    if (coll.type == .lazy_seq) {
+    if (std.meta.activeTag(coll) == .lazy_seq) {
         coll = try sequences.forceLazySeqHelper(allocator, coll);
     }
 
-    switch (coll.type) {
+    switch (std.meta.activeTag(coll)) {
         .vector => {
-            if (coll.vec_val.items.len == 0) return Value.nilValue();
+            if (coll.vec_val.items.len == 0) return vm.nilValue();
             return try coll.vec_val.items[coll.vec_val.items.len - 1].clone(allocator);
         },
         .list => {
-            if (coll.list_val.items.len == 0) return Value.nilValue();
+            if (coll.list_val.items.len == 0) return vm.nilValue();
             return try coll.list_val.items[coll.list_val.items.len - 1].clone(allocator);
         },
         .string => {
             const s = coll.str_val;
-            if (s.len == 0) return Value.nilValue();
+            if (s.len == 0) return vm.nilValue();
             // Get the last UTF-8 code point
             const codepoint_count = Value.utf8CodepointCount(s);
-            const last_cp_bytes = Value.utf8CodepointAt(s, codepoint_count - 1) orelse return Value.nilValue();
-            const cp = std.unicode.utf8Decode(last_cp_bytes) catch return Value.nilValue();
-            return Value.charValue(cp);
+            const last_cp_bytes = Value.utf8CodepointAt(s, codepoint_count - 1) orelse return vm.nilValue();
+            const cp = std.unicode.utf8Decode(last_cp_bytes) catch return vm.nilValue();
+            return vm.charValue(cp);
         },
         else => return error.TypeError,
     }
@@ -245,7 +246,7 @@ pub fn core_reverse(self: *const Value, args: *const list.List, env_env: *Env) a
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const coll = args.items[0];
-    switch (coll.type) {
+    switch (std.meta.activeTag(coll)) {
         .vector => {
             var new_vec: vec.Vector = .empty;
             errdefer new_vec.deinit(env_env.allocator);
@@ -254,7 +255,7 @@ pub fn core_reverse(self: *const Value, args: *const list.List, env_env: *Env) a
                 i -= 1;
                 try new_vec.append(env_env.allocator, try coll.vec_val.items[i].clone(env_env.allocator));
             }
-            return Value.vectorValue(new_vec);
+            return vm.vectorValue(new_vec);
         },
         .list => {
             var new_list: list.List = .empty;
@@ -264,7 +265,7 @@ pub fn core_reverse(self: *const Value, args: *const list.List, env_env: *Env) a
                 i -= 1;
                 try new_list.append(env_env.allocator, try coll.list_val.items[i].clone(env_env.allocator));
             }
-            return Value.listValue(new_list);
+            return vm.listValue(new_list);
         },
         .lazy_seq => {
             var forced = try sequences.forceLazySeqHelper(env_env.allocator, coll);
@@ -276,7 +277,7 @@ pub fn core_reverse(self: *const Value, args: *const list.List, env_env: *Env) a
                 i -= 1;
                 try new_list.append(env_env.allocator, try forced.list_val.items[i].clone(env_env.allocator));
             }
-            return Value.listValue(new_list);
+            return vm.listValue(new_list);
         },
         else => return error.TypeError,
     }
@@ -286,17 +287,17 @@ pub fn core_peek(self: *const Value, args: *const list.List, env_env: *Env) anye
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const coll = args.items[0];
-    switch (coll.type) {
+    switch (std.meta.activeTag(coll)) {
         .queue => {
-            if (coll.queue_val.items.len == 0) return Value.nilValue();
+            if (coll.queue_val.items.len == 0) return vm.nilValue();
             return try coll.queue_val.items[0].clone(env_env.allocator);
         },
         .vector => {
-            if (coll.vec_val.items.len == 0) return Value.nilValue();
+            if (coll.vec_val.items.len == 0) return vm.nilValue();
             return try coll.vec_val.items[coll.vec_val.items.len - 1].clone(env_env.allocator);
         },
         .list => {
-            if (coll.list_val.items.len == 0) return Value.nilValue();
+            if (coll.list_val.items.len == 0) return vm.nilValue();
             return try coll.list_val.items[coll.list_val.items.len - 1].clone(env_env.allocator);
         },
         else => return error.TypeError,
@@ -309,52 +310,52 @@ pub fn core_contains_q(self: *const Value, args: *const list.List, _: *Env) anye
     const coll = args.items[0];
     const key = args.items[1];
 
-    switch (coll.type) {
+    switch (std.meta.activeTag(coll)) {
         .map => {
             for (coll.map_val.items) |entry| {
-                if (entry.key.equals(key)) return Value.boolValue(true);
+                if (entry.key.equals(key)) return vm.boolValue(true);
             }
-            return Value.boolValue(false);
+            return vm.boolValue(false);
         },
         .record => {
             // Check fields first, then extmap
             for (coll.record_val.?.fields.items) |entry| {
-                if (entry.key.equals(key)) return Value.boolValue(true);
+                if (entry.key.equals(key)) return vm.boolValue(true);
             }
             for (coll.record_val.?.extmap.items) |entry| {
-                if (entry.key.equals(key)) return Value.boolValue(true);
+                if (entry.key.equals(key)) return vm.boolValue(true);
             }
-            return Value.boolValue(false);
+            return vm.boolValue(false);
         },
         .set => {
             for (coll.set_val.items) |item| {
-                if (item.equals(key)) return Value.boolValue(true);
+                if (item.equals(key)) return vm.boolValue(true);
             }
-            return Value.boolValue(false);
+            return vm.boolValue(false);
         },
         .vector, .list => {
-            if (key.type != .integer) return Value.boolValue(false);
+            if (std.meta.activeTag(key) != .integer) return vm.boolValue(false);
             const idx = key.int_val;
-            if (idx < 0) return Value.boolValue(false);
-            const len: usize = switch (coll.type) {
+            if (idx < 0) return vm.boolValue(false);
+            const len: usize = switch (std.meta.activeTag(coll)) {
                 .vector => coll.vec_val.items.len,
                 .list => coll.list_val.items.len,
                 else => unreachable,
             };
-            return Value.boolValue(@as(usize, @intCast(idx)) < len);
+            return vm.boolValue(@as(usize, @intCast(idx)) < len);
         },
         else => return error.TypeError,
     }
 }
 
 pub fn registerCollectionFunctions(env: *Env) anyerror!void {
-    try env.put("conj", Value.builtinFnValue(core_conj));
-    try env.put("pop", Value.builtinFnValue(core_pop));
-    try env.put("last", Value.builtinFnValue(core_last));
-    try env.put("reverse", Value.builtinFnValue(core_reverse));
+    try env.put("conj", vm.builtinFnValue(core_conj));
+    try env.put("pop", vm.builtinFnValue(core_pop));
+    try env.put("last", vm.builtinFnValue(core_last));
+    try env.put("reverse", vm.builtinFnValue(core_reverse));
 
-    try env.put("peek", Value.builtinFnValue(core_peek));
-    try env.put("contains?", Value.builtinFnValue(core_contains_q));
+    try env.put("peek", vm.builtinFnValue(core_peek));
+    try env.put("contains?", vm.builtinFnValue(core_contains_q));
 }
 
 // ===== Unit Tests =====
@@ -366,14 +367,14 @@ test "collections::conj: vector" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var v: vec.Vector = .empty;
-    _ = v.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
-    _ = v.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
-    var vv = Value.vectorValue(v);
+    _ = v.append(std.heap.page_allocator, vm.intValue(1)) catch unreachable;
+    _ = v.append(std.heap.page_allocator, vm.intValue(2)) catch unreachable;
+    var vv = vm.vectorValue(v);
     defer vv.deinit(std.heap.page_allocator);
-    const args = makeArgs(&[_]Value{ vv, Value.intValue(3) });
+    const args = makeArgs(&[_]Value{ vv, vm.intValue(3) });
     var result = core_conj(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .vector);
+    try std.testing.expect(std.meta.activeTag(result) == .vector);
     try std.testing.expect(result.vec_val.items.len == 3);
 }
 
@@ -381,14 +382,14 @@ test "collections::conj: list" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var l: list.List = .empty;
-    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
-    _ = l.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
-    var lv = Value.listValue(l);
+    _ = l.append(std.heap.page_allocator, vm.intValue(1)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, vm.intValue(2)) catch unreachable;
+    var lv = vm.listValue(l);
     defer lv.deinit(std.heap.page_allocator);
-    const args = makeArgs(&[_]Value{ lv, Value.intValue(3) });
+    const args = makeArgs(&[_]Value{ lv, vm.intValue(3) });
     var result = core_conj(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .list);
+    try std.testing.expect(std.meta.activeTag(result) == .list);
     // conj on list adds to front: (3 1 2)
     try std.testing.expect(result.list_val.items.len == 3);
     try std.testing.expect(result.list_val.items[0].int_val == 3);
@@ -398,15 +399,15 @@ test "collections::pop: vector" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var v: vec.Vector = .empty;
-    _ = v.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
-    _ = v.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
-    _ = v.append(std.heap.page_allocator, Value.intValue(3)) catch unreachable;
-    var vv = Value.vectorValue(v);
+    _ = v.append(std.heap.page_allocator, vm.intValue(1)) catch unreachable;
+    _ = v.append(std.heap.page_allocator, vm.intValue(2)) catch unreachable;
+    _ = v.append(std.heap.page_allocator, vm.intValue(3)) catch unreachable;
+    var vv = vm.vectorValue(v);
     defer vv.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vv });
     var result = core_pop(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .vector);
+    try std.testing.expect(std.meta.activeTag(result) == .vector);
     try std.testing.expect(result.vec_val.items.len == 2);
 }
 
@@ -414,10 +415,10 @@ test "collections::last: list" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var l: list.List = .empty;
-    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
-    _ = l.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
-    _ = l.append(std.heap.page_allocator, Value.intValue(3)) catch unreachable;
-    var lv = Value.listValue(l);
+    _ = l.append(std.heap.page_allocator, vm.intValue(1)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, vm.intValue(2)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, vm.intValue(3)) catch unreachable;
+    var lv = vm.listValue(l);
     defer lv.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ lv });
     var result = core_last(testSelf(), &args, &a) catch unreachable;
@@ -428,25 +429,25 @@ test "collections::last: list" {
 test "collections::last: empty list returns nil" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
-    const args = makeArgs(&[_]Value{ Value.listValue(list.empty()) });
+    const args = makeArgs(&[_]Value{ vm.listValue(list.empty()) });
     var result = core_last(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .nil);
+    try std.testing.expect(std.meta.activeTag(result) == .nil);
 }
 
 test "collections::reverse: list" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var l: list.List = .empty;
-    _ = l.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
-    _ = l.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
-    _ = l.append(std.heap.page_allocator, Value.intValue(3)) catch unreachable;
-    var lv = Value.listValue(l);
+    _ = l.append(std.heap.page_allocator, vm.intValue(1)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, vm.intValue(2)) catch unreachable;
+    _ = l.append(std.heap.page_allocator, vm.intValue(3)) catch unreachable;
+    var lv = vm.listValue(l);
     defer lv.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ lv });
     var result = core_reverse(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.type == .list);
+    try std.testing.expect(std.meta.activeTag(result) == .list);
     try std.testing.expect(result.list_val.items[0].int_val == 3);
     try std.testing.expect(result.list_val.items[2].int_val == 1);
 }
@@ -454,11 +455,11 @@ test "collections::reverse: list" {
 test "collections::contains_q: map has key" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
-    var m: Value.Map = .empty;
-    _ = m.append(std.heap.page_allocator, .{ .key = Value.intValue(1), .value = Value.intValue(10) }) catch unreachable;
-    var mv = Value.mapValue(m);
+    var m: vm.Map = .empty;
+    _ = m.append(std.heap.page_allocator, .{ .key = vm.intValue(1), .value = vm.intValue(10) }) catch unreachable;
+    var mv = vm.mapValue(m);
     defer mv.deinit(std.heap.page_allocator);
-    const args = makeArgs(&[_]Value{ mv, Value.intValue(1) });
+    const args = makeArgs(&[_]Value{ mv, vm.intValue(1) });
     var result = core_contains_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
@@ -467,11 +468,11 @@ test "collections::contains_q: map has key" {
 test "collections::contains_q: map missing key" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
-    var m: Value.Map = .empty;
-    _ = m.append(std.heap.page_allocator, .{ .key = Value.intValue(1), .value = Value.intValue(10) }) catch unreachable;
-    var mv = Value.mapValue(m);
+    var m: vm.Map = .empty;
+    _ = m.append(std.heap.page_allocator, .{ .key = vm.intValue(1), .value = vm.intValue(10) }) catch unreachable;
+    var mv = vm.mapValue(m);
     defer mv.deinit(std.heap.page_allocator);
-    const args = makeArgs(&[_]Value{ mv, Value.intValue(99) });
+    const args = makeArgs(&[_]Value{ mv, vm.intValue(99) });
     var result = core_contains_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
@@ -481,11 +482,11 @@ test "collections::contains_q: vector index in range" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var v: vec.Vector = .empty;
-    _ = v.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
-    _ = v.append(std.heap.page_allocator, Value.intValue(2)) catch unreachable;
-    var vv = Value.vectorValue(v);
+    _ = v.append(std.heap.page_allocator, vm.intValue(1)) catch unreachable;
+    _ = v.append(std.heap.page_allocator, vm.intValue(2)) catch unreachable;
+    var vv = vm.vectorValue(v);
     defer vv.deinit(std.heap.page_allocator);
-    const args = makeArgs(&[_]Value{ vv, Value.intValue(0) });
+    const args = makeArgs(&[_]Value{ vv, vm.intValue(0) });
     var result = core_contains_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == true);
@@ -495,10 +496,10 @@ test "collections::contains_q: vector index out of range" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var v: vec.Vector = .empty;
-    _ = v.append(std.heap.page_allocator, Value.intValue(1)) catch unreachable;
-    var vv = Value.vectorValue(v);
+    _ = v.append(std.heap.page_allocator, vm.intValue(1)) catch unreachable;
+    var vv = vm.vectorValue(v);
     defer vv.deinit(std.heap.page_allocator);
-    const args = makeArgs(&[_]Value{ vv, Value.intValue(5) });
+    const args = makeArgs(&[_]Value{ vv, vm.intValue(5) });
     var result = core_contains_q(testSelf(), &args, &a) catch unreachable;
     defer result.deinit(std.heap.page_allocator);
     try std.testing.expect(result.bool_val == false);
