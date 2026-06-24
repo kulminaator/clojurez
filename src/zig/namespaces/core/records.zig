@@ -47,8 +47,8 @@ fn buildDescriptorMap(allocator: Allocator, desc: *const RecordDescriptor) anyer
     var entries: vm.Map = .empty;
     errdefer {
         for (entries.items) |*entry| {
-            entry.key.deinit(allocator);
-            entry.value.deinit(allocator);
+            vm.valueDeinit(&entry.key, allocator);
+            vm.valueDeinit(&entry.value, allocator);
         }
         allocator.free(entries.items);
     }
@@ -73,7 +73,7 @@ fn buildDescriptorMap(allocator: Allocator, desc: *const RecordDescriptor) anyer
     }
     try entries.append(allocator, .{
         .key = try vm.keywordValue(allocator, "fields"),
-        .value = vm.listValue(fields_list),
+        .value = try vm.listValue(allocator, fields_list),
     });
     fields_list = .empty;
 
@@ -83,7 +83,7 @@ fn buildDescriptorMap(allocator: Allocator, desc: *const RecordDescriptor) anyer
         .value = vm.intValue(@as(i64, @intCast(desc.field_names.items.len))),
     });
 
-    return vm.mapValue(entries);
+    return try vm.mapValue(allocator, entries);
 }
 
 /// Deinitialize a RecordDescriptor.
@@ -116,7 +116,7 @@ pub fn core_record_ctor(self: *const Value, args: *const list.List, env: *Env) a
     if (std.meta.activeTag(type_name_val) != .string) {
         return makeErrorStr(allocator, "record-ctor: type name must be a string", .{});
     }
-    const type_name = type_name_val.str_val;
+    const type_name = type_name_val.string;
 
     // Arg 1: fields map (keyword → value)
     const fields_map_val = args.items[1];
@@ -134,15 +134,15 @@ pub fn core_record_ctor(self: *const Value, args: *const list.List, env: *Env) a
     var fields: vm.Map = .empty;
     errdefer {
         for (fields.items) |*entry| {
-            entry.key.deinit(allocator);
-            entry.value.deinit(allocator);
+            vm.valueDeinit(&entry.key, allocator);
+            vm.valueDeinit(&entry.value, allocator);
         }
         allocator.free(fields.items);
     }
-    for (fields_map_val.map_val.items) |entry| {
+    for (fields_map_val.map.entries.items) |entry| {
         try fields.append(allocator, .{
-            .key = try entry.key.clone(allocator),
-            .value = try entry.value.clone(allocator),
+            .key = try vm.clone(&entry.key, allocator),
+            .value = try vm.clone(&entry.value, allocator),
         });
     }
 
@@ -150,16 +150,16 @@ pub fn core_record_ctor(self: *const Value, args: *const list.List, env: *Env) a
     var extmap: vm.Map = .empty;
     errdefer {
         for (extmap.items) |*entry| {
-            entry.key.deinit(allocator);
-            entry.value.deinit(allocator);
+            vm.valueDeinit(&entry.key, allocator);
+            vm.valueDeinit(&entry.value, allocator);
         }
         allocator.free(extmap.items);
     }
     if (std.meta.activeTag(extmap_val) == .map) {
-        for (extmap_val.map_val.items) |entry| {
+        for (extmap_val.map.entries.items) |entry| {
             try extmap.append(allocator, .{
-                .key = try entry.key.clone(allocator),
-                .value = try entry.value.clone(allocator),
+                .key = try vm.clone(&entry.key, allocator),
+                .value = try vm.clone(&entry.value, allocator),
             });
         }
     }
@@ -170,15 +170,15 @@ pub fn core_record_ctor(self: *const Value, args: *const list.List, env: *Env) a
         var m: vm.Map = .empty;
         errdefer {
             for (m.items) |*entry| {
-                entry.key.deinit(allocator);
-                entry.value.deinit(allocator);
+                vm.valueDeinit(&entry.key, allocator);
+                vm.valueDeinit(&entry.value, allocator);
             }
             allocator.free(m.items);
         }
-        for (meta_val.map_val.items) |entry| {
+        for (meta_val.map.entries.items) |entry| {
             try m.append(allocator, .{
-                .key = try entry.key.clone(allocator),
-                .value = try entry.value.clone(allocator),
+                .key = try vm.clone(&entry.key, allocator),
+                .value = try vm.clone(&entry.value, allocator),
             });
         }
         meta = m;
@@ -206,8 +206,8 @@ pub fn buildPositionalFactory(
     var fields_entries: vm.Map = .empty;
     defer {
         for (fields_entries.items) |*entry| {
-            entry.key.deinit(allocator);
-            entry.value.deinit(allocator);
+            vm.valueDeinit(&entry.key, allocator);
+            vm.valueDeinit(&entry.value, allocator);
         }
         allocator.free(fields_entries.items);
     }
@@ -223,12 +223,12 @@ pub fn buildPositionalFactory(
     defer body_list.deinit(allocator);
     try body_list.append(allocator, try vm.symValue(allocator, "record-ctor"));
     try body_list.append(allocator, try vm.stringValue(allocator, desc.full_name));
-    try body_list.append(allocator, vm.mapValue(fields_entries));
+    try body_list.append(allocator, try vm.mapValue(allocator, fields_entries));
     // fields_entries ownership transferred to the mapValue
     fields_entries = .empty;
 
     // Empty extmap: {}
-    try body_list.append(allocator, vm.mapValue(.empty));
+    try body_list.append(allocator, try vm.mapValue(allocator, .empty));
     // nil meta
     try body_list.append(allocator, vm.nilValue());
 
@@ -241,7 +241,7 @@ pub fn buildPositionalFactory(
 
     // Create the function value
     const env_copy: Env = env.*;
-    const result = try Value.fnValueSingleNamed(
+    const result = try vm.fnValueSingleNamed(
         allocator,
         params_list,
         body_list,
@@ -273,8 +273,8 @@ pub fn buildMapFactory(
     var fields_entries: vm.Map = .empty;
     defer {
         for (fields_entries.items) |*entry| {
-            entry.key.deinit(allocator);
-            entry.value.deinit(allocator);
+            vm.valueDeinit(&entry.key, allocator);
+            vm.valueDeinit(&entry.value, allocator);
         }
         allocator.free(fields_entries.items);
     }
@@ -287,7 +287,7 @@ pub fn buildMapFactory(
         try get_call.append(allocator, try vm.keywordValue(allocator, fname));
         try fields_entries.append(allocator, .{
             .key = try vm.keywordValue(allocator, fname),
-            .value = vm.listValue(get_call),
+            .value = try vm.listValue(allocator, get_call),
         });
         get_call = .empty;
     }
@@ -297,11 +297,11 @@ pub fn buildMapFactory(
     defer body_list.deinit(allocator);
     try body_list.append(allocator, try vm.symValue(allocator, "record-ctor"));
     try body_list.append(allocator, try vm.stringValue(allocator, desc.full_name));
-    try body_list.append(allocator, vm.mapValue(fields_entries));
+    try body_list.append(allocator, try vm.mapValue(allocator, fields_entries));
     fields_entries = .empty;
 
     // Empty extmap: {}
-    try body_list.append(allocator, vm.mapValue(.empty));
+    try body_list.append(allocator, try vm.mapValue(allocator, .empty));
     // nil meta
     try body_list.append(allocator, vm.nilValue());
 
@@ -314,7 +314,7 @@ pub fn buildMapFactory(
 
     // Create the function value
     const env_copy: Env = env.*;
-    const result = try Value.fnValueSingleNamed(
+    const result = try vm.fnValueSingleNamed(
         allocator,
         params_list,
         body_list,
@@ -344,21 +344,21 @@ fn processRecordProtocolSpec(
 
     // Evaluate the protocol symbol to get the protocol value
     const proto_ptr = try eval.evalRec(allocator, &proto_sym, env, depth + 1);
-    defer proto_ptr.*.deinit(allocator);
+    defer vm.valueDeinit(&proto_ptr.*, allocator);
 
     // Validate it's a protocol (has :sigs key)
     var sigs_kw = try vm.keywordValue(allocator, "sigs");
-    defer sigs_kw.deinit(allocator);
+    defer vm.valueDeinit(&sigs_kw, allocator);
     if (getMapEntry(proto_ptr.*, sigs_kw) == null) {
-        return makeErrorStr(allocator, "defrecord: {s} is not a protocol", .{proto_sym.sym_val});
+        return makeErrorStr(allocator, "defrecord: {s} is not a protocol", .{proto_sym.symbol});
     }
 
     // Build method map: group method definitions by name, build multi-arity fns
     var mmap: vm.Map = .empty;
     errdefer {
         for (mmap.items) |*entry| {
-            entry.key.deinit(allocator);
-            entry.value.deinit(allocator);
+            vm.valueDeinit(&entry.key, allocator);
+            vm.valueDeinit(&entry.value, allocator);
         }
         allocator.free(mmap.items);
     }
@@ -372,14 +372,14 @@ fn processRecordProtocolSpec(
 
     for (method_indices) |mi| {
         const mdef = l.items[mi];
-        if (std.meta.activeTag(mdef) != .list or mdef.list_val.items.len < 2) {
+        if (std.meta.activeTag(mdef) != .list or mdef.list.items.items.len < 2) {
             return makeErrorStr(allocator, "defrecord: method definition must be a list with at least a name and params", .{});
         }
-        const mname_sym = mdef.list_val.items[0];
+        const mname_sym = mdef.list.items.items[0];
         if (std.meta.activeTag(mname_sym) != .symbol) {
             return makeErrorStr(allocator, "defrecord: method name must be a symbol", .{});
         }
-        const mname = mname_sym.sym_val;
+        const mname = mname_sym.symbol;
 
         // Add to unique names if not already present
         var found = false;
@@ -403,17 +403,17 @@ fn processRecordProtocolSpec(
 
         for (method_indices) |mi| {
             const mdef = l.items[mi];
-            const mname_sym = mdef.list_val.items[0];
+            const mname_sym = mdef.list.items.items[0];
             if (std.meta.activeTag(mname_sym) != .symbol) continue;
-            if (!std.mem.eql(u8, mname_sym.sym_val, mname)) continue;
+            if (!std.mem.eql(u8, mname_sym.symbol, mname)) continue;
 
             // items[1:] of the method def: [params] body...
             // Build arity form: ([params] (let [field1 (get this :field1) ...] body...))
             var arity_form: list.List = .empty;
             defer arity_form.deinit(allocator);
-            const def_items = mdef.list_val.items[1..];
+            const def_items = mdef.list.items.items[1..];
             // params vector is def_items[0], body is def_items[1..]
-            try arity_form.append(allocator, try def_items[0].clone(allocator));
+            try arity_form.append(allocator, try vm.clone(&def_items[0], allocator));
 
             // Wrap body in let that binds field names to (get this :field_name)
             if (field_names.len > 0) {
@@ -433,33 +433,33 @@ fn processRecordProtocolSpec(
                     try get_form.append(allocator, try vm.symValue(allocator, "get"));
                     try get_form.append(allocator, try vm.symValue(allocator, "this"));
                     try get_form.append(allocator, try vm.keywordValue(allocator, fname));
-                    try bindings.append(allocator, vm.listValue(get_form));
+                    try bindings.append(allocator, try vm.listValue(allocator, get_form));
                     get_form = .empty;
                 }
-                try let_form.append(allocator, vm.listValue(bindings));
+                try let_form.append(allocator, try vm.listValue(allocator, bindings));
                 bindings = .empty;
 
                 // Append body forms
                 for (def_items[1..]) |item| {
-                    try let_form.append(allocator, try item.clone(allocator));
+                    try let_form.append(allocator, try vm.clone(&item, allocator));
                 }
-                try arity_form.append(allocator, vm.listValue(let_form));
+                try arity_form.append(allocator, try vm.listValue(allocator, let_form));
                 let_form = .empty;
             } else {
                 // No fields, just append body as-is
                 for (def_items[1..]) |item| {
-                    try arity_form.append(allocator, try item.clone(allocator));
+                    try arity_form.append(allocator, try vm.clone(&item, allocator));
                 }
             }
-            try fn_form.append(allocator, vm.listValue(arity_form));
+            try fn_form.append(allocator, try vm.listValue(allocator, arity_form));
             arity_form = .empty;
         }
 
         // Evaluate to get a function value
-        const fn_ptr = try eval.evalRec(allocator, &vm.listValue(fn_form), env, depth + 1);
+        const fn_ptr = try eval.evalRec(allocator, &(try vm.listValue(allocator, fn_form)), env, depth + 1);
         fn_form = .empty;
-        const persistent_fn = try fn_ptr.*.clone(allocator);
-        fn_ptr.*.deinit(allocator);
+        const persistent_fn = try vm.clone(&fn_ptr.*, allocator);
+        vm.valueDeinit(&fn_ptr.*, allocator);
 
         try mmap.append(allocator, .{
             .key = try vm.keywordValue(allocator, mname),
@@ -469,14 +469,14 @@ fn processRecordProtocolSpec(
 
     // Build the dispatch type keyword: :ns.RecordName
     var atype = try vm.keywordValue(allocator, full_type_name);
-    defer atype.deinit(allocator);
+    defer vm.valueDeinit(&atype, allocator);
 
     // Build extend args: (extend atype protocol mmap)
     var extend_args: list.List = .empty;
     defer extend_args.deinit(allocator);
     try extend_args.append(allocator, atype);
     try extend_args.append(allocator, proto_ptr.*);
-    try extend_args.append(allocator, vm.mapValue(mmap));
+    try extend_args.append(allocator, try vm.mapValue(allocator, mmap));
     mmap = .empty;
 
     // Call evalExtend
@@ -486,8 +486,8 @@ fn processRecordProtocolSpec(
 /// Look up a key in a map, returning the value or null.
 fn getMapEntry(m: Value, key: Value) ?Value {
     if (std.meta.activeTag(m) != .map) return null;
-    for (m.map_val.items) |entry| {
-        if (entry.key.equals(key)) return entry.value;
+    for (m.map.entries.items) |entry| {
+        if (vm.equals(entry.key, key)) return entry.value;
     }
     return null;
 }
@@ -510,7 +510,7 @@ pub fn evalDefRecord(
     if (std.meta.activeTag(name_sym) != .symbol) {
         return makeErrorStr(allocator, "defrecord: name must be a symbol", .{});
     }
-    const record_name = name_sym.sym_val;
+    const record_name = name_sym.symbol;
 
     const fields_vec = l.items[2];
 
@@ -521,12 +521,12 @@ pub fn evalDefRecord(
 
     const reserved = [_][]const u8 { "__meta", "__extmap", "__hash", "__hasheq" };
 
-    for (fields_vec.vec_val.items) |field| {
+    for (fields_vec.vector.items.items) |field| {
         if (std.meta.activeTag(field) != .symbol) {
             return makeErrorStr(allocator, "defrecord: fields must be symbols, got {s}", .{@tagName(std.meta.activeTag(field))});
         }
         for (reserved) |res| {
-            if (std.mem.eql(u8, field.sym_val, res)) {
+            if (std.mem.eql(u8, field.symbol, res)) {
                 return makeErrorStr(allocator, "defrecord: '{s}' cannot be used as a field name", .{res});
             }
         }
@@ -544,8 +544,8 @@ pub fn evalDefRecord(
     // Parse field names
     var field_names: std.ArrayListUnmanaged([]const u8) = .empty;
     errdefer allocator.free(field_names.items);
-    for (fields_vec.vec_val.items) |field| {
-        const fname = try allocator.dupe(u8, field.sym_val);
+    for (fields_vec.vector.items.items) |field| {
+        const fname = try allocator.dupe(u8, field.symbol);
         try field_names.append(allocator, fname);
     }
 
@@ -570,22 +570,22 @@ pub fn evalDefRecord(
     const desc_ptr = try allocator.create(RecordDescriptor);
     desc_ptr.* = desc;
     // Transfer ownership: desc is now owned by desc_ptr, don't deinit it
-    const wrapped_desc = Value.wrapPtr(*RecordDescriptor, desc_ptr);
+    const wrapped_desc = vm.wrapPtr(*RecordDescriptor, desc_ptr);
     const internal_name = try std.fmt.allocPrint(allocator, "__record_{s}", .{record_name});
     try eval.bindInCurrentNamespace(env, internal_name, wrapped_desc);
 
     // Build and bind factory functions
     // ->RecordName (positional factory)
     var pos_factory = try buildPositionalFactory(allocator, desc_ptr, env);
-    const persistent_pos = try pos_factory.clone(allocator);
-    pos_factory.deinit(allocator);
+    const persistent_pos = try vm.clone(&pos_factory, allocator);
+    vm.valueDeinit(&pos_factory, allocator);
     const pos_fn_name = try std.fmt.allocPrint(allocator, "->{s}", .{record_name});
     try eval.bindInCurrentNamespace(env, pos_fn_name, persistent_pos);
 
     // map->RecordName (map factory)
     var map_factory = try buildMapFactory(allocator, desc_ptr, env);
-    const persistent_map = try map_factory.clone(allocator);
-    map_factory.deinit(allocator);
+    const persistent_map = try vm.clone(&map_factory, allocator);
+    vm.valueDeinit(&map_factory, allocator);
     const map_fn_name = try std.fmt.allocPrint(allocator, "map->{s}", .{record_name});
     try eval.bindInCurrentNamespace(env, map_fn_name, persistent_map);
 

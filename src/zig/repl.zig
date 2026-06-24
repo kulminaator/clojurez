@@ -14,7 +14,7 @@ const Allocator = std.mem.Allocator;
 /// Fully realize a lazy-seq into a concrete list by repeatedly forcing one level.
 /// This avoids the deep recursion problem of forceLazySeqHelper.
 fn fullyRealizeLazySeq(allocator: Allocator, val: Value) anyerror!Value {
-    if (std.meta.activeTag(val) != .lazy_seq) return try val.clone(allocator);
+    if (std.meta.activeTag(val) != .lazy_seq) return try vm.clone(&val, allocator);
 
     var result: list.List = .empty;
     errdefer result.deinit(allocator);
@@ -26,30 +26,30 @@ fn fullyRealizeLazySeq(allocator: Allocator, val: Value) anyerror!Value {
 
         // Force one level
         var forced = try sequences.forceLazySeqHelper(allocator, current);
-        current.deinit(allocator);
+        vm.valueDeinit(&current, allocator);
 
         if (std.meta.activeTag(forced) != .list) {
-            forced.deinit(allocator);
+            vm.valueDeinit(&forced, allocator);
             break;
         }
 
         // Append elements from the forced list
-        for (forced.list_val.items) |item| {
+        for (forced.list.items.items) |item| {
             if (std.meta.activeTag(item) == .lazy_seq) {
                 // Recursively realize nested lazy-seqs
                 const realized = try fullyRealizeLazySeq(allocator, item);
                 if (std.meta.activeTag(realized) == .list) {
-                    for (realized.list_val.items) |ri| {
-                        try result.append(allocator, try ri.clone(allocator));
+                    for (realized.list.items.items) |ri| {
+                        try result.append(allocator, try vm.clone(&ri, allocator));
                     }
                 } else {
                     try result.append(allocator, realized);
                 }
             } else {
-                try result.append(allocator, try item.clone(allocator));
+                try result.append(allocator, try vm.clone(&item, allocator));
             }
         }
-        forced.deinit(allocator);
+        vm.valueDeinit(&forced, allocator);
 
         // Check if there's a lazy-seq tail to continue
         if (result.items.len > 0 and std.meta.activeTag(result.items[result.items.len - 1]) == .lazy_seq) {
@@ -59,9 +59,9 @@ fn fullyRealizeLazySeq(allocator: Allocator, val: Value) anyerror!Value {
         }
     }
     if (std.meta.activeTag(current) != .lazy_seq) {
-        current.deinit(allocator);
+        vm.valueDeinit(&current, allocator);
     }
-    return vm.listValue(result);
+    return try vm.listValue(allocator, result);
 }
 
 pub fn runRepl(allocator: Allocator, env: *vm.Env) anyerror!void {
@@ -210,12 +210,12 @@ fn evaluateAndPrint(allocator: Allocator, input: []const u8, env: *vm.Env) anyer
         };
         // Force lazy-seqs before printing so they show realized values
         var print_val: Value = undefined;
-        if (std.meta.activeTag(result_ptr) == .lazy_seq) {
+        if (std.meta.activeTag(result_ptr.*) == .lazy_seq) {
             print_val = try fullyRealizeLazySeq(allocator, result_ptr.*);
         } else {
             print_val = result_ptr.*;
         }
-        const formatted = try print_val.fmt(allocator);
+        const formatted = try vm.fmt(print_val, allocator);
         try writeStdout(formatted);
         try writeStdout("\n");
         // GC handles all cleanup — no manual deinit/free for GC-allocated values.

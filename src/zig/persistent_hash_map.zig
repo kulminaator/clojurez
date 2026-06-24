@@ -872,7 +872,7 @@ pub const PersistentHashMap = struct {
     pub fn mapEquals(self: PersistentHashMap, other: PersistentHashMap) bool {
         if (self.count != other.count) return false;
         if (self.has_null != other.has_null) return false;
-        if (self.has_null and !self.null_value.equals(other.null_value)) return false;
+        if (self.has_null and !vm.equals(self.null_value, other.null_value)) return false;
 
         if (self.count == 0) return true;
 
@@ -1726,8 +1726,8 @@ test "persistent_hash_map::string keys" {
 
     var key1 = try vm.stringValue(a, "hello");
     var key2 = try vm.stringValue(a, "world");
-    defer key1.deinit(a);
-    defer key2.deinit(a);
+    defer vm.valueDeinit(&key1, a);
+    defer vm.valueDeinit(&key2, a);
 
     m = try m.mapAssoc(a, key1, vm.intValue(1));
     m = try m.mapAssoc(a, key2, vm.intValue(2));
@@ -1743,8 +1743,8 @@ test "persistent_hash_map::keyword keys" {
 
     var kw1 = try vm.keywordValue(a, "foo");
     var kw2 = try vm.keywordValue(a, "bar");
-    defer kw1.deinit(a);
-    defer kw2.deinit(a);
+    defer vm.valueDeinit(&kw1, a);
+    defer vm.valueDeinit(&kw2, a);
 
     m = try m.mapAssoc(a, kw1, vm.intValue(100));
     m = try m.mapAssoc(a, kw2, vm.intValue(200));
@@ -1892,7 +1892,7 @@ test "persistent_hash_map::findDefault" {
     m = try m.mapAssoc(a, vm.intValue(1), vm.intValue(10));
 
     try std.testing.expect(m.findDefault(vm.intValue(1), vm.nilValue()).integer == 10);
-    try std.testing.expect(m.findDefault(vm.intValue(99), vm.nilValue()).type == .nil);
+    try std.testing.expect(std.meta.activeTag(m.findDefault(vm.intValue(99), vm.nilValue())) == .nil);
 
     // m.deinit(a); // skip deinit for standalone test (shallow copy in path copying)
 }

@@ -74,10 +74,10 @@ test "random::rand: no args returns float in [0.0, 1.0)" {
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{});
     var result = core_rand(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .float);
-    try std.testing.expect(result.float_val >= 0.0);
-    try std.testing.expect(result.float_val < 1.0);
+    try std.testing.expect(result.float >= 0.0);
+    try std.testing.expect(result.float < 1.0);
 }
 
 test "random::rand: with arg returns int in [0, n)" {
@@ -85,10 +85,10 @@ test "random::rand: with arg returns int in [0, n)" {
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vm.intValue(100) });
     var result = core_rand(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .integer);
-    try std.testing.expect(result.int_val >= 0);
-    try std.testing.expect(result.int_val < 100);
+    try std.testing.expect(result.integer >= 0);
+    try std.testing.expect(result.integer < 100);
 }
 
 test "random::rand-int: returns int in [0, n)" {
@@ -96,10 +96,10 @@ test "random::rand-int: returns int in [0, n)" {
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vm.intValue(50) });
     var result = core_rand_int(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .integer);
-    try std.testing.expect(result.int_val >= 0);
-    try std.testing.expect(result.int_val < 50);
+    try std.testing.expect(result.integer >= 0);
+    try std.testing.expect(result.integer < 50);
 }
 
 test "random::rand-int: wrong arity" {

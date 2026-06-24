@@ -20,7 +20,7 @@ pub fn clone(self: *const List, allocator: Allocator) anyerror!List {
 
 pub fn deinit(self: *List, allocator: Allocator) void {
     for (self.items) |*item| {
-        vm.deinit(item, allocator);
+        vm.valueDeinit(item, allocator);
     }
     allocator.free(self.items);
     self.* = .{};
@@ -78,6 +78,6 @@ test "list::clone: round-trip" {
     defer l.deinit(a);
     defer cloned.deinit(a);
     try std.testing.expect(cloned.items.len == 2);
-    try std.testing.expect(cloned.items[0].int_val == 1);
-    try std.testing.expect(cloned.items[1].int_val == 2);
+    try std.testing.expect(cloned.items[0].integer == 1);
+    try std.testing.expect(cloned.items[1].integer == 2);
 }

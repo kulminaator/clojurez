@@ -51,8 +51,8 @@ pub fn core_gc_stats(self: *const Value, args: *const list.List, env: *Env) anye
     var entries: std.ArrayListUnmanaged(vm.MapEntry) = .empty;
     errdefer {
         for (entries.items) |*e| {
-            e.key.deinit(allocator);
-            e.value.deinit(allocator);
+            vm.valueDeinit(&e.key, allocator);
+            vm.valueDeinit(&e.value, allocator);
         }
         entries.deinit(allocator);
     }
@@ -73,7 +73,7 @@ pub fn core_gc_stats(self: *const Value, args: *const list.List, env: *Env) anye
         try entries.append(allocator, .{ .key = key, .value = val });
     }
 
-    return vm.mapValue(entries);
+    return try vm.mapValue(allocator, entries);
 }
 
 /// Register GC functions in the zig.core namespace.

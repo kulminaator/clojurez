@@ -21,19 +21,20 @@ pub fn evalThreadLast(allocator: Allocator, forms: []const Value, env: *Env, dep
         const form = &forms[i];
 
         // Handle non-list forms: (->> x inc) => (inc x)
-        if (std.meta.activeTag(form) != .list) {
+        if (std.meta.activeTag(form.*) != .list) {
             var new_call: list.List = .empty;
             errdefer new_call.deinit(allocator);
-            try new_call.append(allocator, try form.clone(allocator));
-            try new_call.append(allocator, try current.clone(allocator));
-            const next_ptr = try eval.evalRec(allocator, &vm.listValue(new_call), env, depth);
-            current.deinit(allocator);
+            try new_call.append(allocator, try vm.clone(form, allocator));
+            try new_call.append(allocator, try vm.clone(&current, allocator));
+            const call_list = try vm.listValue(allocator, new_call);
+            const next_ptr = try eval.evalRec(allocator, &call_list, env, depth);
+            vm.valueDeinit(&current, allocator);
             current = next_ptr.*;
             continue;
         }
 
-        if (form.list_val.items.len == 0) {
-            current.deinit(allocator);
+        if (form.*.list.items.items.len == 0) {
+            vm.valueDeinit(&current, allocator);
             return error.ArityError;
         }
 
@@ -42,13 +43,14 @@ pub fn evalThreadLast(allocator: Allocator, forms: []const Value, env: *Env, dep
         errdefer new_call.deinit(allocator);
 
         var j: usize = 0;
-        while (j < form.list_val.items.len) : (j += 1) {
-            try new_call.append(allocator, try form.list_val.items[j].clone(allocator));
+        while (j < form.*.list.items.items.len) : (j += 1) {
+            try new_call.append(allocator, try vm.clone(&form.*.list.items.items[j], allocator));
         }
-        try new_call.append(allocator, try current.clone(allocator));
+        try new_call.append(allocator, try vm.clone(&current, allocator));
 
-        const next_ptr = try eval.evalRec(allocator, &vm.listValue(new_call), env, depth);
-        current.deinit(allocator);
+        const call_list = try vm.listValue(allocator, new_call);
+        const next_ptr = try eval.evalRec(allocator, &call_list, env, depth);
+        vm.valueDeinit(&current, allocator);
         current = next_ptr.*;
     }
     return current;
@@ -66,19 +68,20 @@ pub fn evalThreadFirst(allocator: Allocator, forms: []const Value, env: *Env, de
         const form = &forms[i];
 
         // Handle non-list forms: (-> x inc) => (inc x)
-        if (std.meta.activeTag(form) != .list) {
+        if (std.meta.activeTag(form.*) != .list) {
             var new_call: list.List = .empty;
             errdefer new_call.deinit(allocator);
-            try new_call.append(allocator, try form.clone(allocator));
-            try new_call.append(allocator, try current.clone(allocator));
-            const next_ptr = try eval.evalRec(allocator, &vm.listValue(new_call), env, depth);
-            current.deinit(allocator);
+            try new_call.append(allocator, try vm.clone(form, allocator));
+            try new_call.append(allocator, try vm.clone(&current, allocator));
+            const call_list = try vm.listValue(allocator, new_call);
+            const next_ptr = try eval.evalRec(allocator, &call_list, env, depth);
+            vm.valueDeinit(&current, allocator);
             current = next_ptr.*;
             continue;
         }
 
-        if (form.list_val.items.len == 0) {
-            current.deinit(allocator);
+        if (form.*.list.items.items.len == 0) {
+            vm.valueDeinit(&current, allocator);
             return error.ArityError;
         }
 
@@ -86,17 +89,18 @@ pub fn evalThreadFirst(allocator: Allocator, forms: []const Value, env: *Env, de
         var new_call: list.List = .empty;
         errdefer new_call.deinit(allocator);
 
-        try new_call.append(allocator, try form.list_val.items[0].clone(allocator));
+        try new_call.append(allocator, try vm.clone(&form.*.list.items.items[0], allocator));
         var j: usize = 1;
-        while (j < form.list_val.items.len) : (j += 1) {
+        while (j < form.*.list.items.items.len) : (j += 1) {
             if (j == 1) {
-                try new_call.append(allocator, try current.clone(allocator));
+                try new_call.append(allocator, try vm.clone(&current, allocator));
             }
-            try new_call.append(allocator, try form.list_val.items[j].clone(allocator));
+            try new_call.append(allocator, try vm.clone(&form.*.list.items.items[j], allocator));
         }
 
-        const next_ptr = try eval.evalRec(allocator, &vm.listValue(new_call), env, depth);
-        current.deinit(allocator);
+        const call_list = try vm.listValue(allocator, new_call);
+        const next_ptr = try eval.evalRec(allocator, &call_list, env, depth);
+        vm.valueDeinit(&current, allocator);
         current = next_ptr.*;
     }
     return current;
@@ -113,34 +117,35 @@ pub fn evalCondThreadFirst(allocator: Allocator, forms: []const Value, env: *Env
     var i: usize = 1;
     while (i + 1 < forms.len) : (i += 2) {
         const test_ptr = try eval.evalRec(allocator, &forms[i], env, depth);
-        if (test_ptr.isTruthy()) {
+        if (vm.isTruthy(test_ptr.*)) {
             const step = &forms[i + 1];
-            if (std.meta.activeTag(step) == .list and step.list_val.items.len > 0) {
+            if (std.meta.activeTag(step.*) == .list and step.*.list.items.items.len > 0) {
                 // Evaluate operator and args, inserting current as second arg
-                const op_ptr = try eval.evalRec(allocator, &step.list_val.items[0], env, depth);
-                defer op_ptr.*.deinit(allocator);
+                const op_ptr = try eval.evalRec(allocator, &step.*.list.items.items[0], env, depth);
+                defer vm.valueDeinit(&op_ptr.*, allocator);
                 var args: list.List = .empty;
                 errdefer args.deinit(allocator);
-                try args.append(allocator, try current.clone(allocator));
+                try args.append(allocator, try vm.clone(&current, allocator));
                 var j: usize = 1;
-                while (j < step.list_val.items.len) : (j += 1) {
-                    const arg_ptr = try eval.evalRec(allocator, &step.list_val.items[j], env, depth);
+                while (j < step.*.list.items.items.len) : (j += 1) {
+                    const arg_ptr = try eval.evalRec(allocator, &step.*.list.items.items[j], env, depth);
                     try args.append(allocator, arg_ptr.*);
                 }
                 const next = try eval.call(allocator, op_ptr, &args, env, depth);
-                current.deinit(allocator);
+                vm.valueDeinit(&current, allocator);
                 current = next;
             } else {
                 var new_call: list.List = .empty;
                 errdefer new_call.deinit(allocator);
-                try new_call.append(allocator, try step.clone(allocator));
-                try new_call.append(allocator, try current.clone(allocator));
-                const next_ptr = try eval.evalRec(allocator, &vm.listValue(new_call), env, depth);
-                current.deinit(allocator);
+                try new_call.append(allocator, try vm.clone(step, allocator));
+                try new_call.append(allocator, try vm.clone(&current, allocator));
+                const call_list = try vm.listValue(allocator, new_call);
+                const next_ptr = try eval.evalRec(allocator, &call_list, env, depth);
+                vm.valueDeinit(&current, allocator);
                 current = next_ptr.*;
             }
         }
-        test_ptr.*.deinit(allocator);
+        vm.valueDeinit(&test_ptr.*, allocator);
     }
     return current;
 }
@@ -156,34 +161,35 @@ pub fn evalCondThreadLast(allocator: Allocator, forms: []const Value, env: *Env,
     var i: usize = 1;
     while (i + 1 < forms.len) : (i += 2) {
         const test_ptr = try eval.evalRec(allocator, &forms[i], env, depth);
-        if (test_ptr.isTruthy()) {
+        if (vm.isTruthy(test_ptr.*)) {
             const step = &forms[i + 1];
-            if (std.meta.activeTag(step) == .list and step.list_val.items.len > 0) {
+            if (std.meta.activeTag(step.*) == .list and step.*.list.items.items.len > 0) {
                 // Evaluate operator and args, then call with current as last arg
-                const op_ptr = try eval.evalRec(allocator, &step.list_val.items[0], env, depth);
-                defer op_ptr.*.deinit(allocator);
+                const op_ptr = try eval.evalRec(allocator, &step.*.list.items.items[0], env, depth);
+                defer vm.valueDeinit(&op_ptr.*, allocator);
                 var args: list.List = .empty;
                 errdefer args.deinit(allocator);
                 var j: usize = 1;
-                while (j < step.list_val.items.len) : (j += 1) {
-                    const arg_ptr = try eval.evalRec(allocator, &step.list_val.items[j], env, depth);
+                while (j < step.*.list.items.items.len) : (j += 1) {
+                    const arg_ptr = try eval.evalRec(allocator, &step.*.list.items.items[j], env, depth);
                     try args.append(allocator, arg_ptr.*);
                 }
-                try args.append(allocator, try current.clone(allocator));
+                try args.append(allocator, try vm.clone(&current, allocator));
                 const next = try eval.call(allocator, op_ptr, &args, env, depth);
-                current.deinit(allocator);
+                vm.valueDeinit(&current, allocator);
                 current = next;
             } else {
                 var new_call: list.List = .empty;
                 errdefer new_call.deinit(allocator);
-                try new_call.append(allocator, try step.clone(allocator));
-                try new_call.append(allocator, try current.clone(allocator));
-                const next_ptr = try eval.evalRec(allocator, &vm.listValue(new_call), env, depth);
-                current.deinit(allocator);
+                try new_call.append(allocator, try vm.clone(step, allocator));
+                try new_call.append(allocator, try vm.clone(&current, allocator));
+                const call_list = try vm.listValue(allocator, new_call);
+                const next_ptr = try eval.evalRec(allocator, &call_list, env, depth);
+                vm.valueDeinit(&current, allocator);
                 current = next_ptr.*;
             }
         }
-        test_ptr.*.deinit(allocator);
+        vm.valueDeinit(&test_ptr.*, allocator);
     }
     return current;
 }

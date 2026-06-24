@@ -508,7 +508,7 @@ pub fn clone(val: *const Value, allocator: Allocator) anyerror!Value {
         .symbol => |s| return symValue(allocator, s),
         .keyword => |s| return keywordValue(allocator, s),
         .list => |data| return try listValue(allocator, try list.clone(&data.items, allocator)),
-        .vector => |data| return try vectorValue(allocator, try data.items.clone(allocator)),
+        .vector => |data| return try vectorValue(allocator, try vec.clone(&data.items, allocator)),
         .map => |data| {
             var new_map: Map = .empty;
             errdefer {
@@ -792,7 +792,7 @@ pub fn compare(val: Value, other: Value) i64 {
     }
 
     if (std.meta.activeTag(val) == std.meta.activeTag(other)) {
-        if (val.equals(other)) return 0;
+        if (equals(val, other)) return 0;
         if (std.meta.activeTag(val) == .string) {
             return compareStrings(val.string, other.string);
         }
@@ -997,10 +997,9 @@ pub fn consFmt(data: *const ConsData, allocator: Allocator) anyerror![]const u8 
 
         switch (tail_ref.*) {
             .cons => {
-                if (tail_ref.cons) |tail_data| {
-                    head_ref = &tail_data.head;
-                    tail_ref = &tail_data.tail;
-                } else break;
+                const tail_data = tail_ref.cons;
+                head_ref = &tail_data.head;
+                tail_ref = &tail_data.tail;
             },
             .list => {
                 for (tail_ref.list.items.items) |item| {

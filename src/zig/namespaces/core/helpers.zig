@@ -11,7 +11,7 @@ pub fn listFromVector(allocator: Allocator, v: vec.Vector) anyerror!list.List {
     var result: list.List = .empty;
     errdefer result.deinit(allocator);
     for (v.items) |item| {
-        try result.append(allocator, try item.clone(allocator));
+        try result.append(allocator, try vm.clone(&item, allocator));
     }
     return result;
 }
@@ -20,7 +20,7 @@ pub fn listFromSlice(allocator: Allocator, items: []const Value) anyerror!list.L
     var result: list.List = .empty;
     errdefer result.deinit(allocator);
     for (items) |item| {
-        try result.append(allocator, try item.clone(allocator));
+        try result.append(allocator, try vm.clone(&item, allocator));
     }
     return result;
 }
@@ -36,16 +36,16 @@ pub fn isIntF64(f: f64) bool {
 
 pub fn toInt(v: Value) anyerror!i64 {
     return switch (std.meta.activeTag(v)) {
-        .integer => v.int_val,
-        .float => @as(i64, @intFromFloat(v.float_val)),
+        .integer => v.integer,
+        .float => @as(i64, @intFromFloat(v.float)),
         else => return error.TypeError,
     };
 }
 
 pub fn toNum(v: Value) f64 {
     return switch (std.meta.activeTag(v)) {
-        .integer => @as(f64, @floatFromInt(v.int_val)),
-        .float => v.float_val,
+        .integer => @as(f64, @floatFromInt(v.integer)),
+        .float => v.float,
         else => 0,
     };
 }

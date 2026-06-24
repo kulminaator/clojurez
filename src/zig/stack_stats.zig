@@ -85,8 +85,8 @@ pub fn core_stack_stats(self: *const Value, args: *const list.List, env: *Env) a
     var entries: std.ArrayListUnmanaged(vm.MapEntry) = .empty;
     errdefer {
         for (entries.items) |*e| {
-            e.key.deinit(allocator);
-            e.value.deinit(allocator);
+            vm.valueDeinit(&e.key, allocator);
+            vm.valueDeinit(&e.value, allocator);
         }
         entries.deinit(allocator);
     }
@@ -104,7 +104,7 @@ pub fn core_stack_stats(self: *const Value, args: *const list.List, env: *Env) a
         try entries.append(allocator, .{ .key = key, .value = val });
     }
 
-    return vm.mapValue(entries);
+    return try vm.mapValue(allocator, entries);
 }
 
 /// Register the stack-stats builtin in the zig.core namespace.

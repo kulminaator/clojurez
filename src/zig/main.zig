@@ -24,7 +24,7 @@ const Allocator = std.mem.Allocator;
 
 /// Fully realize a lazy-seq into a concrete list for printing.
 fn fullyRealizeLazySeq(allocator: Allocator, val: Value) anyerror!Value {
-    if (std.meta.activeTag(val) != .lazy_seq) return try val.clone(allocator);
+    if (std.meta.activeTag(val) != .lazy_seq) return try vm.clone(&val, allocator);
 
     var result: list.List = .empty;
     errdefer result.deinit(allocator);
@@ -35,28 +35,28 @@ fn fullyRealizeLazySeq(allocator: Allocator, val: Value) anyerror!Value {
         if (std.meta.activeTag(current) != .lazy_seq) break;
 
         var forced = try sequences.forceLazySeqHelper(allocator, current);
-        current.deinit(allocator);
+        vm.valueDeinit(&current, allocator);
 
         if (std.meta.activeTag(forced) != .list) {
-            forced.deinit(allocator);
+            vm.valueDeinit(&forced, allocator);
             break;
         }
 
-        for (forced.list_val.items) |item| {
+        for (forced.list.items.items) |item| {
             if (std.meta.activeTag(item) == .lazy_seq) {
                 const realized = try fullyRealizeLazySeq(allocator, item);
                 if (std.meta.activeTag(realized) == .list) {
-                    for (realized.list_val.items) |ri| {
-                        try result.append(allocator, try ri.clone(allocator));
+                    for (realized.list.items.items) |ri| {
+                        try result.append(allocator, try vm.clone(&ri, allocator));
                     }
                 } else {
                     try result.append(allocator, realized);
                 }
             } else {
-                try result.append(allocator, try item.clone(allocator));
+                try result.append(allocator, try vm.clone(&item, allocator));
             }
         }
-        forced.deinit(allocator);
+        vm.valueDeinit(&forced, allocator);
 
         if (result.items.len > 0 and std.meta.activeTag(result.items[result.items.len - 1]) == .lazy_seq) {
             current = result.pop() orelse break;
@@ -65,9 +65,9 @@ fn fullyRealizeLazySeq(allocator: Allocator, val: Value) anyerror!Value {
         }
     }
     if (std.meta.activeTag(current) != .lazy_seq) {
-        current.deinit(allocator);
+        vm.valueDeinit(&current, allocator);
     }
-    return vm.listValue(result);
+    return try vm.listValue(allocator, result);
 }
 
 pub fn main(init: std.process.Init.Minimal) anyerror!void {
@@ -285,10 +285,10 @@ fn copyBuiltinsToNamespace(root_env: *Env, target_env: *Env) anyerror!void {
     while (it.next()) |entry| {
         if (std.meta.activeTag(entry.val) == .builtin_fn) {
             // Skip zig-only functions that should not leak into clojure.core
-            if (std.meta.activeTag(entry.key) == .symbol and std.mem.eql(u8, entry.key.sym_val, "temp-dir")) continue;
+            if (std.meta.activeTag(entry.key) == .symbol and std.mem.eql(u8, entry.key.symbol, "temp-dir")) continue;
             // builtinFnValue is just a function pointer — clone is trivial
             if (std.meta.activeTag(entry.key) == .symbol) {
-                try target_env.put(entry.key.sym_val, vm.builtinFnValue(entry.val.builtin_fn_val));
+                try target_env.put(entry.key.symbol, vm.builtinFnValue(entry.val.builtin_fn));
             }
         }
     }
@@ -307,7 +307,7 @@ fn loadCoreLibrary(allocator: Allocator, env: *Env) anyerror!void {
 
     for (forms.items) |form| {
         const result_ptr = try eval.eval(allocator, form, env);
-        result_ptr.*.deinit(allocator);
+        vm.valueDeinit(&result_ptr.*, allocator);
         // GC handles result cleanup.
         // Silent: don't print results during core library loading
     }
@@ -325,7 +325,7 @@ fn loadStringLibrary(allocator: Allocator, env: *Env) anyerror!void {
 
     for (forms.items) |form| {
         const result_ptr = try eval.eval(allocator, form, env);
-        result_ptr.*.deinit(allocator);
+        vm.valueDeinit(&result_ptr.*, allocator);
         // GC handles result cleanup.
         // Silent: don't print results during string library loading
     }
@@ -375,12 +375,12 @@ fn runExpression(allocator: Allocator, expr: []const u8, env: *Env) anyerror!voi
         const eval_env = getCurrentNsEnv(env) orelse env;
         const result_ptr = try eval.eval(allocator, form, eval_env);
 
-        if (!result_ptr.equals(vm.nilValue())) {
-            const print_val = if (std.meta.activeTag(result_ptr) == .lazy_seq) blk: {
+        if (!vm.equals(result_ptr.*, vm.nilValue())) {
+            const print_val = if (std.meta.activeTag(result_ptr.*) == .lazy_seq) blk: {
                 const realized = try fullyRealizeLazySeq(allocator, result_ptr.*);
                 break :blk realized;
             } else result_ptr.*;
-            const formatted = try print_val.fmt(allocator);
+            const formatted = try vm.fmt(print_val, allocator);
             // GC handles all cleanup — no manual deinit/free for GC-allocated values.
             try writeStdout(formatted);
             try writeStdout("\n");
@@ -432,12 +432,12 @@ fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void 
         const eval_env = getCurrentNsEnv(env) orelse env;
         const result_ptr = try eval.eval(allocator, form, eval_env);
 
-        if (print_results and !result_ptr.equals(vm.nilValue())) {
-            const print_val = if (std.meta.activeTag(result_ptr) == .lazy_seq) blk: {
+        if (print_results and !vm.equals(result_ptr.*, vm.nilValue())) {
+            const print_val = if (std.meta.activeTag(result_ptr.*) == .lazy_seq) blk: {
                 const realized = try fullyRealizeLazySeq(allocator, result_ptr.*);
                 break :blk realized;
             } else result_ptr.*;
-            const formatted = try print_val.fmt(allocator);
+            const formatted = try vm.fmt(print_val, allocator);
             // GC handles all cleanup — no manual deinit/free for GC-allocated values.
             try writeStdout(formatted);
             try writeStdout("\n");
@@ -547,7 +547,7 @@ fn runMain(allocator: Allocator, env: *Env, ns_name: []const u8) anyerror!void {
 
     for (forms.items) |form| {
         const result_ptr = try eval.eval(allocator, form, env);
-        result_ptr.*.deinit(allocator);
+        vm.valueDeinit(&result_ptr.*, allocator);
         // GC handles result cleanup.
     }
 
@@ -570,9 +570,9 @@ fn runMain(allocator: Allocator, env: *Env, ns_name: []const u8) anyerror!void {
     // Call (-main) with no arguments
     var call_list: list.List = .empty;
     defer call_list.deinit(allocator);
-    try call_list.append(allocator, try main_fn.clone(allocator));
-    const call_result_ptr = try eval.eval(allocator, vm.listValue(call_list), ns_env);
-    call_result_ptr.*.deinit(allocator);
+    try call_list.append(allocator, try vm.clone(&main_fn, allocator));
+    const call_result_ptr = try eval.eval(allocator, try vm.listValue(allocator, call_list), ns_env);
+    vm.valueDeinit(&call_result_ptr.*, allocator);
 
 }
 

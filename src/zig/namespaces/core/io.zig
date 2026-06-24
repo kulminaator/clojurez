@@ -43,7 +43,7 @@ pub fn core_temp_dir(self: *const Value, args: *const list.List, env_env: *Env) 
 
 /// Fully realize a lazy-seq into a concrete list for printing.
 fn fullyRealizeLazySeq(allocator: std.mem.Allocator, val: Value) anyerror!Value {
-    if (std.meta.activeTag(val) != .lazy_seq) return try val.clone(allocator);
+    if (std.meta.activeTag(val) != .lazy_seq) return try vm.clone(&val, allocator);
 
     var result: list.List = .empty;
     errdefer result.deinit(allocator);
@@ -54,28 +54,28 @@ fn fullyRealizeLazySeq(allocator: std.mem.Allocator, val: Value) anyerror!Value 
         if (std.meta.activeTag(current) != .lazy_seq) break;
 
         var forced = try sequences.forceLazySeqHelper(allocator, current);
-        current.deinit(allocator);
+        vm.valueDeinit(&current, allocator);
 
         if (std.meta.activeTag(forced) != .list) {
-            forced.deinit(allocator);
+            vm.valueDeinit(&forced, allocator);
             break;
         }
 
-        for (forced.list_val.items) |item| {
+        for (forced.list.items.items) |item| {
             if (std.meta.activeTag(item) == .lazy_seq) {
                 const realized = try fullyRealizeLazySeq(allocator, item);
                 if (std.meta.activeTag(realized) == .list) {
-                    for (realized.list_val.items) |ri| {
-                        try result.append(allocator, try ri.clone(allocator));
+                    for (realized.list.items.items) |ri| {
+                        try result.append(allocator, try vm.clone(&ri, allocator));
                     }
                 } else {
                     try result.append(allocator, realized);
                 }
             } else {
-                try result.append(allocator, try item.clone(allocator));
+                try result.append(allocator, try vm.clone(&item, allocator));
             }
         }
-        forced.deinit(allocator);
+        vm.valueDeinit(&forced, allocator);
 
         if (result.items.len > 0 and std.meta.activeTag(result.items[result.items.len - 1]) == .lazy_seq) {
             current = result.pop() orelse break;
@@ -84,19 +84,19 @@ fn fullyRealizeLazySeq(allocator: std.mem.Allocator, val: Value) anyerror!Value 
         }
     }
     if (std.meta.activeTag(current) != .lazy_seq) {
-        current.deinit(allocator);
+        vm.valueDeinit(&current, allocator);
     }
-    return vm.listValue(result);
+    return try vm.listValue(allocator, result);
 }
 
 /// Format a value, forcing lazy-seqs first.
 fn fmtValue(allocator: std.mem.Allocator, val: Value) anyerror![]const u8 {
     if (std.meta.activeTag(val) == .lazy_seq) {
         var realized = try fullyRealizeLazySeq(allocator, val);
-        defer realized.deinit(allocator);
-        return try realized.fmt(allocator);
+        defer vm.valueDeinit(&realized, allocator);
+        return try vm.fmt(realized, allocator);
     }
-    return try val.fmt(allocator);
+    return try vm.fmt(val, allocator);
 }
 
 pub fn core_print(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
@@ -175,7 +175,7 @@ pub fn core_slurp(self: *const Value, args: *const list.List, env_env: *Env) any
     if (std.meta.activeTag(filename) != .string) return error.TypeError;
 
     const cwd = std.Io.Dir.cwd();
-    const file = std.Io.Dir.openFile(cwd, std.Options.debug_io, filename.str_val, .{}) catch {
+    const file = std.Io.Dir.openFile(cwd, std.Options.debug_io, filename.string, .{}) catch {
         return error.FileError;
     };
     defer std.Io.File.close(file, std.Options.debug_io);
@@ -198,7 +198,7 @@ pub fn core_spit(self: *const Value, args: *const list.List, env_env: *Env) anye
     while (i < args.items.len) : (i += 1) {
         const arg = args.items[i];
         if (std.meta.activeTag(arg) == .keyword) continue;
-        const s = try arg.fmt(env_env.allocator);
+        const s = try vm.fmt(arg, env_env.allocator);
         defer env_env.allocator.free(s);
         if (std.meta.activeTag(arg) == .string and s.len >= 2 and s[0] == '"' and s[s.len - 1] == '"') {
             try content_buf.appendSlice(env_env.allocator, s[1 .. s.len - 1]);
@@ -208,7 +208,7 @@ pub fn core_spit(self: *const Value, args: *const list.List, env_env: *Env) anye
     }
 
     const cwd = std.Io.Dir.cwd();
-    const file = try std.Io.Dir.createFile(cwd, std.Options.debug_io, filename.str_val, .{});
+    const file = try std.Io.Dir.createFile(cwd, std.Options.debug_io, filename.string, .{});
     defer std.Io.File.close(file, std.Options.debug_io);
 
     var writer = file.writer(std.Options.debug_io, &[_]u8{});
@@ -234,7 +234,7 @@ pub fn core_read_string(self: *const Value, args: *const list.List, env_env: *En
     const input = args.items[0];
     if (std.meta.activeTag(input) != .string) return error.TypeError;
 
-    var p = try parser.Parser.init(env_env.allocator, input.str_val);
+    var p = try parser.Parser.init(env_env.allocator, input.string);
     defer p.deinit();
 
     const form = try p.parse();
@@ -250,7 +250,7 @@ pub fn core_load_file(self: *const Value, args: *const list.List, env_env: *Env)
 
     // Open and read the file
     const cwd = std.Io.Dir.cwd();
-    var file = std.Io.Dir.openFile(cwd, std.Options.debug_io, filename.str_val, .{}) catch {
+    var file = std.Io.Dir.openFile(cwd, std.Options.debug_io, filename.string, .{}) catch {
         return error.FileError;
     };
     defer std.Io.File.close(file, std.Options.debug_io);
@@ -274,7 +274,7 @@ pub fn core_load_file(self: *const Value, args: *const list.List, env_env: *Env)
             }
         }
         const result_ptr = try eval_mod.eval(env_env.allocator, form, eval_env);
-        last_result.deinit(env_env.allocator);
+        vm.valueDeinit(&last_result, env_env.allocator);
         last_result = result_ptr.*;
     }
 

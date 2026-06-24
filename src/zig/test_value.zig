@@ -37,22 +37,22 @@ const Queue = vm.Queue;
 test "value::intValue: creates integer value" {
     const v = intValue(42);
     try std.testing.expect(v.type == .integer);
-    try std.testing.expect(v.int_val == 42);
+    try std.testing.expect(v.integer == 42);
 }
 
 test "value::floatValue: creates float value" {
     const v = floatValue(3.14);
     try std.testing.expect(v.type == .float);
-    try std.testing.expect(v.float_val == 3.14);
+    try std.testing.expect(v.float == 3.14);
 }
 
 test "value::boolValue: true and false" {
     const t = boolValue(true);
     try std.testing.expect(t.type == .bool);
-    try std.testing.expect(t.bool_val);
+    try std.testing.expect(t.bool);
     const f = boolValue(false);
     try std.testing.expect(f.type == .bool);
-    try std.testing.expect(!f.bool_val);
+    try std.testing.expect(!f.bool);
 }
 
 test "value::nilValue: creates nil" {
@@ -65,7 +65,7 @@ test "value::stringValue: creates string" {
     var v = try stringValue(a, "hello");
     defer v.deinit(a);
     try std.testing.expect(v.type == .string);
-    try std.testing.expect(std.mem.eql(u8, v.str_val, "hello"));
+    try std.testing.expect(std.mem.eql(u8, v.string, "hello"));
 }
 
 test "value::stringValue: rejects invalid UTF-8" {
@@ -79,7 +79,7 @@ test "value::symValue: creates symbol" {
     var v = try symValue(a, "foo-bar");
     defer v.deinit(a);
     try std.testing.expect(v.type == .symbol);
-    try std.testing.expect(std.mem.eql(u8, v.sym_val, "foo-bar"));
+    try std.testing.expect(std.mem.eql(u8, v.symbol, "foo-bar"));
 }
 
 test "value::keywordValue: creates keyword" {
@@ -87,7 +87,7 @@ test "value::keywordValue: creates keyword" {
     var v = try keywordValue(a, "foo");
     defer v.deinit(a);
     try std.testing.expect(v.type == .keyword);
-    try std.testing.expect(std.mem.eql(u8, v.kw_val, "foo"));
+    try std.testing.expect(std.mem.eql(u8, v.keyword, "foo"));
 }
 
 test "value::isTruthy: nil is falsy" {
@@ -421,7 +421,7 @@ test "value::clone: integer" {
     const v = intValue(42);
     const c = try v.clone(a);
     try std.testing.expect(c.type == .integer);
-    try std.testing.expect(c.int_val == 42);
+    try std.testing.expect(c.integer == 42);
 }
 
 test "value::clone: string round-trip" {
@@ -430,7 +430,7 @@ test "value::clone: string round-trip" {
     var c = try v.clone(a);
     defer v.deinit(a);
     defer c.deinit(a);
-    try std.testing.expect(std.mem.eql(u8, c.str_val, "test"));
+    try std.testing.expect(std.mem.eql(u8, c.string, "test"));
 }
 
 test "value::clone: atom shares data" {
@@ -440,7 +440,7 @@ test "value::clone: atom shares data" {
     var c = try v.clone(a);
     defer v.deinit(a);
     defer c.deinit(a);
-    try std.testing.expect(v.atom_val == c.atom_val);
+    try std.testing.expect(v.atom == c.atom);
 }
 
 test "value::atomValue: ref count is 1" {
@@ -448,14 +448,14 @@ test "value::atomValue: ref count is 1" {
     const init = intValue(42);
     var v = try atomValue(a, init);
     defer v.deinit(a);
-    try std.testing.expect(v.atom_val.?.ref_count == 1);
+    try std.testing.expect(v.atom.?.ref_count == 1);
 }
 
 test "value::atomValueShared: increments ref count" {
     const a = std.heap.page_allocator;
     const init = intValue(42);
     var v = try atomValue(a, init);
-    const data = v.atom_val.?;
+    const data = v.atom.?;
     var shared = atomValueShared(data);
     defer v.deinit(a);
     defer shared.deinit(a);
@@ -522,7 +522,7 @@ test "value::Env::put and get" {
     const val = env.get("x");
     try std.testing.expect(val != null);
     try std.testing.expect(val.?.type == .integer);
-    try std.testing.expect(val.?.int_val == 42);
+    try std.testing.expect(val.?.integer == 42);
 }
 
 test "value::Env::get returns null for missing key" {
@@ -552,7 +552,7 @@ test "value::Env::parent lookup" {
     try parent.put("x", intValue(42));
     const val = child.get("x");
     try std.testing.expect(val != null);
-    try std.testing.expect(val.?.int_val == 42);
+    try std.testing.expect(val.?.integer == 42);
 }
 
 test "value::Env::child shadows parent" {
@@ -566,7 +566,7 @@ test "value::Env::child shadows parent" {
     try parent.put("x", intValue(42));
     try child.put("x", intValue(99));
     const val = child.get("x");
-    try std.testing.expect(val.?.int_val == 99);
+    try std.testing.expect(val.?.integer == 99);
 }
 
 test "value::Env::put overwrites existing" {
@@ -577,7 +577,7 @@ test "value::Env::put overwrites existing" {
     try env.put("x", intValue(1));
     try env.put("x", intValue(2));
     const val = env.get("x");
-    try std.testing.expect(val.?.int_val == 2);
+    try std.testing.expect(val.?.integer == 2);
 }
 
 test "value::Env::clone" {
@@ -590,7 +590,7 @@ test "value::Env::clone" {
 
     const val = cloned.get("x");
     try std.testing.expect(val != null);
-    try std.testing.expect(val.?.int_val == 42);
+    try std.testing.expect(val.?.integer == 42);
 }
 
 test "value::Env::clone preserves parent" {
@@ -605,8 +605,8 @@ test "value::Env::clone preserves parent" {
     defer child.deinit(a);
     defer cloned.deinit(a);
 
-    try std.testing.expect(cloned.get("local").?.int_val == 2);
-    try std.testing.expect(cloned.get("root").?.int_val == 1);
+    try std.testing.expect(cloned.get("local").?.integer == 2);
+    try std.testing.expect(cloned.get("root").?.integer == 1);
 }
 
 // ===== Character Type Tests =====
@@ -614,25 +614,25 @@ test "value::Env::clone preserves parent" {
 test "value::charValue: creates ASCII char" {
     const v = charValue('A');
     try std.testing.expect(v.type == .character);
-    try std.testing.expect(v.char_val == 65);
+    try std.testing.expect(v.character == 65);
 }
 
 test "value::charValue: creates zero char" {
     const v = charValue(0);
     try std.testing.expect(v.type == .character);
-    try std.testing.expect(v.char_val == 0);
+    try std.testing.expect(v.character == 0);
 }
 
 test "value::charValue: creates unicode char" {
     const v = charValue(0x00F6); // ö
     try std.testing.expect(v.type == .character);
-    try std.testing.expect(v.char_val == 0x00F6);
+    try std.testing.expect(v.character == 0x00F6);
 }
 
 test "value::charValue: creates emoji codepoint" {
     const v = charValue(0x1F468); // 👨
     try std.testing.expect(v.type == .character);
-    try std.testing.expect(v.char_val == 0x1F468);
+    try std.testing.expect(v.character == 0x1F468);
 }
 
 test "value::charValue: deinit is no-op" {
@@ -663,7 +663,7 @@ test "value::clone: char" {
     const v = charValue(0x1F468);
     var c = try v.clone(a);
     try std.testing.expect(c.type == .character);
-    try std.testing.expect(c.char_val == 0x1F468);
+    try std.testing.expect(c.character == 0x1F468);
     c.deinit(a);
 }
 
@@ -804,7 +804,7 @@ test "value::Env: function closures with captured envs survive GC" {
     try std.testing.expect(retrieved.?.type == .function);
 
     // The fn's env should still be accessible and not corrupt
-    const fn_data = retrieved.?.fn_val orelse unreachable;
+    const fn_data = retrieved.?.function orelse unreachable;
     _ = fn_data.env; // accessing the pointer should not crash
     try std.testing.expect(fn_data.env.entries.count == 0); // empty env (clone of empty root)
 }
@@ -881,7 +881,7 @@ test "value::Env: nested child envs survive GC" {
         defer allocator.free(fname);
         const found = root_env.get(fname);
         try std.testing.expect(found != null);
-        try std.testing.expect(found.?.int_val == @as(i64, @intCast(i)));
+        try std.testing.expect(found.?.integer == @as(i64, @intCast(i)));
     }
 
     // Verify values accessible through parent chain from deepest env

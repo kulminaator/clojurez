@@ -123,6 +123,8 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         .nil, .bool, .integer, .float, .character, .builtin_fn, .wrapped => {},
 
         .bigint => |bi_ptr| {
+            // Guard against null/invalid pointers
+            if (@intFromPtr(bi_ptr) < 0x1000) return;
             // Mark the BigInt struct itself
             ctx.gc.markRecursive(bi_ptr, ctx);
             // Mark the limbs array inside BigInt
@@ -132,6 +134,8 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         },
 
         .ratio => |r_ptr| {
+            // Guard against null/invalid pointers
+            if (@intFromPtr(r_ptr) < 0x1000) return;
             // Mark the Ratio struct itself
             ctx.gc.markRecursive(r_ptr, ctx);
             // Mark the limbs arrays inside num and den BigInts
@@ -174,26 +178,41 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         },
 
         .list => |data| {
+            // Mark the ListData wrapper struct itself so GC can find it
+            ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(data))), ctx);
+            // Mark the items array buffer
             if (data.items.items.len > 0) {
                 ctx.gc.markRecursive(data.items.items.ptr, ctx);
             }
         },
         .vector => |data| {
+            // Mark the VectorData wrapper struct itself so GC can find it
+            ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(data))), ctx);
+            // Mark the items array buffer
             if (data.items.items.len > 0) {
                 ctx.gc.markRecursive(data.items.items.ptr, ctx);
             }
         },
         .map => |data| {
+            // Mark the MapData wrapper struct itself so GC can find it
+            ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(data))), ctx);
+            // Mark the entries array buffer
             if (data.entries.items.len > 0) {
                 ctx.gc.markRecursive(data.entries.items.ptr, ctx);
             }
         },
         .set => |data| {
+            // Mark the SetData wrapper struct itself so GC can find it
+            ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(data))), ctx);
+            // Mark the items array buffer
             if (data.items.items.len > 0) {
                 ctx.gc.markRecursive(data.items.items.ptr, ctx);
             }
         },
         .queue => |data| {
+            // Mark the QueueData wrapper struct itself so GC can find it
+            ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(data))), ctx);
+            // Mark the items array buffer
             if (data.items.items.len > 0) {
                 ctx.gc.markRecursive(data.items.items.ptr, ctx);
             }

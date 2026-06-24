@@ -20,11 +20,11 @@ pub fn core_re_pattern(self: *const Value, args: *const list.List, env: *Env) an
     if (args.items.len != 1) return error.ArityError;
     const arg = args.items[0];
     // If already a regex, return it as-is
-    if (std.meta.activeTag(arg) == .regex) return try arg.clone(env.allocator);
+    if (std.meta.activeTag(arg) == .regex) return try vm.clone(&arg, env.allocator);
     if (std.meta.activeTag(arg) != .string) return error.TypeError;
 
     const allocator = env.allocator;
-    const s = arg.str_val;
+    const s = arg.string;
 
     // Validate the pattern by parsing it
     var ast = try regexp.parseRegex(s, allocator);
@@ -47,8 +47,8 @@ pub fn core_re_matches(self: *const Value, args: *const list.List, env: *Env) an
     const allocator = env.allocator;
     var nfa = try getNfaFromPattern(allocator, pattern);
 
-    if (try regexp.nfaMatch(&nfa, s.str_val, allocator)) {
-        return try vm.stringValue(allocator, s.str_val);
+    if (try regexp.nfaMatch(&nfa, s.string, allocator)) {
+        return try vm.stringValue(allocator, s.string);
     }
     return vm.nilValue();
 }
@@ -67,8 +67,8 @@ pub fn core_re_find(self: *const Value, args: *const list.List, env: *Env) anyer
     const allocator = env.allocator;
     var nfa = try getNfaFromPattern(allocator, pattern);
 
-    const str = s.str_val;
-    const n = Value.utf8CodepointCount(str);
+    const str = s.string;
+    const n = vm.utf8CodepointCount(str);
 
     var start: usize = 0;
     while (start < n) : (start += 1) {
@@ -96,11 +96,11 @@ pub fn core_re_seq(self: *const Value, args: *const list.List, env: *Env) anyerr
     const allocator = env.allocator;
     var nfa = try getNfaFromPattern(allocator, pattern);
 
-    const str = s.str_val;
-    const n = Value.utf8CodepointCount(str);
+    const str = s.string;
+    const n = vm.utf8CodepointCount(str);
     var matches = std.ArrayListUnmanaged(Value).empty;
     errdefer {
-        for (matches.items) |*m| m.deinit(allocator);
+        for (matches.items) |*m| vm.valueDeinit(m, allocator);
         matches.deinit(allocator);
     }
 
@@ -111,7 +111,7 @@ pub fn core_re_seq(self: *const Value, args: *const list.List, env: *Env) anyerr
         if (match_len > 0) {
             const match_str = remaining[0..match_len];
             try matches.append(allocator, try vm.stringValue(allocator, match_str));
-            const cp_count = Value.utf8CodepointCount(match_str);
+            const cp_count = vm.utf8CodepointCount(match_str);
             start += cp_count;
         } else {
             start += 1;
@@ -123,7 +123,7 @@ pub fn core_re_seq(self: *const Value, args: *const list.List, env: *Env) anyerr
     for (matches.items) |m| {
         try v.append(allocator, m);
     }
-    return vm.vectorValue(v);
+    return try vm.vectorValue(allocator, v);
 }
 
 // ============================================================
@@ -141,8 +141,8 @@ pub fn core_re_find_with_index(self: *const Value, args: *const list.List, env: 
     const allocator = env.allocator;
     var nfa = try getNfaFromPattern(allocator, pattern);
 
-    const str = s.str_val;
-    const n = Value.utf8CodepointCount(str);
+    const str = s.string;
+    const n = vm.utf8CodepointCount(str);
 
     var start: usize = 0;
     while (start < n) : (start += 1) {
@@ -150,13 +150,13 @@ pub fn core_re_find_with_index(self: *const Value, args: *const list.List, env: 
         const match_len = try regexp.nfaMatchLen(&nfa, remaining, allocator);
         if (match_len > 0) {
             const match_str = remaining[0..match_len];
-            const match_cp_count = Value.utf8CodepointCount(match_str);
+            const match_cp_count = vm.utf8CodepointCount(match_str);
             var result = vec.Vector.empty;
             errdefer result.deinit(allocator);
             try result.append(allocator, try vm.stringValue(allocator, match_str));
             try result.append(allocator, vm.intValue(@intCast(start)));
             try result.append(allocator, vm.intValue(@intCast(start + match_cp_count)));
-            return vm.vectorValue(result);
+            return try vm.vectorValue(allocator, result);
         }
     }
     return vm.nilValue();
@@ -177,11 +177,11 @@ pub fn core_re_find_all(self: *const Value, args: *const list.List, env: *Env) a
     const allocator = env.allocator;
     var nfa = try getNfaFromPattern(allocator, pattern);
 
-    const str = s.str_val;
-    const n = Value.utf8CodepointCount(str);
+    const str = s.string;
+    const n = vm.utf8CodepointCount(str);
     var results = std.ArrayListUnmanaged(Value).empty;
     errdefer {
-        for (results.items) |*m| m.deinit(allocator);
+        for (results.items) |*m| vm.valueDeinit(m, allocator);
         results.deinit(allocator);
     }
 
@@ -191,13 +191,13 @@ pub fn core_re_find_all(self: *const Value, args: *const list.List, env: *Env) a
         const match_len = try regexp.nfaMatchLen(&nfa, remaining, allocator);
         if (match_len > 0) {
             const match_str = remaining[0..match_len];
-            const match_cp_count = Value.utf8CodepointCount(match_str);
+            const match_cp_count = vm.utf8CodepointCount(match_str);
             var entry = vec.Vector.empty;
             errdefer entry.deinit(allocator);
             try entry.append(allocator, try vm.stringValue(allocator, match_str));
             try entry.append(allocator, vm.intValue(@intCast(start)));
             try entry.append(allocator, vm.intValue(@intCast(start + match_cp_count)));
-            try results.append(allocator, vm.vectorValue(entry));
+            try results.append(allocator, try vm.vectorValue(allocator, entry));
             start += match_cp_count;
         } else {
             start += 1;
@@ -209,7 +209,7 @@ pub fn core_re_find_all(self: *const Value, args: *const list.List, env: *Env) a
     for (results.items) |m| {
         try v.append(allocator, m);
     }
-    return vm.vectorValue(v);
+    return try vm.vectorValue(allocator, v);
 }
 
 // ============================================================

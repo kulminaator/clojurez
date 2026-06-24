@@ -13,53 +13,53 @@ const Allocator = std.mem.Allocator;
 pub fn unquoteProcess(allocator: Allocator, form: Value, env: *Env, depth: usize) anyerror!Value {
     switch (std.meta.activeTag(form)) {
         .list => {
-            if (form.list_val.items.len == 0) return vm.listValue(list.empty());
-            const first = form.list_val.items[0];
+            if (form.list.items.items.len == 0) return try vm.listValue(allocator, list.empty());
+            const first = form.list.items.items[0];
             if (std.meta.activeTag(first) == .symbol) {
-                if (std.mem.eql(u8, first.sym_val, "unquote")) {
-                    if (form.list_val.items.len != 2) return error.ArityError;
-                    const ptr = try eval.evalRec(allocator, &form.list_val.items[1], env, depth);
+                if (std.mem.eql(u8, first.symbol, "unquote")) {
+                    if (form.list.items.items.len != 2) return error.ArityError;
+                    const ptr = try eval.evalRec(allocator, &form.list.items.items[1], env, depth);
                     const result = ptr.*;
                     return result;
                 }
-                if (std.mem.eql(u8, first.sym_val, "unquote-splicing")) {
-                    if (form.list_val.items.len != 2) return error.ArityError;
-                    const result_ptr = try eval.evalRec(allocator, &form.list_val.items[1], env, depth);
-                    if (std.meta.activeTag(result_ptr) == .list) return result_ptr.*;
+                if (std.mem.eql(u8, first.symbol, "unquote-splicing")) {
+                    if (form.list.items.items.len != 2) return error.ArityError;
+                    const result_ptr = try eval.evalRec(allocator, &form.list.items.items[1], env, depth);
+                    if (std.meta.activeTag(result_ptr.*) == .list) return result_ptr.*;
                     return error.TypeError;
                 }
             }
             // Process each element
             var result: list.List = .empty;
             errdefer result.deinit(allocator);
-            for (form.list_val.items) |item| {
+            for (form.list.items.items) |item| {
                 // Check for unquote-splicing: splice elements directly into result
-                if (std.meta.activeTag(item) == .list and item.list_val.items.len == 2) {
-                    const uq_first = item.list_val.items[0];
-                    if (std.meta.activeTag(uq_first) == .symbol and std.mem.eql(u8, uq_first.sym_val, "unquote-splicing")) {
-                        const splice_ptr = try eval.evalRec(allocator, &item.list_val.items[1], env, depth);
-                        if (std.meta.activeTag(splice_ptr) == .list) {
-                            for (splice_ptr.list_val.items) |elem| {
-                                try result.append(allocator, try elem.clone(allocator));
+                if (std.meta.activeTag(item) == .list and item.list.items.items.len == 2) {
+                    const uq_first = item.list.items.items[0];
+                    if (std.meta.activeTag(uq_first) == .symbol and std.mem.eql(u8, uq_first.symbol, "unquote-splicing")) {
+                        const splice_ptr = try eval.evalRec(allocator, &item.list.items.items[1], env, depth);
+                        if (std.meta.activeTag(splice_ptr.*) == .list) {
+                            for (splice_ptr.*.list.items.items) |elem| {
+                                try result.append(allocator, try vm.clone(&elem, allocator));
                             }
                         }
-                        splice_ptr.*.deinit(allocator);
+                        vm.valueDeinit(&splice_ptr.*, allocator);
                         continue;
                     }
                 }
                 const processed = try unquoteProcess(allocator, item, env, depth);
                 try result.append(allocator, processed);
             }
-            return vm.listValue(result);
+            return try vm.listValue(allocator, result);
         },
         .vector => {
             var result: vec.Vector = .empty;
             errdefer result.deinit(allocator);
-            for (form.vec_val.items) |item| {
+            for (form.vector.items.items) |item| {
                 try result.append(allocator, try unquoteProcess(allocator, item, env, depth));
             }
-            return vm.vectorValue(result);
+            return try vm.vectorValue(allocator, result);
         },
-        else => return try form.clone(allocator),
+        else => return try vm.clone(&form, allocator),
     }
 }

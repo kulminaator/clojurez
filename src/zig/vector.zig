@@ -10,7 +10,7 @@ pub fn empty() Vector {
 }
 
 pub fn clone(self: *const Vector, allocator: Allocator) anyerror!Vector {
-    var result: Vector = .{};
+    var result: Vector = .empty;
     try result.ensureTotalCapacity(allocator, self.items.len);
     for (self.items) |item| {
         try result.append(allocator, try vm.clone(&item, allocator));
@@ -20,7 +20,7 @@ pub fn clone(self: *const Vector, allocator: Allocator) anyerror!Vector {
 
 pub fn deinit(self: *Vector, allocator: Allocator) void {
     for (self.items) |*item| {
-        vm.deinit(item, allocator);
+        vm.valueDeinit(item, allocator);
     }
     allocator.free(self.items);
     self.* = .{};
@@ -77,6 +77,6 @@ test "vector::clone: round-trip" {
     defer v.deinit(a);
     defer cloned.deinit(a);
     try std.testing.expect(cloned.items.len == 2);
-    try std.testing.expect(cloned.items[0].int_val == 10);
-    try std.testing.expect(cloned.items[1].int_val == 20);
+    try std.testing.expect(cloned.items[0].integer == 10);
+    try std.testing.expect(cloned.items[1].integer == 20);
 }

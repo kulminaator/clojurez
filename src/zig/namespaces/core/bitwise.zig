@@ -19,7 +19,7 @@ const Allocator = std.mem.Allocator;
 
 fn toI64(v: Value) anyerror!i64 {
     return switch (std.meta.activeTag(v)) {
-        .integer => v.int_val,
+        .integer => v.integer,
         else => return error.TypeError,
     };
 }
@@ -240,9 +240,9 @@ test "bitwise::bit-not: basic" {
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vm.intValue(5) });
     var result = core_bit_not(testSelf(), &args, &env) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .integer);
-    try std.testing.expect(result.int_val == -6);
+    try std.testing.expect(result.integer == -6);
 }
 
 test "bitwise::bit-not: -1" {
@@ -250,9 +250,9 @@ test "bitwise::bit-not: -1" {
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vm.intValue(-1) });
     var result = core_bit_not(testSelf(), &args, &env) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .integer);
-    try std.testing.expect(result.int_val == 0);
+    try std.testing.expect(result.integer == 0);
 }
 
 test "bitwise::bit-and: basic" {
@@ -260,9 +260,9 @@ test "bitwise::bit-and: basic" {
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vm.intValue(12), vm.intValue(10) });
     var result = core_bit_and(testSelf(), &args, &env) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .integer);
-    try std.testing.expect(result.int_val == 8);
+    try std.testing.expect(result.integer == 8);
 }
 
 test "bitwise::bit-and: n-ary" {
@@ -270,9 +270,9 @@ test "bitwise::bit-and: n-ary" {
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vm.intValue(1), vm.intValue(2), vm.intValue(4), vm.intValue(8) });
     var result = core_bit_and(testSelf(), &args, &env) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .integer);
-    try std.testing.expect(result.int_val == 0);
+    try std.testing.expect(result.integer == 0);
 }
 
 test "bitwise::bit-or: basic" {
@@ -280,9 +280,9 @@ test "bitwise::bit-or: basic" {
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vm.intValue(12), vm.intValue(10) });
     var result = core_bit_or(testSelf(), &args, &env) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .integer);
-    try std.testing.expect(result.int_val == 14);
+    try std.testing.expect(result.integer == 14);
 }
 
 test "bitwise::bit-or: n-ary" {
@@ -290,9 +290,9 @@ test "bitwise::bit-or: n-ary" {
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vm.intValue(1), vm.intValue(2), vm.intValue(4), vm.intValue(8) });
     var result = core_bit_or(testSelf(), &args, &env) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .integer);
-    try std.testing.expect(result.int_val == 15);
+    try std.testing.expect(result.integer == 15);
 }
 
 test "bitwise::bit-xor: basic" {
@@ -300,9 +300,9 @@ test "bitwise::bit-xor: basic" {
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vm.intValue(12), vm.intValue(10) });
     var result = core_bit_xor(testSelf(), &args, &env) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .integer);
-    try std.testing.expect(result.int_val == 6);
+    try std.testing.expect(result.integer == 6);
 }
 
 test "bitwise::bit-xor: n-ary" {
@@ -310,9 +310,9 @@ test "bitwise::bit-xor: n-ary" {
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vm.intValue(1), vm.intValue(2), vm.intValue(4), vm.intValue(8) });
     var result = core_bit_xor(testSelf(), &args, &env) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .integer);
-    try std.testing.expect(result.int_val == 15);
+    try std.testing.expect(result.integer == 15);
 }
 
 test "bitwise::bit-and-not: basic" {
@@ -320,9 +320,9 @@ test "bitwise::bit-and-not: basic" {
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vm.intValue(12), vm.intValue(10) });
     var result = core_bit_and_not(testSelf(), &args, &env) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .integer);
-    try std.testing.expect(result.int_val == 4);
+    try std.testing.expect(result.integer == 4);
 }
 
 test "bitwise::bit-and-not: n-ary" {
@@ -330,9 +330,9 @@ test "bitwise::bit-and-not: n-ary" {
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vm.intValue(15), vm.intValue(1), vm.intValue(2), vm.intValue(4) });
     var result = core_bit_and_not(testSelf(), &args, &env) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .integer);
-    try std.testing.expect(result.int_val == 8);
+    try std.testing.expect(result.integer == 8);
 }
 
 test "bitwise::bit-clear: basic" {
@@ -340,9 +340,9 @@ test "bitwise::bit-clear: basic" {
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vm.intValue(10), vm.intValue(1) });
     var result = core_bit_clear(testSelf(), &args, &env) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .integer);
-    try std.testing.expect(result.int_val == 8);
+    try std.testing.expect(result.integer == 8);
 }
 
 test "bitwise::bit-set: basic" {
@@ -350,9 +350,9 @@ test "bitwise::bit-set: basic" {
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vm.intValue(10), vm.intValue(1) });
     var result = core_bit_set(testSelf(), &args, &env) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .integer);
-    try std.testing.expect(result.int_val == 10);
+    try std.testing.expect(result.integer == 10);
 }
 
 test "bitwise::bit-flip: basic" {
@@ -360,9 +360,9 @@ test "bitwise::bit-flip: basic" {
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vm.intValue(10), vm.intValue(1) });
     var result = core_bit_flip(testSelf(), &args, &env) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .integer);
-    try std.testing.expect(result.int_val == 8);
+    try std.testing.expect(result.integer == 8);
 }
 
 test "bitwise::bit-test: true" {
@@ -370,9 +370,9 @@ test "bitwise::bit-test: true" {
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vm.intValue(10), vm.intValue(1) });
     var result = core_bit_test(testSelf(), &args, &env) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .bool);
-    try std.testing.expect(result.bool_val == true);
+    try std.testing.expect(result.bool == true);
 }
 
 test "bitwise::bit-test: false" {
@@ -380,9 +380,9 @@ test "bitwise::bit-test: false" {
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vm.intValue(10), vm.intValue(0) });
     var result = core_bit_test(testSelf(), &args, &env) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .bool);
-    try std.testing.expect(result.bool_val == false);
+    try std.testing.expect(result.bool == false);
 }
 
 test "bitwise::bit-test: -1 bit 0" {
@@ -390,9 +390,9 @@ test "bitwise::bit-test: -1 bit 0" {
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vm.intValue(-1), vm.intValue(0) });
     var result = core_bit_test(testSelf(), &args, &env) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .bool);
-    try std.testing.expect(result.bool_val == true);
+    try std.testing.expect(result.bool == true);
 }
 
 test "bitwise::bit-shift-left: basic" {
@@ -400,9 +400,9 @@ test "bitwise::bit-shift-left: basic" {
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vm.intValue(5), vm.intValue(2) });
     var result = core_bit_shift_left(testSelf(), &args, &env) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .integer);
-    try std.testing.expect(result.int_val == 20);
+    try std.testing.expect(result.integer == 20);
 }
 
 test "bitwise::bit-shift-right: signed negative" {
@@ -410,9 +410,9 @@ test "bitwise::bit-shift-right: signed negative" {
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vm.intValue(-8), vm.intValue(2) });
     var result = core_bit_shift_right(testSelf(), &args, &env) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .integer);
-    try std.testing.expect(result.int_val == -2);
+    try std.testing.expect(result.integer == -2);
 }
 
 test "bitwise::unsigned-bit-shift-right: negative value" {
@@ -420,9 +420,9 @@ test "bitwise::unsigned-bit-shift-right: negative value" {
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vm.intValue(-8), vm.intValue(2) });
     var result = core_unsigned_bit_shift_right(testSelf(), &args, &env) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .integer);
-    try std.testing.expect(result.int_val == 4611686018427387902);
+    try std.testing.expect(result.integer == 4611686018427387902);
 }
 
 test "bitwise::bit-shift-right: shift >= 64" {
@@ -430,9 +430,9 @@ test "bitwise::bit-shift-right: shift >= 64" {
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vm.intValue(-1), vm.intValue(64) });
     var result = core_bit_shift_right(testSelf(), &args, &env) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .integer);
-    try std.testing.expect(result.int_val == -1);
+    try std.testing.expect(result.integer == -1);
 }
 
 test "bitwise::bit-shift-left: shift >= 64" {
@@ -440,9 +440,9 @@ test "bitwise::bit-shift-left: shift >= 64" {
     defer env.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vm.intValue(5), vm.intValue(64) });
     var result = core_bit_shift_left(testSelf(), &args, &env) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .integer);
-    try std.testing.expect(result.int_val == 0);
+    try std.testing.expect(result.integer == 0);
 }
 
 test "bitwise::bit-not: type error on float" {

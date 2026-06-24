@@ -16,11 +16,11 @@ pub fn core_str(self: *const Value, args: *const list.List, env_env: *Env) anyer
         // Handle character type: convert code point to UTF-8 string
         if (std.meta.activeTag(arg) == .character) {
             var utf8_buf: [4]u8 = undefined;
-            const utf8_len = std.unicode.utf8Encode(arg.char_val, &utf8_buf) catch return error.InvalidUnicode;
+            const utf8_len = std.unicode.utf8Encode(arg.character, &utf8_buf) catch return error.InvalidUnicode;
             try buf.appendSlice(env_env.allocator, utf8_buf[0..utf8_len]);
             continue;
         }
-        const s = try arg.fmt(env_env.allocator);
+        const s = try vm.fmt(arg, env_env.allocator);
         defer env_env.allocator.free(s);
         // Strip quotes from string values
         if (std.meta.activeTag(arg) == .string and s.len >= 2 and s[0] == '"' and s[s.len - 1] == '"') {
@@ -36,7 +36,7 @@ pub fn core_utf8_valid_q(self: *const Value, args: *const list.List, _: *Env) an
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     if (std.meta.activeTag(args.items[0]) != .string) return error.TypeError;
-    return vm.boolValue(std.unicode.utf8ValidateSlice(args.items[0].str_val));
+    return vm.boolValue(std.unicode.utf8ValidateSlice(args.items[0].string));
 }
 
 /// subs - returns the substring of s beginning at start inclusive, and ending
@@ -47,11 +47,11 @@ pub fn core_subs(self: *const Value, args: *const list.List, env_env: *Env) anye
     if (args.items.len < 2 or args.items.len > 3) return error.ArityError;
     if (std.meta.activeTag(args.items[0]) != .string) return error.TypeError;
     const allocator = env_env.allocator;
-    const s = args.items[0].str_val;
+    const s = args.items[0].string;
     const start = try helpers.toInt(args.items[1]);
     if (start < 0) return error.IndexOutOfBounds;
 
-    const codepoint_count = Value.utf8CodepointCount(s);
+    const codepoint_count = vm.utf8CodepointCount(s);
     var end: i64 = @as(i64, @intCast(codepoint_count));
     if (args.items.len == 3) {
         end = try helpers.toInt(args.items[2]);
@@ -63,14 +63,14 @@ pub fn core_subs(self: *const Value, args: *const list.List, env_env: *Env) anye
     var byte_start: usize = 0;
     var i: i64 = 0;
     while (i < start) : (i += 1) {
-        const cp_bytes = Value.utf8CodepointAt(s, @as(usize, @intCast(i))) orelse break;
+        const cp_bytes = vm.utf8CodepointAt(s, @as(usize, @intCast(i))) orelse break;
         byte_start += cp_bytes.len;
     }
     // Find the byte offset for end code point
     var byte_end: usize = byte_start;
     i = start;
     while (i < end) : (i += 1) {
-        const cp_bytes = Value.utf8CodepointAt(s, @as(usize, @intCast(i))) orelse break;
+        const cp_bytes = vm.utf8CodepointAt(s, @as(usize, @intCast(i))) orelse break;
         byte_end += cp_bytes.len;
     }
 
@@ -123,7 +123,7 @@ pub fn str_upper_case(self: *const Value, args: *const list.List, env_env: *Env)
     const arg = args.items[0];
     if (std.meta.activeTag(arg) != .string) return error.TypeError;
     const allocator = env_env.allocator;
-    const s = arg.str_val;
+    const s = arg.string;
 
     var upper: std.ArrayList(u8) = .empty;
     errdefer upper.deinit(allocator);
@@ -146,7 +146,7 @@ pub fn str_lower_case(self: *const Value, args: *const list.List, env_env: *Env)
     const arg = args.items[0];
     if (std.meta.activeTag(arg) != .string) return error.TypeError;
     const allocator = env_env.allocator;
-    const s = arg.str_val;
+    const s = arg.string;
 
     var lower: std.ArrayList(u8) = .empty;
     errdefer lower.deinit(allocator);
@@ -169,7 +169,7 @@ pub fn str_capitalize(self: *const Value, args: *const list.List, env_env: *Env)
     const arg = args.items[0];
     if (std.meta.activeTag(arg) != .string) return error.TypeError;
     const allocator = env_env.allocator;
-    const s = arg.str_val;
+    const s = arg.string;
 
     if (s.len == 0) return vm.stringValue(allocator, "");
 
@@ -196,17 +196,17 @@ pub fn str_trim(self: *const Value, args: *const list.List, env_env: *Env) anyer
     const arg = args.items[0];
     if (std.meta.activeTag(arg) != .string) return error.TypeError;
     const allocator = env_env.allocator;
-    const s = arg.str_val;
+    const s = arg.string;
 
     if (s.len == 0) return vm.stringValue(allocator, "");
 
-    const codepoint_count = Value.utf8CodepointCount(s);
+    const codepoint_count = vm.utf8CodepointCount(s);
     if (codepoint_count == 0) return vm.stringValue(allocator, "");
 
     // Find first non-whitespace code point index
     var start: usize = 0;
     while (start < codepoint_count) : (start += 1) {
-        const cp_bytes = Value.utf8CodepointAt(s, start) orelse break;
+        const cp_bytes = vm.utf8CodepointAt(s, start) orelse break;
         const cp = std.unicode.utf8Decode(cp_bytes) catch break;
         if (!isWhitespaceCp(cp)) break;
     }
@@ -215,7 +215,7 @@ pub fn str_trim(self: *const Value, args: *const list.List, env_env: *Env) anyer
     var end: usize = codepoint_count;
     while (end > 0) {
         end -= 1;
-        const cp_bytes = Value.utf8CodepointAt(s, end) orelse break;
+        const cp_bytes = vm.utf8CodepointAt(s, end) orelse break;
         const cp = std.unicode.utf8Decode(cp_bytes) catch break;
         if (!isWhitespaceCp(cp)) break;
     }
@@ -226,13 +226,13 @@ pub fn str_trim(self: *const Value, args: *const list.List, env_env: *Env) anyer
     var byte_start: usize = 0;
     var i: usize = 0;
     while (i < start) : (i += 1) {
-        const cp_bytes = Value.utf8CodepointAt(s, i) orelse break;
+        const cp_bytes = vm.utf8CodepointAt(s, i) orelse break;
         byte_start += cp_bytes.len;
     }
     var byte_end: usize = byte_start;
     i = start;
     while (i <= end) : (i += 1) {
-        const cp_bytes = Value.utf8CodepointAt(s, i) orelse break;
+        const cp_bytes = vm.utf8CodepointAt(s, i) orelse break;
         byte_end += cp_bytes.len;
     }
 
@@ -246,17 +246,17 @@ pub fn str_triml(self: *const Value, args: *const list.List, env_env: *Env) anye
     const arg = args.items[0];
     if (std.meta.activeTag(arg) != .string) return error.TypeError;
     const allocator = env_env.allocator;
-    const s = arg.str_val;
+    const s = arg.string;
 
     if (s.len == 0) return vm.stringValue(allocator, "");
 
-    const codepoint_count = Value.utf8CodepointCount(s);
+    const codepoint_count = vm.utf8CodepointCount(s);
     if (codepoint_count == 0) return vm.stringValue(allocator, "");
 
     // Find first non-whitespace code point index
     var start: usize = 0;
     while (start < codepoint_count) : (start += 1) {
-        const cp_bytes = Value.utf8CodepointAt(s, start) orelse break;
+        const cp_bytes = vm.utf8CodepointAt(s, start) orelse break;
         const cp = std.unicode.utf8Decode(cp_bytes) catch break;
         if (!isWhitespaceCp(cp)) break;
     }
@@ -267,7 +267,7 @@ pub fn str_triml(self: *const Value, args: *const list.List, env_env: *Env) anye
     var byte_start: usize = 0;
     var i: usize = 0;
     while (i < start) : (i += 1) {
-        const cp_bytes = Value.utf8CodepointAt(s, i) orelse break;
+        const cp_bytes = vm.utf8CodepointAt(s, i) orelse break;
         byte_start += cp_bytes.len;
     }
 
@@ -281,18 +281,18 @@ pub fn str_trimr(self: *const Value, args: *const list.List, env_env: *Env) anye
     const arg = args.items[0];
     if (std.meta.activeTag(arg) != .string) return error.TypeError;
     const allocator = env_env.allocator;
-    const s = arg.str_val;
+    const s = arg.string;
 
     if (s.len == 0) return vm.stringValue(allocator, "");
 
-    const codepoint_count = Value.utf8CodepointCount(s);
+    const codepoint_count = vm.utf8CodepointCount(s);
     if (codepoint_count == 0) return vm.stringValue(allocator, "");
 
     // Find last non-whitespace code point index
     var end: usize = codepoint_count;
     while (end > 0) {
         end -= 1;
-        const cp_bytes = Value.utf8CodepointAt(s, end) orelse break;
+        const cp_bytes = vm.utf8CodepointAt(s, end) orelse break;
         const cp = std.unicode.utf8Decode(cp_bytes) catch break;
         if (!isWhitespaceCp(cp)) break;
     }
@@ -303,7 +303,7 @@ pub fn str_trimr(self: *const Value, args: *const list.List, env_env: *Env) anye
     var byte_end: usize = 0;
     var i: usize = 0;
     while (i <= end) : (i += 1) {
-        const cp_bytes = Value.utf8CodepointAt(s, i) orelse break;
+        const cp_bytes = vm.utf8CodepointAt(s, i) orelse break;
         byte_end += cp_bytes.len;
     }
 
@@ -317,7 +317,7 @@ pub fn str_trim_newline(self: *const Value, args: *const list.List, env_env: *En
     const arg = args.items[0];
     if (std.meta.activeTag(arg) != .string) return error.TypeError;
     const allocator = env_env.allocator;
-    const s = arg.str_val;
+    const s = arg.string;
 
     if (s.len == 0) return vm.stringValue(allocator, "");
 
@@ -346,7 +346,7 @@ pub fn str_blank_q(self: *const Value, args: *const list.List, env_env: *Env) an
     // nil is blank
     if (std.meta.activeTag(arg) == .nil) return vm.boolValue(true);
     if (std.meta.activeTag(arg) != .string) return error.TypeError;
-    const s = arg.str_val;
+    const s = arg.string;
 
     if (s.len == 0) return vm.boolValue(true);
 
@@ -367,9 +367,9 @@ pub fn str_index_of(self: *const Value, args: *const list.List, env_env: *Env) a
     if (args.items.len < 2 or args.items.len > 3) return error.ArityError;
     const s_arg = args.items[0];
     if (std.meta.activeTag(s_arg) != .string) return error.TypeError;
-    const s = s_arg.str_val;
+    const s = s_arg.string;
 
-    const codepoint_count = Value.utf8CodepointCount(s);
+    const codepoint_count = vm.utf8CodepointCount(s);
 
     // Handle from_index as i64 to support negative values (clamped to 0)
     var from_index: i64 = 0;
@@ -386,7 +386,7 @@ pub fn str_index_of(self: *const Value, args: *const list.List, env_env: *Env) a
 
     // Search for substring
     if (std.meta.activeTag(args.items[1]) == .string) {
-        const needle = args.items[1].str_val;
+        const needle = args.items[1].string;
         // Empty needle: return from_index clamped to codepoint count
         if (needle.len == 0) return vm.intValue(@as(i64, @intCast(from_index_clamped)));
 
@@ -394,7 +394,7 @@ pub fn str_index_of(self: *const Value, args: *const list.List, env_env: *Env) a
         var byte_from: usize = 0;
         var i: usize = 0;
         while (i < from_index_clamped) : (i += 1) {
-            const cp_bytes = Value.utf8CodepointAt(s, i) orelse break;
+            const cp_bytes = vm.utf8CodepointAt(s, i) orelse break;
             byte_from += cp_bytes.len;
         }
 
@@ -405,7 +405,7 @@ pub fn str_index_of(self: *const Value, args: *const list.List, env_env: *Env) a
             var cp_idx: usize = 0;
             var byte_pos: usize = 0;
             while (byte_pos < absolute_byte) {
-                const cp_bytes = Value.utf8CodepointAt(s, cp_idx) orelse break;
+                const cp_bytes = vm.utf8CodepointAt(s, cp_idx) orelse break;
                 byte_pos += cp_bytes.len;
                 cp_idx += 1;
             }
@@ -415,14 +415,14 @@ pub fn str_index_of(self: *const Value, args: *const list.List, env_env: *Env) a
     }
     // Search for character
     if (std.meta.activeTag(args.items[1]) == .character) {
-        const ch = args.items[1].char_val;
+        const ch = args.items[1].character;
         var utf8_needle: [4]u8 = undefined;
         const needle_len = std.unicode.utf8Encode(ch, &utf8_needle) catch return error.InvalidUnicode;
 
         var byte_from: usize = 0;
         var i: usize = 0;
         while (i < from_index_clamped) : (i += 1) {
-            const cp_bytes = Value.utf8CodepointAt(s, i) orelse break;
+            const cp_bytes = vm.utf8CodepointAt(s, i) orelse break;
             byte_from += cp_bytes.len;
         }
 
@@ -432,7 +432,7 @@ pub fn str_index_of(self: *const Value, args: *const list.List, env_env: *Env) a
             var cp_idx: usize = 0;
             var byte_pos: usize = 0;
             while (byte_pos < absolute_byte) {
-                const cp_bytes = Value.utf8CodepointAt(s, cp_idx) orelse break;
+                const cp_bytes = vm.utf8CodepointAt(s, cp_idx) orelse break;
                 byte_pos += cp_bytes.len;
                 cp_idx += 1;
             }
@@ -451,9 +451,9 @@ pub fn str_last_index_of(self: *const Value, args: *const list.List, env_env: *E
     if (args.items.len < 2 or args.items.len > 3) return error.ArityError;
     const s_arg = args.items[0];
     if (std.meta.activeTag(s_arg) != .string) return error.TypeError;
-    const s = s_arg.str_val;
+    const s = s_arg.string;
 
-    const codepoint_count = Value.utf8CodepointCount(s);
+    const codepoint_count = vm.utf8CodepointCount(s);
 
     // Handle from_index as i64 to support negative values (return nil)
     var from_index: i64 = @as(i64, @intCast(codepoint_count));
@@ -472,13 +472,13 @@ pub fn str_last_index_of(self: *const Value, args: *const list.List, env_env: *E
     var byte_from: usize = 0;
     var i: usize = 0;
     while (i < from_index_clamped) : (i += 1) {
-        const cp_bytes = Value.utf8CodepointAt(s, i) orelse break;
+        const cp_bytes = vm.utf8CodepointAt(s, i) orelse break;
         byte_from += cp_bytes.len;
     }
 
     // Search for substring
     if (std.meta.activeTag(args.items[1]) == .string) {
-        const needle = args.items[1].str_val;
+        const needle = args.items[1].string;
         if (needle.len == 0) return vm.intValue(@as(i64, @intCast(from_index_clamped)));
 
         // Find last occurrence where start byte <= byte_from.
@@ -503,7 +503,7 @@ pub fn str_last_index_of(self: *const Value, args: *const list.List, env_env: *E
             var cp_idx: usize = 0;
             var byte_pos: usize = 0;
             while (byte_pos < best) {
-                const cp_bytes = Value.utf8CodepointAt(s, cp_idx) orelse break;
+                const cp_bytes = vm.utf8CodepointAt(s, cp_idx) orelse break;
                 byte_pos += cp_bytes.len;
                 cp_idx += 1;
             }
@@ -513,7 +513,7 @@ pub fn str_last_index_of(self: *const Value, args: *const list.List, env_env: *E
     }
     // Search for character
     if (std.meta.activeTag(args.items[1]) == .character) {
-        const ch = args.items[1].char_val;
+        const ch = args.items[1].character;
         var utf8_needle: [4]u8 = undefined;
         const needle_len = std.unicode.utf8Encode(ch, &utf8_needle) catch return error.InvalidUnicode;
 
@@ -537,7 +537,7 @@ pub fn str_last_index_of(self: *const Value, args: *const list.List, env_env: *E
             var cp_idx: usize = 0;
             var byte_pos: usize = 0;
             while (byte_pos < best) {
-                const cp_bytes = Value.utf8CodepointAt(s, cp_idx) orelse break;
+                const cp_bytes = vm.utf8CodepointAt(s, cp_idx) orelse break;
                 byte_pos += cp_bytes.len;
                 cp_idx += 1;
             }
@@ -555,8 +555,8 @@ pub fn str_starts_with_q(self: *const Value, args: *const list.List, _: *Env) an
     const s_arg = args.items[0];
     const substr_arg = args.items[1];
     if (std.meta.activeTag(s_arg) != .string or std.meta.activeTag(substr_arg) != .string) return error.TypeError;
-    const s = s_arg.str_val;
-    const substr = substr_arg.str_val;
+    const s = s_arg.string;
+    const substr = substr_arg.string;
     return vm.boolValue(std.mem.startsWith(u8, s, substr));
 }
 
@@ -567,8 +567,8 @@ pub fn str_ends_with_q(self: *const Value, args: *const list.List, _: *Env) anye
     const s_arg = args.items[0];
     const substr_arg = args.items[1];
     if (std.meta.activeTag(s_arg) != .string or std.meta.activeTag(substr_arg) != .string) return error.TypeError;
-    const s = s_arg.str_val;
-    const substr = substr_arg.str_val;
+    const s = s_arg.string;
+    const substr = substr_arg.string;
     return vm.boolValue(std.mem.endsWith(u8, s, substr));
 }
 
@@ -579,8 +579,8 @@ pub fn str_includes_q(self: *const Value, args: *const list.List, _: *Env) anyer
     const s_arg = args.items[0];
     const substr_arg = args.items[1];
     if (std.meta.activeTag(s_arg) != .string or std.meta.activeTag(substr_arg) != .string) return error.TypeError;
-    const s = s_arg.str_val;
-    const substr = substr_arg.str_val;
+    const s = s_arg.string;
+    const substr = substr_arg.string;
     return vm.boolValue(std.mem.indexOf(u8, s, substr) != null);
 }
 
@@ -613,9 +613,9 @@ test "strings::str: single string strips quotes" {
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = core_str(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .string);
-    try std.testing.expect(std.mem.eql(u8, result.str_val, "hello"));
+    try std.testing.expect(std.mem.eql(u8, result.string, "hello"));
 }
 
 test "strings::str: concatenates multiple values" {
@@ -627,8 +627,8 @@ test "strings::str: concatenates multiple values" {
     defer s2.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s1, s2 });
     var result = core_str(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.str_val, "helloworld"));
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
+    try std.testing.expect(std.mem.eql(u8, result.string, "helloworld"));
 }
 
 test "strings::str: integer converted to string" {
@@ -636,8 +636,8 @@ test "strings::str: integer converted to string" {
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vm.intValue(42) });
     var result = core_str(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.str_val, "42"));
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
+    try std.testing.expect(std.mem.eql(u8, result.string, "42"));
 }
 
 test "strings::str: no args returns empty string" {
@@ -645,8 +645,8 @@ test "strings::str: no args returns empty string" {
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{});
     var result = core_str(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.str_val, ""));
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
+    try std.testing.expect(std.mem.eql(u8, result.string, ""));
 }
 
 test "strings::utf8_valid_q: valid string" {
@@ -656,8 +656,8 @@ test "strings::utf8_valid_q: valid string" {
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = core_utf8_valid_q(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.bool_val == true);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
+    try std.testing.expect(result.bool == true);
 }
 
 test "strings::utf8_valid_q: non-string returns error" {
@@ -676,8 +676,8 @@ test "strings::upper_case: basic" {
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_upper_case(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.str_val, "HELLO"));
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
+    try std.testing.expect(std.mem.eql(u8, result.string, "HELLO"));
 }
 
 test "strings::lower_case: basic" {
@@ -687,8 +687,8 @@ test "strings::lower_case: basic" {
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_lower_case(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.str_val, "hello"));
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
+    try std.testing.expect(std.mem.eql(u8, result.string, "hello"));
 }
 
 test "strings::capitalize: basic" {
@@ -698,8 +698,8 @@ test "strings::capitalize: basic" {
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_capitalize(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.str_val, "Hello"));
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
+    try std.testing.expect(std.mem.eql(u8, result.string, "Hello"));
 }
 
 test "strings::capitalize: empty" {
@@ -709,8 +709,8 @@ test "strings::capitalize: empty" {
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_capitalize(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.str_val, ""));
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
+    try std.testing.expect(std.mem.eql(u8, result.string, ""));
 }
 
 test "strings::trim: both sides" {
@@ -720,8 +720,8 @@ test "strings::trim: both sides" {
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_trim(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.str_val, "hello"));
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
+    try std.testing.expect(std.mem.eql(u8, result.string, "hello"));
 }
 
 test "strings::trim: empty" {
@@ -731,8 +731,8 @@ test "strings::trim: empty" {
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_trim(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.str_val, ""));
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
+    try std.testing.expect(std.mem.eql(u8, result.string, ""));
 }
 
 test "strings::trim: all whitespace" {
@@ -742,8 +742,8 @@ test "strings::trim: all whitespace" {
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_trim(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.str_val, ""));
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
+    try std.testing.expect(std.mem.eql(u8, result.string, ""));
 }
 
 test "strings::triml: basic" {
@@ -753,8 +753,8 @@ test "strings::triml: basic" {
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_triml(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.str_val, "hello  "));
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
+    try std.testing.expect(std.mem.eql(u8, result.string, "hello  "));
 }
 
 test "strings::trimr: basic" {
@@ -764,8 +764,8 @@ test "strings::trimr: basic" {
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_trimr(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.str_val, "  hello"));
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
+    try std.testing.expect(std.mem.eql(u8, result.string, "  hello"));
 }
 
 test "strings::trim_newline: basic" {
@@ -775,8 +775,8 @@ test "strings::trim_newline: basic" {
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_trim_newline(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.str_val, "hello"));
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
+    try std.testing.expect(std.mem.eql(u8, result.string, "hello"));
 }
 
 test "strings::trim_newline: cr" {
@@ -786,8 +786,8 @@ test "strings::trim_newline: cr" {
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_trim_newline(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.str_val, "hello"));
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
+    try std.testing.expect(std.mem.eql(u8, result.string, "hello"));
 }
 
 test "strings::blank_q: nil" {
@@ -795,8 +795,8 @@ test "strings::blank_q: nil" {
     defer a.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ vm.nilValue() });
     var result = str_blank_q(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.bool_val == true);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
+    try std.testing.expect(result.bool == true);
 }
 
 test "strings::blank_q: empty" {
@@ -806,8 +806,8 @@ test "strings::blank_q: empty" {
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_blank_q(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.bool_val == true);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
+    try std.testing.expect(result.bool == true);
 }
 
 test "strings::blank_q: whitespace" {
@@ -817,8 +817,8 @@ test "strings::blank_q: whitespace" {
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_blank_q(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.bool_val == true);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
+    try std.testing.expect(result.bool == true);
 }
 
 test "strings::blank_q: text" {
@@ -828,8 +828,8 @@ test "strings::blank_q: text" {
     defer s.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_blank_q(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.bool_val == false);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
+    try std.testing.expect(result.bool == false);
 }
 
 test "strings::starts_with_q: true" {
@@ -841,8 +841,8 @@ test "strings::starts_with_q: true" {
     defer sub.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, sub });
     var result = str_starts_with_q(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.bool_val == true);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
+    try std.testing.expect(result.bool == true);
 }
 
 test "strings::starts_with_q: false" {
@@ -854,8 +854,8 @@ test "strings::starts_with_q: false" {
     defer sub.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, sub });
     var result = str_starts_with_q(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.bool_val == false);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
+    try std.testing.expect(result.bool == false);
 }
 
 test "strings::ends_with_q: true" {
@@ -867,8 +867,8 @@ test "strings::ends_with_q: true" {
     defer sub.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, sub });
     var result = str_ends_with_q(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.bool_val == true);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
+    try std.testing.expect(result.bool == true);
 }
 
 test "strings::ends_with_q: false" {
@@ -880,8 +880,8 @@ test "strings::ends_with_q: false" {
     defer sub.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, sub });
     var result = str_ends_with_q(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.bool_val == false);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
+    try std.testing.expect(result.bool == false);
 }
 
 test "strings::includes_q: true" {
@@ -893,8 +893,8 @@ test "strings::includes_q: true" {
     defer sub.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, sub });
     var result = str_includes_q(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.bool_val == true);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
+    try std.testing.expect(result.bool == true);
 }
 
 test "strings::includes_q: false" {
@@ -906,8 +906,8 @@ test "strings::includes_q: false" {
     defer sub.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, sub });
     var result = str_includes_q(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
-    try std.testing.expect(result.bool_val == false);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
+    try std.testing.expect(result.bool == false);
 }
 
 test "strings::index_of: found" {
@@ -919,9 +919,9 @@ test "strings::index_of: found" {
     defer needle.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, needle });
     var result = str_index_of(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .integer);
-    try std.testing.expect(result.int_val == 6);
+    try std.testing.expect(result.integer == 6);
 }
 
 test "strings::index_of: not found" {
@@ -933,7 +933,7 @@ test "strings::index_of: not found" {
     defer needle.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, needle });
     var result = str_index_of(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .nil);
 }
 
@@ -946,9 +946,9 @@ test "strings::last_index_of: found" {
     defer needle.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, needle });
     var result = str_last_index_of(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .integer);
-    try std.testing.expect(result.int_val == 6);
+    try std.testing.expect(result.integer == 6);
 }
 
 test "strings::last_index_of: not found" {
@@ -960,7 +960,7 @@ test "strings::last_index_of: not found" {
     defer needle.deinit(std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, needle });
     var result = str_last_index_of(testSelf(), &args, &a) catch unreachable;
-    defer result.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .nil);
 }
 
