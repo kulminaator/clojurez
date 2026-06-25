@@ -36,6 +36,7 @@ pub fn valueScanFn(obj: *anyopaque, ctx: *gc.ScanContext) void {
         .set_data => scanSetData(obj, ctx),
         .queue_data => scanQueueData(obj, ctx),
         .fn_arities => scanFnArities(obj, ctx, header.size),
+        .string_data => {}, // raw string bytes — no child pointers to scan
     }
 }
 
@@ -206,6 +207,10 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         .function => |fn_data| {
             // Mark the FnData struct itself so GC can find arities and env
             ctx.gc.markRecursive(fn_data, ctx);
+            // Mark the fn's name string (if GC-allocated)
+            if (fn_data.name) |name| {
+                if (name.len > 0) markPtr(name.ptr, ctx);
+            }
             // Mark the arities array buffer itself
             if (fn_data.arities.items.len > 0) {
                 ctx.gc.markRecursive(fn_data.arities.items.ptr, ctx);
@@ -309,6 +314,10 @@ fn scanFnData(fndata_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     if (fndata.arities.items.len > 0) {
         ctx.gc.setObjectType(fndata.arities.items.ptr, gc.GCObjectType.fn_arities);
         ctx.gc.markRecursive(fndata.arities.items.ptr, ctx);
+    }
+    // Mark the fn's name string (if GC-allocated)
+    if (fndata.name) |name| {
+        if (name.len > 0) markPtr(name.ptr, ctx);
     }
     // Mark the fn's env struct itself (heap-allocated *Env)
     const fn_env = fndata.env;

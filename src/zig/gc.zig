@@ -55,6 +55,7 @@ pub const GCObjectType = enum(u8) {
     set_data = 19,    // SetData { items: ArrayListUnmanaged(Value) }
     queue_data = 20,  // QueueData { items: ArrayListUnmanaged(Value) }
     fn_arities = 21,  // array of Arity { params: list.List, body: list.List, rest_name }
+    string_data = 22, // raw string bytes (no child pointers to scan)
 };
 
 const Header = struct {

@@ -9,6 +9,13 @@ const BD = @import("big_decimal.zig");
 const phm = @import("persistent_hash_map.zig");
 const gc_mod = @import("gc.zig");
 
+/// Helper: tag a string data allocation so the GC doesn't misidentify it as a Value.
+fn tagStringData(ptr: *anyopaque) void {
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(ptr, gc_mod.GCObjectType.string_data);
+    }
+}
+
 // ============================================================
 // Type enum — discriminant for the Value tagged union
 // ============================================================
@@ -216,11 +223,13 @@ pub fn decimalValue(allocator: Allocator, d: BD.BigDecimal) anyerror!Value {
 pub fn stringValue(allocator: Allocator, s: []const u8) anyerror!Value {
     if (!std.unicode.utf8ValidateSlice(s)) return error.InvalidUTF8;
     const duped = try allocator.dupe(u8, s);
+    tagStringData(@as(*anyopaque, @ptrCast(@constCast(duped.ptr))));
     return .{ .string = duped };
 }
 
 pub fn regexValue(allocator: Allocator, s: []const u8) anyerror!Value {
     const duped = try allocator.dupe(u8, s);
+    tagStringData(@as(*anyopaque, @ptrCast(@constCast(duped.ptr))));
     return .{ .regex = duped };
 }
 
@@ -230,11 +239,13 @@ pub fn charValue(c: u21) Value {
 
 pub fn symValue(allocator: Allocator, s: []const u8) anyerror!Value {
     const duped = try allocator.dupe(u8, s);
+    tagStringData(@as(*anyopaque, @ptrCast(@constCast(duped.ptr))));
     return .{ .symbol = duped };
 }
 
 pub fn keywordValue(allocator: Allocator, s: []const u8) anyerror!Value {
     const duped = try allocator.dupe(u8, s);
+    tagStringData(@as(*anyopaque, @ptrCast(@constCast(duped.ptr))));
     return .{ .keyword = duped };
 }
 
@@ -607,7 +618,9 @@ pub fn clone(val: *const Value, allocator: Allocator) anyerror!Value {
             for (fn_data.arities.items) |arity| {
                 var cloned_rest: ?[]const u8 = null;
                 if (arity.rest_name) |rn| {
-                    cloned_rest = try allocator.dupe(u8, rn);
+                    const duped = try allocator.dupe(u8, rn);
+                    tagStringData(@as(*anyopaque, @ptrCast(@constCast(duped.ptr))));
+                    cloned_rest = duped;
                 }
                 try cloned_arities.append(allocator, Arity{
                     .params = try list.clone(&arity.params, allocator),
@@ -616,7 +629,11 @@ pub fn clone(val: *const Value, allocator: Allocator) anyerror!Value {
                 });
             }
             var cloned_name: ?[]const u8 = null;
-            if (fn_data.name) |n| cloned_name = try allocator.dupe(u8, n);
+            if (fn_data.name) |n| {
+                const duped = try allocator.dupe(u8, n);
+                tagStringData(@as(*anyopaque, @ptrCast(@constCast(duped.ptr))));
+                cloned_name = duped;
+            }
             return try fnValueNamed(allocator, cloned_arities, try fn_data.env.clone(allocator), fn_data.is_macro, cloned_name);
         },
         .builtin_fn => |fn_ptr| return builtinFnValue(fn_ptr),
@@ -626,6 +643,7 @@ pub fn clone(val: *const Value, allocator: Allocator) anyerror!Value {
         },
         .record => |rd| {
             const owned_name = try allocator.dupe(u8, rd.type_name);
+            tagStringData(@as(*anyopaque, @ptrCast(@constCast(owned_name.ptr))));
             const cloned_fields = try cloneMap(allocator, rd.fields);
             const cloned_extmap = try cloneMap(allocator, rd.extmap);
             const cloned_meta = if (rd.meta) |m|
@@ -1157,6 +1175,8 @@ pub fn recordValue(
         .meta = owned_meta,
         .allocator = allocator,
     };
+    // Tag type_name string so GC doesn't misidentify it as a Value
+    tagStringData(@as(*anyopaque, @ptrCast(@constCast(owned_name.ptr))));
     if (gc_mod.current_gc) |gc_inst| {
         gc_inst.setObjectType(@as(*anyopaque, @ptrCast(rd)), gc_mod.GCObjectType.record_data);
     }
