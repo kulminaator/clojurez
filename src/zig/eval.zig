@@ -1563,6 +1563,9 @@ fn evalLazySeq(allocator: Allocator, l: *const list.List, env: *Env, depth: usiz
         .body = body,
         .env = try env.clone(allocator),
     };
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
+    }
     return try allocValue(allocator, vm.lazySeqValue(thunk));
 }
 

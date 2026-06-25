@@ -2,12 +2,33 @@
 // Base 10^18 limbs (u64), little-endian order.
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const gc_mod = @import("gc.zig");
 
 pub const LIMB = u64;
 pub const Base: LIMB = 1_000_000_000_000_000_000; // 10^18
 
 pub const Sign = enum { positive, negative };
 pub const CompareResult = enum { less, equal, greater };
+
+/// Allocate a limbs array and tag it for the GC.
+/// This prevents the GC from misidentifying the raw u64 data as Value structs.
+fn allocLimbs(allocator: Allocator, count: usize) []LIMB {
+    const limbs = allocator.alloc(LIMB, count) catch unreachable;
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(limbs.ptr)), gc_mod.GCObjectType.bigint_limbs);
+    }
+    return limbs;
+}
+
+/// Tag a limbs array for the GC (for arrays allocated via toOwnedSlice).
+fn tagLimbs(allocator: Allocator, limbs: []LIMB) void {
+    _ = allocator;
+    if (limbs.len > 0) {
+        if (gc_mod.current_gc) |gc| {
+            gc.setObjectType(@as(*anyopaque, @ptrCast(limbs.ptr)), gc_mod.GCObjectType.bigint_limbs);
+        }
+    }
+}
 
 /// Owned signed big integer using owned slices.
 pub const BigInt = struct {
@@ -44,6 +65,7 @@ pub const BigInt = struct {
         result.sign = self.sign;
         if (self.limbs.len > 0) {
             result.limbs = try allocator.dupe(LIMB, self.limbs);
+            tagLimbs(allocator, result.limbs);
             result.owns_limbs = true;
         }
         return result;
@@ -79,10 +101,10 @@ pub const BigInt = struct {
         if (n == 0) return;
         // Split into base-10^18 limbs
         if (n < Base) {
-            self.limbs = self.allocator.alloc(LIMB, 1) catch unreachable;
+            self.limbs = allocLimbs(self.allocator, 1);
             self.limbs[0] = @as(LIMB, @intCast(n));
         } else {
-            self.limbs = self.allocator.alloc(LIMB, 2) catch unreachable;
+            self.limbs = allocLimbs(self.allocator, 2);
             self.limbs[0] = @as(LIMB, @intCast(n % Base));
             self.limbs[1] = @as(LIMB, @intCast(n / Base));
         }
@@ -98,10 +120,10 @@ pub const BigInt = struct {
         const abs_n: u64 = if (n < 0) @as(u64, @intCast(-n)) else @as(u64, @intCast(n));
         // Split into base-10^18 limbs
         if (abs_n < Base) {
-            self.limbs = self.allocator.alloc(LIMB, 1) catch unreachable;
+            self.limbs = allocLimbs(self.allocator, 1);
             self.limbs[0] = @as(LIMB, @intCast(abs_n));
         } else {
-            self.limbs = self.allocator.alloc(LIMB, 2) catch unreachable;
+            self.limbs = allocLimbs(self.allocator, 2);
             self.limbs[0] = @as(LIMB, @intCast(abs_n % Base));
             self.limbs[1] = @as(LIMB, @intCast(abs_n / Base));
         }
@@ -186,7 +208,9 @@ pub fn addLimbs(allocator: Allocator, a: []const LIMB, b: []const LIMB) anyerror
         try result.append(allocator, @as(LIMB, @intCast(sum % Base)));
         carry = @as(LIMB, @intCast(sum / Base));
     }
-    return result.toOwnedSlice(allocator);
+    const limbs = try result.toOwnedSlice(allocator);
+    tagLimbs(allocator, limbs);
+    return limbs;
 }
 
 // ---- Subtraction (a >= b) ----
@@ -209,7 +233,9 @@ pub fn subLimbs(allocator: Allocator, a: []const LIMB, b: []const LIMB) anyerror
             borrow = 1;
         }
     }
-    return result.toOwnedSlice(allocator);
+    const limbs = try result.toOwnedSlice(allocator);
+    tagLimbs(allocator, limbs);
+    return limbs;
 }
 
 // ---- Multiplication ----
@@ -217,7 +243,7 @@ pub fn subLimbs(allocator: Allocator, a: []const LIMB, b: []const LIMB) anyerror
 pub fn mulLimbs(allocator: Allocator, a: []const LIMB, b: []const LIMB) anyerror![]LIMB {
     const al = effLen(a);
     const bl = effLen(b);
-    if (al == 0 or bl == 0) return allocator.alloc(LIMB, 0);
+    if (al == 0 or bl == 0) return allocLimbs(allocator, 0);
     const rl = al + bl;
     var result: std.ArrayListUnmanaged(LIMB) = .empty;
     errdefer result.deinit(allocator);
@@ -237,7 +263,9 @@ pub fn mulLimbs(allocator: Allocator, a: []const LIMB, b: []const LIMB) anyerror
             carry = total / Base;
         }
     }
-    return result.toOwnedSlice(allocator);
+    const limbs = try result.toOwnedSlice(allocator);
+    tagLimbs(allocator, limbs);
+    return limbs;
 }
 
 // ---- Division ----
@@ -249,15 +277,30 @@ pub fn divLimbs(allocator: Allocator, a: []const LIMB, b: []const LIMB) anyerror
 
     const cmp = compareLen(a, b);
     if (cmp == .less) {
+        const q_limbs = try allocator.alloc(LIMB, 0);
+        if (gc_mod.current_gc) |gc| {
+            gc.setObjectType(@as(*anyopaque, @ptrCast(q_limbs.ptr)), gc_mod.GCObjectType.bigint_limbs);
+        }
+        const r_limbs = try allocator.dupe(LIMB, a[0..al]);
+        if (gc_mod.current_gc) |gc| {
+            gc.setObjectType(@as(*anyopaque, @ptrCast(r_limbs.ptr)), gc_mod.GCObjectType.bigint_limbs);
+        }
         return .{
-            .quotient = try allocator.alloc(LIMB, 0),
-            .remainder = try allocator.dupe(LIMB, a[0..al]),
+            .quotient = q_limbs,
+            .remainder = r_limbs,
         };
     }
     if (cmp == .equal) {
         var q = try allocator.alloc(LIMB, 1);
+        if (gc_mod.current_gc) |gc| {
+            gc.setObjectType(@as(*anyopaque, @ptrCast(q.ptr)), gc_mod.GCObjectType.bigint_limbs);
+        }
         q[0] = 1;
-        return .{ .quotient = q, .remainder = try allocator.alloc(LIMB, 0) };
+        const r = try allocator.alloc(LIMB, 0);
+        if (gc_mod.current_gc) |gc| {
+            gc.setObjectType(@as(*anyopaque, @ptrCast(r.ptr)), gc_mod.GCObjectType.bigint_limbs);
+        }
+        return .{ .quotient = q, .remainder = r };
     }
 
     var work: std.ArrayListUnmanaged(LIMB) = .empty;
@@ -349,8 +392,12 @@ pub fn divLimbs(allocator: Allocator, a: []const LIMB, b: []const LIMB) anyerror
         while (rs < r_start) : (rs += 1) try r_res.append(allocator, work.items[rs]);
     }
 
+    const q_limbs = try q_res.toOwnedSlice(allocator);
+    const r_limbs = try r_res.toOwnedSlice(allocator);
+    tagLimbs(allocator, q_limbs);
+    tagLimbs(allocator, r_limbs);
     return .{
-        .quotient = try q_res.toOwnedSlice(allocator),
-        .remainder = try r_res.toOwnedSlice(allocator),
+        .quotient = q_limbs,
+        .remainder = r_limbs,
     };
 }

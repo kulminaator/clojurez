@@ -12,6 +12,7 @@ const eval_helpers = @import("eval_helpers.zig");
 const arithmetic = @import("arithmetic.zig");
 const sequences_mod = @import("sequences.zig");
 const test_utils = @import("test_utils.zig");
+const gc_mod = @import("../../gc.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -115,6 +116,9 @@ pub fn core_map(self: *const Value, args: *const list.List, env_env: *Env) anyer
         .custom_handler = vm.LazySeqHandler.map,
         .shared_coll = null,
     };
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
+    }
     try thunk.env.put("f", try vm.clone(&f, allocator));
 
     // For concrete collections (list/vector), allocate the collection as a
@@ -667,6 +671,9 @@ fn dropLazySeq(allocator: Allocator, n: i64, coll: Value, env: *Env) anyerror!Va
         .body = list.empty(),
         .env = try env.clone(allocator),
     };
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
+    }
     try thunk.env.put("n", vm.intValue(n));
     try thunk.env.put("coll", try vm.clone(&coll, allocator));
     // Self-reference: thunk calls core_drop directly
@@ -1023,6 +1030,9 @@ pub fn core_iterate(self: *const Value, args: *const list.List, env_env: *Env) a
         .body = list.empty(),
         .env = try env_env.clone(allocator),
     };
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
+    }
     try thunk.env.put("f", try vm.clone(&f, allocator));
     try thunk.env.put("x", try vm.clone(&x, allocator));
     // Store a self-reference so the thunk body calls core_iterate directly
@@ -1068,6 +1078,9 @@ pub fn core_cycle(self: *const Value, args: *const list.List, env_env: *Env) any
     // Return a lazy-seq: (lazy-seq (let [s (seq coll)] (when s (cons (first s) (__zig_cycle (conj (vec (rest s)) (first s)))))))
     const thunk = try allocator.create(vm.LazySeqThunk);
     thunk.* = .{ .params = list.empty(), .body = list.empty(), .env = try env_env.clone(allocator) };
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
+    }
     try thunk.env.put("coll", try vm.clone(&coll, allocator));
     // Self-reference: thunk calls core_cycle directly, not via global symbol
     try thunk.env.put("__zig_cycle", vm.builtinFnValue(core_cycle));

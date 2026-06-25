@@ -9,6 +9,7 @@ const phm = @import("../../persistent_hash_map.zig");
 const eval_helpers = @import("eval_helpers.zig");
 const helpers = @import("helpers.zig");
 const test_utils = @import("test_utils.zig");
+const gc_mod = @import("../../gc.zig");
 const Allocator = std.mem.Allocator;
 
 /// Force a value and append to target list.
@@ -403,6 +404,9 @@ fn forceMapStepConcrete(allocator: Allocator, f: Value, coll: *const Value, env:
         .custom_handler = vm.LazySeqHandler.map,
         .shared_coll = coll, // shared pointer, no clone (*const Value → *const anyopaque)
     };
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
+    }
     try thunk.env.put("f", try vm.clone(&f, allocator));
     try thunk.env.put("idx", vm.intValue(@as(i64, @intCast(idx + 1))));
 
@@ -458,6 +462,9 @@ fn forceMapStepLazy(allocator: Allocator, f: Value, coll: Value, env: *Env) anye
         },
         .custom_handler = vm.LazySeqHandler.map,
     };
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
+    }
     try thunk.env.put("f", try vm.clone(&f, allocator));
     try thunk.env.put("coll", rest_val);
 
@@ -759,6 +766,9 @@ pub fn core_take(self: *const Value, args: *const list.List, env_env: *Env) anye
         .body = list.empty(),
         .env = try env_env.clone(allocator),
     };
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
+    }
     try thunk.env.put("n", try vm.clone(&n_val, allocator));
     try thunk.env.put("coll", try vm.clone(&args.items[1], allocator));
 

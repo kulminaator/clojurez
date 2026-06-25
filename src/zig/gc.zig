@@ -56,6 +56,10 @@ pub const GCObjectType = enum(u8) {
     queue_data = 20,  // QueueData { items: ArrayListUnmanaged(Value) }
     fn_arities = 21,  // array of Arity { params: list.List, body: list.List, rest_name }
     string_data = 22, // raw string bytes (no child pointers to scan)
+    bigint_limbs = 23, // array of u64 limbs (BigInt/BigDecimal/Ratio internal storage)
+    bigint_data = 24,  // BigInt struct { sign, limbs, allocator, owns_limbs }
+    ratio_data = 25,   // Ratio struct { num: BigInt, den: BigInt }
+    decimal_data = 26, // BigDecimal struct { unscaled: BigInt, scale: i32 }
 };
 
 const Header = struct {

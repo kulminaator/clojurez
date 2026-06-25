@@ -5,6 +5,9 @@ const gc = @import("gc.zig");
 const vm = @import("value.zig");
 const Value = vm.Value;
 const phm = @import("persistent_hash_map.zig");
+const BI = @import("big_int.zig");
+const RatioMod = @import("ratio.zig");
+const BD = @import("big_decimal.zig");
 
 /// Helper: cast any pointer to *anyopaque for GC marking.
 fn markPtr(ptr: anytype, ctx: *gc.ScanContext) void {
@@ -21,6 +24,18 @@ fn isValidPtr(ptr: anytype) bool {
     if (addr == std.math.maxInt(@TypeOf(addr))) return false;
     // Reject pointers below minimum heap address (GC allocator starts well above this)
     if (addr < 0x1000) return false;
+    return true;
+}
+
+/// Check if a pointer is both plausibly valid AND a real GC-tracked block.
+/// This is a stronger check than isValidPtr — it verifies the pointer
+/// corresponds to an actual GC allocation header.
+/// Used as a safety net when scanUnknownBlock might have misidentified a block.
+fn isValidGCPtr(ptr: anytype, ctx: *gc.ScanContext) bool {
+    if (!isValidPtr(ptr)) return false;
+    // Verify this pointer is a real GC-tracked block
+    const header = ctx.gc.findHeader(@as(*anyopaque, @ptrCast(@constCast(ptr))));
+    if (header == null) return false;
     return true;
 }
 
@@ -50,13 +65,26 @@ pub fn valueScanFn(obj: *anyopaque, ctx: *gc.ScanContext) void {
         .queue_data => scanQueueData(obj, ctx),
         .fn_arities => scanFnArities(obj, ctx, header.size),
         .string_data => {}, // raw string bytes — no child pointers to scan
+        .bigint_limbs => {}, // raw u64 limbs — no child pointers to scan
+        .bigint_data => scanBigIntData(obj, ctx),
+        .ratio_data => scanRatioData(obj, ctx),
+        .decimal_data => scanDecimalData(obj, ctx),
     }
 }
 
 /// Heuristic scan for blocks without a type tag.
+///
+/// IMPORTANT: This function is a FALLBACK for allocations that weren't
+/// properly typed. All properly-typed blocks are handled by their specific
+/// scan functions. This function handles edge cases where type tagging
+/// was missed.
+///
+/// The isValidGCPtr safety net in scanValueChildrenDirect protects against
+/// misidentification — even if this function guesses wrong, the pointer
+/// validation will prevent crashes.
 fn scanUnknownBlock(obj: *anyopaque, ctx: *gc.ScanContext, size: usize) void {
     const value_size = @sizeOf(Value);
-    
+
     const atom_size = @sizeOf(vm.AtomData);
     const thunk_size = @sizeOf(vm.LazySeqThunk);
 
@@ -134,8 +162,8 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         .nil, .bool, .integer, .float, .character, .builtin_fn, .wrapped => {},
 
         .bigint => |bi_ptr| {
-            // Guard against scanUnknownBlock misidentifying non-Value blocks
-            if (!isValidPtr(bi_ptr)) return;
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!isValidGCPtr(bi_ptr, ctx)) return;
             // Mark the BigInt struct itself
             ctx.gc.markRecursive(bi_ptr, ctx);
             // Mark the limbs array inside BigInt
@@ -145,8 +173,8 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         },
 
         .ratio => |r_ptr| {
-            // Guard against scanUnknownBlock misidentifying non-Value blocks
-            if (!isValidPtr(r_ptr)) return;
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!isValidGCPtr(r_ptr, ctx)) return;
             // Mark the Ratio struct itself
             ctx.gc.markRecursive(r_ptr, ctx);
             // Mark the limbs arrays inside num and den BigInts
@@ -159,8 +187,8 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         },
 
         .decimal => |d_ptr| {
-            // Guard against scanUnknownBlock misidentifying non-Value blocks
-            if (!isValidPtr(d_ptr)) return;
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!isValidGCPtr(d_ptr, ctx)) return;
             // Mark the BigDecimal struct itself
             ctx.gc.markRecursive(d_ptr, ctx);
             // Mark the limbs array inside unscaled BigInt
@@ -183,8 +211,8 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         },
 
         .list => |data| {
-            // Guard against scanUnknownBlock misidentifying non-Value blocks
-            if (!isValidPtr(data)) return;
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!isValidGCPtr(data, ctx)) return;
             // Mark the ListData wrapper struct itself so GC can find it
             markPtr(data, ctx);
             // Mark the items array buffer
@@ -193,8 +221,8 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
             }
         },
         .vector => |data| {
-            // Guard against scanUnknownBlock misidentifying non-Value blocks
-            if (!isValidPtr(data)) return;
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!isValidGCPtr(data, ctx)) return;
             // Mark the VectorData wrapper struct itself so GC can find it
             markPtr(data, ctx);
             // Mark the items array buffer
@@ -203,8 +231,8 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
             }
         },
         .map => |data| {
-            // Guard against scanUnknownBlock misidentifying non-Value blocks
-            if (!isValidPtr(data)) return;
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!isValidGCPtr(data, ctx)) return;
             // Mark the MapData wrapper struct itself so GC can find it
             markPtr(data, ctx);
             // Mark the entries array buffer
@@ -213,8 +241,8 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
             }
         },
         .set => |data| {
-            // Guard against scanUnknownBlock misidentifying non-Value blocks
-            if (!isValidPtr(data)) return;
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!isValidGCPtr(data, ctx)) return;
             // Mark the SetData wrapper struct itself so GC can find it
             markPtr(data, ctx);
             // Mark the items array buffer
@@ -223,8 +251,8 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
             }
         },
         .queue => |data| {
-            // Guard against scanUnknownBlock misidentifying non-Value blocks
-            if (!isValidPtr(data)) return;
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!isValidGCPtr(data, ctx)) return;
             // Mark the QueueData wrapper struct itself so GC can find it
             markPtr(data, ctx);
             // Mark the items array buffer
@@ -234,8 +262,8 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         },
 
         .function => |fn_data| {
-            // Guard against scanUnknownBlock misidentifying non-Value blocks
-            if (!isValidPtr(fn_data)) return;
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!isValidGCPtr(fn_data, ctx)) return;
             // Mark the FnData struct itself so GC can find arities and env
             ctx.gc.markRecursive(fn_data, ctx);
             // Mark the fn's name string (if GC-allocated)
@@ -281,28 +309,28 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         },
 
         .cons => |data| {
-            // Guard against scanUnknownBlock misidentifying non-Value blocks
-            if (!isValidPtr(data)) return;
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!isValidGCPtr(data, ctx)) return;
             // Mark the ConsData struct so GC can find head and tail
             ctx.gc.markRecursive(data, ctx);
         },
 
         .atom => |data| {
-            // Guard against scanUnknownBlock misidentifying non-Value blocks
-            if (!isValidPtr(data)) return;
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!isValidGCPtr(data, ctx)) return;
             ctx.gc.markRecursive(data, ctx);
         },
 
         .reduced => |data| {
-            // Guard against scanUnknownBlock misidentifying non-Value blocks
-            if (!isValidPtr(data)) return;
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!isValidGCPtr(data, ctx)) return;
             // Scan the wrapped value
             ctx.gc.markRecursive(data, ctx);
         },
 
         .record => |rd| {
-            // Guard against scanUnknownBlock misidentifying non-Value blocks
-            if (!isValidPtr(rd)) return;
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!isValidGCPtr(rd, ctx)) return;
             // Mark the RecordData block itself so it survives GC sweep
             markPtr(rd, ctx);
             // Then scan its children (type_name, fields, extmap, meta)
@@ -527,6 +555,36 @@ fn scanFnArities(arities_ptr: *anyopaque, ctx: *gc.ScanContext, total_size: usiz
         if (arity.rest_name) |rn| {
             if (rn.len > 0) markPtr(rn.ptr, ctx);
         }
+    }
+}
+
+/// Scan BigInt struct: { sign, limbs: []LIMB, allocator, owns_limbs }.
+fn scanBigIntData(bi_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const bi: *BI.BigInt = @ptrCast(@alignCast(bi_ptr));
+    if (bi.limbs.len > 0 and bi.owns_limbs) {
+        ctx.gc.markRecursive(bi.limbs.ptr, ctx);
+    }
+}
+
+/// Scan Ratio struct: { num: BigInt, den: BigInt, allocator }.
+fn scanRatioData(r_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const r: *RatioMod.Ratio = @ptrCast(@alignCast(r_ptr));
+    // Mark numerator limbs
+    if (r.num.limbs.len > 0 and r.num.owns_limbs) {
+        ctx.gc.markRecursive(r.num.limbs.ptr, ctx);
+    }
+    // Mark denominator limbs
+    if (r.den.limbs.len > 0 and r.den.owns_limbs) {
+        ctx.gc.markRecursive(r.den.limbs.ptr, ctx);
+    }
+}
+
+/// Scan BigDecimal struct: { unscaled: BigInt, scale, allocator }.
+fn scanDecimalData(d_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const d: *BD.BigDecimal = @ptrCast(@alignCast(d_ptr));
+    // Mark unscaled value limbs
+    if (d.unscaled.limbs.len > 0 and d.unscaled.owns_limbs) {
+        ctx.gc.markRecursive(d.unscaled.limbs.ptr, ctx);
     }
 }
 

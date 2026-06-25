@@ -8,6 +8,7 @@ const phm = @import("../../persistent_hash_map.zig");
 const helpers = @import("helpers.zig");
 const eval_ns = @import("../../eval_ns.zig");
 const eval_macro = @import("../../eval_macro.zig");
+const gc_mod = @import("../../gc.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -455,6 +456,9 @@ fn evalLazySeq(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!
         .body = body,
         .env = try env.clone(allocator),
     };
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
+    }
     return try allocBuiltinResult(allocator, vm.lazySeqValue(thunk));
 }
 

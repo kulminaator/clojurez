@@ -205,18 +205,27 @@ pub fn floatValue(f: f64) Value {
 pub fn bigIntValue(allocator: Allocator, bi: BI.BigInt) anyerror!Value {
     const ptr = try allocator.create(BI.BigInt);
     ptr.* = bi;
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(ptr)), gc_mod.GCObjectType.bigint_data);
+    }
     return .{ .bigint = ptr };
 }
 
 pub fn ratioValue(allocator: Allocator, r: RatioMod.Ratio) anyerror!Value {
     const ptr = try allocator.create(RatioMod.Ratio);
     ptr.* = r;
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(ptr)), gc_mod.GCObjectType.ratio_data);
+    }
     return .{ .ratio = ptr };
 }
 
 pub fn decimalValue(allocator: Allocator, d: BD.BigDecimal) anyerror!Value {
     const ptr = try allocator.create(BD.BigDecimal);
     ptr.* = d;
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(ptr)), gc_mod.GCObjectType.decimal_data);
+    }
     return .{ .decimal = ptr };
 }
 
@@ -297,6 +306,9 @@ pub fn queueValue(allocator: Allocator, q: Queue) anyerror!Value {
 pub fn atomValue(allocator: Allocator, initial: Value) anyerror!Value {
     const data = try allocator.create(AtomData);
     data.* = .{ .value = try clone(&initial, allocator), .ref_count = 1 };
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(data)), gc_mod.GCObjectType.atom_data);
+    }
     return .{ .atom = data };
 }
 
@@ -337,6 +349,9 @@ pub fn consValue(allocator: Allocator, head: Value, tail: Value) anyerror!Value 
     const data = try allocator.create(ConsData);
     errdefer allocator.destroy(data);
     data.* = .{ .head = head, .tail = tail, .allocator = allocator, .ref_count = 1 };
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(data)), gc_mod.GCObjectType.cons_data);
+    }
     return .{ .cons = data };
 }
 
@@ -354,6 +369,9 @@ pub fn fnValueNamed(allocator: Allocator, arities: std.ArrayListUnmanaged(Arity)
     const env_ptr = try allocator.create(Env);
     errdefer allocator.destroy(env_ptr);
     env_ptr.* = env;
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(env_ptr)), gc_mod.GCObjectType.env);
+    }
     const fn_data = try allocator.create(FnData);
     errdefer allocator.destroy(fn_data);
     fn_data.* = .{ .arities = arities, .env = env_ptr, .is_macro = is_macro, .name = name };
@@ -594,6 +612,9 @@ pub fn clone(val: *const Value, allocator: Allocator) anyerror!Value {
                     .custom_handler = t.custom_handler,
                     .shared_coll = t.shared_coll,
                 };
+                if (gc_mod.current_gc) |gc| {
+                    gc.setObjectType(@as(*anyopaque, @ptrCast(new_thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
+                }
                 return Value{ .lazy_seq = new_thunk };
             }
             return Value{ .lazy_seq = null };
