@@ -6,6 +6,11 @@ const vm = @import("value.zig");
 const Value = vm.Value;
 const phm = @import("persistent_hash_map.zig");
 
+/// Helper: cast any pointer to *anyopaque for GC marking.
+fn markPtr(ptr: anytype, ctx: *gc.ScanContext) void {
+    ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(ptr))), ctx);
+}
+
 /// Main scan function — dispatched by the GC for each marked block.
 pub fn valueScanFn(obj: *anyopaque, ctx: *gc.ScanContext) void {
     const header = ctx.gc.findHeader(obj) orelse return;
@@ -15,7 +20,6 @@ pub fn valueScanFn(obj: *anyopaque, ctx: *gc.ScanContext) void {
         .map_entries => scanMapEntries(obj, ctx, header.size),
         .set_items => scanValueArray(obj, ctx, header.size),
         .queue_items => scanValueArray(obj, ctx, header.size),
-        .env_entries => scanEnvEntries(obj, ctx, header.size),
         .lazy_seq_thunk => scanLazySeqThunk(obj, ctx),
         .atom_data => scanAtomData(obj, ctx),
         .fn_data => scanFnData(obj, ctx),
@@ -64,10 +68,7 @@ fn scanUnknownBlock(obj: *anyopaque, ctx: *gc.ScanContext, size: usize) void {
         return;
     }
     // Array of Values (list items, vector items, set items, queue items)
-    // Fallback for arrays that weren't explicitly typed.
-    // Note: This can misidentify Arity arrays as value_arrays,
-    // but the explicit type setting in scanFnData/scanListData etc.
-    // takes precedence for properly typed blocks.
+    // Fallback for arrays that weren't explicitly typed during allocation.
     if (size % value_size == 0 and size >= value_size and size / value_size <= 10000) {
         scanValueArray(obj, ctx, size);
         return;
@@ -96,14 +97,6 @@ fn scanMapEntries(entries_ptr: *anyopaque, ctx: *gc.ScanContext, total_size: usi
     }
 }
 
-/// Scan StringArrayHashMapUnmanaged(Value) MultiArrayList bytes buffer.
-/// (kept for backward compatibility — no longer used for Env entries)
-fn scanEnvEntries(bytes_ptr: *anyopaque, ctx: *gc.ScanContext, total_size: usize) void {
-    _ = bytes_ptr;
-    _ = ctx;
-    _ = total_size;
-}
-
 /// Scan a single Value's child heap pointers and mark them.
 pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
     // Guard against corrupt/uninitialized Value structs.
@@ -127,8 +120,6 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         .nil, .bool, .integer, .float, .character, .builtin_fn, .wrapped => {},
 
         .bigint => |bi_ptr| {
-            // Guard against null/invalid pointers
-            if (@intFromPtr(bi_ptr) < 0x1000) return;
             // Mark the BigInt struct itself
             ctx.gc.markRecursive(bi_ptr, ctx);
             // Mark the limbs array inside BigInt
@@ -138,8 +129,6 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         },
 
         .ratio => |r_ptr| {
-            // Guard against null/invalid pointers
-            if (@intFromPtr(r_ptr) < 0x1000) return;
             // Mark the Ratio struct itself
             ctx.gc.markRecursive(r_ptr, ctx);
             // Mark the limbs arrays inside num and den BigInts
@@ -161,29 +150,21 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         },
 
         .string => |s| {
-            if (s.len > 0) {
-                ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(s.ptr))), ctx);
-            }
+            if (s.len > 0) markPtr(s.ptr, ctx);
         },
         .regex => |s| {
-            if (s.len > 0) {
-                ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(s.ptr))), ctx);
-            }
+            if (s.len > 0) markPtr(s.ptr, ctx);
         },
         .symbol => |s| {
-            if (s.len > 0) {
-                ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(s.ptr))), ctx);
-            }
+            if (s.len > 0) markPtr(s.ptr, ctx);
         },
         .keyword => |s| {
-            if (s.len > 0) {
-                ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(s.ptr))), ctx);
-            }
+            if (s.len > 0) markPtr(s.ptr, ctx);
         },
 
         .list => |data| {
             // Mark the ListData wrapper struct itself so GC can find it
-            ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(data))), ctx);
+            markPtr(data, ctx);
             // Mark the items array buffer
             if (data.items.items.len > 0) {
                 ctx.gc.markRecursive(data.items.items.ptr, ctx);
@@ -191,7 +172,7 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         },
         .vector => |data| {
             // Mark the VectorData wrapper struct itself so GC can find it
-            ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(data))), ctx);
+            markPtr(data, ctx);
             // Mark the items array buffer
             if (data.items.items.len > 0) {
                 ctx.gc.markRecursive(data.items.items.ptr, ctx);
@@ -199,7 +180,7 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         },
         .map => |data| {
             // Mark the MapData wrapper struct itself so GC can find it
-            ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(data))), ctx);
+            markPtr(data, ctx);
             // Mark the entries array buffer
             if (data.entries.items.len > 0) {
                 ctx.gc.markRecursive(data.entries.items.ptr, ctx);
@@ -207,7 +188,7 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         },
         .set => |data| {
             // Mark the SetData wrapper struct itself so GC can find it
-            ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(data))), ctx);
+            markPtr(data, ctx);
             // Mark the items array buffer
             if (data.items.items.len > 0) {
                 ctx.gc.markRecursive(data.items.items.ptr, ctx);
@@ -215,7 +196,7 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         },
         .queue => |data| {
             // Mark the QueueData wrapper struct itself so GC can find it
-            ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(data))), ctx);
+            markPtr(data, ctx);
             // Mark the items array buffer
             if (data.items.items.len > 0) {
                 ctx.gc.markRecursive(data.items.items.ptr, ctx);
@@ -237,9 +218,7 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
                         ctx.gc.markRecursive(arity.body.items.ptr, ctx);
                     }
                     if (arity.rest_name) |rn| {
-                        if (rn.len > 0) {
-                            ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(rn.ptr))), ctx);
-                        }
+                        if (rn.len > 0) markPtr(rn.ptr, ctx);
                     }
                 }
             }
@@ -281,7 +260,7 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
 
         .record => |rd| {
             // Mark the RecordData block itself so it survives GC sweep
-            ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(rd))), ctx);
+            markPtr(rd, ctx);
             // Then scan its children (type_name, fields, extmap, meta)
             scanRecordData(@as(*anyopaque, @ptrCast(@constCast(rd))), ctx);
         },
@@ -314,7 +293,7 @@ fn scanLazySeqThunk(thunk_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     // This keeps the collection alive across GC cycles since it's a raw pointer
     // that the GC wouldn't otherwise discover.
     if (thunk.shared_coll) |sc| {
-        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(sc))), ctx);
+        markPtr(sc, ctx);
     }
 }
 
@@ -400,11 +379,9 @@ fn scanEnv(env_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     }
     // Mark referred_names list buffer and strings
     if (env.referred_names.items.len > 0) {
-        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(env.referred_names.items.ptr)), ctx);
+        markPtr(env.referred_names.items.ptr, ctx);
         for (env.referred_names.items) |name| {
-            if (name.len > 0) {
-                ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(name.ptr))), ctx);
-            }
+            if (name.len > 0) markPtr(name.ptr, ctx);
         }
     }
     // Mark parent env pointer
@@ -421,9 +398,7 @@ fn scanEnv(env_ptr: *anyopaque, ctx: *gc.ScanContext) void {
 fn scanRecordData(rd_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     const rd: *vm.RecordData = @ptrCast(@alignCast(rd_ptr));
     // Mark type_name string
-    if (rd.type_name.len > 0) {
-        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(rd.type_name.ptr))), ctx);
-    }
+    if (rd.type_name.len > 0) markPtr(rd.type_name.ptr, ctx);
     // Mark fields map entries buffer (contains vm.MapEntry { key, value })
     if (rd.fields.items.len > 0) {
         ctx.gc.markRecursive(rd.fields.items.ptr, ctx);
@@ -502,9 +477,7 @@ fn scanFnArities(arities_ptr: *anyopaque, ctx: *gc.ScanContext, total_size: usiz
             ctx.gc.markRecursive(arity.body.items.ptr, ctx);
         }
         if (arity.rest_name) |rn| {
-            if (rn.len > 0) {
-                ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(rn.ptr))), ctx);
-            }
+            if (rn.len > 0) markPtr(rn.ptr, ctx);
         }
     }
 }
@@ -514,9 +487,7 @@ fn scanNamespaceManager(ns_mgr_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     const ns_mgr: *vm.NamespaceManager = @ptrCast(@alignCast(ns_mgr_ptr));
 
     // Mark current_ns string
-    if (ns_mgr.current_ns.len > 0) {
-        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(ns_mgr.current_ns.ptr))), ctx);
-    }
+    if (ns_mgr.current_ns.len > 0) markPtr(ns_mgr.current_ns.ptr, ctx);
     // Mark namespaces PersistentHashMap root node
     if (ns_mgr.namespaces.root) |root| {
         ctx.gc.markRecursive(root, ctx);
@@ -527,11 +498,9 @@ fn scanNamespaceManager(ns_mgr_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     }
     // Mark classpath buffer and strings
     if (ns_mgr.classpath.items.len > 0) {
-        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(ns_mgr.classpath.items.ptr)), ctx);
+        markPtr(ns_mgr.classpath.items.ptr, ctx);
         for (ns_mgr.classpath.items) |dir| {
-            if (dir.len > 0) {
-                ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(dir.ptr))), ctx);
-            }
+            if (dir.len > 0) markPtr(dir.ptr, ctx);
         }
     }
 }
