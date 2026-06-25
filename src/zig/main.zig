@@ -260,8 +260,8 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
         } else {
             // Treat as a file to execute
             try runFile(allocator, arg, user_env);
-            // Collect after function returns so local vars are out of scope
-            if (gc_mod.current_gc) |gc| gc.collect(gc_scan.valueScanFn);
+            // For file execution, skip post-run GC — OS reclaims all memory on exit.
+            // The GC deinit is now O(1) (just resets pointers, no individual block freeing).
         }
     }
 
@@ -444,8 +444,9 @@ fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void 
         }
 
         // GC handles result cleanup.
-        // Auto-GC: check threshold between form evaluations (safe point).
-        if (gc_mod.current_gc) |gc| gc.tryAutoCollect();
+        // For file execution, handle only deferred manual sweeps (from gc-sweep).
+        // Skip auto-GC — OS reclaims all memory on exit.
+        if (gc_mod.current_gc) |gc| gc.tryDeferredSweep();
     }
 
 }

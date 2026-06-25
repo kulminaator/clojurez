@@ -176,32 +176,27 @@ pub const GC = struct {
         self.freeHeaderTable();
         self.log("[GC] DEINIT: blocks={d} live={d}\n", .{ self.block_count, self.current_allocated });
 
-        // Free all remaining blocks.
-        // Safeguard: verify magic number to protect against corrupted headers.
-        // At program exit, the OS reclaims all memory anyway, so we just
-        // need to avoid double-frees or invalid frees that could crash.
-        var block = self.blocks;
-        var freed: usize = 0;
-        var skipped: usize = 0;
-        while (block) |b| {
-            const next = b.next;
-            if (b.magic == MAGIC) {
-                const total = b.offset + b.size;
-                const block_start = @as([*]u8, @ptrCast(b));
-                self.wrapped.free(block_start[0..total]);
-                freed += 1;
-            } else {
-                // Corrupted header — skip to avoid invalid free.
-                // The OS will reclaim this memory on exit.
-                skipped += 1;
-            }
-            block = next;
-        }
-        self.log("[GC] DEINIT: freed={d} skipped={d}\n", .{ freed, skipped });
+        // At program exit, the OS reclaims all memory anyway.
+        // Freeing blocks individually through the slab allocator is O(blocks × pages)
+        // because slabFree does a linear page search for each free.
+        // With hundreds of thousands of blocks, this causes ~1.5s shutdown delay.
+        // Instead, skip individual block freeing and let the slab allocator's
+        // deinit handle cleanup efficiently (frees all pages directly).
+        // Just clean up our bookkeeping structures.
         self.blocks = null;
         self.block_count = 0;
-        self.wrapped.free(self.roots.items);
+
+        // Free the roots array (small allocation, not via slab)
+        if (self.roots.items.len > 0) {
+            self.wrapped.free(self.roots.items);
+        }
         self.roots = .empty;
+
+        // Free temp_roots array if any
+        if (self.temp_roots.items.len > 0) {
+            self.wrapped.free(self.temp_roots.items);
+        }
+        self.temp_roots = .empty;
     }
 
     /// Return a std.mem.Allocator backed by the GC.
@@ -624,6 +619,19 @@ pub const GC = struct {
         if (need_collect) {
             if (self.scan_fn) |fn_ptr| {
                 self.auto_gc_pending = false;
+                self.manual_sweep_pending = false;
+                self.collect(fn_ptr);
+            }
+        }
+    }
+
+    /// Handle only deferred manual sweeps (from zig.core/gc-sweep).
+    /// Does NOT trigger auto-GC collections. This is useful for file
+    /// execution where auto-GC is unnecessary overhead (OS reclaims
+    /// all memory on exit), but manual sweeps still need to run.
+    pub fn tryDeferredSweep(self: *Self) void {
+        if (self.manual_sweep_pending) {
+            if (self.scan_fn) |fn_ptr| {
                 self.manual_sweep_pending = false;
                 self.collect(fn_ptr);
             }
