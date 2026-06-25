@@ -3,9 +3,10 @@
 // All memory is allocated via the GC allocator (env.allocator).
 
 const std = @import("std");
-const Value = @import("../../value.zig");
+const vm = @import("../../value.zig");
+const Value = vm.Value;
 const list = @import("../../list.zig");
-const Env = Value.Env;
+const Env = vm.Env;
 const Allocator = std.mem.Allocator;
 
 // ============================================================
@@ -643,15 +644,15 @@ pub fn nfaMatchLen(nfa: *const Nfa, s: []const u8, allocator: Allocator) anyerro
 // ============================================================
 
 pub fn extractPatternString(pattern: Value) anyerror![]const u8 {
-    return switch (pattern.type) {
-        .string => pattern.str_val,
-        .regex => pattern.re_pattern,
+    return switch (std.meta.activeTag(pattern)) {
+        .string => pattern.string,
+        .regex => pattern.regex,
         .map => {
             // Legacy support: old {:pattern "..."} map format
-            for (pattern.map_val.items) |entry| {
-                if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, "pattern")) {
-                    if (entry.value.type == .string) {
-                        return entry.value.str_val;
+            for (pattern.map.entries.items) |entry| {
+                if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, "pattern")) {
+                    if (std.meta.activeTag(entry.value) == .string) {
+                        return entry.value.string;
                     }
                 }
             }

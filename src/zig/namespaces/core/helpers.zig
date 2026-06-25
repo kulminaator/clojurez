@@ -1,6 +1,7 @@
 // Shared helper functions for core built-in modules
 const std = @import("std");
-const Value = @import("../../value.zig");
+const vm = @import("../../value.zig");
+const Value = vm.Value;
 const list = @import("../../list.zig");
 const vec = @import("../../vector.zig");
 
@@ -10,7 +11,7 @@ pub fn listFromVector(allocator: Allocator, v: vec.Vector) anyerror!list.List {
     var result: list.List = .empty;
     errdefer result.deinit(allocator);
     for (v.items) |item| {
-        try result.append(allocator, try item.clone(allocator));
+        try result.append(allocator, try vm.clone(&item, allocator));
     }
     return result;
 }
@@ -19,7 +20,7 @@ pub fn listFromSlice(allocator: Allocator, items: []const Value) anyerror!list.L
     var result: list.List = .empty;
     errdefer result.deinit(allocator);
     for (items) |item| {
-        try result.append(allocator, try item.clone(allocator));
+        try result.append(allocator, try vm.clone(&item, allocator));
     }
     return result;
 }
@@ -34,17 +35,17 @@ pub fn isIntF64(f: f64) bool {
 }
 
 pub fn toInt(v: Value) anyerror!i64 {
-    return switch (v.type) {
-        .integer => v.int_val,
-        .float => @as(i64, @intFromFloat(v.float_val)),
+    return switch (std.meta.activeTag(v)) {
+        .integer => v.integer,
+        .float => @as(i64, @intFromFloat(v.float)),
         else => return error.TypeError,
     };
 }
 
 pub fn toNum(v: Value) f64 {
-    return switch (v.type) {
-        .integer => @as(f64, @floatFromInt(v.int_val)),
-        .float => v.float_val,
+    return switch (std.meta.activeTag(v)) {
+        .integer => @as(f64, @floatFromInt(v.integer)),
+        .float => v.float,
         else => 0,
     };
 }
@@ -76,31 +77,31 @@ test "helpers::isIntF64: out of i64 range returns false" {
 }
 
 test "helpers::toInt: integer value" {
-    const v = Value.intValue(42);
+    const v = vm.intValue(42);
     try std.testing.expect(try toInt(v) == 42);
 }
 
 test "helpers::toInt: float value" {
-    const v = Value.floatValue(3.0);
+    const v = vm.floatValue(3.0);
     try std.testing.expect(try toInt(v) == 3);
 }
 
 test "helpers::toInt: non-numeric returns error" {
-    const v = Value.nilValue();
+    const v = vm.nilValue();
     try std.testing.expectError(error.TypeError, toInt(v));
 }
 
 test "helpers::toNum: integer value" {
-    const v = Value.intValue(42);
+    const v = vm.intValue(42);
     try std.testing.expect(toNum(v) == 42.0);
 }
 
 test "helpers::toNum: float value" {
-    const v = Value.floatValue(3.14);
+    const v = vm.floatValue(3.14);
     try std.testing.expect(toNum(v) == 3.14);
 }
 
 test "helpers::toNum: non-numeric returns 0" {
-    const v = Value.nilValue();
+    const v = vm.nilValue();
     try std.testing.expect(toNum(v) == 0);
 }

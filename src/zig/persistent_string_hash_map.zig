@@ -9,7 +9,8 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const Value = @import("value.zig");
+const vm = @import("value.zig");
+const Value = vm.Value;
 const phm = @import("persistent_hash_map.zig");
 
 // Re-export sym from persistent_hash_map.zig
@@ -66,7 +67,7 @@ pub fn PersistentStringHashMap(T: type) type {
 
             for (keys_list.items) |v| {
                 if (v.type == .symbol) {
-                    try result.append(allocator, v.sym_val);
+                    try result.append(allocator, v.symbol);
                 }
             }
             return result;
@@ -94,11 +95,11 @@ pub fn PersistentStringHashMap(T: type) type {
 
         fn wrapVal(allocator: Allocator, val: T) anyerror!Value {
             _ = val;
-            return Value{ .type = .bigint, .bigint_val = try allocator.create(WrappedValue) };
+            return Value{ .type = .bigint, .bigint = try allocator.create(WrappedValue) };
         }
 
         fn unwrap(v: Value) T {
-            const wrapped: *WrappedValue = @ptrCast(@alignCast(v.bigint_val.?));
+            const wrapped: *WrappedValue = @ptrCast(@alignCast(v.bigint.?));
             return wrapped.val;
         }
 
@@ -155,8 +156,8 @@ pub const StringHashMap = struct {
         errdefer allocator.free(result.items);
 
         for (keys_list.items) |v| {
-            if (v.type == .symbol) {
-                try result.append(allocator, v.sym_val);
+            if (std.meta.activeTag(v) == .symbol) {
+                try result.append(allocator, v.symbol);
             }
         }
         return result;
@@ -205,38 +206,38 @@ test "persistent_string_hash_map::assoc and find" {
     const a = std.heap.page_allocator;
     var m = StringHashMap.empty();
 
-    m = try m.assoc(a, "one", Value.intValue(1));
+    m = try m.assoc(a, "one", vm.intValue(1));
     try std.testing.expect(m.mapCount() == 1);
-    try std.testing.expect(m.find("one").?.int_val == 1);
+    try std.testing.expect(m.find("one").?.integer == 1);
 
-    m = try m.assoc(a, "two", Value.intValue(2));
+    m = try m.assoc(a, "two", vm.intValue(2));
     try std.testing.expect(m.mapCount() == 2);
-    try std.testing.expect(m.find("one").?.int_val == 1);
-    try std.testing.expect(m.find("two").?.int_val == 2);
+    try std.testing.expect(m.find("one").?.integer == 1);
+    try std.testing.expect(m.find("two").?.integer == 2);
 }
 
 test "persistent_string_hash_map::update existing key" {
     const a = std.heap.page_allocator;
     var m = StringHashMap.empty();
 
-    m = try m.assoc(a, "x", Value.intValue(10));
-    m = try m.assoc(a, "x", Value.intValue(99));
+    m = try m.assoc(a, "x", vm.intValue(10));
+    m = try m.assoc(a, "x", vm.intValue(99));
     try std.testing.expect(m.mapCount() == 1);
-    try std.testing.expect(m.find("x").?.int_val == 99);
+    try std.testing.expect(m.find("x").?.integer == 99);
 }
 
 test "persistent_string_hash_map::without" {
     const a = std.heap.page_allocator;
     var m = StringHashMap.empty();
 
-    m = try m.assoc(a, "a", Value.intValue(1));
-    m = try m.assoc(a, "b", Value.intValue(2));
-    m = try m.assoc(a, "c", Value.intValue(3));
+    m = try m.assoc(a, "a", vm.intValue(1));
+    m = try m.assoc(a, "b", vm.intValue(2));
+    m = try m.assoc(a, "c", vm.intValue(3));
     m = try m.without(a, "b");
     try std.testing.expect(m.mapCount() == 2);
-    try std.testing.expect(m.find("a").?.int_val == 1);
+    try std.testing.expect(m.find("a").?.integer == 1);
     try std.testing.expectEqual(null, m.find("b"));
-    try std.testing.expect(m.find("c").?.int_val == 3);
+    try std.testing.expect(m.find("c").?.integer == 3);
 }
 
 test "persistent_string_hash_map::many entries" {
@@ -246,7 +247,7 @@ test "persistent_string_hash_map::many entries" {
     var i: usize = 0;
     while (i < 50) : (i += 1) {
         const key = try std.fmt.allocPrint(a, "key_{d}", .{i});
-        m = try m.assoc(a, key, Value.intValue(@as(i64, @intCast(i))));
+        m = try m.assoc(a, key, vm.intValue(@as(i64, @intCast(i))));
     }
     try std.testing.expect(m.mapCount() == 50);
 
@@ -255,7 +256,7 @@ test "persistent_string_hash_map::many entries" {
         const key = try std.fmt.allocPrint(a, "key_{d}", .{i});
         const found = m.find(key);
         try std.testing.expect(found != null);
-        try std.testing.expect(found.?.int_val == @as(i64, @intCast(i)));
+        try std.testing.expect(found.?.integer == @as(i64, @intCast(i)));
     }
 }
 
@@ -263,19 +264,19 @@ test "persistent_string_hash_map::hash collision" {
     const a = std.heap.page_allocator;
     var m = StringHashMap.empty();
 
-    m = try m.assoc(a, "hello", Value.intValue(1));
-    m = try m.assoc(a, "world", Value.intValue(2));
+    m = try m.assoc(a, "hello", vm.intValue(1));
+    m = try m.assoc(a, "world", vm.intValue(2));
     try std.testing.expect(m.mapCount() == 2);
-    try std.testing.expect(m.find("hello").?.int_val == 1);
-    try std.testing.expect(m.find("world").?.int_val == 2);
+    try std.testing.expect(m.find("hello").?.integer == 1);
+    try std.testing.expect(m.find("world").?.integer == 2);
 }
 
 test "persistent_string_hash_map::keys" {
     const a = std.heap.page_allocator;
     var m = StringHashMap.empty();
 
-    m = try m.assoc(a, "alpha", Value.intValue(1));
-    m = try m.assoc(a, "beta", Value.intValue(2));
+    m = try m.assoc(a, "alpha", vm.intValue(1));
+    m = try m.assoc(a, "beta", vm.intValue(2));
 
     const keys = try m.mapKeys(a);
     defer a.free(keys.items);

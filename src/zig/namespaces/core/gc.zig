@@ -2,9 +2,10 @@
 // Provides gc-sweep and gc-stats for manual GC control and monitoring.
 
 const std = @import("std");
-const Value = @import("../../value.zig");
+const vm = @import("../../value.zig");
+const Value = vm.Value;
 const list = @import("../../list.zig");
-const Env = Value.Env;
+const Env = vm.Env;
 const gc_mod = @import("../../gc.zig");
 const gc_scan = @import("../../gc_scan.zig");
 
@@ -15,7 +16,7 @@ const Allocator = std.mem.Allocator;
 /// When called from within Clojure evaluation, the mark phase runs immediately
 /// but the sweep (actual freeing) is deferred to the next safe point to avoid
 /// freeing in-flight values referenced only by stack-local pointers.
-pub fn core_gc_sweep(self: *Value, args: list.List, _: *Env) anyerror!Value {
+pub fn core_gc_sweep(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 0) return error.ArityError;
 
@@ -27,7 +28,7 @@ pub fn core_gc_sweep(self: *Value, args: list.List, _: *Env) anyerror!Value {
         gc.setSweepEnabled(true);
         gc.manual_sweep_pending = true;
     }
-    return Value.nilValue();
+    return vm.nilValue();
 }
 
 /// zig.core/gc-stats — return a map of GC statistics.
@@ -39,7 +40,7 @@ pub fn core_gc_sweep(self: *Value, args: list.List, _: *Env) anyerror!Value {
 ///   :sweep-count        — number of GC sweeps performed
 ///   :alloc-count        — number of GC allocations performed
 ///   :block-count        — number of live GC blocks
-pub fn core_gc_stats(self: *Value, args: list.List, env: *Env) anyerror!Value {
+pub fn core_gc_stats(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 0) return error.ArityError;
 
@@ -47,11 +48,11 @@ pub fn core_gc_stats(self: *Value, args: list.List, env: *Env) anyerror!Value {
     const s = if (gc_mod.current_gc) |gc| gc.stats() else gc_mod.GC.Stats{};
 
     // Build a map: {:current-allocated N, :peak-allocated N, ...}
-    var entries: std.ArrayListUnmanaged(Value.MapEntry) = .empty;
+    var entries: std.ArrayListUnmanaged(vm.MapEntry) = .empty;
     errdefer {
         for (entries.items) |*e| {
-            e.key.deinit(allocator);
-            e.value.deinit(allocator);
+            vm.valueDeinit(&e.key, allocator);
+            vm.valueDeinit(&e.value, allocator);
         }
         entries.deinit(allocator);
     }
@@ -67,16 +68,16 @@ pub fn core_gc_stats(self: *Value, args: list.List, env: *Env) anyerror!Value {
     };
 
     for (fields) |f| {
-        const key = try Value.keywordValue(allocator, f.key);
-        const val = Value.intValue(@as(i64, @intCast(f.val)));
+        const key = try vm.keywordValue(allocator, f.key);
+        const val = vm.intValue(@as(i64, @intCast(f.val)));
         try entries.append(allocator, .{ .key = key, .value = val });
     }
 
-    return Value.mapValue(entries);
+    return try vm.mapValue(allocator, entries);
 }
 
 /// Register GC functions in the zig.core namespace.
 pub fn registerGCFunctions(env: *Env) anyerror!void {
-    try env.put("gc-sweep", Value.builtinFnValue(core_gc_sweep));
-    try env.put("gc-stats", Value.builtinFnValue(core_gc_stats));
+    try env.put("gc-sweep", vm.builtinFnValue(core_gc_sweep));
+    try env.put("gc-stats", vm.builtinFnValue(core_gc_stats));
 }

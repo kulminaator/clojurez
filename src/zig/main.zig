@@ -1,6 +1,7 @@
 const std = @import("std");
-const Value = @import("value.zig");
-const Env = Value.Env;
+const vm = @import("value.zig");
+const Value = vm.Value;
+const Env = vm.Env;
 const list = @import("list.zig");
 const core = @import("namespaces/core/core.zig");
 const io_mod = @import("namespaces/core/io.zig");
@@ -23,7 +24,7 @@ const Allocator = std.mem.Allocator;
 
 /// Fully realize a lazy-seq into a concrete list for printing.
 fn fullyRealizeLazySeq(allocator: Allocator, val: Value) anyerror!Value {
-    if (val.type != .lazy_seq) return try val.clone(allocator);
+    if (std.meta.activeTag(val) != .lazy_seq) return try vm.clone(&val, allocator);
 
     var result: list.List = .empty;
     errdefer result.deinit(allocator);
@@ -31,42 +32,42 @@ fn fullyRealizeLazySeq(allocator: Allocator, val: Value) anyerror!Value {
     var current: Value = val;
     var max_iter: usize = 100000;
     while (max_iter > 0) : (max_iter -= 1) {
-        if (current.type != .lazy_seq) break;
+        if (std.meta.activeTag(current) != .lazy_seq) break;
 
         var forced = try sequences.forceLazySeqHelper(allocator, current);
-        current.deinit(allocator);
+        vm.valueDeinit(&current, allocator);
 
-        if (forced.type != .list) {
-            forced.deinit(allocator);
+        if (std.meta.activeTag(forced) != .list) {
+            vm.valueDeinit(&forced, allocator);
             break;
         }
 
-        for (forced.list_val.items) |item| {
-            if (item.type == .lazy_seq) {
+        for (forced.list.items.items) |item| {
+            if (std.meta.activeTag(item) == .lazy_seq) {
                 const realized = try fullyRealizeLazySeq(allocator, item);
-                if (realized.type == .list) {
-                    for (realized.list_val.items) |ri| {
-                        try result.append(allocator, try ri.clone(allocator));
+                if (std.meta.activeTag(realized) == .list) {
+                    for (realized.list.items.items) |ri| {
+                        try result.append(allocator, try vm.clone(&ri, allocator));
                     }
                 } else {
                     try result.append(allocator, realized);
                 }
             } else {
-                try result.append(allocator, try item.clone(allocator));
+                try result.append(allocator, try vm.clone(&item, allocator));
             }
         }
-        forced.deinit(allocator);
+        vm.valueDeinit(&forced, allocator);
 
-        if (result.items.len > 0 and result.items[result.items.len - 1].type == .lazy_seq) {
+        if (result.items.len > 0 and std.meta.activeTag(result.items[result.items.len - 1]) == .lazy_seq) {
             current = result.pop() orelse break;
         } else {
             break;
         }
     }
-    if (current.type != .lazy_seq) {
-        current.deinit(allocator);
+    if (std.meta.activeTag(current) != .lazy_seq) {
+        vm.valueDeinit(&current, allocator);
     }
-    return Value.listValue(result);
+    return try vm.listValue(allocator, result);
 }
 
 pub fn main(init: std.process.Init.Minimal) anyerror!void {
@@ -129,7 +130,7 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     io_mod.env_vars = std.process.Environ.createMap(init.environ, allocator) catch std.process.Environ.Map.init(allocator);
 
     // Create namespace manager
-    var ns_mgr = try Value.NamespaceManager.init(allocator);
+    var ns_mgr = try vm.NamespaceManager.init(allocator);
     // No defer deinit — GC handles cleanup at program exit.
     // Calling deinit after GC sweep would access freed memory.
 
@@ -259,8 +260,8 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
         } else {
             // Treat as a file to execute
             try runFile(allocator, arg, user_env);
-            // Collect after function returns so local vars are out of scope
-            if (gc_mod.current_gc) |gc| gc.collect(gc_scan.valueScanFn);
+            // For file execution, skip post-run GC — OS reclaims all memory on exit.
+            // The GC deinit is now O(1) (just resets pointers, no individual block freeing).
         }
     }
 
@@ -282,12 +283,12 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
 fn copyBuiltinsToNamespace(root_env: *Env, target_env: *Env) anyerror!void {
     var it = root_env.entries.entryIterator();
     while (it.next()) |entry| {
-        if (entry.val.type == .builtin_fn) {
+        if (std.meta.activeTag(entry.val) == .builtin_fn) {
             // Skip zig-only functions that should not leak into clojure.core
-            if (entry.key.type == .symbol and std.mem.eql(u8, entry.key.sym_val, "temp-dir")) continue;
+            if (std.meta.activeTag(entry.key) == .symbol and std.mem.eql(u8, entry.key.symbol, "temp-dir")) continue;
             // builtinFnValue is just a function pointer — clone is trivial
-            if (entry.key.type == .symbol) {
-                try target_env.put(entry.key.sym_val, Value.builtinFnValue(entry.val.builtin_fn_val));
+            if (std.meta.activeTag(entry.key) == .symbol) {
+                try target_env.put(entry.key.symbol, vm.builtinFnValue(entry.val.builtin_fn));
             }
         }
     }
@@ -305,7 +306,8 @@ fn loadCoreLibrary(allocator: Allocator, env: *Env) anyerror!void {
     // GC handles cleanup.
 
     for (forms.items) |form| {
-        _ = try eval.eval(allocator, form, env);
+        const result_ptr = try eval.eval(allocator, form, env);
+        vm.valueDeinit(&result_ptr.*, allocator);
         // GC handles result cleanup.
         // Silent: don't print results during core library loading
     }
@@ -322,7 +324,8 @@ fn loadStringLibrary(allocator: Allocator, env: *Env) anyerror!void {
     // GC handles cleanup.
 
     for (forms.items) |form| {
-        _ = try eval.eval(allocator, form, env);
+        const result_ptr = try eval.eval(allocator, form, env);
+        vm.valueDeinit(&result_ptr.*, allocator);
         // GC handles result cleanup.
         // Silent: don't print results during string library loading
     }
@@ -370,14 +373,14 @@ fn runExpression(allocator: Allocator, expr: []const u8, env: *Env) anyerror!voi
     for (forms.items) |form| {
         // Use current namespace's env for evaluation
         const eval_env = getCurrentNsEnv(env) orelse env;
-        const result = try eval.eval(allocator, form, eval_env);
+        const result_ptr = try eval.eval(allocator, form, eval_env);
 
-        if (!result.equals(Value.nilValue())) {
-            const print_val = if (result.type == .lazy_seq) blk: {
-                const realized = try fullyRealizeLazySeq(allocator, result);
+        if (!vm.equals(result_ptr.*, vm.nilValue())) {
+            const print_val = if (std.meta.activeTag(result_ptr.*) == .lazy_seq) blk: {
+                const realized = try fullyRealizeLazySeq(allocator, result_ptr.*);
                 break :blk realized;
-            } else result;
-            const formatted = try print_val.fmt(allocator);
+            } else result_ptr.*;
+            const formatted = try vm.fmt(print_val, allocator);
             // GC handles all cleanup — no manual deinit/free for GC-allocated values.
             try writeStdout(formatted);
             try writeStdout("\n");
@@ -427,22 +430,23 @@ fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void 
     for (forms.items) |form| {
         // Get current namespace's env for each form (ns form may change it)
         const eval_env = getCurrentNsEnv(env) orelse env;
-        var result = try eval.eval(allocator, form, eval_env);
+        const result_ptr = try eval.eval(allocator, form, eval_env);
 
-        if (print_results and !result.equals(Value.nilValue())) {
-            const print_val = if (result.type == .lazy_seq) blk: {
-                const realized = try fullyRealizeLazySeq(allocator, result);
+        if (print_results and !vm.equals(result_ptr.*, vm.nilValue())) {
+            const print_val = if (std.meta.activeTag(result_ptr.*) == .lazy_seq) blk: {
+                const realized = try fullyRealizeLazySeq(allocator, result_ptr.*);
                 break :blk realized;
-            } else result;
-            const formatted = try print_val.fmt(allocator);
+            } else result_ptr.*;
+            const formatted = try vm.fmt(print_val, allocator);
             // GC handles all cleanup — no manual deinit/free for GC-allocated values.
             try writeStdout(formatted);
             try writeStdout("\n");
         }
 
         // GC handles result cleanup.
-        // Auto-GC: check threshold between form evaluations (safe point).
-        if (gc_mod.current_gc) |gc| gc.tryAutoCollect();
+        // For file execution, handle only deferred manual sweeps (from gc-sweep).
+        // Skip auto-GC — OS reclaims all memory on exit.
+        if (gc_mod.current_gc) |gc| gc.tryDeferredSweep();
     }
 
 }
@@ -543,7 +547,8 @@ fn runMain(allocator: Allocator, env: *Env, ns_name: []const u8) anyerror!void {
     // GC handles cleanup.
 
     for (forms.items) |form| {
-        _ = try eval.eval(allocator, form, env);
+        const result_ptr = try eval.eval(allocator, form, env);
+        vm.valueDeinit(&result_ptr.*, allocator);
         // GC handles result cleanup.
     }
 
@@ -566,9 +571,9 @@ fn runMain(allocator: Allocator, env: *Env, ns_name: []const u8) anyerror!void {
     // Call (-main) with no arguments
     var call_list: list.List = .empty;
     defer call_list.deinit(allocator);
-    try call_list.append(allocator, try main_fn.clone(allocator));
-    var call_result = try eval.eval(allocator, Value.listValue(call_list), ns_env);
-    call_result.deinit(allocator);
+    try call_list.append(allocator, try vm.clone(&main_fn, allocator));
+    const call_result_ptr = try eval.eval(allocator, try vm.listValue(allocator, call_list), ns_env);
+    vm.valueDeinit(&call_result_ptr.*, allocator);
 
 }
 
@@ -644,10 +649,10 @@ fn scanEnvEntriesDirect(env: *Env, gc_inst: *gc_mod.GC) void {
 
 // Static pointers for root callback
 var gc_root_env: ?*Env = null;
-var gc_root_ns_mgr: ?*Value.NamespaceManager = null;
+var gc_root_ns_mgr: ?*vm.NamespaceManager = null;
 
 /// Register GC roots: main env entries + namespace env entries.
-fn registerGcRoots(gc_inst: *gc_mod.GC, env: *Env, ns_mgr: *Value.NamespaceManager) void {
+fn registerGcRoots(gc_inst: *gc_mod.GC, env: *Env, ns_mgr: *vm.NamespaceManager) void {
     gc_root_env = env;
     gc_root_ns_mgr = ns_mgr;
     gc_inst.root_fn = gcRootCallback;

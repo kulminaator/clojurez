@@ -1,5 +1,6 @@
 const std = @import("std");
-const Value = @import("value.zig");
+const vm = @import("value.zig");
+const Value = vm.Value;
 const list = @import("list.zig");
 const parser = @import("parser.zig");
 const eval = @import("eval.zig");
@@ -13,7 +14,7 @@ const Allocator = std.mem.Allocator;
 /// Fully realize a lazy-seq into a concrete list by repeatedly forcing one level.
 /// This avoids the deep recursion problem of forceLazySeqHelper.
 fn fullyRealizeLazySeq(allocator: Allocator, val: Value) anyerror!Value {
-    if (val.type != .lazy_seq) return try val.clone(allocator);
+    if (std.meta.activeTag(val) != .lazy_seq) return try vm.clone(&val, allocator);
 
     var result: list.List = .empty;
     errdefer result.deinit(allocator);
@@ -21,49 +22,49 @@ fn fullyRealizeLazySeq(allocator: Allocator, val: Value) anyerror!Value {
     var current: Value = val;
     var max_iter: usize = 100000;
     while (max_iter > 0) : (max_iter -= 1) {
-        if (current.type != .lazy_seq) break;
+        if (std.meta.activeTag(current) != .lazy_seq) break;
 
         // Force one level
         var forced = try sequences.forceLazySeqHelper(allocator, current);
-        current.deinit(allocator);
+        vm.valueDeinit(&current, allocator);
 
-        if (forced.type != .list) {
-            forced.deinit(allocator);
+        if (std.meta.activeTag(forced) != .list) {
+            vm.valueDeinit(&forced, allocator);
             break;
         }
 
         // Append elements from the forced list
-        for (forced.list_val.items) |item| {
-            if (item.type == .lazy_seq) {
+        for (forced.list.items.items) |item| {
+            if (std.meta.activeTag(item) == .lazy_seq) {
                 // Recursively realize nested lazy-seqs
                 const realized = try fullyRealizeLazySeq(allocator, item);
-                if (realized.type == .list) {
-                    for (realized.list_val.items) |ri| {
-                        try result.append(allocator, try ri.clone(allocator));
+                if (std.meta.activeTag(realized) == .list) {
+                    for (realized.list.items.items) |ri| {
+                        try result.append(allocator, try vm.clone(&ri, allocator));
                     }
                 } else {
                     try result.append(allocator, realized);
                 }
             } else {
-                try result.append(allocator, try item.clone(allocator));
+                try result.append(allocator, try vm.clone(&item, allocator));
             }
         }
-        forced.deinit(allocator);
+        vm.valueDeinit(&forced, allocator);
 
         // Check if there's a lazy-seq tail to continue
-        if (result.items.len > 0 and result.items[result.items.len - 1].type == .lazy_seq) {
+        if (result.items.len > 0 and std.meta.activeTag(result.items[result.items.len - 1]) == .lazy_seq) {
             current = result.pop() orelse break;
         } else {
             break;
         }
     }
-    if (current.type != .lazy_seq) {
-        current.deinit(allocator);
+    if (std.meta.activeTag(current) != .lazy_seq) {
+        vm.valueDeinit(&current, allocator);
     }
-    return Value.listValue(result);
+    return try vm.listValue(allocator, result);
 }
 
-pub fn runRepl(allocator: Allocator, env: *Value.Env) anyerror!void {
+pub fn runRepl(allocator: Allocator, env: *vm.Env) anyerror!void {
     try writeStdout("Clojure VM in Zig\n");
 
     var input_buf: [4096]u8 = undefined;
@@ -160,14 +161,14 @@ pub fn runRepl(allocator: Allocator, env: *Value.Env) anyerror!void {
 }
 
 /// Get the current namespace's env for evaluation.
-fn getCurrentNsEnv(env: *Value.Env) ?*Value.Env {
+fn getCurrentNsEnv(env: *vm.Env) ?*vm.Env {
     const ns_mgr = eval_ns.findNsManager(env) orelse return null;
     const current_ns = ns_mgr.getCurrentNamespace();
     return ns_mgr.getNamespace(current_ns);
 }
 
 /// Returns true if the REPL should exit (e.g., quit/exit called)
-fn evaluateAndPrint(allocator: Allocator, input: []const u8, env: *Value.Env) anyerror!bool {
+fn evaluateAndPrint(allocator: Allocator, input: []const u8, env: *vm.Env) anyerror!bool {
     var pos: usize = 0;
     while (pos < input.len) {
         var p = try parser.Parser.init(allocator, input[pos..]);
@@ -192,7 +193,7 @@ fn evaluateAndPrint(allocator: Allocator, input: []const u8, env: *Value.Env) an
 
         // Parser succeeded - evaluate the form
         const form = parsed_form;
-        const result = eval.eval(allocator, form, env) catch |err| {
+        const result_ptr = eval.eval(allocator, form, env) catch |err| {
             // GC handles form cleanup
             switch (err) {
                 eval.EvalError.ReplExit => {
@@ -209,12 +210,12 @@ fn evaluateAndPrint(allocator: Allocator, input: []const u8, env: *Value.Env) an
         };
         // Force lazy-seqs before printing so they show realized values
         var print_val: Value = undefined;
-        if (result.type == .lazy_seq) {
-            print_val = try fullyRealizeLazySeq(allocator, result);
+        if (std.meta.activeTag(result_ptr.*) == .lazy_seq) {
+            print_val = try fullyRealizeLazySeq(allocator, result_ptr.*);
         } else {
-            print_val = result;
+            print_val = result_ptr.*;
         }
-        const formatted = try print_val.fmt(allocator);
+        const formatted = try vm.fmt(print_val, allocator);
         try writeStdout(formatted);
         try writeStdout("\n");
         // GC handles all cleanup — no manual deinit/free for GC-allocated values.

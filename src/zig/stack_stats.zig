@@ -1,9 +1,10 @@
 // Stack usage statistics: captures stack pointer baselines at startup
 // and exposes zig.core/stack-stats for runtime inspection.
 const std = @import("std");
-const Value = @import("value.zig");
+const vm = @import("value.zig");
+const Value = vm.Value;
 const list = @import("list.zig");
-const Env = Value.Env;
+const Env = vm.Env;
 
 const Allocator = std.mem.Allocator;
 
@@ -73,7 +74,7 @@ pub fn getStackStats() StackStats {
 ///   :vm-baseline   — stack pointer after clojure core init
 ///   :current       — current stack pointer
 ///   :usage         — app-baseline - current (bytes of stack consumed)
-pub fn core_stack_stats(self: *Value, args: list.List, env: *Env) anyerror!Value {
+pub fn core_stack_stats(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 0) return error.ArityError;
 
@@ -81,11 +82,11 @@ pub fn core_stack_stats(self: *Value, args: list.List, env: *Env) anyerror!Value
     const stats = getStackStats();
 
     // Build a map: {:app-baseline N, :vm-baseline N, :current N, :usage N}
-    var entries: std.ArrayListUnmanaged(Value.MapEntry) = .empty;
+    var entries: std.ArrayListUnmanaged(vm.MapEntry) = .empty;
     errdefer {
         for (entries.items) |*e| {
-            e.key.deinit(allocator);
-            e.value.deinit(allocator);
+            vm.valueDeinit(&e.key, allocator);
+            vm.valueDeinit(&e.value, allocator);
         }
         entries.deinit(allocator);
     }
@@ -98,17 +99,17 @@ pub fn core_stack_stats(self: *Value, args: list.List, env: *Env) anyerror!Value
     };
 
     for (fields) |f| {
-        const key = try Value.keywordValue(allocator, f.key);
-        const val = Value.intValue(@as(i64, @intCast(f.val)));
+        const key = try vm.keywordValue(allocator, f.key);
+        const val = vm.intValue(@as(i64, @intCast(f.val)));
         try entries.append(allocator, .{ .key = key, .value = val });
     }
 
-    return Value.mapValue(entries);
+    return try vm.mapValue(allocator, entries);
 }
 
 /// Register the stack-stats builtin in the zig.core namespace.
 pub fn registerStackStats(env: *Env) anyerror!void {
-    try env.put("stack-stats", Value.builtinFnValue(core_stack_stats));
+    try env.put("stack-stats", vm.builtinFnValue(core_stack_stats));
 }
 
 test "stack_stats::captureStackPtr: returns non-zero address" {

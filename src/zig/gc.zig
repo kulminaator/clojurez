@@ -41,15 +41,25 @@ pub const GCObjectType = enum(u8) {
     env = 13,       // Env struct (namespace environment)
     namespace_manager = 14, // NamespaceManager struct
     queue_items = 4, // array of Value objects (queue items)
-    env_entries = 5, // array of StringArrayHashMap Entry{ key: []u8, value: Value }
-    lazy_seq_thunk = 6, // LazySeqThunk { params: list.List, body: list.List, env: Env }
-    atom_data = 7,  // AtomData { value: Value, ref_count: usize }
+    lazy_seq_thunk = 5, // LazySeqThunk { params: list.List, body: list.List, env: Env }
+    atom_data = 6,  // AtomData { value: Value, ref_count: usize }
     fn_data = 8,    // FnData { arities: ArrayListUnmanaged(Arity), env: Env }
     cons_data = 9,  // ConsData { head: Value, tail: Value, allocator: Allocator }
     hash_map_node = 10, // PersistentHashMap HAMT node (Node union)
     hash_map_kvp_array = 11, // array of Kvp { key: Value, val: Value } in HAMT
     hash_map_sub_nodes = 12, // array of ?*Node (sub-node pointers in HAMT)
     record_data = 15,        // RecordData { type_name, fields, extmap, meta, allocator }
+    list_data = 16,   // ListData { items: ArrayListUnmanaged(Value) }
+    vector_data = 17, // VectorData { items: ArrayListUnmanaged(Value) }
+    map_data = 18,    // MapData { entries: ArrayListUnmanaged(MapEntry) }
+    set_data = 19,    // SetData { items: ArrayListUnmanaged(Value) }
+    queue_data = 20,  // QueueData { items: ArrayListUnmanaged(Value) }
+    fn_arities = 21,  // array of Arity { params: list.List, body: list.List, rest_name }
+    string_data = 22, // raw string bytes (no child pointers to scan)
+    bigint_limbs = 23, // array of u64 limbs (BigInt/BigDecimal/Ratio internal storage)
+    bigint_data = 24,  // BigInt struct { sign, limbs, allocator, owns_limbs }
+    ratio_data = 25,   // Ratio struct { num: BigInt, den: BigInt }
+    decimal_data = 26, // BigDecimal struct { unscaled: BigInt, scale: i32 }
 };
 
 const Header = struct {
@@ -166,32 +176,27 @@ pub const GC = struct {
         self.freeHeaderTable();
         self.log("[GC] DEINIT: blocks={d} live={d}\n", .{ self.block_count, self.current_allocated });
 
-        // Free all remaining blocks.
-        // Safeguard: verify magic number to protect against corrupted headers.
-        // At program exit, the OS reclaims all memory anyway, so we just
-        // need to avoid double-frees or invalid frees that could crash.
-        var block = self.blocks;
-        var freed: usize = 0;
-        var skipped: usize = 0;
-        while (block) |b| {
-            const next = b.next;
-            if (b.magic == MAGIC) {
-                const total = b.offset + b.size;
-                const block_start = @as([*]u8, @ptrCast(b));
-                self.wrapped.free(block_start[0..total]);
-                freed += 1;
-            } else {
-                // Corrupted header — skip to avoid invalid free.
-                // The OS will reclaim this memory on exit.
-                skipped += 1;
-            }
-            block = next;
-        }
-        self.log("[GC] DEINIT: freed={d} skipped={d}\n", .{ freed, skipped });
+        // At program exit, the OS reclaims all memory anyway.
+        // Freeing blocks individually through the slab allocator is O(blocks × pages)
+        // because slabFree does a linear page search for each free.
+        // With hundreds of thousands of blocks, this causes ~1.5s shutdown delay.
+        // Instead, skip individual block freeing and let the slab allocator's
+        // deinit handle cleanup efficiently (frees all pages directly).
+        // Just clean up our bookkeeping structures.
         self.blocks = null;
         self.block_count = 0;
-        self.wrapped.free(self.roots.items);
+
+        // Free the roots array (small allocation, not via slab)
+        if (self.roots.items.len > 0) {
+            self.wrapped.free(self.roots.items);
+        }
         self.roots = .empty;
+
+        // Free temp_roots array if any
+        if (self.temp_roots.items.len > 0) {
+            self.wrapped.free(self.temp_roots.items);
+        }
+        self.temp_roots = .empty;
     }
 
     /// Return a std.mem.Allocator backed by the GC.
@@ -614,6 +619,19 @@ pub const GC = struct {
         if (need_collect) {
             if (self.scan_fn) |fn_ptr| {
                 self.auto_gc_pending = false;
+                self.manual_sweep_pending = false;
+                self.collect(fn_ptr);
+            }
+        }
+    }
+
+    /// Handle only deferred manual sweeps (from zig.core/gc-sweep).
+    /// Does NOT trigger auto-GC collections. This is useful for file
+    /// execution where auto-GC is unnecessary overhead (OS reclaims
+    /// all memory on exit), but manual sweeps still need to run.
+    pub fn tryDeferredSweep(self: *Self) void {
+        if (self.manual_sweep_pending) {
+            if (self.scan_fn) |fn_ptr| {
                 self.manual_sweep_pending = false;
                 self.collect(fn_ptr);
             }

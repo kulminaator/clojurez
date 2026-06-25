@@ -1,8 +1,9 @@
 const std = @import("std");
-const Value = @import("value.zig");
+const vm = @import("value.zig");
+const Value = vm.Value;
 const list = @import("list.zig");
 const vec = @import("vector.zig");
-const Env = Value.Env;
+const Env = vm.Env;
 const phm = @import("persistent_hash_map.zig");
 const parser = @import("parser.zig");
 const eval_helpers = @import("namespaces/core/eval_helpers.zig");
@@ -17,8 +18,22 @@ const gc_mod = @import("gc.zig");
 
 const Allocator = std.mem.Allocator;
 
+/// Allocate a Value on the GC heap and initialize it from a stack Value.
+/// Used for Values constructed directly (not cloned), e.g. vm.nilValue(), vm.listValue(...).
+pub fn allocValue(allocator: Allocator, val: Value) anyerror!*Value {
+    const ptr = try allocator.create(Value);
+    ptr.* = val;
+    return ptr;
+}
+
+/// Dereference and deinit a *Value, used for intermediate results that won't be returned.
+pub fn deallocValue(allocator: Allocator, ptr: *Value) void {
+    ptr.*.deinit(allocator);
+    // Don't destroy - GC manages the memory
+}
+
 /// Unified special form handler signature.
-const SpecialFormFn = *const fn (Allocator, list.List, *Env, usize) anyerror!Value;
+const SpecialFormFn = *const fn (Allocator, *const list.List, *Env, usize) anyerror!*Value;
 
 /// Dispatch table: static array of special form names → handler functions.
 /// Linear search over ~42 entries is trivial and avoids any allocation.
@@ -130,34 +145,34 @@ pub const EvalError = error{
 const MAX_RECURSION = 1000;
 
 /// Main entry point for evaluation.
-pub fn eval(allocator: Allocator, form: Value, env: *Env) anyerror!Value {
-    return evalRec(allocator, form, env, 0);
+pub fn eval(allocator: Allocator, form: Value, env: *Env) anyerror!*Value {
+    return evalRec(allocator, &form, env, 0);
 }
 
-pub fn evalRec(allocator: Allocator, form: Value, env: *Env, depth: usize) anyerror!Value {
+pub fn evalRec(allocator: Allocator, form: *const Value, env: *Env, depth: usize) anyerror!*Value {
     if (depth > MAX_RECURSION) return error.RecursionLimit;
 
-    switch (form.type) {
+    switch (form.*) {
         .nil, .bool, .integer, .float, .bigint, .ratio, .decimal, .string, .regex, .character, .keyword, .set, .queue, .atom, .reduced, .wrapped, .record => {
-            return try form.clone(allocator);
+            return try vm.cloneGC(form, allocator);
         },
         .symbol => {
-            if (std.mem.eql(u8, form.sym_val, "quote") or
-                std.mem.eql(u8, form.sym_val, "quasiquote") or
-                std.mem.eql(u8, form.sym_val, "unquote") or
-                std.mem.eql(u8, form.sym_val, "unquote-splicing"))
+            if (std.mem.eql(u8, form.*.symbol, "quote") or
+                std.mem.eql(u8, form.*.symbol, "quasiquote") or
+                std.mem.eql(u8, form.*.symbol, "unquote") or
+                std.mem.eql(u8, form.*.symbol, "unquote-splicing"))
             {
-                return try form.clone(allocator);
+                return try vm.cloneGC(form, allocator);
             }
             // Handle qualified symbols: alias/name or namespace/name
-            if (std.mem.indexOfScalar(u8, form.sym_val, '/')) |slash_idx| {
-                const alias = form.sym_val[0..slash_idx];
-                const name = form.sym_val[slash_idx + 1 ..];
+            if (std.mem.indexOfScalar(u8, form.*.symbol, '/')) |slash_idx| {
+                const alias = form.*.symbol[0..slash_idx];
+                const name = form.*.symbol[slash_idx + 1 ..];
                 // Resolve through namespace manager
                 const ns_mgr = findNsManager(env) orelse {
-                    const val2 = env.get(form.sym_val);
-                    if (val2) |v| return try v.clone(allocator);
-                    std.debug.print("Undefined symbol: '{s}'\n", .{form.sym_val});
+                    const val2 = env.get(form.*.symbol);
+                    if (val2) |v| return try vm.cloneGC(&v, allocator);
+                    std.debug.print("Undefined symbol: '{s}'\n", .{form.*.symbol});
                     return error.UndefinedSymbol;
                 };
                 // Look up alias in current namespace, or use the part before '/' as a direct namespace name
@@ -166,84 +181,44 @@ pub fn evalRec(allocator: Allocator, form: Value, env: *Env, depth: usize) anyer
                 // Get target namespace's env and look up the name
                 const target_env = ns_mgr.getNamespace(target_ns) orelse {
                     // Target namespace doesn't exist, try direct lookup
-                    const val3 = env.get(form.sym_val);
-                    if (val3) |v| return try v.clone(allocator);
-                    std.debug.print("Undefined symbol: '{s}'\n", .{form.sym_val});
+                    const val3 = env.get(form.*.symbol);
+                    if (val3) |v| return try vm.cloneGC(&v, allocator);
+                    std.debug.print("Undefined symbol: '{s}'\n", .{form.*.symbol});
                     return error.UndefinedSymbol;
                 };
                 const val4 = target_env.get(name);
-                if (val4) |v| return try v.clone(allocator);
-                std.debug.print("Undefined symbol: '{s}'\n", .{form.sym_val});
+                if (val4) |v| return try vm.cloneGC(&v, allocator);
+                std.debug.print("Undefined symbol: '{s}'\n", .{form.*.symbol});
                 return error.UndefinedSymbol;
             }
-            const val = env.get(form.sym_val);
-            if (val) |v| return try v.clone(allocator);
-            std.debug.print("Undefined symbol: '{s}'\n", .{form.sym_val});
+            const val = env.get(form.*.symbol);
+            if (val) |v| return try vm.cloneGC(&v, allocator);
+            std.debug.print("Undefined symbol: '{s}'\n", .{form.*.symbol});
             return error.UndefinedSymbol;
         },
         .list => {
-            return try evalList(allocator, form.list_val, env, depth);
+            return try evalList(allocator, &form.*.list.items, env, depth);
         },
         .vector => {
-            // Vectors evaluate element-wise
-            var new_vec: vec.Vector = .empty;
-            errdefer new_vec.deinit(allocator);
-            for (form.vec_val.items) |item| {
-                try new_vec.append(allocator, try evalRec(allocator, item, env, depth + 1));
-            }
-            return Value.vectorValue(new_vec);
+            return try evalVector(allocator, form, env, depth);
         },
         .map => {
-            // Maps evaluate key-value pairs element-wise
-            var new_map: Value.Map = .empty;
-            errdefer {
-                for (new_map.items) |*entry| {
-                    entry.key.deinit(allocator);
-                    entry.value.deinit(allocator);
-                }
-                allocator.free(new_map.items);
-            }
-            for (form.map_val.items) |entry| {
-                try new_map.append(allocator, .{
-                    .key = try evalRec(allocator, entry.key, env, depth + 1),
-                    .value = try evalRec(allocator, entry.value, env, depth + 1),
-                });
-            }
-            return Value.mapValue(new_map);
+            return try evalMap(allocator, form, env, depth);
         },
-        .function, .builtin_fn => return try form.clone(allocator),
-        .lazy_seq => return try form.clone(allocator),
+        .function, .builtin_fn => return try vm.cloneGC(form, allocator),
+        .lazy_seq => return try vm.cloneGC(form, allocator),
         .cons => {
-            // Evaluate cons cells as forms (like lists)
-            // Convert cons chain to a list, then evaluate
-            var new_list: list.List = .empty;
-            errdefer new_list.deinit(allocator);
-            var current = form;
-            while (current.type == .cons) {
-                const cdata = current.cons_val orelse break;
-                try new_list.append(allocator, try cdata.head.clone(allocator));
-                current = cdata.tail;
-            }
-            // If tail is a list, splice in its elements
-            if (current.type == .list) {
-                for (current.list_val.items) |item| {
-                    try new_list.append(allocator, try item.clone(allocator));
-                }
-            } else if (current.type != .nil) {
-                // Improper list - append the tail as a final element
-                try new_list.append(allocator, try current.clone(allocator));
-            }
-            return try evalList(allocator, new_list, env, depth);
+            return try evalCons(allocator, form, env, depth);
         },
     }
     unreachable;
 }
 
 // Parse ([params] body...)+ pairs from a list slice.
-// Returns an ArrayListUnmanaged(Value.Arity) and updates *idx to point past the last consumed item.
+// Returns an ArrayListUnmanaged(vm.Arity) and updates *idx to point past the last consumed item.
 // Handles both flattened form: (fn [x] body) and wrapped form: (fn ([x] body))
-fn parseArityForms(allocator: Allocator, items: []const Value, end: usize, idx: *usize) anyerror!std.ArrayListUnmanaged(Value.Arity) {
-    var arities: std.ArrayListUnmanaged(Value.Arity) = .empty;
+fn parseArityForms(allocator: Allocator, items: []const Value, end: usize, idx: *usize) anyerror!std.ArrayListUnmanaged(vm.Arity) {
+    var arities: std.ArrayListUnmanaged(vm.Arity) = .empty;
     errdefer {
         for (arities.items) |*a| {
             a.params.deinit(allocator);
@@ -260,10 +235,10 @@ fn parseArityForms(allocator: Allocator, items: []const Value, end: usize, idx: 
         var params_list: list.List = undefined;
         var body_forms: []const Value = undefined;
 
-        if (form.type == .vector) {
+        if (std.meta.activeTag(form) == .vector) {
             // Flattened form: (fn [x] body1 body2 [y] body3)
             // params = [x], body = body1 body2
-            params_list = try helpers.listFromVector(allocator, form.vec_val);
+            params_list = try helpers.listFromVector(allocator, form.vector.items);
 
             // Collect body forms until next [params] or end
             const body_start = idx.*;
@@ -275,25 +250,25 @@ fn parseArityForms(allocator: Allocator, items: []const Value, end: usize, idx: 
                 idx.* += 1;
             }
             body_forms = items[body_start..idx.*];
-        } else if (form.type == .list) {
+        } else if (std.meta.activeTag(form) == .list) {
             // Wrapped form: (fn ([x] body1 body2) ([y] body3))
             // Or: (fn (x y) body) from macro-generated code where (list x y) creates (x y)
             // Extract params and body from within the list
-            if (form.list_val.items.len == 0) return error.TypeError;
-            const inner_first = form.list_val.items[0];
-            if (inner_first.type == .vector) {
+            if (form.list.items.items.len == 0) return error.TypeError;
+            const inner_first = form.list.items.items[0];
+            if (std.meta.activeTag(inner_first) == .vector) {
                 // Standard: (fn ([x] body))
-                params_list = try helpers.listFromVector(allocator, inner_first.vec_val);
-                body_forms = form.list_val.items[1..];
-            } else if (inner_first.type == .list) {
+                params_list = try helpers.listFromVector(allocator, inner_first.vector.items);
+                body_forms = form.list.items.items[1..];
+            } else if (std.meta.activeTag(inner_first) == .list) {
                 // Nested list params: (fn ((x y) body)) - treat inner list as params
-                params_list = inner_first.list_val;
-                body_forms = form.list_val.items[1..];
+                params_list = inner_first.list.items;
+                body_forms = form.list.items.items[1..];
             } else {
                 // Macro-generated: (fn (x) body) where (list x) created (x)
                 // The entire list is the params form: (x) means params = [x]
                 // Body forms come from the parent list after this form
-                params_list = form.list_val;
+                params_list = form.list.items;
 
                 // Collect body forms from the parent list
                 const body_start = idx.*;
@@ -313,9 +288,9 @@ fn parseArityForms(allocator: Allocator, items: []const Value, end: usize, idx: 
         // Wrap body in a do block
         var body_list: list.List = .empty;
         errdefer body_list.deinit(allocator);
-        try body_list.append(allocator, try Value.symValue(allocator, "do"));
+        try body_list.append(allocator, try vm.symValue(allocator, "do"));
         for (body_forms) |form_item| {
-            try body_list.append(allocator, try form_item.clone(allocator));
+            try body_list.append(allocator, try vm.clone(&form_item, allocator));
         }
 
         // Parse params for variadic support (& rest)
@@ -328,7 +303,7 @@ fn parseArityForms(allocator: Allocator, items: []const Value, end: usize, idx: 
         const cloned_params = try list.clone(&parsed.params, allocator);
         const cloned_body = try list.clone(&body_list, allocator);
         const cloned_rest = if (parsed.rest_name) |rn| try allocator.dupe(u8, rn) else null;
-        try arities.append(allocator, Value.Arity{
+        try arities.append(allocator, vm.Arity{
             .params = cloned_params,
             .body = cloned_body,
             .rest_name = cloned_rest,
@@ -357,18 +332,18 @@ fn parseParams(allocator: Allocator, params: list.List) anyerror!ParsedParams {
     var found_amp = false;
     while (i < params.items.len) : (i += 1) {
         const item = params.items[i];
-        if (!found_amp and item.type == .symbol and std.mem.eql(u8, item.sym_val, "&")) {
+        if (!found_amp and std.meta.activeTag(item) == .symbol and std.mem.eql(u8, item.symbol, "&")) {
             found_amp = true;
             continue;
         }
         if (found_amp) {
             // The symbol after & is the rest parameter name
-            if (item.type != .symbol) return error.TypeError;
-            rest_name = try allocator.dupe(u8, item.sym_val);
+            if (std.meta.activeTag(item) != .symbol) return error.TypeError;
+            rest_name = try allocator.dupe(u8, item.symbol);
             // No more params expected after rest
             break;
         } else {
-            try regular_params.append(allocator, try item.clone(allocator));
+            try regular_params.append(allocator, try vm.clone(&item, allocator));
         }
     }
 
@@ -378,14 +353,14 @@ fn parseParams(allocator: Allocator, params: list.List) anyerror!ParsedParams {
     };
 }
 
-fn evalList(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
-    if (l.items.len == 0) return Value.listValue(list.empty());
+fn evalList(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
+    if (l.items.len == 0) return try allocValue(allocator, try vm.listValue(allocator, list.empty()));
 
     const first = l.items[0];
 
     // Self-evaluating symbols (special forms) — dispatch via lookup table
-    if (first.type == .symbol) {
-        if (findSpecialForm(first.sym_val)) |fn_ptr| {
+    if (std.meta.activeTag(first) == .symbol) {
+        if (findSpecialForm(first.symbol)) |fn_ptr| {
             return fn_ptr(allocator, l, env, depth);
         }
     }
@@ -394,47 +369,101 @@ fn evalList(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerro
     return try evalFunctionCall(allocator, l, env, depth + 1);
 }
 
-fn evalFunctionCall(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+/// Evaluate a vector element-wise.
+/// Extracted from evalRec to isolate its stack frame.
+fn evalVector(allocator: Allocator, form: *const Value, env: *Env, depth: usize) anyerror!*Value {
+    var new_vec: vec.Vector = .empty;
+    errdefer new_vec.deinit(allocator);
+    for (form.*.vector.items.items) |item| {
+        const ptr = try evalRec(allocator, &item, env, depth + 1);
+        try new_vec.append(allocator, ptr.*);
+    }
+    return try allocValue(allocator, try vm.vectorValue(allocator, new_vec));
+}
+
+/// Evaluate a map key-value pairs element-wise.
+/// Extracted from evalRec to isolate its stack frame.
+fn evalMap(allocator: Allocator, form: *const Value, env: *Env, depth: usize) anyerror!*Value {
+    var new_map: vm.Map = .empty;
+    errdefer {
+        for (new_map.items) |*entry| {
+            vm.valueDeinit(&entry.key, allocator);
+            vm.valueDeinit(&entry.value, allocator);
+        }
+        allocator.free(new_map.items);
+    }
+    for (form.*.map.entries.items) |entry| {
+        const key_ptr = try evalRec(allocator, &entry.key, env, depth + 1);
+        const val_ptr = try evalRec(allocator, &entry.value, env, depth + 1);
+        try new_map.append(allocator, .{
+            .key = key_ptr.*,
+            .value = val_ptr.*,
+        });
+    }
+    return try allocValue(allocator, try vm.mapValue(allocator, new_map));
+}
+
+/// Evaluate a cons cell as a form: convert cons chain to list, then evaluate.
+/// Extracted from evalRec to isolate its stack frame (cons evaluation needs a Value copy).
+fn evalCons(allocator: Allocator, form: *const Value, env: *Env, depth: usize) anyerror!*Value {
+    var new_list: list.List = .empty;
+    errdefer new_list.deinit(allocator);
+    var current_val = form.*;
+    while (std.meta.activeTag(current_val) == .cons) {
+        const cdata = current_val.cons;
+        try new_list.append(allocator, try vm.clone(&cdata.head, allocator));
+        current_val = cdata.tail;
+    }
+    // If tail is a list, splice in its elements
+    if (std.meta.activeTag(current_val) == .list) {
+        for (current_val.list.items.items) |item| {
+            try new_list.append(allocator, try vm.clone(&item, allocator));
+        }
+    } else if (std.meta.activeTag(current_val) != .nil) {
+        // Improper list - append the tail as a final element
+        try new_list.append(allocator, try vm.clone(&current_val, allocator));
+    }
+    return try evalList(allocator, &new_list, env, depth);
+}
+
+fn evalFunctionCall(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     // Evaluate the operator
-    var op = try evalRec(allocator, l.items[0], env, depth);
-    defer op.deinit(allocator);
+    const op_ptr = try evalRec(allocator, &l.items[0], env, depth);
+    defer vm.valueDeinit(&op_ptr.*, allocator);
 
     // Check if operator is a macro
-    if (op.type == .function and op.fn_val.?.is_macro) {
+    if (std.meta.activeTag(op_ptr.*) == .function and op_ptr.*.function.is_macro) {
         // Macro: pass unevaluated arguments
         var macro_args: list.List = .empty;
-        errdefer macro_args.deinit(allocator);
+        defer macro_args.deinit(allocator);
         for (l.items[1..]) |arg| {
-            try macro_args.append(allocator, try arg.clone(allocator));
+            try macro_args.append(allocator, try vm.clone(&arg, allocator));
         }
-        // Call the macro with unevaluated args
-        var expanded = try call(allocator, op, macro_args, env, depth);
+        // Call the macro with unevaluated args — returns Value by value
+        var expanded = try call(allocator, op_ptr, &macro_args, env, depth);
         // Evaluate the expanded form
-        const result = try evalRec(allocator, expanded, env, depth);
-        expanded.deinit(allocator);
+        const result = try evalRec(allocator, &expanded, env, depth);
+        vm.valueDeinit(&expanded, allocator);
         return result;
     }
 
     // Evaluate all arguments
     var args: list.List = .empty;
-    errdefer args.deinit(allocator);
+    defer args.deinit(allocator);
     for (l.items[1..]) |arg| {
-        try args.append(allocator, try evalRec(allocator, arg, env, depth));
+        const ptr = try evalRec(allocator, &arg, env, depth);
+        try args.append(allocator, ptr.*);
     }
 
-    // Transfer ownership of args to call (call will deinit it).
-    // Reset local copy to prevent double-free from errdefer.
-    const transferred = args;
-    args = list.List.empty;
-
-    // Call the function
-    return try call(allocator, op, transferred, env, depth);
+    // Call the function — returns Value by value, allocate once for return
+    const result = try call(allocator, op_ptr, &args, env, depth);
+    return try allocValue(allocator, result);
 }
 
-fn evalLet(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+fn evalLet(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     if (l.items.len < 2) return error.ArityError;
-    const bindings = l.items[1];
-    if (bindings.type != .list and bindings.type != .vector) return error.TypeError;
+    const bindings = &l.items[1];
+    if (std.meta.activeTag(bindings.*) != .list and std.meta.activeTag(bindings.*) != .vector) return error.TypeError;
     const body = l.items[2..];
 
     // Heap-allocate Env to reduce C stack pressure during deep recursion.
@@ -446,39 +475,53 @@ fn evalLet(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror
     defer pushEnvTempRoot(new_env).deinit();
     defer allocator.destroy(new_env);
 
-    const items = switch (bindings.type) {
-        .list => bindings.list_val.items,
-        .vector => bindings.vec_val.items,
+    const items = switch (std.meta.activeTag(bindings.*)) {
+        .list => bindings.*.list.items.items,
+        .vector => bindings.*.vector.items.items,
         else => unreachable,
     };
 
     var i: usize = 0;
     while (i < items.len) : (i += 2) {
-        const sym = items[i];
+        const sym = &items[i];
         // Evaluate binding value in new_env so later bindings can reference earlier ones
-        const val = try evalRec(allocator, items[i + 1], new_env, depth);
+        const val_ptr = try evalRec(allocator, &items[i + 1], new_env, depth);
         // Bind using destructuring if sym is a vector pattern
-        try bindPattern(allocator, sym, val, new_env, depth);
+        try bindPattern(allocator, sym.*, val_ptr.*, new_env, depth);
     }
 
-    var do_result: Value = Value.nilValue();
-    errdefer do_result.deinit(allocator);
-    for (body) |form| {
-        do_result.deinit(allocator);
-        do_result = Value.nilValue();
-        do_result = try evalRec(allocator, form, new_env, depth);
+    // Evaluate body forms, returning the last result.
+    // Keep a *Value pointer instead of copying Value onto the stack.
+    var last_ptr: ?*Value = null;
+    errdefer {
+        if (last_ptr) |p| {
+            vm.valueDeinit(&p.*, allocator);
+            allocator.destroy(p);
+        }
     }
-    return do_result;
+    for (body) |form| {
+        if (last_ptr) |p| {
+            vm.valueDeinit(&p.*, allocator);
+            allocator.destroy(p);
+        }
+        last_ptr = try evalRec(allocator, &form, new_env, depth);
+    }
+    if (last_ptr) |p| {
+        const result = p.*;
+        allocator.destroy(p);
+        return try allocValue(allocator, result);
+    }
+    return try allocValue(allocator, vm.nilValue());
 }
 
-fn evalLetFn(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+fn evalLetFn(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     if (l.items.len < 2) return error.ArityError;
     const bindings = l.items[1];
-    if (bindings.type != .list and bindings.type != .vector) return error.TypeError;
+    if (std.meta.activeTag(bindings) != .list and std.meta.activeTag(bindings) != .vector) return error.TypeError;
     const body_forms = l.items[2..];
-    const bind_items = switch (bindings.type) {
-        .list => bindings.list_val.items,
-        .vector => bindings.vec_val.items,
+    const bind_items = switch (std.meta.activeTag(bindings)) {
+        .list => bindings.list.items.items,
+        .vector => bindings.vector.items.items,
         else => return error.TypeError,
     };
 
@@ -494,27 +537,27 @@ fn evalLetFn(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerr
 
     // Parse each function definition: (name [params] body...)
     for (bind_items) |binding| {
-        if (binding.type != .list or binding.list_val.items.len < 3) return error.TypeError;
-        const b = binding.list_val;
+        if (std.meta.activeTag(binding) != .list or binding.list.items.items.len < 3) return error.TypeError;
+        const b = binding.list;
 
         // First element is the function name
-        const fname = b.items[0];
-        if (fname.type != .symbol) return error.TypeError;
+        const fname = b.items.items[0];
+        if (std.meta.activeTag(fname) != .symbol) return error.TypeError;
 
         // Second element is the parameter list
-        const params_form = b.items[1];
-        if (params_form.type != .list and params_form.type != .vector) return error.TypeError;
-        const params_list = if (params_form.type == .vector)
-            try helpers.listFromVector(allocator, params_form.vec_val)
+        const params_form = b.items.items[1];
+        if (std.meta.activeTag(params_form) != .list and std.meta.activeTag(params_form) != .vector) return error.TypeError;
+        const params_list = if (std.meta.activeTag(params_form) == .vector)
+            try helpers.listFromVector(allocator, params_form.vector.items)
         else
-            params_form.list_val;
+            params_form.list.items;
 
         // Remaining elements are the body
         var body_list: list.List = .empty;
         errdefer body_list.deinit(allocator);
-        try body_list.append(allocator, try Value.symValue(allocator, "do"));
-        for (b.items[2..]) |form_item| {
-            try body_list.append(allocator, try form_item.clone(allocator));
+        try body_list.append(allocator, try vm.symValue(allocator, "do"));
+        for (b.items.items[2..]) |form_item| {
+            try body_list.append(allocator, try vm.clone(&form_item, allocator));
         }
 
         // Parse params for variadic support
@@ -525,7 +568,7 @@ fn evalLetFn(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerr
         }
 
         // Build arity
-        var arities: std.ArrayListUnmanaged(Value.Arity) = .empty;
+        var arities: std.ArrayListUnmanaged(vm.Arity) = .empty;
         errdefer {
             for (arities.items) |*a| {
                 a.params.deinit(allocator);
@@ -538,7 +581,7 @@ fn evalLetFn(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerr
         const cloned_params = try list.clone(&parsed.params, allocator);
         const cloned_body = try list.clone(&body_list, allocator);
         const cloned_rest = if (parsed.rest_name) |rn| try allocator.dupe(u8, rn) else null;
-        try arities.append(allocator, Value.Arity{
+        try arities.append(allocator, vm.Arity{
             .params = cloned_params,
             .body = cloned_body,
             .rest_name = cloned_rest,
@@ -551,53 +594,53 @@ fn evalLetFn(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerr
             .parent = &new_env,
             .ns_manager = null,
         };
-        var fn_val = try Value.fnValue(allocator, arities, fn_env, false);
-        const persistent_fn = try fn_val.clone(allocator);
-        fn_val.deinit(allocator);
+        var fn_val = try vm.fnValue(allocator, arities, fn_env, false);
+        const persistent_fn = try vm.clone(&fn_val, allocator);
+        vm.valueDeinit(&fn_val, allocator);
 
         // Bind in new_env
-        try new_env.put(fname.sym_val, persistent_fn);
+        try new_env.put(fname.symbol, persistent_fn);
     }
 
-    var do_result: Value = Value.nilValue();
-    errdefer do_result.deinit(allocator);
+    var do_result: Value = vm.nilValue();
+    errdefer vm.valueDeinit(&do_result, allocator);
     for (body_forms) |form| {
-        do_result.deinit(allocator);
-        do_result = Value.nilValue();
-        do_result = try evalRec(allocator, form, &new_env, depth);
+        const result_ptr = try evalRec(allocator, &form, &new_env, depth);
+        vm.valueDeinit(&do_result, allocator);
+        do_result = result_ptr.*;
     }
-    return do_result;
+    return try allocValue(allocator, do_result);
 }
 
 /// Bind a value to a pattern. Supports simple symbols and vector destructuring with & rest.
-fn bindPattern(allocator: Allocator, pattern: Value, val: Value, env: *Value.Env, depth: usize) anyerror!void {
-    switch (pattern.type) {
+fn bindPattern(allocator: Allocator, pattern: Value, val: Value, env: *vm.Env, depth: usize) anyerror!void {
+    switch (std.meta.activeTag(pattern)) {
         .symbol => {
-            try env.put(pattern.sym_val, try val.clone(allocator));
+            try env.put(pattern.symbol, try vm.clone(&val, allocator));
         },
         .vector => {
             // Vector destructuring: [a b & rest] matches elements of val
-            const vitems = switch (val.type) {
-                .list => val.list_val.items,
-                .vector => val.vec_val.items,
+            const vitems = switch (std.meta.activeTag(val)) {
+                .list => val.list.items.items,
+                .vector => val.vector.items.items,
                 else => return error.TypeError,
             };
             var j: usize = 0;
-            while (j < pattern.vec_val.items.len) : (j += 1) {
-                const pat_item = pattern.vec_val.items[j];
+            while (j < pattern.vector.items.items.len) : (j += 1) {
+                const pat_item = pattern.vector.items.items[j];
                 // Handle & rest (& is parsed as a symbol)
-                if (pat_item.type == .symbol and std.mem.eql(u8, pat_item.sym_val, "&")) {
-                    if (j + 1 < pattern.vec_val.items.len) {
-                        const rest_sym = pattern.vec_val.items[j + 1];
+                if (std.meta.activeTag(pat_item) == .symbol and std.mem.eql(u8, pat_item.symbol, "&")) {
+                    if (j + 1 < pattern.vector.items.items.len) {
+                        const rest_sym = pattern.vector.items.items[j + 1];
                         // Collect remaining items into a list (starting from current position j)
                         var rest_list: list.List = .empty;
                         errdefer rest_list.deinit(allocator);
                         var k: usize = j;
                         while (k < vitems.len) : (k += 1) {
-                            try rest_list.append(allocator, try vitems[k].clone(allocator));
+                            try rest_list.append(allocator, try vm.clone(&vitems[k], allocator));
                         }
-                        if (rest_sym.type == .symbol) {
-                            try env.put(rest_sym.sym_val, Value.listValue(rest_list));
+                        if (std.meta.activeTag(rest_sym) == .symbol) {
+                            try env.put(rest_sym.symbol, try vm.listValue(allocator, rest_list));
                         }
                         j += 1; // Skip the rest symbol
                     }
@@ -611,38 +654,38 @@ fn bindPattern(allocator: Allocator, pattern: Value, val: Value, env: *Value.Env
     }
 }
 
-fn evalCond(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+fn evalCond(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     if (l.items.len < 2) return error.ArityError;
     const clauses = l.items[1..];
     var i: usize = 0;
     while (i < clauses.len) : (i += 2) {
         const cond = clauses[i];
         // Handle :else clause
-        if (cond.type == .keyword and std.mem.eql(u8, cond.kw_val, "else")) {
+        if (std.meta.activeTag(cond) == .keyword and std.mem.eql(u8, cond.keyword, "else")) {
             if (i + 1 >= clauses.len) return error.ArityError;
-            return try evalRec(allocator, clauses[i + 1], env, depth);
+            return try evalRec(allocator, &clauses[i + 1], env, depth);
         }
 
-        var result = try evalRec(allocator, cond, env, depth);
-        if (result.isTruthy()) {
+        const result_ptr = try evalRec(allocator, &cond, env, depth);
+        if (vm.isTruthy(result_ptr.*)) {
             if (i + 1 >= clauses.len) return error.ArityError;
-            result.deinit(allocator);
-            return try evalRec(allocator, clauses[i + 1], env, depth);
+            vm.valueDeinit(result_ptr, allocator);
+            return try evalRec(allocator, &clauses[i + 1], env, depth);
         }
-        result.deinit(allocator);
+        vm.valueDeinit(result_ptr, allocator);
     }
-    return Value.nilValue();
+    return try allocValue(allocator, vm.nilValue());
 }
 
-fn evalLoop(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+fn evalLoop(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     if (l.items.len < 2) return error.ArityError;
     const bindings = l.items[1];
-    if (bindings.type != .list and bindings.type != .vector) return error.TypeError;
+    if (std.meta.activeTag(bindings) != .list and std.meta.activeTag(bindings) != .vector) return error.TypeError;
     const body = l.items[2..];
 
-    const bind_items = switch (bindings.type) {
-        .list => bindings.list_val.items,
-        .vector => bindings.vec_val.items,
+    const bind_items = switch (std.meta.activeTag(bindings)) {
+        .list => bindings.list.items.items,
+        .vector => bindings.vector.items.items,
         else => unreachable,
     };
 
@@ -655,8 +698,8 @@ fn evalLoop(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerro
     var i: usize = 0;
     while (i < bind_items.len) : (i += 2) {
         const sym = bind_items[i];
-        if (sym.type != .symbol) return error.TypeError;
-        try bind_names.append(allocator, try allocator.dupe(u8, sym.sym_val));
+        if (std.meta.activeTag(sym) != .symbol) return error.TypeError;
+        try bind_names.append(allocator, try allocator.dupe(u8, sym.symbol));
     }
 
     // Initialize environment with initial binding values
@@ -667,8 +710,8 @@ fn evalLoop(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerro
     i = 0;
     while (i < bind_items.len) : (i += 2) {
         const sym = bind_items[i];
-        const val = try evalRec(allocator, bind_items[i + 1], env, depth);
-        try new_env.put(sym.sym_val, val);
+        const val_ptr = try evalRec(allocator, &bind_items[i + 1], env, depth);
+        try new_env.put(sym.symbol, val_ptr.*);
     }
 
     // Loop: evaluate body, check for recur marker, rebind and repeat
@@ -676,62 +719,59 @@ fn evalLoop(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerro
     while (true) {
         if (loop_depth > MAX_RECURSION) return error.RecursionLimit;
 
-        var result: Value = Value.nilValue();
-        errdefer result.deinit(allocator);
+        var result: Value = vm.nilValue();
+        errdefer vm.valueDeinit(&result, allocator);
         for (body) |form| {
-            result.deinit(allocator);
-            result = Value.nilValue();
-            result = try evalRec(allocator, form, &new_env, loop_depth);
+            const result_ptr = try evalRec(allocator, &form, &new_env, loop_depth);
+            vm.valueDeinit(&result, allocator);
+            result = result_ptr.*;
         }
 
         // Check for recur marker: list starting with __recur__ symbol
-        if (result.type == .list and result.list_val.items.len > 0 and
-            result.list_val.items[0].type == .symbol and
-            std.mem.eql(u8, result.list_val.items[0].sym_val, "__recur__"))
+        if (std.meta.activeTag(result) == .list and result.list.items.items.len > 0 and
+            std.meta.activeTag(result.list.items.items[0]) == .symbol and
+            std.mem.eql(u8, result.list.items.items[0].symbol, "__recur__"))
         {
-            const recur_vals = result.list_val.items[1..];
+            const recur_vals = result.list.items.items[1..];
             if (recur_vals.len != bind_names.items.len) {
-                result.deinit(allocator);
+                vm.valueDeinit(&result, allocator);
                 return error.ArityError;
             }
             // Rebind loop variables with new values
             var j: usize = 0;
             while (j < recur_vals.len) : (j += 1) {
-                const new_val = try recur_vals[j].clone(allocator);
+                const new_val = try vm.clone(&recur_vals[j], allocator);
                 try new_env.put(bind_names.items[j], new_val);
             }
-            result.deinit(allocator);
+            vm.valueDeinit(&result, allocator);
             loop_depth += 1;
             continue;
         }
 
-        return result;
+        return try allocValue(allocator, result);
     }
 }
 
-pub fn call(allocator: Allocator, op: Value, args_list: list.List, env: *Env, depth: usize) anyerror!Value {
-    var args = args_list;
-    defer args.deinit(allocator);
-
-    switch (op.type) {
-        .function => return callFunction(allocator, op, args, env, depth),
-        .builtin_fn => return callBuiltinFn(op, args, env),
-        .set => return callSet(allocator, op, args),
-        .keyword => return callKeyword(allocator, op, args),
-        .map => return callMap(allocator, op, args),
-        .record => return callRecord(allocator, op, args),
+pub fn call(allocator: Allocator, op: *const Value, args_list: *const list.List, env: *Env, depth: usize) anyerror!Value {
+    switch (std.meta.activeTag(op.*)) {
+        .function => return callFunction(allocator, op, args_list, env, depth),
+        .builtin_fn => return callBuiltinFn(allocator, op, args_list, env),
+        .set => return callSet(allocator, op, args_list),
+        .keyword => return callKeyword(allocator, op, args_list),
+        .map => return callMap(allocator, op, args_list),
+        .record => return callRecord(allocator, op, args_list),
         .lazy_seq => return callLazySeq(allocator, op, env, depth),
         else => {
-            std.debug.print("NotCallable: tried to call value of type {s}\n", .{@tagName(op.type)});
+            std.debug.print("NotCallable: tried to call value of type {s}\n", .{@tagName(std.meta.activeTag(op.*))});
             return error.NotCallable;
         }
     }
 }
 
 /// Call a user-defined function: match arity, bind params, evaluate body.
-fn callFunction(allocator: Allocator, op: Value, args: list.List, env: *Env, depth: usize) anyerror!Value {
+fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, env: *Env, depth: usize) anyerror!Value {
     _ = env;
-    const fn_data = op.fn_val orelse return error.TypeError;
+    const fn_data = op.function;
     const arity = try matchArity(fn_data, args.items.len);
 
     // Heap-allocate Env to reduce C stack pressure during deep recursion.
@@ -745,7 +785,7 @@ fn callFunction(allocator: Allocator, op: Value, args: list.List, env: *Env, dep
 
     // Bind function name for self-reference (e.g., (fn self [x] (self (dec x))))
     if (fn_data.name) |fn_name| {
-        const fn_clone = try op.clone(allocator);
+        const fn_clone = try vm.clone(op, allocator);
         try new_env.put(fn_name, fn_clone);
     }
 
@@ -754,18 +794,22 @@ fn callFunction(allocator: Allocator, op: Value, args: list.List, env: *Env, dep
 
     // Check for protocol dispatch marker
     if (arity.body.items.len >= 1 and
-        arity.body.items[0].type == .symbol and
-        std.mem.eql(u8, arity.body.items[0].sym_val, "__protocol_dispatch__"))
+        std.meta.activeTag(arity.body.items[0]) == .symbol and
+        std.mem.eql(u8, arity.body.items[0].symbol, "__protocol_dispatch__"))
     {
-        return try protocols.dispatchProtocolMethod(allocator, args, new_env, depth);
+        return try protocols.dispatchProtocolMethod(allocator, args.*, new_env, depth);
     }
 
-    // Evaluate the function body
-    return try evalRec(allocator, Value.listValue(arity.body), new_env, depth);
+    // Evaluate the function body — take ownership from evalRec's *Value
+    const body_val = try vm.listValue(allocator, arity.body);
+    const result_ptr = try evalRec(allocator, &body_val, new_env, depth);
+    const result = result_ptr.*;
+    allocator.destroy(result_ptr);
+    return result;
 }
 
 /// Find the matching arity for a given argument count.
-fn matchArity(fn_data: *const Value.FnData, arg_count: usize) anyerror!*const Value.Arity {
+fn matchArity(fn_data: *const vm.FnData, arg_count: usize) anyerror!*const vm.Arity {
     var i: usize = 0;
     while (i < fn_data.arities.items.len) : (i += 1) {
         const arity = &fn_data.arities.items[i];
@@ -794,7 +838,7 @@ fn cloneFnEnv(allocator: Allocator, src: *const Env) anyerror!Env {
 }
 
 /// Bind arity parameters (regular + rest) to arguments in the call env.
-fn bindArityParams(allocator: Allocator, arity: *const Value.Arity, args: list.List, new_env: *Env) anyerror!void {
+fn bindArityParams(allocator: Allocator, arity: *const vm.Arity, args: *const list.List, new_env: *Env) anyerror!void {
     const min_args = arity.params.items.len;
     const has_rest = arity.rest_name != null;
 
@@ -812,140 +856,144 @@ fn bindArityParams(allocator: Allocator, arity: *const Value.Arity, args: list.L
             errdefer rest_list.deinit(allocator);
             var k: usize = min_args;
             while (k < args.items.len) : (k += 1) {
-                try rest_list.append(allocator, try args.items[k].clone(allocator));
+                try rest_list.append(allocator, try vm.clone(&args.items[k], allocator));
             }
-            try new_env.put(arity.rest_name.?, Value.listValue(rest_list));
+            try new_env.put(arity.rest_name.?, try vm.listValue(allocator, rest_list));
         } else {
             // No extra args: bind empty list to rest parameter
-            try new_env.put(arity.rest_name.?, Value.listValue(.empty));
+            try new_env.put(arity.rest_name.?, try vm.listValue(allocator, .empty));
         }
     }
 }
 
 /// Call a built-in function registered with the VM.
-fn callBuiltinFn(op: Value, args: list.List, env: *Env) anyerror!Value {
-    var op_mut = op;
-    return op_mut.builtin_fn_val(&op_mut, args, env);
+fn callBuiltinFn(_: Allocator, op: *const Value, args: *const list.List, env: *Env) anyerror!Value {
+    // Use cast to avoid copying the large Value struct onto the stack
+    const op_mut = @constCast(op);
+    return op_mut.builtin_fn(op_mut, args, env);
 }
 
 /// Call a set as a function: returns the element if found, nil otherwise.
-fn callSet(allocator: Allocator, op: Value, args: list.List) anyerror!Value {
+fn callSet(allocator: Allocator, op: *const Value, args: *const list.List) anyerror!Value {
     if (args.items.len != 1) return error.ArityError;
-    for (op.set_val.items) |item| {
-        if (item.equals(args.items[0])) {
-            return try item.clone(allocator);
+    for (op.set.items.items) |item| {
+        if (vm.equals(item, args.items[0])) {
+            return try vm.clone(&item, allocator);
         }
     }
-    return Value.nilValue();
+    return vm.nilValue();
 }
 
 /// Call a keyword as a function: looks up the keyword in a map or record.
-fn callKeyword(allocator: Allocator, op: Value, args: list.List) anyerror!Value {
+fn callKeyword(allocator: Allocator, op: *const Value, args: *const list.List) anyerror!Value {
     if (args.items.len != 1) return error.ArityError;
     const coll = args.items[0];
-    if (coll.type == .map) {
-        for (coll.map_val.items) |entry| {
-            if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, op.kw_val)) {
-                return try entry.value.clone(allocator);
+    if (std.meta.activeTag(coll) == .map) {
+        for (coll.map.entries.items) |entry| {
+            if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, op.keyword)) {
+                return try vm.clone(&entry.value, allocator);
             }
         }
-    } else if (coll.type == .record) {
-        for (coll.record_val.?.fields.items) |entry| {
-            if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, op.kw_val)) {
-                return try entry.value.clone(allocator);
+    } else if (std.meta.activeTag(coll) == .record) {
+        for (coll.record.fields.items) |entry| {
+            if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, op.keyword)) {
+                return try vm.clone(&entry.value, allocator);
             }
         }
-        for (coll.record_val.?.extmap.items) |entry| {
-            if (entry.key.type == .keyword and std.mem.eql(u8, entry.key.kw_val, op.kw_val)) {
-                return try entry.value.clone(allocator);
+        for (coll.record.extmap.items) |entry| {
+            if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, op.keyword)) {
+                return try vm.clone(&entry.value, allocator);
             }
         }
     }
-    return Value.nilValue();
+    return vm.nilValue();
 }
 
 /// Call a map as a function: returns value for key, or not-found if provided.
-fn callMap(allocator: Allocator, op: Value, args: list.List) anyerror!Value {
+fn callMap(allocator: Allocator, op: *const Value, args: *const list.List) anyerror!Value {
     if (args.items.len < 1 or args.items.len > 2) return error.ArityError;
     const key = args.items[0];
-    for (op.map_val.items) |entry| {
-        if (entry.key.equals(key)) {
-            return try entry.value.clone(allocator);
+    for (op.map.entries.items) |entry| {
+        if (vm.equals(entry.key, key)) {
+            return try vm.clone(&entry.value, allocator);
         }
     }
     if (args.items.len == 2) {
-        return try args.items[1].clone(allocator);
+        return try vm.clone(&args.items[1], allocator);
     }
-    return Value.nilValue();
+    return vm.nilValue();
 }
 
 /// Call a record as a function: returns value for key (fields first, then extmap).
-fn callRecord(allocator: Allocator, op: Value, args: list.List) anyerror!Value {
+fn callRecord(allocator: Allocator, op: *const Value, args: *const list.List) anyerror!Value {
     if (args.items.len < 1 or args.items.len > 2) return error.ArityError;
     const key = args.items[0];
-    for (op.record_val.?.fields.items) |entry| {
-        if (entry.key.equals(key)) {
-            return try entry.value.clone(allocator);
+    for (op.record.fields.items) |entry| {
+        if (vm.equals(entry.key, key)) {
+            return try vm.clone(&entry.value, allocator);
         }
     }
-    for (op.record_val.?.extmap.items) |entry| {
-        if (entry.key.equals(key)) {
-            return try entry.value.clone(allocator);
+    for (op.record.extmap.items) |entry| {
+        if (vm.equals(entry.key, key)) {
+            return try vm.clone(&entry.value, allocator);
         }
     }
     if (args.items.len == 2) {
-        return try args.items[1].clone(allocator);
+        return try vm.clone(&args.items[1], allocator);
     }
-    return Value.nilValue();
+    return vm.nilValue();
 }
 
 /// Call a lazy-seq as a function: forces its evaluation (no args allowed).
-fn callLazySeq(allocator: Allocator, op: Value, env: *Env, depth: usize) anyerror!Value {
-    return try forceLazySeq(allocator, op, env, depth);
+fn callLazySeq(allocator: Allocator, op: *const Value, env: *Env, depth: usize) anyerror!Value {
+    const result_ptr = try forceLazySeq(allocator, op.*, env, depth);
+    const result = result_ptr.*;
+    allocator.destroy(result_ptr);
+    return result;
 }
 
 // Flatten a cons chain into a list for doall/dorun.
 // Recursively forces any nested lazy_seqs.
 fn flattenConsForDoall(allocator: Allocator, val: Value, env: *Env, depth: usize, target: *list.List) anyerror!void {
     var current = val;
-    errdefer current.deinit(allocator);
+    errdefer vm.valueDeinit(&current, allocator);
 
     while (true) {
-        switch (current.type) {
+        switch (std.meta.activeTag(current)) {
             .cons => {
                 // Force the head if it's a lazy_seq
-                const cdata = current.cons_val.?;
+                const cdata = current.cons;
                 const head = cdata.head;
-                if (head.type == .lazy_seq) {
-                    var head_forced = try forceLazySeq(allocator, try head.clone(allocator), env, depth + 1);
-                    if (head_forced.type == .list) {
-                        for (head_forced.list_val.items) |fi| {
-                            try target.append(allocator, try fi.clone(allocator));
+                if (std.meta.activeTag(head) == .lazy_seq) {
+                    const head_forced_ptr = try forceLazySeq(allocator, try vm.clone(&head, allocator), env, depth + 1);
+                    if (std.meta.activeTag(head_forced_ptr.*) == .list) {
+                        for (head_forced_ptr.list.items.items) |fi| {
+                            try target.append(allocator, try vm.clone(&fi, allocator));
                         }
                     } else {
-                        try target.append(allocator, head_forced);
+                        try target.append(allocator, head_forced_ptr.*);
                     }
-                    head_forced.deinit(allocator);
+                    vm.valueDeinit(&head_forced_ptr.*, allocator);
                 } else {
-                    try target.append(allocator, try head.clone(allocator));
+                    try target.append(allocator, try vm.clone(&head, allocator));
                 }
                 // Move to tail
-                const tail = try cdata.tail.clone(allocator);
-                current.deinit(cdata.allocator);
+                const tail = try vm.clone(&cdata.tail, allocator);
+                vm.valueDeinit(&current, cdata.allocator);
                 current = tail;
             },
             .list => {
-                for (current.list_val.items) |item| {
-                    if (item.type == .lazy_seq) {
-                        var forced = try forceLazySeq(allocator, item, env, depth + 1);
-                        if (forced.type == .list) {
-                            for (forced.list_val.items) |fi| {
-                                try target.append(allocator, try fi.clone(allocator));
+                for (current.list.items.items) |item| {
+                    if (std.meta.activeTag(item) == .lazy_seq) {
+                        const forced_ptr = try forceLazySeq(allocator, item, env, depth + 1);
+                        if (std.meta.activeTag(forced_ptr.*) == .list) {
+                            for (forced_ptr.list.items.items) |fi| {
+                                try target.append(allocator, try vm.clone(&fi, allocator));
                             }
                         }
-                        forced.deinit(allocator);
+                        vm.valueDeinit(&forced_ptr.*, allocator);
                     } else {
-                        try target.append(allocator, try item.clone(allocator));
+                        try target.append(allocator, try vm.clone(&item, allocator));
                     }
                 }
                 break;
@@ -953,29 +1001,29 @@ fn flattenConsForDoall(allocator: Allocator, val: Value, env: *Env, depth: usize
             .nil => break,
             .lazy_seq => {
                 // Force the lazy_seq and flatten
-                var forced = try forceLazySeq(allocator, current, env, depth + 1);
-                if (forced.type == .list) {
-                    for (forced.list_val.items) |fi| {
-                        try target.append(allocator, try fi.clone(allocator));
+                const forced_ptr = try forceLazySeq(allocator, current, env, depth + 1);
+                if (std.meta.activeTag(forced_ptr.*) == .list) {
+                    for (forced_ptr.list.items.items) |fi| {
+                        try target.append(allocator, try vm.clone(&fi, allocator));
                     }
                 }
-                forced.deinit(allocator);
+                vm.valueDeinit(&forced_ptr.*, allocator);
                 break;
             },
             else => {
                 try target.append(allocator, current);
-                current = Value.nilValue();
+                current = vm.nilValue();
                 break;
             },
         }
     }
-    current.deinit(allocator);
+    vm.valueDeinit(&current, allocator);
 }
 
 // Force evaluation of a lazy sequence, returning the resulting list
-fn forceLazySeq(allocator: Allocator, lazy: Value, env: *Env, depth: usize) anyerror!Value {
+fn forceLazySeq(allocator: Allocator, lazy: Value, env: *Env, depth: usize) anyerror!*Value {
     // Evaluate the thunk
-    if (lazy.lazy_seq_val.thunk) |thunk| {
+    if (lazy.lazy_seq) |thunk| {
         // Clone thunk data for evaluation — don't free the thunk itself
         // since the original Value (e.g. stored in env) still holds the pointer.
         // The thunk will be properly freed when the original Value is deinited.
@@ -991,121 +1039,123 @@ fn forceLazySeq(allocator: Allocator, lazy: Value, env: *Env, depth: usize) anye
         }
 
         // Evaluate the body to get the result
-        var result = try evalRec(allocator, Value.listValue(cloned_body), &thunk_env, depth);
+        const body_val = try vm.listValue(allocator, cloned_body);
+        const result_ptr = try evalRec(allocator, &body_val, &thunk_env, depth);
 
         // The result should be a list/vector (the sequence)
         // Convert to list if needed
         var final_list: list.List = .empty;
         errdefer final_list.deinit(allocator);
 
-        switch (result.type) {
+        switch (std.meta.activeTag(result_ptr.*)) {
             .list => {
                 // Handle cons cell pattern: [head, lazy_seq_tail]
-                if (result.list_val.items.len == 2 and result.list_val.items[1].type == .lazy_seq) {
-                    const head_item = result.list_val.items[0];
-                    if (head_item.type == .lazy_seq) {
-                        const head_forced = try forceLazySeq(allocator, head_item, env, depth + 1);
-                        try final_list.append(allocator, head_forced);
+                if (result_ptr.*.list.items.items.len == 2 and std.meta.activeTag(result_ptr.*.list.items.items[1]) == .lazy_seq) {
+                    const head_item = result_ptr.*.list.items.items[0];
+                    if (std.meta.activeTag(head_item) == .lazy_seq) {
+                        const head_forced_ptr = try forceLazySeq(allocator, head_item, env, depth + 1);
+                        try final_list.append(allocator, head_forced_ptr.*);
+                        vm.valueDeinit(&head_forced_ptr.*, allocator);
                     } else {
-                        try final_list.append(allocator, try head_item.clone(allocator));
+                        try final_list.append(allocator, try vm.clone(&head_item, allocator));
                     }
-                    var tail_forced = try forceLazySeq(allocator, result.list_val.items[1], env, depth + 1);
-                    if (tail_forced.type == .list) {
-                        for (tail_forced.list_val.items) |fi| {
-                            try final_list.append(allocator, try fi.clone(allocator));
+                    const tail_forced_ptr = try forceLazySeq(allocator, result_ptr.*.list.items.items[1], env, depth + 1);
+                    if (std.meta.activeTag(tail_forced_ptr.*) == .list) {
+                        for (tail_forced_ptr.*.list.items.items) |fi| {
+                            try final_list.append(allocator, try vm.clone(&fi, allocator));
                         }
                     }
-                    tail_forced.deinit(allocator);
+                    vm.valueDeinit(&tail_forced_ptr.*, allocator);
                 } else {
-                    for (result.list_val.items) |item| {
+                    for (result_ptr.*.list.items.items) |item| {
                         // Recursively force nested lazy_seqs for doall/dorun
-                        if (item.type == .lazy_seq) {
-                            var forced = try forceLazySeq(allocator, item, env, depth + 1);
-                            if (forced.type == .list) {
-                                for (forced.list_val.items) |fi| {
-                                    try final_list.append(allocator, try fi.clone(allocator));
+                        if (std.meta.activeTag(item) == .lazy_seq) {
+                            const forced_ptr = try forceLazySeq(allocator, item, env, depth + 1);
+                            if (std.meta.activeTag(forced_ptr.*) == .list) {
+                                for (forced_ptr.*.list.items.items) |fi| {
+                                    try final_list.append(allocator, try vm.clone(&fi, allocator));
                                 }
                             }
-                            forced.deinit(allocator);
+                            vm.valueDeinit(&forced_ptr.*, allocator);
                         } else {
-                            try final_list.append(allocator, try item.clone(allocator));
+                            try final_list.append(allocator, try vm.clone(&item, allocator));
                         }
                     }
                 }
             },
             .vector => {
-                for (result.vec_val.items) |item| {
-                    if (item.type == .lazy_seq) {
-                        var forced = try forceLazySeq(allocator, item, env, depth + 1);
-                        if (forced.type == .list) {
-                            for (forced.list_val.items) |fi| {
-                                try final_list.append(allocator, try fi.clone(allocator));
+                for (result_ptr.*.vector.items.items) |item| {
+                    if (std.meta.activeTag(item) == .lazy_seq) {
+                        const forced_ptr = try forceLazySeq(allocator, item, env, depth + 1);
+                        if (std.meta.activeTag(forced_ptr.*) == .list) {
+                            for (forced_ptr.*.list.items.items) |fi| {
+                                try final_list.append(allocator, try vm.clone(&fi, allocator));
                             }
                         }
-                        forced.deinit(allocator);
+                        vm.valueDeinit(&forced_ptr.*, allocator);
                     } else {
-                        try final_list.append(allocator, try item.clone(allocator));
+                        try final_list.append(allocator, try vm.clone(&item, allocator));
                     }
                 }
             },
             .nil => {}, // empty sequence
             .lazy_seq => {
                 // Recursively force for doall/dorun
-                var forced = try forceLazySeq(allocator, result, env, depth + 1);
-                if (forced.type == .list) {
-                    for (forced.list_val.items) |fi| {
-                        try final_list.append(allocator, try fi.clone(allocator));
+                const forced_ptr = try forceLazySeq(allocator, result_ptr.*, env, depth + 1);
+                if (std.meta.activeTag(forced_ptr.*) == .list) {
+                    for (forced_ptr.list.items.items) |fi| {
+                        try final_list.append(allocator, try vm.clone(&fi, allocator));
                     }
                 }
-                forced.deinit(allocator);
+                vm.valueDeinit(&forced_ptr.*, allocator);
             },
             .cons => {
                 // Walk the cons chain and flatten into the list
-                try flattenConsForDoall(allocator, result, env, depth + 1, &final_list);
+                try flattenConsForDoall(allocator, result_ptr.*, env, depth + 1, &final_list);
             },
             else => {
-                try final_list.append(allocator, result);
+                try final_list.append(allocator, result_ptr.*);
             },
         }
 
-        result.deinit(allocator);
-        return Value.listValue(final_list);
+        vm.valueDeinit(&result_ptr.*, allocator);
+        return try allocValue(allocator, try vm.listValue(allocator, final_list));
     }
 
-    return Value.listValue(list.empty());
+    return try allocValue(allocator, try vm.listValue(allocator, list.empty()));
 }
 
 // Bind a parameter to an argument, supporting destructuring
 // e.g., param=[a b], arg=[1 2] => binds a=1, b=2
 fn bindParam(allocator: Allocator, param: Value, arg: Value, env: *Env) anyerror!void {
-    switch (param.type) {
+    switch (std.meta.activeTag(param)) {
         .symbol => {
-            try env.put(param.sym_val, try arg.clone(allocator));
+            try env.put(param.symbol, try vm.clone(&arg, allocator));
         },
         .vector => {
             // Destructure: param is [x y z], arg should be a collection
             var arg_items: []const Value = undefined;
-            switch (arg.type) {
-                .list => arg_items = arg.list_val.items,
-                .vector => arg_items = arg.vec_val.items,
+            switch (std.meta.activeTag(arg)) {
+                .list => arg_items = arg.list.items.items,
+                .vector => arg_items = arg.vector.items.items,
                 else => return error.TypeError,
             }
-            if (param.vec_val.items.len != arg_items.len) {
+            if (param.vector.items.items.len != arg_items.len) {
                 return error.ArityError;
             }
             var i: usize = 0;
-            while (i < param.vec_val.items.len) : (i += 1) {
-                try bindParam(allocator, param.vec_val.items[i], arg_items[i], env);
+            while (i < param.vector.items.items.len) : (i += 1) {
+                try bindParam(allocator, param.vector.items.items[i], arg_items[i], env);
             }
         },
         .list => {
             // Same as vector but from a list
-            if (param.list_val.items.len != arg.list_val.items.len) {
+            if (param.list.items.items.len != arg.list.items.items.len) {
                 return error.ArityError;
             }
             var i: usize = 0;
-            while (i < param.list_val.items.len) : (i += 1) {
-                try bindParam(allocator, param.list_val.items[i], arg.list_val.items[i], env);
+            while (i < param.list.items.items.len) : (i += 1) {
+                try bindParam(allocator, param.list.items.items[i], arg.list.items.items[i], env);
             }
         },
         else => {}, // Ignore other param types
@@ -1114,51 +1164,51 @@ fn bindParam(allocator: Allocator, param: Value, arg: Value, env: *Env) anyerror
 
 // Check if a form looks like a parameter list (vector/list of symbols, possibly with & rest)
 fn looksLikeParamList(form: Value) bool {
-    const items = switch (form.type) {
-        .vector => form.vec_val.items,
-        .list => form.list_val.items,
+    const items = switch (std.meta.activeTag(form)) {
+        .vector => form.vector.items.items,
+        .list => form.list.items.items,
         else => return false,
     };
     if (items.len == 0) return false;
     var found_amp = false;
     for (items) |item| {
-        if (item.type == .symbol and std.mem.eql(u8, item.sym_val, "&")) {
+        if (std.meta.activeTag(item) == .symbol and std.mem.eql(u8, item.symbol, "&")) {
             if (found_amp) return false; // duplicate &
             found_amp = true;
             continue;
         }
-        if (!found_amp and item.type != .symbol) return false;
-        if (found_amp and item.type != .symbol) return false;
+        if (!found_amp and std.meta.activeTag(item) != .symbol) return false;
+        if (found_amp and std.meta.activeTag(item) != .symbol) return false;
     }
     return true;
 }
 
 // case - multi-way constant dispatch
 // (case expr test1 result1 test2 result2 ... :else default)
-fn evalCase(allocator: Allocator, forms: []const Value, env: *Env, depth: usize) anyerror!Value {
+fn evalCase(allocator: Allocator, forms: []const Value, env: *Env, depth: usize) anyerror!*Value {
     if (forms.len < 1) return error.ArityError;
 
-    var expr_val = try evalRec(allocator, forms[0], env, depth);
-    defer expr_val.deinit(allocator);
+    const expr_val_ptr = try evalRec(allocator, &forms[0], env, depth);
+    defer vm.valueDeinit(expr_val_ptr, allocator);
 
     var i: usize = 1;
     while (i < forms.len) : (i += 2) {
         const test_form = forms[i];
-        if (test_form.type == .keyword and std.mem.eql(u8, test_form.kw_val, "else")) {
+        if (std.meta.activeTag(test_form) == .keyword and std.mem.eql(u8, test_form.keyword, "else")) {
             if (i + 1 >= forms.len) return error.ArityError;
-            return try evalRec(allocator, forms[i + 1], env, depth);
+            return try evalRec(allocator, &forms[i + 1], env, depth);
         }
 
-        var test_val = try evalRec(allocator, test_form, env, depth);
-        defer test_val.deinit(allocator);
+        const test_val_ptr = try evalRec(allocator, &test_form, env, depth);
+        defer vm.valueDeinit(test_val_ptr, allocator);
 
-        if (expr_val.equals(test_val)) {
+        if (vm.equals(expr_val_ptr.*, test_val_ptr.*)) {
             if (i + 1 >= forms.len) return error.ArityError;
-            return try evalRec(allocator, forms[i + 1], env, depth);
+            return try evalRec(allocator, &forms[i + 1], env, depth);
         }
     }
 
-    return Value.nilValue();
+    return try allocValue(allocator, vm.nilValue());
 }
 
 // ============================================================================
@@ -1169,15 +1219,15 @@ fn evalCase(allocator: Allocator, forms: []const Value, env: *Env, depth: usize)
 // ============================================================================
 
 /// (quote form) — return form unevaluated
-fn evalQuote(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+fn evalQuote(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     _ = env;
     _ = depth;
     if (l.items.len != 2) return error.ArityError;
-    return try l.items[1].clone(allocator);
+    return try vm.cloneGC(&l.items[1], allocator);
 }
 
 /// (quit) / (exit) — signal REPL to exit
-fn evalQuit(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+fn evalQuit(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     _ = allocator;
     _ = l;
     _ = env;
@@ -1186,83 +1236,95 @@ fn evalQuit(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerro
 }
 
 /// (quasiquote form) — template with unquote
-fn evalQuasiquote(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+fn evalQuasiquote(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     if (l.items.len != 2) return error.ArityError;
-    return try eval_macro.unquoteProcess(allocator, l.items[1], env, depth + 1);
+    const result = try eval_macro.unquoteProcess(allocator, l.items[1], env, depth + 1);
+    return try allocValue(allocator, result);
 }
 
 /// (def name value?) — define in current namespace
-fn evalDef(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+fn evalDef(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     if (l.items.len < 2 or l.items.len > 3) return error.ArityError;
     const sym = l.items[1];
-    if (sym.type != .symbol) return error.TypeError;
+    if (std.meta.activeTag(sym) != .symbol) return error.TypeError;
     const eval_idx: usize = if (l.items.len >= 3) 2 else 1;
-    var val = try evalRec(allocator, l.items[eval_idx], env, depth + 1);
-    const persistent_val = try val.clone(allocator);
-    val.deinit(allocator);
-    try bindInCurrentNamespace(env, sym.sym_val, persistent_val);
-    return try sym.clone(allocator);
+    const val_ptr = try evalRec(allocator, &l.items[eval_idx], env, depth + 1);
+    const persistent_val = try vm.clone(&val_ptr.*, allocator);
+    try bindInCurrentNamespace(env, sym.symbol, persistent_val);
+    return try vm.cloneGC(&sym, allocator);
 }
 
 /// (if test then else?) — conditional
-fn evalIf(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+fn evalIf(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     if (l.items.len < 2 or l.items.len > 4) return error.ArityError;
-    var cond = try evalRec(allocator, l.items[1], env, depth + 1);
-    const truthy = cond.isTruthy();
-    cond.deinit(allocator);
+    const cond_ptr = try evalRec(allocator, &l.items[1], env, depth + 1);
+    const truthy = vm.isTruthy(cond_ptr.*);
+    vm.valueDeinit(cond_ptr, allocator);
     if (truthy) {
-        if (l.items.len >= 3) return try evalRec(allocator, l.items[2], env, depth + 1);
-        return Value.nilValue();
+        if (l.items.len >= 3) return try evalRec(allocator, &l.items[2], env, depth + 1);
+        return try allocValue(allocator, vm.nilValue());
     } else {
-        if (l.items.len >= 4) return try evalRec(allocator, l.items[3], env, depth + 1);
-        return Value.nilValue();
+        if (l.items.len >= 4) return try evalRec(allocator, &l.items[3], env, depth + 1);
+        return try allocValue(allocator, vm.nilValue());
     }
 }
 
 /// (when test body...) — if with implicit do
-fn evalWhen(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+fn evalWhen(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     if (l.items.len < 2) return error.ArityError;
-    var cond = try evalRec(allocator, l.items[1], env, depth + 1);
-    const truthy = cond.isTruthy();
-    cond.deinit(allocator);
+    const cond_ptr = try evalRec(allocator, &l.items[1], env, depth + 1);
+    const truthy = vm.isTruthy(cond_ptr.*);
+    vm.valueDeinit(cond_ptr, allocator);
     if (truthy) {
-        var do_result: Value = Value.nilValue();
-        errdefer do_result.deinit(allocator);
+        var do_result: Value = vm.nilValue();
+        errdefer vm.valueDeinit(&do_result, allocator);
         for (l.items[2..]) |form| {
-            do_result.deinit(allocator);
-            do_result = Value.nilValue();
-            do_result = try evalRec(allocator, form, env, depth + 1);
+            const result_ptr = try evalRec(allocator, &form, env, depth + 1);
+            vm.valueDeinit(&do_result, allocator);
+            do_result = result_ptr.*;
         }
-        return do_result;
+        return try allocValue(allocator, do_result);
     }
-    return Value.nilValue();
+    return try allocValue(allocator, vm.nilValue());
 }
 
 /// (do body...) — evaluate a sequence of forms
-fn evalDo(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
-    var do_result: Value = Value.nilValue();
-    errdefer do_result.deinit(allocator);
-    for (l.items[1..]) |form| {
-        do_result.deinit(allocator);
-        do_result = Value.nilValue();
-        do_result = try evalRec(allocator, form, env, depth + 1);
+fn evalDo(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
+    var last_ptr: ?*Value = null;
+    errdefer {
+        if (last_ptr) |p| {
+            vm.valueDeinit(p, allocator);
+            allocator.destroy(p);
+        }
     }
-    return do_result;
+    for (l.items[1..]) |form| {
+        if (last_ptr) |p| {
+            vm.valueDeinit(p, allocator);
+            allocator.destroy(p);
+        }
+        last_ptr = try evalRec(allocator, &form, env, depth + 1);
+    }
+    if (last_ptr) |p| {
+        const result = p.*;
+        allocator.destroy(p);
+        return try allocValue(allocator, result);
+    }
+    return try allocValue(allocator, vm.nilValue());
 }
 
 /// (defn name docstring? ([params] body...)+) — define named function
-fn evalDefn(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+fn evalDefn(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     _ = depth;
     if (l.items.len < 3) return error.ArityError;
     const fname = l.items[1];
-    if (fname.type != .symbol) return error.TypeError;
+    if (std.meta.activeTag(fname) != .symbol) return error.TypeError;
     var idx: usize = 2;
-    if (idx < l.items.len and l.items[idx].type == .string) {
+    if (idx < l.items.len and std.meta.activeTag(l.items[idx]) == .string) {
         idx += 1;
     }
     if (idx >= l.items.len) return error.ArityError;
 
-    var arities: std.ArrayListUnmanaged(Value.Arity) = .empty;
+    var arities: std.ArrayListUnmanaged(vm.Arity) = .empty;
     errdefer {
         for (arities.items) |*a| {
             a.params.deinit(allocator);
@@ -1280,26 +1342,26 @@ fn evalDefn(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerro
         .parent = env,
         .ns_manager = null,
     };
-    var fn_val = try Value.fnValue(allocator, arities, fn_env, false);
-    const persistent_fn = try fn_val.clone(allocator);
-    fn_val.deinit(allocator);
-    try bindInCurrentNamespace(env, fname.sym_val, persistent_fn);
-    return try fname.clone(allocator);
+    var fn_val = try vm.fnValue(allocator, arities, fn_env, false);
+    const persistent_fn = try vm.clone(&fn_val, allocator);
+    vm.valueDeinit(&fn_val, allocator);
+    try bindInCurrentNamespace(env, fname.symbol, persistent_fn);
+    return try vm.cloneGC(&fname, allocator);
 }
 
 /// (fn name? ([params] body...)+) — anonymous function
-fn evalFn(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+fn evalFn(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     _ = depth;
     if (l.items.len < 2) return error.ArityError;
     var idx: usize = 1;
     var fn_name: ?Value = null;
-    if (l.items[idx].type == .symbol) {
+    if (std.meta.activeTag(l.items[idx]) == .symbol) {
         fn_name = l.items[idx];
         idx += 1;
     }
     if (idx >= l.items.len) return error.ArityError;
 
-    var arities: std.ArrayListUnmanaged(Value.Arity) = .empty;
+    var arities: std.ArrayListUnmanaged(vm.Arity) = .empty;
     errdefer {
         for (arities.items) |*a| {
             a.params.deinit(allocator);
@@ -1315,26 +1377,26 @@ fn evalFn(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!
 
     var fn_name_str: ?[]const u8 = null;
     if (fn_name) |name_sym| {
-        fn_name_str = try allocator.dupe(u8, name_sym.sym_val);
+        fn_name_str = try allocator.dupe(u8, name_sym.symbol);
     }
 
-    const fn_val = try Value.fnValueNamed(allocator, arities, fn_env, false, fn_name_str);
-    return fn_val;
+    const fn_val = try vm.fnValueNamed(allocator, arities, fn_env, false, fn_name_str);
+    return try allocValue(allocator, fn_val);
 }
 
 /// (defmacro name docstring? ([params] body...)+) — define a macro
-fn evalDefmacro(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+fn evalDefmacro(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     _ = depth;
     if (l.items.len < 3) return error.ArityError;
     const macro_name = l.items[1];
-    if (macro_name.type != .symbol) return error.TypeError;
+    if (std.meta.activeTag(macro_name) != .symbol) return error.TypeError;
     var idx: usize = 2;
-    if (idx < l.items.len and l.items[idx].type == .string) {
+    if (idx < l.items.len and std.meta.activeTag(l.items[idx]) == .string) {
         idx += 1;
     }
     if (idx >= l.items.len) return error.ArityError;
 
-    var arities: std.ArrayListUnmanaged(Value.Arity) = .empty;
+    var arities: std.ArrayListUnmanaged(vm.Arity) = .empty;
     errdefer {
         for (arities.items) |*a| {
             a.params.deinit(allocator);
@@ -1352,159 +1414,173 @@ fn evalDefmacro(allocator: Allocator, l: list.List, env: *Env, depth: usize) any
         .parent = env,
         .ns_manager = null,
     };
-    var macro_fn = try Value.fnValue(allocator, arities, fn_env, true);
-    const persistent_macro = try macro_fn.clone(allocator);
-    macro_fn.deinit(allocator);
-    try bindInCurrentNamespace(env, macro_name.sym_val, persistent_macro);
-    return try macro_name.clone(allocator);
+    var macro_fn = try vm.fnValue(allocator, arities, fn_env, true);
+    const persistent_macro = try vm.clone(&macro_fn, allocator);
+    vm.valueDeinit(&macro_fn, allocator);
+    try bindInCurrentNamespace(env, macro_name.symbol, persistent_macro);
+    return try vm.cloneGC(&macro_name, allocator);
 }
 
 /// (set! name value) — modify a variable
-fn evalSetBang(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+fn evalSetBang(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     if (l.items.len != 3) return error.ArityError;
     const sym = l.items[1];
-    if (sym.type != .symbol) return error.TypeError;
-    const val = try evalRec(allocator, l.items[2], env, depth + 1);
-    const persistent_val = try val.clone(allocator);
-    try env.put(sym.sym_val, persistent_val);
-    return val;
+    if (std.meta.activeTag(sym) != .symbol) return error.TypeError;
+    const val_ptr = try evalRec(allocator, &l.items[2], env, depth + 1);
+    const persistent_val = try vm.clone(&val_ptr.*, allocator);
+    try env.put(sym.symbol, persistent_val);
+    return val_ptr;
 }
 
 /// (recur new-arg*) — tail recursion signal
-fn evalRecur(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+fn evalRecur(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     if (l.items.len < 2) return error.ArityError;
     var results: list.List = .empty;
     errdefer results.deinit(allocator);
-    try results.append(allocator, try Value.symValue(allocator, "__recur__"));
+    try results.append(allocator, try vm.symValue(allocator, "__recur__"));
     for (l.items[1..]) |arg| {
-        try results.append(allocator, try evalRec(allocator, arg, env, depth + 1));
+        const ptr = try evalRec(allocator, &arg, env, depth + 1);
+        try results.append(allocator, ptr.*);
     }
-    return Value.listValue(results);
+    return try allocValue(allocator, try vm.listValue(allocator, results));
 }
 
 /// (var name value?) — create a mutable var
-fn evalVar(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+fn evalVar(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     if (l.items.len < 2 or l.items.len > 3) return error.ArityError;
     const sym = l.items[1];
-    if (sym.type != .symbol) return error.TypeError;
-    var val = if (l.items.len >= 3)
-        try evalRec(allocator, l.items[2], env, depth + 1)
+    if (std.meta.activeTag(sym) != .symbol) return error.TypeError;
+    const val_ptr = if (l.items.len >= 3)
+        try evalRec(allocator, &l.items[2], env, depth + 1)
     else
-        Value.nilValue();
-    const persistent_val = try val.clone(allocator);
-    val.deinit(allocator);
-    try env.put(sym.sym_val, persistent_val);
-    return try sym.clone(allocator);
+        try allocValue(allocator, vm.nilValue());
+    const persistent_val = try vm.clone(&val_ptr.*, allocator);
+    try env.put(sym.symbol, persistent_val);
+    return try vm.cloneGC(&sym, allocator);
 }
 
 /// (deref form) / (@ form) — get value from atom/var/reduced
-fn evalDeref(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+fn evalDeref(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     if (l.items.len != 2) return error.ArityError;
-    var arg = try evalRec(allocator, l.items[1], env, depth + 1);
-    if (arg.type == .atom) {
-        if (arg.atom_val) |data| {
-            const val = try data.value.clone(allocator);
-            arg.deinit(allocator);
-            return val;
-        }
-        arg.deinit(allocator);
-        return Value.nilValue();
+    const arg_ptr = try evalRec(allocator, &l.items[1], env, depth + 1);
+    if (std.meta.activeTag(arg_ptr.*) == .atom) {
+        const data = arg_ptr.*.atom;
+        const val = try vm.clone(&data.value, allocator);
+        vm.valueDeinit(&arg_ptr.*, allocator);
+        return try allocValue(allocator, val);
     }
-    if (arg.type == .reduced) {
-        if (arg.reduced_val) |data| {
-            const val = try data.clone(allocator);
-            arg.deinit(allocator);
-            return val;
-        }
-        arg.deinit(allocator);
-        return Value.nilValue();
+    if (std.meta.activeTag(arg_ptr.*) == .reduced) {
+        const data = arg_ptr.*.reduced;
+        const val = try vm.clone(&data.*, allocator);
+        vm.valueDeinit(&arg_ptr.*, allocator);
+        return try allocValue(allocator, val);
     }
-    return arg;
+    vm.valueDeinit(&arg_ptr.*, allocator);
+    return try allocValue(allocator, vm.nilValue());
 }
 
 /// (or form*) — short-circuit or
-fn evalOr(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
-    var last_val: Value = Value.nilValue();
-    errdefer last_val.deinit(allocator);
-    for (l.items[1..]) |form_item| {
-        const val = try evalRec(allocator, form_item, env, depth + 1);
-        if (val.isTruthy()) {
-            last_val.deinit(allocator);
-            return val;
+fn evalOr(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
+    var last_ptr: ?*Value = null;
+    errdefer {
+        if (last_ptr) |p| {
+            vm.valueDeinit(p, allocator);
+            allocator.destroy(p);
         }
-        last_val.deinit(allocator);
-        last_val = val;
     }
-    return last_val;
+    for (l.items[1..]) |form_item| {
+        const val_ptr = try evalRec(allocator, &form_item, env, depth + 1);
+        if (vm.isTruthy(val_ptr.*)) {
+            if (last_ptr) |p| {
+                vm.valueDeinit(p, allocator);
+                allocator.destroy(p);
+            }
+            return val_ptr;
+        }
+        if (last_ptr) |p| {
+            vm.valueDeinit(p, allocator);
+            allocator.destroy(p);
+        }
+        last_ptr = val_ptr;
+    }
+    if (last_ptr) |p| {
+        const result = p.*;
+        allocator.destroy(p);
+        return try allocValue(allocator, result);
+    }
+    return try allocValue(allocator, vm.nilValue());
 }
 
 /// (and form*) — short-circuit and
-fn evalAnd(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+fn evalAnd(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     for (l.items[1..]) |form_item| {
-        var val = try evalRec(allocator, form_item, env, depth + 1);
-        if (!val.isTruthy()) return val;
-        val.deinit(allocator);
+        const val_ptr = try evalRec(allocator, &form_item, env, depth + 1);
+        if (!vm.isTruthy(val_ptr.*)) return val_ptr;
+        vm.valueDeinit(val_ptr, allocator);
     }
-    return Value.boolValue(true);
+    return try allocValue(allocator, vm.boolValue(true));
 }
 
 /// (binding [var1 val1 ...] body...) — dynamic variable binding
-fn evalBinding(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+fn evalBinding(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     if (l.items.len < 3) return error.ArityError;
     const bindings = l.items[1];
-    if (bindings.type != .vector) return error.TypeError;
+    if (std.meta.activeTag(bindings) != .vector) return error.TypeError;
     var new_env = try env.clone(allocator);
     defer new_env.deinit(allocator);
     defer pushEnvTempRoot(&new_env).deinit();
 
     var i: usize = 0;
-    while (i < bindings.vec_val.items.len) : (i += 2) {
-        const sym = bindings.vec_val.items[i];
-        if (sym.type != .symbol) return error.TypeError;
-        const val = try evalRec(allocator, bindings.vec_val.items[i + 1], env, depth + 1);
-        try new_env.put(sym.sym_val, val);
+    while (i < bindings.vector.items.items.len) : (i += 2) {
+        const sym = bindings.vector.items.items[i];
+        if (std.meta.activeTag(sym) != .symbol) return error.TypeError;
+        const val_ptr = try evalRec(allocator, &bindings.vector.items.items[i + 1], env, depth + 1);
+        try new_env.put(sym.symbol, val_ptr.*);
     }
-    var do_result: Value = Value.nilValue();
-    errdefer do_result.deinit(allocator);
+    var do_result: Value = vm.nilValue();
+    errdefer vm.valueDeinit(&do_result, allocator);
     for (l.items[2..]) |form| {
-        do_result.deinit(allocator);
-        do_result = Value.nilValue();
-        do_result = try evalRec(allocator, form, &new_env, depth + 1);
+        const result_ptr = try evalRec(allocator, &form, &new_env, depth + 1);
+        vm.valueDeinit(&do_result, allocator);
+        do_result = result_ptr.*;
     }
-    return do_result;
+    return try allocValue(allocator, do_result);
 }
 
 /// (lazy-seq body...) — create a lazy sequence
-fn evalLazySeq(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+fn evalLazySeq(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     _ = depth;
     if (l.items.len < 2) return error.ArityError;
     var body: list.List = .empty;
     errdefer body.deinit(allocator);
-    try body.append(allocator, try Value.symValue(allocator, "do"));
+    try body.append(allocator, try vm.symValue(allocator, "do"));
     for (l.items[1..]) |form| {
-        try body.append(allocator, try form.clone(allocator));
+        try body.append(allocator, try vm.clone(&form, allocator));
     }
-    const thunk = try allocator.create(Value.LazySeqThunk);
+    const thunk = try allocator.create(vm.LazySeqThunk);
     thunk.* = .{
         .params = list.empty(),
         .body = body,
         .env = try env.clone(allocator),
     };
-    return Value.lazySeqValue(thunk);
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
+    }
+    return try allocValue(allocator, vm.lazySeqValue(thunk));
 }
 
 /// (dorun n? coll) — realize sequence for side effects, return nil
-fn evalDorun(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+fn evalDorun(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     if (l.items.len < 2 or l.items.len > 3) return error.ArityError;
     const dorun_args = l.items[1..];
     var n: ?usize = null;
     var coll_form: Value = undefined;
     if (dorun_args.len == 2) {
-        var n_val = try evalRec(allocator, dorun_args[0], env, depth + 1);
-        defer n_val.deinit(allocator);
-        const n_int: i64 = switch (n_val.type) {
-            .integer => n_val.int_val,
-            .float => @as(i64, @intFromFloat(n_val.float_val)),
+        const n_val_ptr = try evalRec(allocator, &dorun_args[0], env, depth + 1);
+        defer vm.valueDeinit(&n_val_ptr.*, allocator);
+        const n_int: i64 = switch (std.meta.activeTag(n_val_ptr.*)) {
+            .integer => n_val_ptr.*.integer,
+            .float => @as(i64, @intFromFloat(n_val_ptr.*.float)),
             else => return error.TypeError,
         };
         n = @as(usize, @intCast(n_int));
@@ -1512,21 +1588,22 @@ fn evalDorun(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerr
     } else {
         coll_form = dorun_args[0];
     }
-    var coll = try evalRec(allocator, coll_form, env, depth + 1);
-    defer coll.deinit(allocator);
+    const coll_ptr = try evalRec(allocator, &coll_form, env, depth + 1);
+    defer vm.valueDeinit(&coll_ptr.*, allocator);
 
-    if (coll.type == .lazy_seq) {
+    var coll = coll_ptr.*;
+    if (std.meta.activeTag(coll) == .lazy_seq) {
         const forced = try sequences.forceLazySeqHelper(allocator, coll);
-        coll.deinit(allocator);
+        vm.valueDeinit(&coll, allocator);
         coll = forced;
     }
     var items: []const Value = undefined;
-    switch (coll.type) {
-        .list => items = coll.list_val.items,
-        .vector => items = coll.vec_val.items,
-        .set => items = coll.set_val.items,
-        .queue => items = coll.queue_val.items,
-        else => return Value.nilValue(),
+    switch (std.meta.activeTag(coll)) {
+        .list => items = coll.list.items.items,
+        .vector => items = coll.vector.items.items,
+        .set => items = coll.set.items.items,
+        .queue => items = coll.queue.items.items,
+        else => return try allocValue(allocator, vm.nilValue()),
     }
     var count: usize = 0;
     var i: usize = 0;
@@ -1535,41 +1612,43 @@ fn evalDorun(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerr
             if (count >= limit) break;
         }
         const item = items[i];
-        if (item.type == .lazy_seq) {
+        if (std.meta.activeTag(item) == .lazy_seq) {
             _ = try sequences.forceLazySeqHelper(allocator, item);
         }
         count += 1;
     }
-    return Value.nilValue();
+    return try allocValue(allocator, vm.nilValue());
 }
 
 /// (doall coll) — realize lazy sequences and return result
-fn evalDoall(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+fn evalDoall(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     if (l.items.len != 2) return error.ArityError;
-    var coll = try evalRec(allocator, l.items[1], env, depth + 1);
-    if (coll.type == .lazy_seq) {
-        const forced = try sequences.forceLazySeqHelper(allocator, coll);
-        coll.deinit(allocator);
-        return try forced.clone(allocator);
+    const coll_ptr = try evalRec(allocator, &l.items[1], env, depth + 1);
+    if (std.meta.activeTag(coll_ptr.*) == .lazy_seq) {
+        const forced = try sequences.forceLazySeqHelper(allocator, coll_ptr.*);
+        vm.valueDeinit(&coll_ptr.*, allocator);
+        return try vm.cloneGC(&forced, allocator);
     }
-    if (coll.type == .nil) {
-        coll.deinit(allocator);
-        return Value.listValue(list.empty());
+    if (std.meta.activeTag(coll_ptr.*) == .nil) {
+        vm.valueDeinit(&coll_ptr.*, allocator);
+        return try allocValue(allocator, try vm.listValue(allocator, list.empty()));
     }
-    return try coll.clone(allocator);
+    return try vm.cloneGC(&coll_ptr.*, allocator);
 }
 
 /// (extend atype protocol mmap & more...) — add protocol implementations
-fn evalExtend(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
+fn evalExtend(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     if (l.items.len < 4) return error.ArityError;
     var ext_args: list.List = .empty;
     errdefer ext_args.deinit(allocator);
-    try ext_args.append(allocator, try l.items[1].clone(allocator));
+    try ext_args.append(allocator, try vm.clone(&l.items[1], allocator));
     var ei: usize = 2;
     while (ei < l.items.len) : (ei += 1) {
-        try ext_args.append(allocator, try evalRec(allocator, l.items[ei], env, depth + 1));
+        const ptr = try evalRec(allocator, &l.items[ei], env, depth + 1);
+        try ext_args.append(allocator, ptr.*);
     }
-    return try protocols.evalExtend(allocator, ext_args, env, depth + 1);
+    const result = try protocols.evalExtend(allocator, ext_args, env, depth + 1);
+    return try allocValue(allocator, result);
 }
 
 // ============================================================================
@@ -1577,46 +1656,56 @@ fn evalExtend(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyer
 // These adapt the unified SpecialFormFn signature to external module APIs.
 // ============================================================================
 
-fn evalNsForm(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
-    return eval_ns.evalNs(allocator, l, env, depth);
+fn evalNsForm(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
+    const result = try eval_ns.evalNs(allocator, l.*, env, depth);
+    return try allocValue(allocator, result);
 }
 
-fn evalInNsForm(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
-    return eval_ns.evalInNs(allocator, l, env, depth);
+fn evalInNsForm(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
+    const result = try eval_ns.evalInNs(allocator, l.*, env, depth);
+    return try allocValue(allocator, result);
 }
 
-fn evalDefprotocolForm(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
-    return protocols.evalDefProtocol(allocator, l, env, depth + 1);
+fn evalDefprotocolForm(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
+    const result = try protocols.evalDefProtocol(allocator, l.*, env, depth + 1);
+    return try allocValue(allocator, result);
 }
 
-fn evalExtendTypeForm(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
-    return protocols.evalExtendType(allocator, l, env, depth + 1);
+fn evalExtendTypeForm(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
+    const result = try protocols.evalExtendType(allocator, l.*, env, depth + 1);
+    return try allocValue(allocator, result);
 }
 
-fn evalExtendProtocolForm(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
-    return protocols.evalExtendProtocol(allocator, l, env, depth + 1);
+fn evalExtendProtocolForm(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
+    const result = try protocols.evalExtendProtocol(allocator, l.*, env, depth + 1);
+    return try allocValue(allocator, result);
 }
 
-fn evalDefrecordForm(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
-    return records.evalDefRecord(allocator, l, env, depth + 1);
+fn evalDefrecordForm(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
+    const result = try records.evalDefRecord(allocator, l.*, env, depth + 1);
+    return try allocValue(allocator, result);
 }
 
-fn evalThreadLastForm(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
-    return eval_thread.evalThreadLast(allocator, l.items[1..], env, depth + 1);
+fn evalThreadLastForm(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
+    const result = try eval_thread.evalThreadLast(allocator, l.items[1..], env, depth + 1);
+    return try allocValue(allocator, result);
 }
 
-fn evalThreadFirstForm(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
-    return eval_thread.evalThreadFirst(allocator, l.items[1..], env, depth + 1);
+fn evalThreadFirstForm(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
+    const result = try eval_thread.evalThreadFirst(allocator, l.items[1..], env, depth + 1);
+    return try allocValue(allocator, result);
 }
 
-fn evalCondThreadFirstForm(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
-    return eval_thread.evalCondThreadFirst(allocator, l.items[1..], env, depth + 1);
+fn evalCondThreadFirstForm(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
+    const result = try eval_thread.evalCondThreadFirst(allocator, l.items[1..], env, depth + 1);
+    return try allocValue(allocator, result);
 }
 
-fn evalCondThreadLastForm(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
-    return eval_thread.evalCondThreadLast(allocator, l.items[1..], env, depth + 1);
+fn evalCondThreadLastForm(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
+    const result = try eval_thread.evalCondThreadLast(allocator, l.items[1..], env, depth + 1);
+    return try allocValue(allocator, result);
 }
 
-fn evalCaseForm(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
-    return evalCase(allocator, l.items[1..], env, depth + 1);
+fn evalCaseForm(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
+    return try evalCase(allocator, l.items[1..], env, depth + 1);
 }

@@ -2,6 +2,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const B = @import("big_int_base.zig");
+const gc_mod = @import("gc.zig");
 
 pub const BigInt = B.BigInt;
 pub const Sign = B.Sign;
@@ -62,6 +63,9 @@ pub fn mulBySmall(allocator: Allocator, a: BigInt, small: B.LIMB) BigInt {
             result.limbs = allocator.realloc(result.limbs, new_len) catch unreachable;
         } else {
             result.limbs = allocator.alloc(B.LIMB, new_len) catch unreachable;
+            if (gc_mod.current_gc) |gc| {
+                gc.setObjectType(@as(*anyopaque, @ptrCast(result.limbs.ptr)), gc_mod.GCObjectType.bigint_limbs);
+            }
             result.owns_limbs = true;
         }
         result.limbs[idx] = @as(B.LIMB, @intCast(prod % B.Base));

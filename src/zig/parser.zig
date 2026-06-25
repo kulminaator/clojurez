@@ -2,7 +2,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const Token = @import("lexer.zig").Token;
 const Lexer = @import("lexer.zig").Lexer;
-const Value = @import("value.zig");
+const vm = @import("value.zig");
+const Value = vm.Value;
 const list = @import("list.zig");
 const vec = @import("vector.zig");
 const BI = @import("big_int.zig");
@@ -139,7 +140,7 @@ pub const Parser = struct {
                 errdefer quoted.deinit(self.allocator);
                 try quoted.append(self.allocator, try self.symValue("quote"));
                 try quoted.append(self.allocator, form);
-                return Value.listValue(quoted);
+                return try vm.listValue(self.allocator, quoted);
             },
             .backtick => {
                 // `x is shorthand for (quasiquote x)
@@ -151,7 +152,7 @@ pub const Parser = struct {
                 errdefer qq.deinit(self.allocator);
                 try qq.append(self.allocator, try self.symValue("quasiquote"));
                 try qq.append(self.allocator, form);
-                return Value.listValue(qq);
+                return try vm.listValue(self.allocator, qq);
             },
             .deref => {
                 // @x is shorthand for (deref x)
@@ -163,7 +164,7 @@ pub const Parser = struct {
                 errdefer deref_list.deinit(self.allocator);
                 try deref_list.append(self.allocator, try self.symValue("deref"));
                 try deref_list.append(self.allocator, form);
-                return Value.listValue(deref_list);
+                return try vm.listValue(self.allocator, deref_list);
             },
             .unquote => {
                 // ~x is shorthand for (unquote x)
@@ -175,7 +176,7 @@ pub const Parser = struct {
                 errdefer uq.deinit(self.allocator);
                 try uq.append(self.allocator, try self.symValue("unquote"));
                 try uq.append(self.allocator, form);
-                return Value.listValue(uq);
+                return try vm.listValue(self.allocator, uq);
             },
             .unquote_splicing => {
                 // ~@x is shorthand for (unquote-splicing x)
@@ -187,24 +188,24 @@ pub const Parser = struct {
                 errdefer uqs.deinit(self.allocator);
                 try uqs.append(self.allocator, try self.symValue("unquote-splicing"));
                 try uqs.append(self.allocator, form);
-                return Value.listValue(uqs);
+                return try vm.listValue(self.allocator, uqs);
             },
             .string => |s| {
-                const val = try Value.stringValue(self.allocator, s);
+                const val = try vm.stringValue(self.allocator, s);
                 self.current.deinit(self.allocator);
                 self.current = .{ .eof = {} };
                 try self.advance();
                 return val;
             },
             .regex => |s| {
-                const val = try Value.regexValue(self.allocator, s);
+                const val = try vm.regexValue(self.allocator, s);
                 self.current.deinit(self.allocator);
                 self.current = .{ .eof = {} };
                 try self.advance();
                 return val;
             },
             .character => |c| {
-                const val = Value.charValue(c);
+                const val = vm.charValue(c);
                 self.current.deinit(self.allocator);
                 self.current = .{ .eof = {} };
                 try self.advance();
@@ -225,7 +226,7 @@ pub const Parser = struct {
                 return val;
             },
             .keyword => |s| {
-                const val = try Value.keywordValue(self.allocator, s);
+                const val = try vm.keywordValue(self.allocator, s);
                 self.current.deinit(self.allocator);
                 self.current = .{ .eof = {} };
                 try self.advance();
@@ -266,7 +267,7 @@ pub const Parser = struct {
                 .close_paren => {
                     self.debugCloseForm("list");
                     try self.advance();
-                    return Value.listValue(items);
+                    return try vm.listValue(self.allocator, items);
                 },
                 .eof => return error.UnexpectedEof,
                 else => {},
@@ -287,7 +288,7 @@ pub const Parser = struct {
                 .close_bracket => {
                     self.debugCloseForm("vector");
                     try self.advance();
-                    return Value.vectorValue(items);
+                    return try vm.vectorValue(self.allocator, items);
                 },
                 .eof => return error.UnexpectedEof,
                 .comma => {
@@ -303,11 +304,11 @@ pub const Parser = struct {
 
     fn readMap(self: *Parser) anyerror!Value {
         try self.advance(); // consume '{'
-        var entries: Value.Map = .empty;
+        var entries: vm.Map = .empty;
         errdefer {
             for (entries.items) |*entry| {
-                entry.key.deinit(self.allocator);
-                entry.value.deinit(self.allocator);
+                vm.valueDeinit(&entry.key, self.allocator);
+                vm.valueDeinit(&entry.value, self.allocator);
             }
             self.allocator.free(entries.items);
         }
@@ -318,7 +319,7 @@ pub const Parser = struct {
                 .close_brace => {
                     self.debugCloseForm("map");
                     try self.advance();
-                    return Value.mapValue(entries);
+                    return try vm.mapValue(self.allocator, entries);
                 },
                 .eof => return error.UnexpectedEof,
                 .comma => {
@@ -335,10 +336,10 @@ pub const Parser = struct {
 
     fn readSet(self: *Parser) anyerror!Value {
         try self.advance(); // consume 'set_open' (which already consumed '#{')
-        var items: Value.Set = .empty;
+        var items: vm.Set = .empty;
         errdefer {
             for (items.items) |*item| {
-                item.deinit(self.allocator);
+                vm.valueDeinit(item, self.allocator);
             }
             self.allocator.free(items.items);
         }
@@ -349,7 +350,7 @@ pub const Parser = struct {
                 .close_brace => {
                     self.debugCloseForm("set");
                     try self.advance();
-                    return Value.setValue(items);
+                    return try vm.setValue(self.allocator, items);
                 },
                 .eof => return error.UnexpectedEof,
                 .comma => {
@@ -362,7 +363,7 @@ pub const Parser = struct {
             // Check for duplicates (sets don't allow them)
             var found = false;
             for (items.items) |existing| {
-                if (existing.equals(item)) {
+                if (vm.equals(existing, item)) {
                     found = true;
                     break;
                 }
@@ -370,17 +371,17 @@ pub const Parser = struct {
             if (!found) {
                 try items.append(self.allocator, item);
             } else {
-                item.deinit(self.allocator);
+                vm.valueDeinit(&item, self.allocator);
             }
         }
     }
 
     fn readQueue(self: *Parser) anyerror!Value {
         try self.advance(); // consume 'queue_tag' (which already consumed '#queue(')
-        var items: Value.Queue = .empty;
+        var items: vm.Queue = .empty;
         errdefer {
             for (items.items) |*item| {
-                item.deinit(self.allocator);
+                vm.valueDeinit(item, self.allocator);
             }
             self.allocator.free(items.items);
         }
@@ -389,7 +390,7 @@ pub const Parser = struct {
             switch (self.current) {
                 .close_paren => {
                     try self.advance();
-                    return Value.queueValue(items);
+                    return try vm.queueValue(self.allocator, items);
                 },
                 .eof => return error.UnexpectedEof,
                 .comma => {
@@ -408,25 +409,25 @@ pub const Parser = struct {
         // Check for BigDecimal suffix 'M' (e.g., "123.456M")
         if (s.len > 1 and s[s.len - 1] == 'M') {
             const bd = try BD.BigDecimal.fromString(allocator, s[0 .. s.len - 1]);
-            return try Value.decimalValue(allocator, bd);
+            return try vm.decimalValue(allocator, bd);
         }
         // Check for BigInt suffix 'N' (e.g., "12345678901234567890N")
         if (s.len > 1 and s[s.len - 1] == 'N') {
             const bi = try BI.bigIntFromString(allocator, s[0 .. s.len - 1]);
-            return try Value.bigIntValue(allocator, bi);
+            return try vm.bigIntValue(allocator, bi);
         }
         // Check for float (contains '.')
         if (std.mem.indexOfScalar(u8, s, '.')) |_| {
             const f = try std.fmt.parseFloat(f64, s);
-            return Value.floatValue(f);
+            return vm.floatValue(f);
         }
         // Try to parse as i64
         if (std.fmt.parseInt(i64, s, 10)) |i| {
-            return Value.intValue(i);
+            return vm.intValue(i);
         } else |_| {
             // Overflow: parse as BigInt
             const bi = try BI.bigIntFromString(allocator, s);
-            return try Value.bigIntValue(allocator, bi);
+            return try vm.bigIntValue(allocator, bi);
         }
     }
 
@@ -435,7 +436,7 @@ pub const Parser = struct {
         const copy_len = if (s.len < tmp_buf.len) s.len else tmp_buf.len;
         @memcpy(tmp_buf[0..copy_len], s[0..copy_len]);
         const duped = try self.allocator.dupe(u8, tmp_buf[0..copy_len]);
-        return .{ .type = .symbol, .sym_val = duped };
+        return .{ .symbol = duped };
     }
 
     fn parseSymbol(self: *Parser, s: []const u8) anyerror!Value {
@@ -446,9 +447,9 @@ pub const Parser = struct {
             }
         }
         // Handle special literal symbols
-        if (std.mem.eql(u8, s, "true")) return Value.boolValue(true);
-        if (std.mem.eql(u8, s, "false")) return Value.boolValue(false);
-        if (std.mem.eql(u8, s, "nil")) return Value.nilValue();
+        if (std.mem.eql(u8, s, "true")) return vm.boolValue(true);
+        if (std.mem.eql(u8, s, "false")) return vm.boolValue(false);
+        if (std.mem.eql(u8, s, "nil")) return vm.nilValue();
         // Copy via stack buffer to avoid aliasing with page_allocator
         var tmp_buf: [256]u8 = undefined;
         const copy_len = if (s.len < tmp_buf.len) s.len else tmp_buf.len;
@@ -462,9 +463,9 @@ pub const Parser = struct {
             @memcpy(full[0..copy_len], tmp_buf[0..copy_len]);
             @memcpy(full[copy_len..], extra);
             self.allocator.free(extra);
-            return .{ .type = .symbol, .sym_val = full };
+            return .{ .symbol = full };
         }
-        return .{ .type = .symbol, .sym_val = duped };
+        return .{ .symbol = duped };
     }
 
     /// Expand #(body) shorthand into (fn [params] body).
@@ -506,11 +507,11 @@ pub const Parser = struct {
         var params_vec: vec.Vector = .empty;
         try args.buildParams(self.allocator, &params_vec);
 
-        try fn_form.append(self.allocator, Value.vectorValue(params_vec));
+        try fn_form.append(self.allocator, try vm.vectorValue(self.allocator, params_vec));
         // Don't deinit params_vec — items transferred to fn_form
         try fn_form.append(self.allocator, body_form);
 
-        return Value.listValue(fn_form);
+        return try vm.listValue(self.allocator, fn_form);
     }
 
     /// Tracks % arg references during fn shorthand parsing.
@@ -529,7 +530,7 @@ pub const Parser = struct {
             } else if (std.mem.eql(u8, s, "%&")) {
                 self.has_rest = true;
                 const rest_name = try allocator.dupe(u8, "%&");
-                return .{ .type = .symbol, .sym_val = rest_name };
+                return .{ .symbol = rest_name };
             } else if (s.len >= 2 and std.ascii.isDigit(s[1])) {
                 const n = std.fmt.parseInt(usize, s[1..], 10) catch return error.TypeError;
                 return self.getArgSymbol(n);
@@ -542,13 +543,13 @@ pub const Parser = struct {
             if (n >= self.arg_symbols.len) {
                 // Dynamic allocation for high arg numbers
                 const name = try std.fmt.allocPrint(self.allocator, "%{d}", .{n});
-                return .{ .type = .symbol, .sym_val = name };
+                return .{ .symbol = name };
             }
             if (self.arg_symbols[n] == null) {
                 const name = try std.fmt.allocPrint(self.allocator, "%{d}", .{n});
                 self.arg_symbols[n] = name;
             }
-            return .{ .type = .symbol, .sym_val = self.arg_symbols[n].? };
+            return .{ .symbol = self.arg_symbols[n].? };
         }
 
         /// Build the params vector from tracked args.
@@ -556,11 +557,11 @@ pub const Parser = struct {
             var i: usize = 1;
             while (i <= self.max_positional) : (i += 1) {
                 const name = try std.fmt.allocPrint(allocator, "%{d}", .{i});
-                try params_vec.append(allocator, .{ .type = .symbol, .sym_val = name });
+                try params_vec.append(allocator, .{ .symbol = name });
             }
             if (self.has_rest) {
                 const rest_name = try allocator.dupe(u8, "%&");
-                try params_vec.append(allocator, .{ .type = .symbol, .sym_val = rest_name });
+                try params_vec.append(allocator, .{ .symbol = rest_name });
             }
         }
 
@@ -584,10 +585,10 @@ test "parser: empty list" {
     defer p.deinit();
 
     var form = try p.parse();
-    defer form.deinit(allocator);
+    defer vm.valueDeinit(&form, allocator);
 
-    try std.testing.expect(form.type == .list);
-    try std.testing.expect(form.list_val.items.len == 0);
+    try std.testing.expect(std.meta.activeTag(form) == .list);
+    try std.testing.expect(form.list.items.items.len == 0);
 }
 
 test "parser: simple list" {
@@ -599,10 +600,10 @@ test "parser: simple list" {
     defer p.deinit();
 
     var form = try p.parse();
-    defer form.deinit(allocator);
+    defer vm.valueDeinit(&form, allocator);
 
-    try std.testing.expect(form.type == .list);
-    try std.testing.expect(form.list_val.items.len == 3);
+    try std.testing.expect(std.meta.activeTag(form) == .list);
+    try std.testing.expect(form.list.items.items.len == 3);
 }
 
 test "parser: nested list" {
@@ -614,10 +615,10 @@ test "parser: nested list" {
     defer p.deinit();
 
     var form = try p.parse();
-    defer form.deinit(allocator);
+    defer vm.valueDeinit(&form, allocator);
 
-    try std.testing.expect(form.type == .list);
-    try std.testing.expect(form.list_val.items.len == 2);
+    try std.testing.expect(std.meta.activeTag(form) == .list);
+    try std.testing.expect(form.list.items.items.len == 2);
 }
 
 test "parser: vector" {
@@ -629,10 +630,10 @@ test "parser: vector" {
     defer p.deinit();
 
     var form = try p.parse();
-    defer form.deinit(allocator);
+    defer vm.valueDeinit(&form, allocator);
 
-    try std.testing.expect(form.type == .vector);
-    try std.testing.expect(form.vec_val.items.len == 3);
+    try std.testing.expect(std.meta.activeTag(form) == .vector);
+    try std.testing.expect(form.vector.items.items.len == 3);
 }
 
 test "parser: string" {
@@ -644,10 +645,10 @@ test "parser: string" {
     defer p.deinit();
 
     var form = try p.parse();
-    defer form.deinit(allocator);
+    defer vm.valueDeinit(&form, allocator);
 
-    try std.testing.expect(form.type == .string);
-    try std.testing.expect(std.mem.eql(u8, form.str_val, "hello"));
+    try std.testing.expect(std.meta.activeTag(form) == .string);
+    try std.testing.expect(std.mem.eql(u8, form.string, "hello"));
 }
 
 test "parser: keyword" {
@@ -659,10 +660,10 @@ test "parser: keyword" {
     defer p.deinit();
 
     var form = try p.parse();
-    defer form.deinit(allocator);
+    defer vm.valueDeinit(&form, allocator);
 
-    try std.testing.expect(form.type == .keyword);
-    try std.testing.expect(std.mem.eql(u8, form.kw_val, "foo"));
+    try std.testing.expect(std.meta.activeTag(form) == .keyword);
+    try std.testing.expect(std.mem.eql(u8, form.keyword, "foo"));
 }
 
 test "parser: integer" {
@@ -674,10 +675,10 @@ test "parser: integer" {
     defer p.deinit();
 
     var form = try p.parse();
-    defer form.deinit(allocator);
+    defer vm.valueDeinit(&form, allocator);
 
-    try std.testing.expect(form.type == .integer);
-    try std.testing.expect(form.int_val == 42);
+    try std.testing.expect(std.meta.activeTag(form) == .integer);
+    try std.testing.expect(form.integer == 42);
 }
 
 test "parser: float" {
@@ -689,9 +690,9 @@ test "parser: float" {
     defer p.deinit();
 
     var form = try p.parse();
-    defer form.deinit(allocator);
+    defer vm.valueDeinit(&form, allocator);
 
-    try std.testing.expect(form.type == .float);
+    try std.testing.expect(std.meta.activeTag(form) == .float);
 }
 
 test "parser: booleans" {
@@ -702,16 +703,16 @@ test "parser: booleans" {
     var p = try Parser.init(allocator, "true");
     defer p.deinit();
     var form = try p.parse();
-    defer form.deinit(allocator);
-    try std.testing.expect(form.type == .bool);
-    try std.testing.expect(form.bool_val == true);
+    defer vm.valueDeinit(&form, allocator);
+    try std.testing.expect(std.meta.activeTag(form) == .bool);
+    try std.testing.expect(form.bool == true);
 
     var p2 = try Parser.init(allocator, "false");
     defer p2.deinit();
     var form2 = try p2.parse();
-    defer form2.deinit(allocator);
-    try std.testing.expect(form2.type == .bool);
-    try std.testing.expect(form2.bool_val == false);
+    defer vm.valueDeinit(&form2, allocator);
+    try std.testing.expect(std.meta.activeTag(form2) == .bool);
+    try std.testing.expect(form2.bool == false);
 }
 
 test "parser: nil" {
@@ -722,8 +723,8 @@ test "parser: nil" {
     var p = try Parser.init(allocator, "nil");
     defer p.deinit();
     var form = try p.parse();
-    defer form.deinit(allocator);
-    try std.testing.expect(form.type == .nil);
+    defer vm.valueDeinit(&form, allocator);
+    try std.testing.expect(std.meta.activeTag(form) == .nil);
 }
 
 test "parser: fn shorthand single arg" {
@@ -734,19 +735,19 @@ test "parser: fn shorthand single arg" {
     var p = try Parser.init(allocator, "#(identity %)");
     defer p.deinit();
     var form = try p.parse();
-    defer form.deinit(allocator);
+    defer vm.valueDeinit(&form, allocator);
 
     // Should expand to (fn [%1] (identity %1))
-    try std.testing.expect(form.type == .list);
-    try std.testing.expect(form.list_val.items.len == 3);
-    try std.testing.expect(std.mem.eql(u8, form.list_val.items[0].sym_val, "fn"));
-    try std.testing.expect(form.list_val.items[1].type == .vector);
-    try std.testing.expect(form.list_val.items[1].vec_val.items.len == 1);
-    try std.testing.expect(std.mem.eql(u8, form.list_val.items[1].vec_val.items[0].sym_val, "%1"));
+    try std.testing.expect(std.meta.activeTag(form) == .list);
+    try std.testing.expect(form.list.items.items.len == 3);
+    try std.testing.expect(std.mem.eql(u8, form.list.items.items[0].symbol, "fn"));
+    try std.testing.expect(std.meta.activeTag(form.list.items.items[1]) == .vector);
+    try std.testing.expect(form.list.items.items[1].vector.items.items.len == 1);
+    try std.testing.expect(std.mem.eql(u8, form.list.items.items[1].vector.items.items[0].symbol, "%1"));
     // Check body: (identity %1)
-    try std.testing.expect(form.list_val.items[2].type == .list);
-    try std.testing.expect(form.list_val.items[2].list_val.items.len == 2);
-    try std.testing.expect(std.mem.eql(u8, form.list_val.items[2].list_val.items[1].sym_val, "%1"));
+    try std.testing.expect(std.meta.activeTag(form.list.items.items[2]) == .list);
+    try std.testing.expect(form.list.items.items[2].list.items.items.len == 2);
+    try std.testing.expect(std.mem.eql(u8, form.list.items.items[2].list.items.items[1].symbol, "%1"));
 }
 
 test "parser: fn shorthand no args" {
@@ -757,14 +758,14 @@ test "parser: fn shorthand no args" {
     var p = try Parser.init(allocator, "#(identity 42)");
     defer p.deinit();
     var form = try p.parse();
-    defer form.deinit(allocator);
+    defer vm.valueDeinit(&form, allocator);
 
     // Should expand to (fn [] (identity 42))
-    try std.testing.expect(form.type == .list);
-    try std.testing.expect(form.list_val.items.len == 3);
-    try std.testing.expect(std.mem.eql(u8, form.list_val.items[0].sym_val, "fn"));
-    try std.testing.expect(form.list_val.items[1].type == .vector);
-    try std.testing.expect(form.list_val.items[1].vec_val.items.len == 0);
+    try std.testing.expect(std.meta.activeTag(form) == .list);
+    try std.testing.expect(form.list.items.items.len == 3);
+    try std.testing.expect(std.mem.eql(u8, form.list.items.items[0].symbol, "fn"));
+    try std.testing.expect(std.meta.activeTag(form.list.items.items[1]) == .vector);
+    try std.testing.expect(form.list.items.items[1].vector.items.items.len == 0);
 }
 
 test "parser: fn shorthand two args" {
@@ -775,18 +776,18 @@ test "parser: fn shorthand two args" {
     var p = try Parser.init(allocator, "#(+ %1 %2)");
     defer p.deinit();
     var form = try p.parse();
-    defer form.deinit(allocator);
+    defer vm.valueDeinit(&form, allocator);
 
-    try std.testing.expect(form.type == .list);
-    try std.testing.expect(form.list_val.items.len == 3);
-    try std.testing.expect(form.list_val.items[1].vec_val.items.len == 2);
-    try std.testing.expect(std.mem.eql(u8, form.list_val.items[1].vec_val.items[0].sym_val, "%1"));
-    try std.testing.expect(std.mem.eql(u8, form.list_val.items[1].vec_val.items[1].sym_val, "%2"));
+    try std.testing.expect(std.meta.activeTag(form) == .list);
+    try std.testing.expect(form.list.items.items.len == 3);
+    try std.testing.expect(form.list.items.items[1].vector.items.items.len == 2);
+    try std.testing.expect(std.mem.eql(u8, form.list.items.items[1].vector.items.items[0].symbol, "%1"));
+    try std.testing.expect(std.mem.eql(u8, form.list.items.items[1].vector.items.items[1].symbol, "%2"));
     // Check body: (+ %1 %2)
-    try std.testing.expect(form.list_val.items[2].type == .list);
-    try std.testing.expect(form.list_val.items[2].list_val.items.len == 3);
-    try std.testing.expect(std.mem.eql(u8, form.list_val.items[2].list_val.items[1].sym_val, "%1"));
-    try std.testing.expect(std.mem.eql(u8, form.list_val.items[2].list_val.items[2].sym_val, "%2"));
+    try std.testing.expect(std.meta.activeTag(form.list.items.items[2]) == .list);
+    try std.testing.expect(form.list.items.items[2].list.items.items.len == 3);
+    try std.testing.expect(std.mem.eql(u8, form.list.items.items[2].list.items.items[1].symbol, "%1"));
+    try std.testing.expect(std.mem.eql(u8, form.list.items.items[2].list.items.items[2].symbol, "%2"));
 }
 
 test "parser: char literal" {
@@ -797,9 +798,9 @@ test "parser: char literal" {
     var p = try Parser.init(allocator, "\\A");
     defer p.deinit();
     var form = try p.parse();
-    defer form.deinit(allocator);
-    try std.testing.expect(form.type == .character);
-    try std.testing.expect(form.char_val == 'A');
+    defer vm.valueDeinit(&form, allocator);
+    try std.testing.expect(std.meta.activeTag(form) == .character);
+    try std.testing.expect(form.character == 'A');
 }
 
 test "parser: char newline" {
@@ -810,9 +811,9 @@ test "parser: char newline" {
     var p = try Parser.init(allocator, "\\newline");
     defer p.deinit();
     var form = try p.parse();
-    defer form.deinit(allocator);
-    try std.testing.expect(form.type == .character);
-    try std.testing.expect(form.char_val == 10);
+    defer vm.valueDeinit(&form, allocator);
+    try std.testing.expect(std.meta.activeTag(form) == .character);
+    try std.testing.expect(form.character == 10);
 }
 
 test "parser: char unicode escape" {
@@ -823,9 +824,9 @@ test "parser: char unicode escape" {
     var p = try Parser.init(allocator, "\\u0041");
     defer p.deinit();
     var form = try p.parse();
-    defer form.deinit(allocator);
-    try std.testing.expect(form.type == .character);
-    try std.testing.expect(form.char_val == 65);
+    defer vm.valueDeinit(&form, allocator);
+    try std.testing.expect(std.meta.activeTag(form) == .character);
+    try std.testing.expect(form.character == 65);
 }
 
 test "parser: char in list" {
@@ -836,11 +837,11 @@ test "parser: char in list" {
     var p = try Parser.init(allocator, "(\\A \\B \\C)");
     defer p.deinit();
     var form = try p.parse();
-    defer form.deinit(allocator);
-    try std.testing.expect(form.type == .list);
-    try std.testing.expect(form.list_val.items.len == 3);
-    try std.testing.expect(form.list_val.items[0].type == .character);
-    try std.testing.expect(form.list_val.items[0].char_val == 'A');
-    try std.testing.expect(form.list_val.items[1].char_val == 'B');
-    try std.testing.expect(form.list_val.items[2].char_val == 'C');
+    defer vm.valueDeinit(&form, allocator);
+    try std.testing.expect(std.meta.activeTag(form) == .list);
+    try std.testing.expect(form.list.items.items.len == 3);
+    try std.testing.expect(std.meta.activeTag(form.list.items.items[0]) == .character);
+    try std.testing.expect(form.list.items.items[0].character == 'A');
+    try std.testing.expect(form.list.items.items[1].character == 'B');
+    try std.testing.expect(form.list.items.items[2].character == 'C');
 }
