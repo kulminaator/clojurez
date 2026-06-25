@@ -240,30 +240,45 @@ pub fn keywordValue(allocator: Allocator, s: []const u8) anyerror!Value {
 
 pub fn listValue(allocator: Allocator, l: list.List) anyerror!Value {
     const data = try allocator.create(ListData);
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(data)), gc_mod.GCObjectType.list_data);
+    }
     data.* = .{ .items = l };
     return .{ .list = data };
 }
 
 pub fn vectorValue(allocator: Allocator, v: vec.Vector) anyerror!Value {
     const data = try allocator.create(VectorData);
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(data)), gc_mod.GCObjectType.vector_data);
+    }
     data.* = .{ .items = v };
     return .{ .vector = data };
 }
 
 pub fn mapValue(allocator: Allocator, m: Map) anyerror!Value {
     const data = try allocator.create(MapData);
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(data)), gc_mod.GCObjectType.map_data);
+    }
     data.* = .{ .entries = m };
     return .{ .map = data };
 }
 
 pub fn setValue(allocator: Allocator, s: Set) anyerror!Value {
     const data = try allocator.create(SetData);
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(data)), gc_mod.GCObjectType.set_data);
+    }
     data.* = .{ .items = s };
     return .{ .set = data };
 }
 
 pub fn queueValue(allocator: Allocator, q: Queue) anyerror!Value {
     const data = try allocator.create(QueueData);
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(data)), gc_mod.GCObjectType.queue_data);
+    }
     data.* = .{ .items = q };
     return .{ .queue = data };
 }
@@ -333,6 +348,9 @@ pub fn fnValueNamed(allocator: Allocator, arities: std.ArrayListUnmanaged(Arity)
     fn_data.* = .{ .arities = arities, .env = env_ptr, .is_macro = is_macro, .name = name };
     if (gc_mod.current_gc) |gc_inst| {
         gc_inst.setObjectType(@as(*anyopaque, @ptrCast(fn_data)), gc_mod.GCObjectType.fn_data);
+        if (arities.items.len > 0) {
+            gc_inst.setObjectType(@as(*anyopaque, @ptrCast(arities.items.ptr)), gc_mod.GCObjectType.fn_arities);
+        }
     }
     return .{ .function = fn_data };
 }

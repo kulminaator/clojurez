@@ -1,6 +1,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const vm = @import("value.zig");
+const gc_mod = @import("gc.zig");
 const Value = vm.Value;
 
 pub const List = std.ArrayListUnmanaged(Value);
@@ -11,6 +12,13 @@ pub fn empty() List {
 
 pub fn clone(self: *const List, allocator: Allocator) anyerror!List {
     var result: List = .empty;
+    defer {
+        if (result.items.len > 0) {
+            if (gc_mod.current_gc) |gc| {
+                gc.setObjectType(@as(*anyopaque, @ptrCast(result.items.ptr)), gc_mod.GCObjectType.value_array);
+            }
+        }
+    }
     try result.ensureTotalCapacity(allocator, self.items.len);
     for (self.items) |item| {
         try result.append(allocator, try vm.clone(&item, allocator));

@@ -50,6 +50,12 @@ pub const GCObjectType = enum(u8) {
     hash_map_kvp_array = 11, // array of Kvp { key: Value, val: Value } in HAMT
     hash_map_sub_nodes = 12, // array of ?*Node (sub-node pointers in HAMT)
     record_data = 15,        // RecordData { type_name, fields, extmap, meta, allocator }
+    list_data = 16,   // ListData { items: ArrayListUnmanaged(Value) }
+    vector_data = 17, // VectorData { items: ArrayListUnmanaged(Value) }
+    map_data = 18,    // MapData { entries: ArrayListUnmanaged(MapEntry) }
+    set_data = 19,    // SetData { items: ArrayListUnmanaged(Value) }
+    queue_data = 20,  // QueueData { items: ArrayListUnmanaged(Value) }
+    fn_arities = 21,  // array of Arity { params: list.List, body: list.List, rest_name }
 };
 
 const Header = struct {

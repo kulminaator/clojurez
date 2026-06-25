@@ -26,13 +26,19 @@ pub fn valueScanFn(obj: *anyopaque, ctx: *gc.ScanContext) void {
         .env => scanEnv(obj, ctx),
         .namespace_manager => scanNamespaceManager(obj, ctx),
         .record_data => scanRecordData(obj, ctx),
+        .list_data => scanListData(obj, ctx),
+        .vector_data => scanVectorData(obj, ctx),
+        .map_data => scanMapData(obj, ctx),
+        .set_data => scanSetData(obj, ctx),
+        .queue_data => scanQueueData(obj, ctx),
+        .fn_arities => scanFnArities(obj, ctx, header.size),
     }
 }
 
 /// Heuristic scan for blocks without a type tag.
 fn scanUnknownBlock(obj: *anyopaque, ctx: *gc.ScanContext, size: usize) void {
     const value_size = @sizeOf(Value);
-    const map_entry_size = @sizeOf(vm.MapEntry);
+    
     const atom_size = @sizeOf(vm.AtomData);
     const thunk_size = @sizeOf(vm.LazySeqThunk);
 
@@ -58,14 +64,12 @@ fn scanUnknownBlock(obj: *anyopaque, ctx: *gc.ScanContext, size: usize) void {
         return;
     }
     // Array of Values (list items, vector items, set items, queue items)
-    // Only match if size is a reasonable multiple of Value size
+    // Fallback for arrays that weren't explicitly typed.
+    // Note: This can misidentify Arity arrays as value_arrays,
+    // but the explicit type setting in scanFnData/scanListData etc.
+    // takes precedence for properly typed blocks.
     if (size % value_size == 0 and size >= value_size and size / value_size <= 10000) {
         scanValueArray(obj, ctx, size);
-        return;
-    }
-    // Array of MapEntries
-    if (size % map_entry_size == 0 and size >= map_entry_size and size / map_entry_size <= 10000) {
-        scanMapEntries(obj, ctx, size);
         return;
     }
     // String/keyword/symbol data — no child pointers, nothing to scan
@@ -288,9 +292,11 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
 fn scanLazySeqThunk(thunk_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     const thunk: *vm.LazySeqThunk = @ptrCast(@alignCast(thunk_ptr));
     if (thunk.params.items.len > 0) {
+        ctx.gc.setObjectType(thunk.params.items.ptr, gc.GCObjectType.value_array);
         ctx.gc.markRecursive(thunk.params.items.ptr, ctx);
     }
     if (thunk.body.items.len > 0) {
+        ctx.gc.setObjectType(thunk.body.items.ptr, gc.GCObjectType.value_array);
         ctx.gc.markRecursive(thunk.body.items.ptr, ctx);
     }
     // Mark the thunk's env HAMT root node (triggers recursive scanning)
@@ -322,21 +328,8 @@ fn scanAtomData(data_ptr: *anyopaque, ctx: *gc.ScanContext) void {
 fn scanFnData(fndata_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     const fndata: *vm.FnData = @ptrCast(@alignCast(fndata_ptr));
     if (fndata.arities.items.len > 0) {
+        ctx.gc.setObjectType(fndata.arities.items.ptr, gc.GCObjectType.fn_arities);
         ctx.gc.markRecursive(fndata.arities.items.ptr, ctx);
-        // Each Arity has params and body lists that need marking
-        for (fndata.arities.items) |arity| {
-            if (arity.params.items.len > 0) {
-                ctx.gc.markRecursive(arity.params.items.ptr, ctx);
-            }
-            if (arity.body.items.len > 0) {
-                ctx.gc.markRecursive(arity.body.items.ptr, ctx);
-            }
-            if (arity.rest_name) |rn| {
-                if (rn.len > 0) {
-                    ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(rn.ptr))), ctx);
-                }
-            }
-        }
     }
     // Mark the fn's env struct itself (heap-allocated *Env)
     const fn_env = fndata.env;
@@ -443,6 +436,75 @@ fn scanRecordData(rd_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     if (rd.meta) |m| {
         if (m.items.len > 0) {
             ctx.gc.markRecursive(m.items.ptr, ctx);
+        }
+    }
+}
+
+/// Scan ListData: { items: ArrayListUnmanaged(Value) }.
+fn scanListData(ld_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const ld: *vm.ListData = @ptrCast(@alignCast(ld_ptr));
+    if (ld.items.items.len > 0) {
+        ctx.gc.setObjectType(ld.items.items.ptr, gc.GCObjectType.value_array);
+        ctx.gc.markRecursive(ld.items.items.ptr, ctx);
+    }
+}
+
+/// Scan VectorData: { items: ArrayListUnmanaged(Value) }.
+fn scanVectorData(vd_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const vd: *vm.VectorData = @ptrCast(@alignCast(vd_ptr));
+    if (vd.items.items.len > 0) {
+        ctx.gc.setObjectType(vd.items.items.ptr, gc.GCObjectType.value_array);
+        ctx.gc.markRecursive(vd.items.items.ptr, ctx);
+    }
+}
+
+/// Scan MapData: { entries: ArrayListUnmanaged(MapEntry) }.
+fn scanMapData(md_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const md: *vm.MapData = @ptrCast(@alignCast(md_ptr));
+    if (md.entries.items.len > 0) {
+        ctx.gc.setObjectType(md.entries.items.ptr, gc.GCObjectType.map_entries);
+        ctx.gc.markRecursive(md.entries.items.ptr, ctx);
+    }
+}
+
+/// Scan SetData: { items: ArrayListUnmanaged(Value) }.
+fn scanSetData(sd_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const sd: *vm.SetData = @ptrCast(@alignCast(sd_ptr));
+    if (sd.items.items.len > 0) {
+        ctx.gc.setObjectType(sd.items.items.ptr, gc.GCObjectType.value_array);
+        ctx.gc.markRecursive(sd.items.items.ptr, ctx);
+    }
+}
+
+/// Scan QueueData: { items: ArrayListUnmanaged(Value) }.
+fn scanQueueData(qd_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const qd: *vm.QueueData = @ptrCast(@alignCast(qd_ptr));
+    if (qd.items.items.len > 0) {
+        ctx.gc.setObjectType(qd.items.items.ptr, gc.GCObjectType.value_array);
+        ctx.gc.markRecursive(qd.items.items.ptr, ctx);
+    }
+}
+
+/// Scan array of Arity structs: { params: list.List, body: list.List, rest_name: ?[]const u8 }.
+fn scanFnArities(arities_ptr: *anyopaque, ctx: *gc.ScanContext, total_size: usize) void {
+    const arity_size = @sizeOf(vm.Arity);
+    const count = total_size / arity_size;
+    const arity_ptr: [*]const vm.Arity = @ptrCast(@alignCast(arities_ptr));
+    var i: usize = 0;
+    while (i < count) : (i += 1) {
+        const arity = arity_ptr[i];
+        if (arity.params.items.len > 0) {
+            ctx.gc.setObjectType(arity.params.items.ptr, gc.GCObjectType.value_array);
+            ctx.gc.markRecursive(arity.params.items.ptr, ctx);
+        }
+        if (arity.body.items.len > 0) {
+            ctx.gc.setObjectType(arity.body.items.ptr, gc.GCObjectType.value_array);
+            ctx.gc.markRecursive(arity.body.items.ptr, ctx);
+        }
+        if (arity.rest_name) |rn| {
+            if (rn.len > 0) {
+                ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(rn.ptr))), ctx);
+            }
         }
     }
 }
