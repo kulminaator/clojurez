@@ -588,7 +588,7 @@ test "parser: empty list" {
     defer vm.valueDeinit(&form, allocator);
 
     try std.testing.expect(std.meta.activeTag(form) == .list);
-    try std.testing.expect(form.list.items.len == 0);
+    try std.testing.expect(form.list.items.items.len == 0);
 }
 
 test "parser: simple list" {
@@ -603,7 +603,7 @@ test "parser: simple list" {
     defer vm.valueDeinit(&form, allocator);
 
     try std.testing.expect(std.meta.activeTag(form) == .list);
-    try std.testing.expect(form.list.items.len == 3);
+    try std.testing.expect(form.list.items.items.len == 3);
 }
 
 test "parser: nested list" {
@@ -618,7 +618,7 @@ test "parser: nested list" {
     defer vm.valueDeinit(&form, allocator);
 
     try std.testing.expect(std.meta.activeTag(form) == .list);
-    try std.testing.expect(form.list.items.len == 2);
+    try std.testing.expect(form.list.items.items.len == 2);
 }
 
 test "parser: vector" {
@@ -633,7 +633,7 @@ test "parser: vector" {
     defer vm.valueDeinit(&form, allocator);
 
     try std.testing.expect(std.meta.activeTag(form) == .vector);
-    try std.testing.expect(form.vector.items.len == 3);
+    try std.testing.expect(form.vector.items.items.len == 3);
 }
 
 test "parser: string" {
@@ -710,7 +710,7 @@ test "parser: booleans" {
     var p2 = try Parser.init(allocator, "false");
     defer p2.deinit();
     var form2 = try p2.parse();
-    defer form2.deinit(allocator);
+    defer vm.valueDeinit(&form2, allocator);
     try std.testing.expect(std.meta.activeTag(form2) == .bool);
     try std.testing.expect(form2.bool == false);
 }
@@ -739,15 +739,15 @@ test "parser: fn shorthand single arg" {
 
     // Should expand to (fn [%1] (identity %1))
     try std.testing.expect(std.meta.activeTag(form) == .list);
-    try std.testing.expect(form.list.items.len == 3);
-    try std.testing.expect(std.mem.eql(u8, form.list.items[0].symbol, "fn"));
-    try std.testing.expect(std.meta.activeTag(form.list.items[1]) == .vector);
-    try std.testing.expect(form.list.items[1].vector.items.len == 1);
-    try std.testing.expect(std.mem.eql(u8, form.list.items[1].vector.items[0].symbol, "%1"));
+    try std.testing.expect(form.list.items.items.len == 3);
+    try std.testing.expect(std.mem.eql(u8, form.list.items.items[0].symbol, "fn"));
+    try std.testing.expect(std.meta.activeTag(form.list.items.items[1]) == .vector);
+    try std.testing.expect(form.list.items.items[1].vector.items.items.len == 1);
+    try std.testing.expect(std.mem.eql(u8, form.list.items.items[1].vector.items.items[0].symbol, "%1"));
     // Check body: (identity %1)
-    try std.testing.expect(std.meta.activeTag(form.list.items[2]) == .list);
-    try std.testing.expect(form.list.items[2].list.items.len == 2);
-    try std.testing.expect(std.mem.eql(u8, form.list.items[2].list.items[1].symbol, "%1"));
+    try std.testing.expect(std.meta.activeTag(form.list.items.items[2]) == .list);
+    try std.testing.expect(form.list.items.items[2].list.items.items.len == 2);
+    try std.testing.expect(std.mem.eql(u8, form.list.items.items[2].list.items.items[1].symbol, "%1"));
 }
 
 test "parser: fn shorthand no args" {
@@ -762,10 +762,10 @@ test "parser: fn shorthand no args" {
 
     // Should expand to (fn [] (identity 42))
     try std.testing.expect(std.meta.activeTag(form) == .list);
-    try std.testing.expect(form.list.items.len == 3);
-    try std.testing.expect(std.mem.eql(u8, form.list.items[0].symbol, "fn"));
-    try std.testing.expect(std.meta.activeTag(form.list.items[1]) == .vector);
-    try std.testing.expect(form.list.items[1].vector.items.len == 0);
+    try std.testing.expect(form.list.items.items.len == 3);
+    try std.testing.expect(std.mem.eql(u8, form.list.items.items[0].symbol, "fn"));
+    try std.testing.expect(std.meta.activeTag(form.list.items.items[1]) == .vector);
+    try std.testing.expect(form.list.items.items[1].vector.items.items.len == 0);
 }
 
 test "parser: fn shorthand two args" {
@@ -779,15 +779,15 @@ test "parser: fn shorthand two args" {
     defer vm.valueDeinit(&form, allocator);
 
     try std.testing.expect(std.meta.activeTag(form) == .list);
-    try std.testing.expect(form.list.items.len == 3);
-    try std.testing.expect(form.list.items[1].vector.items.len == 2);
-    try std.testing.expect(std.mem.eql(u8, form.list.items[1].vector.items[0].symbol, "%1"));
-    try std.testing.expect(std.mem.eql(u8, form.list.items[1].vector.items[1].symbol, "%2"));
+    try std.testing.expect(form.list.items.items.len == 3);
+    try std.testing.expect(form.list.items.items[1].vector.items.items.len == 2);
+    try std.testing.expect(std.mem.eql(u8, form.list.items.items[1].vector.items.items[0].symbol, "%1"));
+    try std.testing.expect(std.mem.eql(u8, form.list.items.items[1].vector.items.items[1].symbol, "%2"));
     // Check body: (+ %1 %2)
-    try std.testing.expect(std.meta.activeTag(form.list.items[2]) == .list);
-    try std.testing.expect(form.list.items[2].list.items.len == 3);
-    try std.testing.expect(std.mem.eql(u8, form.list.items[2].list.items[1].symbol, "%1"));
-    try std.testing.expect(std.mem.eql(u8, form.list.items[2].list.items[2].symbol, "%2"));
+    try std.testing.expect(std.meta.activeTag(form.list.items.items[2]) == .list);
+    try std.testing.expect(form.list.items.items[2].list.items.items.len == 3);
+    try std.testing.expect(std.mem.eql(u8, form.list.items.items[2].list.items.items[1].symbol, "%1"));
+    try std.testing.expect(std.mem.eql(u8, form.list.items.items[2].list.items.items[2].symbol, "%2"));
 }
 
 test "parser: char literal" {
@@ -839,9 +839,9 @@ test "parser: char in list" {
     var form = try p.parse();
     defer vm.valueDeinit(&form, allocator);
     try std.testing.expect(std.meta.activeTag(form) == .list);
-    try std.testing.expect(form.list.items.len == 3);
-    try std.testing.expect(std.meta.activeTag(form.list.items[0]) == .character);
-    try std.testing.expect(form.list.items[0].character == 'A');
-    try std.testing.expect(form.list.items[1].character == 'B');
-    try std.testing.expect(form.list.items[2].character == 'C');
+    try std.testing.expect(form.list.items.items.len == 3);
+    try std.testing.expect(std.meta.activeTag(form.list.items.items[0]) == .character);
+    try std.testing.expect(form.list.items.items[0].character == 'A');
+    try std.testing.expect(form.list.items.items[1].character == 'B');
+    try std.testing.expect(form.list.items.items[2].character == 'C');
 }

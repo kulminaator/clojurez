@@ -1180,18 +1180,18 @@ test "seq_ops::flatten: nested list" {
     _ = inner.append(std.heap.page_allocator, vm.intValue(3)) catch unreachable;
     var outer: list.List = .empty;
     _ = outer.append(std.heap.page_allocator, vm.intValue(1)) catch unreachable;
-    _ = outer.append(std.heap.page_allocator, vm.listValue(inner)) catch unreachable;
+    _ = outer.append(std.heap.page_allocator, try vm.listValue(std.heap.page_allocator, inner)) catch unreachable;
     _ = outer.append(std.heap.page_allocator, vm.intValue(4)) catch unreachable;
-    const lv = vm.listValue(outer);
+    const lv = try vm.listValue(std.heap.page_allocator, outer);
     const args = makeArgs(&[_]Value{ lv });
     var result = core_flatten(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .list);
-    try std.testing.expect(result.list.items.len == 4);
-    try std.testing.expect(result.list.items[0].integer == 1);
-    try std.testing.expect(result.list.items[1].integer == 2);
-    try std.testing.expect(result.list.items[2].integer == 3);
-    try std.testing.expect(result.list.items[3].integer == 4);
+    try std.testing.expect(result.list.items.items.len == 4);
+    try std.testing.expect(result.list.items.items[0].integer == 1);
+    try std.testing.expect(result.list.items.items[1].integer == 2);
+    try std.testing.expect(result.list.items.items[2].integer == 3);
+    try std.testing.expect(result.list.items.items[3].integer == 4);
 }
 
 test "seq_ops::distinct_q: all distinct" {
@@ -1201,7 +1201,7 @@ test "seq_ops::distinct_q: all distinct" {
     _ = l.append(std.heap.page_allocator, vm.intValue(1)) catch unreachable;
     _ = l.append(std.heap.page_allocator, vm.intValue(2)) catch unreachable;
     _ = l.append(std.heap.page_allocator, vm.intValue(3)) catch unreachable;
-    const lv = vm.listValue(l);
+    const lv = try vm.listValue(std.heap.page_allocator, l);
     const args = makeArgs(&[_]Value{ lv });
     var result = core_distinct_q(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -1215,7 +1215,7 @@ test "seq_ops::distinct_q: has duplicates" {
     _ = l.append(std.heap.page_allocator, vm.intValue(1)) catch unreachable;
     _ = l.append(std.heap.page_allocator, vm.intValue(2)) catch unreachable;
     _ = l.append(std.heap.page_allocator, vm.intValue(1)) catch unreachable;
-    const lv = vm.listValue(l);
+    const lv = try vm.listValue(std.heap.page_allocator, l);
     const args = makeArgs(&[_]Value{ lv });
     var result = core_distinct_q(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -1230,13 +1230,13 @@ test "seq_ops::drop: list" {
     _ = l.append(std.heap.page_allocator, vm.intValue(2)) catch unreachable;
     _ = l.append(std.heap.page_allocator, vm.intValue(3)) catch unreachable;
     _ = l.append(std.heap.page_allocator, vm.intValue(4)) catch unreachable;
-    const lv = vm.listValue(l);
+    const lv = try vm.listValue(std.heap.page_allocator, l);
     const args = makeArgs(&[_]Value{ vm.intValue(2), lv });
     var result = core_drop(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .list);
-    try std.testing.expect(result.list.items.len == 2);
-    try std.testing.expect(result.list.items[0].integer == 3);
+    try std.testing.expect(result.list.items.items.len == 2);
+    try std.testing.expect(result.list.items.items[0].integer == 3);
 }
 
 test "seq_ops::drop: more than length returns empty" {
@@ -1244,12 +1244,12 @@ test "seq_ops::drop: more than length returns empty" {
     defer a.deinit(std.heap.page_allocator);
     var l: list.List = .empty;
     _ = l.append(std.heap.page_allocator, vm.intValue(1)) catch unreachable;
-    const lv = vm.listValue(l);
+    const lv = try vm.listValue(std.heap.page_allocator, l);
     const args = makeArgs(&[_]Value{ vm.intValue(5), lv });
     var result = core_drop(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .list);
-    try std.testing.expect(result.list.items.len == 0);
+    try std.testing.expect(result.list.items.items.len == 0);
 }
 
 test "seq_ops::next: list" {
@@ -1259,13 +1259,13 @@ test "seq_ops::next: list" {
     _ = l.append(std.heap.page_allocator, vm.intValue(1)) catch unreachable;
     _ = l.append(std.heap.page_allocator, vm.intValue(2)) catch unreachable;
     _ = l.append(std.heap.page_allocator, vm.intValue(3)) catch unreachable;
-    const lv = vm.listValue(l);
+    const lv = try vm.listValue(std.heap.page_allocator, l);
     const args = makeArgs(&[_]Value{ lv });
     var result = core_next(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .list);
-    try std.testing.expect(result.list.items.len == 2);
-    try std.testing.expect(result.list.items[0].integer == 2);
+    try std.testing.expect(result.list.items.items.len == 2);
+    try std.testing.expect(result.list.items.items[0].integer == 2);
 }
 
 test "seq_ops::next: single element returns nil" {
@@ -1273,7 +1273,7 @@ test "seq_ops::next: single element returns nil" {
     defer a.deinit(std.heap.page_allocator);
     var l: list.List = .empty;
     _ = l.append(std.heap.page_allocator, vm.intValue(1)) catch unreachable;
-    const lv = vm.listValue(l);
+    const lv = try vm.listValue(std.heap.page_allocator, l);
     const args = makeArgs(&[_]Value{ lv });
     var result = core_next(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -1288,13 +1288,13 @@ test "seq_ops::nthnext: list" {
     _ = l.append(std.heap.page_allocator, vm.intValue(2)) catch unreachable;
     _ = l.append(std.heap.page_allocator, vm.intValue(3)) catch unreachable;
     _ = l.append(std.heap.page_allocator, vm.intValue(4)) catch unreachable;
-    const lv = vm.listValue(l);
+    const lv = try vm.listValue(std.heap.page_allocator, l);
     const args = makeArgs(&[_]Value{ vm.intValue(2), lv });
     var result = core_nthnext(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .list);
-    try std.testing.expect(result.list.items.len == 2);
-    try std.testing.expect(result.list.items[0].integer == 3);
+    try std.testing.expect(result.list.items.items.len == 2);
+    try std.testing.expect(result.list.items.items[0].integer == 3);
 }
 
 test "seq_ops::nthnext: out of range returns nil" {
@@ -1302,7 +1302,7 @@ test "seq_ops::nthnext: out of range returns nil" {
     defer a.deinit(std.heap.page_allocator);
     var l: list.List = .empty;
     _ = l.append(std.heap.page_allocator, vm.intValue(1)) catch unreachable;
-    const lv = vm.listValue(l);
+    const lv = try vm.listValue(std.heap.page_allocator, l);
     const args = makeArgs(&[_]Value{ vm.intValue(5), lv });
     var result = core_nthnext(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -1317,14 +1317,14 @@ test "seq_ops::reduced: wraps value" {
     var result = core_reduced(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .reduced);
-    try std.testing.expect(result.reduced.?.integer == 42);
+    try std.testing.expect(result.reduced.integer == 42);
 }
 
 test "seq_ops::reduced_q: true for reduced" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var reduced_val = vm.reducedValue(std.heap.page_allocator, vm.intValue(42)) catch unreachable;
-    defer reduced_val.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&reduced_val, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ reduced_val });
     var result = core_reduced_q(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -1355,7 +1355,7 @@ test "seq_ops::ensure_reduced: passes through reduced" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var reduced_val = vm.reducedValue(std.heap.page_allocator, vm.intValue(42)) catch unreachable;
-    defer reduced_val.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&reduced_val, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ reduced_val });
     var result = core_ensure_reduced(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -1366,7 +1366,7 @@ test "seq_ops::unreduced: unwraps reduced" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var reduced_val = vm.reducedValue(std.heap.page_allocator, vm.intValue(42)) catch unreachable;
-    defer reduced_val.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&reduced_val, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ reduced_val });
     var result = core_unreduced(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);

@@ -610,7 +610,7 @@ test "strings::str: single string strips quotes" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "hello");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = core_str(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -622,9 +622,9 @@ test "strings::str: concatenates multiple values" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s1 = try vm.stringValue(std.heap.page_allocator, "hello");
-    defer s1.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s1, std.heap.page_allocator);
     var s2 = try vm.stringValue(std.heap.page_allocator, "world");
-    defer s2.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s2, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s1, s2 });
     var result = core_str(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -653,7 +653,7 @@ test "strings::utf8_valid_q: valid string" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "hello");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = core_utf8_valid_q(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -673,7 +673,7 @@ test "strings::upper_case: basic" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "hello");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_upper_case(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -684,7 +684,7 @@ test "strings::lower_case: basic" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "HELLO");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_lower_case(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -695,7 +695,7 @@ test "strings::capitalize: basic" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "hELLO");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_capitalize(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -706,7 +706,7 @@ test "strings::capitalize: empty" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_capitalize(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -717,7 +717,7 @@ test "strings::trim: both sides" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "  hello  ");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_trim(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -728,7 +728,7 @@ test "strings::trim: empty" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_trim(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -739,7 +739,7 @@ test "strings::trim: all whitespace" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "   ");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_trim(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -750,7 +750,7 @@ test "strings::triml: basic" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "  hello  ");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_triml(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -761,7 +761,7 @@ test "strings::trimr: basic" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "  hello  ");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_trimr(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -772,7 +772,7 @@ test "strings::trim_newline: basic" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "hello\n\n");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_trim_newline(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -783,7 +783,7 @@ test "strings::trim_newline: cr" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "hello\r");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_trim_newline(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -803,7 +803,7 @@ test "strings::blank_q: empty" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_blank_q(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -814,7 +814,7 @@ test "strings::blank_q: whitespace" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "   ");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_blank_q(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -825,7 +825,7 @@ test "strings::blank_q: text" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "hello");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s });
     var result = str_blank_q(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -836,9 +836,9 @@ test "strings::starts_with_q: true" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "hello");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     var sub = try vm.stringValue(std.heap.page_allocator, "hel");
-    defer sub.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&sub, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, sub });
     var result = str_starts_with_q(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -849,9 +849,9 @@ test "strings::starts_with_q: false" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "hello");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     var sub = try vm.stringValue(std.heap.page_allocator, "world");
-    defer sub.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&sub, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, sub });
     var result = str_starts_with_q(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -862,9 +862,9 @@ test "strings::ends_with_q: true" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "hello");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     var sub = try vm.stringValue(std.heap.page_allocator, "lo");
-    defer sub.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&sub, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, sub });
     var result = str_ends_with_q(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -875,9 +875,9 @@ test "strings::ends_with_q: false" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "hello");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     var sub = try vm.stringValue(std.heap.page_allocator, "xyz");
-    defer sub.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&sub, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, sub });
     var result = str_ends_with_q(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -888,9 +888,9 @@ test "strings::includes_q: true" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "hello world");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     var sub = try vm.stringValue(std.heap.page_allocator, "lo w");
-    defer sub.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&sub, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, sub });
     var result = str_includes_q(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -901,9 +901,9 @@ test "strings::includes_q: false" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "hello world");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     var sub = try vm.stringValue(std.heap.page_allocator, "xyz");
-    defer sub.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&sub, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, sub });
     var result = str_includes_q(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -914,9 +914,9 @@ test "strings::index_of: found" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "hello world");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     var needle = try vm.stringValue(std.heap.page_allocator, "world");
-    defer needle.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&needle, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, needle });
     var result = str_index_of(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -928,9 +928,9 @@ test "strings::index_of: not found" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "hello world");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     var needle = try vm.stringValue(std.heap.page_allocator, "xyz");
-    defer needle.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&needle, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, needle });
     var result = str_index_of(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -941,9 +941,9 @@ test "strings::last_index_of: found" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "hello hello");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     var needle = try vm.stringValue(std.heap.page_allocator, "hello");
-    defer needle.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&needle, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, needle });
     var result = str_last_index_of(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
@@ -955,9 +955,9 @@ test "strings::last_index_of: not found" {
     var a = testEnv();
     defer a.deinit(std.heap.page_allocator);
     var s = try vm.stringValue(std.heap.page_allocator, "hello world");
-    defer s.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&s, std.heap.page_allocator);
     var needle = try vm.stringValue(std.heap.page_allocator, "xyz");
-    defer needle.deinit(std.heap.page_allocator);
+    defer vm.valueDeinit(&needle, std.heap.page_allocator);
     const args = makeArgs(&[_]Value{ s, needle });
     var result = str_last_index_of(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);

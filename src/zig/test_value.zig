@@ -25,10 +25,10 @@ const mapValue = vm.mapValue;
 const setValue = vm.setValue;
 const queueValue = vm.queueValue;
 const atomValue = vm.atomValue;
-const atomValueShared = Value.atomValueShared;
-const utf8CodepointCount = Value.utf8CodepointCount;
-const utf8CodepointByteOffset = Value.utf8CodepointByteOffset;
-const utf8CodepointAt = Value.utf8CodepointAt;
+const atomValueShared = vm.atomValueShared;
+const utf8CodepointCount = vm.utf8CodepointCount;
+const utf8CodepointByteOffset = vm.utf8CodepointByteOffset;
+const utf8CodepointAt = vm.utf8CodepointAt;
 const Env = vm.Env;
 const Set = vm.Set;
 const Map = vm.Map;
@@ -36,35 +36,35 @@ const Queue = vm.Queue;
 
 test "value::intValue: creates integer value" {
     const v = intValue(42);
-    try std.testing.expect(v.type == .integer);
+    try std.testing.expect(std.meta.activeTag(v) == .integer);
     try std.testing.expect(v.integer == 42);
 }
 
 test "value::floatValue: creates float value" {
     const v = floatValue(3.14);
-    try std.testing.expect(v.type == .float);
+    try std.testing.expect(std.meta.activeTag(v) == .float);
     try std.testing.expect(v.float == 3.14);
 }
 
 test "value::boolValue: true and false" {
     const t = boolValue(true);
-    try std.testing.expect(t.type == .bool);
+    try std.testing.expect(std.meta.activeTag(t) == .bool);
     try std.testing.expect(t.bool);
     const f = boolValue(false);
-    try std.testing.expect(f.type == .bool);
+    try std.testing.expect(std.meta.activeTag(f) == .bool);
     try std.testing.expect(!f.bool);
 }
 
 test "value::nilValue: creates nil" {
     const v = nilValue();
-    try std.testing.expect(v.type == .nil);
+    try std.testing.expect(std.meta.activeTag(v) == .nil);
 }
 
 test "value::stringValue: creates string" {
     const a = std.heap.page_allocator;
     var v = try stringValue(a, "hello");
-    defer v.deinit(a);
-    try std.testing.expect(v.type == .string);
+    defer vm.valueDeinit(&v, a);
+    try std.testing.expect(std.meta.activeTag(v) == .string);
     try std.testing.expect(std.mem.eql(u8, v.string, "hello"));
 }
 
@@ -77,56 +77,56 @@ test "value::stringValue: rejects invalid UTF-8" {
 test "value::symValue: creates symbol" {
     const a = std.heap.page_allocator;
     var v = try symValue(a, "foo-bar");
-    defer v.deinit(a);
-    try std.testing.expect(v.type == .symbol);
+    defer vm.valueDeinit(&v, a);
+    try std.testing.expect(std.meta.activeTag(v) == .symbol);
     try std.testing.expect(std.mem.eql(u8, v.symbol, "foo-bar"));
 }
 
 test "value::keywordValue: creates keyword" {
     const a = std.heap.page_allocator;
     var v = try keywordValue(a, "foo");
-    defer v.deinit(a);
-    try std.testing.expect(v.type == .keyword);
+    defer vm.valueDeinit(&v, a);
+    try std.testing.expect(std.meta.activeTag(v) == .keyword);
     try std.testing.expect(std.mem.eql(u8, v.keyword, "foo"));
 }
 
 test "value::isTruthy: nil is falsy" {
-    try std.testing.expect(!nilValue().isTruthy());
+    try std.testing.expect(!vm.isTruthy(nilValue()));
 }
 
 test "value::isTruthy: false is falsy" {
-    try std.testing.expect(!boolValue(false).isTruthy());
+    try std.testing.expect(!vm.isTruthy(boolValue(false)));
 }
 
 test "value::isTruthy: true is truthy" {
-    try std.testing.expect(boolValue(true).isTruthy());
+    try std.testing.expect(vm.isTruthy(boolValue(true)));
 }
 
 test "value::isTruthy: numbers are truthy" {
-    try std.testing.expect(intValue(0).isTruthy());
-    try std.testing.expect(intValue(42).isTruthy());
-    try std.testing.expect(floatValue(0.0).isTruthy());
+    try std.testing.expect(vm.isTruthy(intValue(0)));
+    try std.testing.expect(vm.isTruthy(intValue(42)));
+    try std.testing.expect(vm.isTruthy(floatValue(0.0)));
 }
 
 test "value::equals: integers" {
-    try std.testing.expect(intValue(5).equals(intValue(5)));
-    try std.testing.expect(!intValue(5).equals(intValue(6)));
-    try std.testing.expect(!intValue(5).equals(floatValue(5.0)));
+    try std.testing.expect(vm.equals(intValue(5), intValue(5)));
+    try std.testing.expect(!vm.equals(intValue(5), intValue(6)));
+    try std.testing.expect(!vm.equals(intValue(5), floatValue(5.0)));
 }
 
 test "value::equals: booleans" {
-    try std.testing.expect(boolValue(true).equals(boolValue(true)));
-    try std.testing.expect(!boolValue(true).equals(boolValue(false)));
-    try std.testing.expect(!boolValue(true).equals(nilValue()));
+    try std.testing.expect(vm.equals(boolValue(true), boolValue(true)));
+    try std.testing.expect(!vm.equals(boolValue(true), boolValue(false)));
+    try std.testing.expect(!vm.equals(boolValue(true), nilValue()));
 }
 
 test "value::equals: nils" {
-    try std.testing.expect(nilValue().equals(nilValue()));
+    try std.testing.expect(vm.equals(nilValue(), nilValue()));
 }
 
 test "value::equals: floats" {
-    try std.testing.expect(floatValue(1.5).equals(floatValue(1.5)));
-    try std.testing.expect(!floatValue(1.5).equals(floatValue(2.0)));
+    try std.testing.expect(vm.equals(floatValue(1.5), floatValue(1.5)));
+    try std.testing.expect(!vm.equals(floatValue(1.5), floatValue(2.0)));
 }
 
 test "value::equals: sets (order independent)" {
@@ -135,17 +135,17 @@ test "value::equals: sets (order independent)" {
     var s1: Set = .empty;
     try s1.append(a, intValue(1));
     try s1.append(a, intValue(2));
-    var v1 = setValue(s1);
+    var v1 = try setValue(a, s1);
 
     var s2: Set = .empty;
     try s2.append(a, intValue(2));
     try s2.append(a, intValue(1));
-    var v2 = setValue(s2);
+    var v2 = try setValue(a, s2);
 
-    defer v1.deinit(a);
-    defer v2.deinit(a);
+    defer vm.valueDeinit(&v1, a);
+    defer vm.valueDeinit(&v2, a);
 
-    try std.testing.expect(v1.equals(v2));
+    try std.testing.expect(vm.equals(v1, v2));
 }
 
 test "value::equals: maps (order independent)" {
@@ -154,35 +154,35 @@ test "value::equals: maps (order independent)" {
     var m1: Map = .empty;
     try m1.append(a, .{ .key = intValue(1), .value = intValue(10) });
     try m1.append(a, .{ .key = intValue(2), .value = intValue(20) });
-    var v1 = mapValue(m1);
+    var v1 = try mapValue(a, m1);
 
     // Same keys/values, different insertion order
     var m2: Map = .empty;
     try m2.append(a, .{ .key = intValue(2), .value = intValue(20) });
     try m2.append(a, .{ .key = intValue(1), .value = intValue(10) });
-    var v2 = mapValue(m2);
+    var v2 = try mapValue(a, m2);
 
-    defer v1.deinit(a);
-    defer v2.deinit(a);
+    defer vm.valueDeinit(&v1, a);
+    defer vm.valueDeinit(&v2, a);
 
-    try std.testing.expect(v1.equals(v2));
+    try std.testing.expect(vm.equals(v1, v2));
 
     // Different value for same key
     var m3: Map = .empty;
     try m3.append(a, .{ .key = intValue(1), .value = intValue(99) });
     try m3.append(a, .{ .key = intValue(2), .value = intValue(20) });
-    var v3 = mapValue(m3);
-    defer v3.deinit(a);
+    var v3 = try mapValue(a, m3);
+    defer vm.valueDeinit(&v3, a);
 
-    try std.testing.expect(!v1.equals(v3));
+    try std.testing.expect(!vm.equals(v1, v3));
 
     // Different size (subset)
     var m4: Map = .empty;
     try m4.append(a, .{ .key = intValue(1), .value = intValue(10) });
-    var v4 = mapValue(m4);
-    defer v4.deinit(a);
+    var v4 = try mapValue(a, m4);
+    defer vm.valueDeinit(&v4, a);
 
-    try std.testing.expect(!v1.equals(v4));
+    try std.testing.expect(!vm.equals(v1, v4));
 }
 
 test "value::equals: lists (deep comparison)" {
@@ -193,45 +193,45 @@ test "value::equals: lists (deep comparison)" {
     try l1.append(a, intValue(1));
     try l1.append(a, intValue(2));
     try l1.append(a, intValue(3));
-    var v1 = listValue(l1);
+    var v1 = try listValue(a, l1);
 
     var l2: list.List = .empty;
     try l2.append(a, intValue(1));
     try l2.append(a, intValue(2));
     try l2.append(a, intValue(3));
-    var v2 = listValue(l2);
+    var v2 = try listValue(a, l2);
 
-    defer v1.deinit(a);
-    defer v2.deinit(a);
+    defer vm.valueDeinit(&v1, a);
+    defer vm.valueDeinit(&v2, a);
 
-    try std.testing.expect(v1.equals(v2));
+    try std.testing.expect(vm.equals(v1, v2));
 
     // Different values
     var l3: list.List = .empty;
     try l3.append(a, intValue(1));
     try l3.append(a, intValue(9));
     try l3.append(a, intValue(3));
-    var v3 = listValue(l3);
-    defer v3.deinit(a);
+    var v3 = try listValue(a, l3);
+    defer vm.valueDeinit(&v3, a);
 
-    try std.testing.expect(!v1.equals(v3));
+    try std.testing.expect(!vm.equals(v1, v3));
 
     // Different lengths
     var l4: list.List = .empty;
     try l4.append(a, intValue(1));
     try l4.append(a, intValue(2));
-    var v4 = listValue(l4);
-    defer v4.deinit(a);
+    var v4 = try listValue(a, l4);
+    defer vm.valueDeinit(&v4, a);
 
-    try std.testing.expect(!v1.equals(v4));
+    try std.testing.expect(!vm.equals(v1, v4));
 
     // Empty lists
     const l5: list.List = .empty;
-    const v5 = listValue(l5);
+    const v5 = try listValue(a, l5);
     const l6: list.List = .empty;
-    const v6 = listValue(l6);
+    const v6 = try listValue(a, l6);
 
-    try std.testing.expect(v5.equals(v6));
+    try std.testing.expect(vm.equals(v5, v6));
 }
 
 test "value::equals: vectors (deep comparison)" {
@@ -241,42 +241,42 @@ test "value::equals: vectors (deep comparison)" {
     var vec1: vec.Vector = .empty;
     try vec1.append(a, intValue(1));
     try vec1.append(a, intValue(2));
-    var v1 = vectorValue(vec1);
+    var v1 = try vectorValue(a, vec1);
 
     var vec2: vec.Vector = .empty;
     try vec2.append(a, intValue(1));
     try vec2.append(a, intValue(2));
-    var v2 = vectorValue(vec2);
+    var v2 = try vectorValue(a, vec2);
 
-    defer v1.deinit(a);
-    defer v2.deinit(a);
+    defer vm.valueDeinit(&v1, a);
+    defer vm.valueDeinit(&v2, a);
 
-    try std.testing.expect(v1.equals(v2));
+    try std.testing.expect(vm.equals(v1, v2));
 
     // Different values
     var vec3: vec.Vector = .empty;
     try vec3.append(a, intValue(1));
     try vec3.append(a, intValue(9));
-    var v3 = vectorValue(vec3);
-    defer v3.deinit(a);
+    var v3 = try vectorValue(a, vec3);
+    defer vm.valueDeinit(&v3, a);
 
-    try std.testing.expect(!v1.equals(v3));
+    try std.testing.expect(!vm.equals(v1, v3));
 
     // Different lengths
     var vec4: vec.Vector = .empty;
     try vec4.append(a, intValue(1));
-    var v4 = vectorValue(vec4);
-    defer v4.deinit(a);
+    var v4 = try vectorValue(a, vec4);
+    defer vm.valueDeinit(&v4, a);
 
-    try std.testing.expect(!v1.equals(v4));
+    try std.testing.expect(!vm.equals(v1, v4));
 
     // Empty vectors
     const vec5: vec.Vector = .empty;
-    const v5 = vectorValue(vec5);
+    const v5 = try vectorValue(a, vec5);
     const vec6: vec.Vector = .empty;
-    const v6 = vectorValue(vec6);
+    const v6 = try vectorValue(a, vec6);
 
-    try std.testing.expect(v5.equals(v6));
+    try std.testing.expect(vm.equals(v5, v6));
 }
 
 test "value::equals: nested structures" {
@@ -291,9 +291,9 @@ test "value::equals: nested structures" {
     try inner2.append(a, intValue(4));
 
     var outer1: vec.Vector = .empty;
-    try outer1.append(a, vectorValue(inner1));
-    try outer1.append(a, vectorValue(inner2));
-    var v1 = vectorValue(outer1);
+    try outer1.append(a, try vectorValue(a, inner1));
+    try outer1.append(a, try vectorValue(a, inner2));
+    var v1 = try vectorValue(a, outer1);
 
     var inner3: vec.Vector = .empty;
     try inner3.append(a, intValue(1));
@@ -303,32 +303,32 @@ test "value::equals: nested structures" {
     try inner4.append(a, intValue(4));
 
     var outer2: vec.Vector = .empty;
-    try outer2.append(a, vectorValue(inner3));
-    try outer2.append(a, vectorValue(inner4));
-    var v2 = vectorValue(outer2);
+    try outer2.append(a, try vectorValue(a, inner3));
+    try outer2.append(a, try vectorValue(a, inner4));
+    var v2 = try vectorValue(a, outer2);
 
-    defer v1.deinit(a);
-    defer v2.deinit(a);
+    defer vm.valueDeinit(&v1, a);
+    defer vm.valueDeinit(&v2, a);
 
-    try std.testing.expect(v1.equals(v2));
+    try std.testing.expect(vm.equals(v1, v2));
 
     // Nested map in map: {:a {:b 1}}
     var inner_map1: Map = .empty;
     try inner_map1.append(a, .{ .key = intValue(1), .value = intValue(10) });
     var outer_map1: Map = .empty;
-    try outer_map1.append(a, .{ .key = intValue(2), .value = mapValue(inner_map1) });
-    var mv1 = mapValue(outer_map1);
+    try outer_map1.append(a, .{ .key = intValue(2), .value = try mapValue(a, inner_map1) });
+    var mv1 = try mapValue(a, outer_map1);
 
     var inner_map2: Map = .empty;
     try inner_map2.append(a, .{ .key = intValue(1), .value = intValue(10) });
     var outer_map2: Map = .empty;
-    try outer_map2.append(a, .{ .key = intValue(2), .value = mapValue(inner_map2) });
-    var mv2 = mapValue(outer_map2);
+    try outer_map2.append(a, .{ .key = intValue(2), .value = try mapValue(a, inner_map2) });
+    var mv2 = try mapValue(a, outer_map2);
 
-    defer mv1.deinit(a);
-    defer mv2.deinit(a);
+    defer vm.valueDeinit(&mv1, a);
+    defer vm.valueDeinit(&mv2, a);
 
-    try std.testing.expect(mv1.equals(mv2));
+    try std.testing.expect(vm.equals(mv1, mv2));
 }
 
 test "value::equals: map with string keys" {
@@ -337,17 +337,17 @@ test "value::equals: map with string keys" {
     var m1: Map = .empty;
     try m1.append(a, .{ .key = try stringValue(a, "hello"), .value = intValue(1) });
     try m1.append(a, .{ .key = try stringValue(a, "world"), .value = intValue(2) });
-    var v1 = mapValue(m1);
+    var v1 = try mapValue(a, m1);
 
     var m2: Map = .empty;
     try m2.append(a, .{ .key = try stringValue(a, "world"), .value = intValue(2) });
     try m2.append(a, .{ .key = try stringValue(a, "hello"), .value = intValue(1) });
-    var v2 = mapValue(m2);
+    var v2 = try mapValue(a, m2);
 
-    defer v1.deinit(a);
-    defer v2.deinit(a);
+    defer vm.valueDeinit(&v1, a);
+    defer vm.valueDeinit(&v2, a);
 
-    try std.testing.expect(v1.equals(v2));
+    try std.testing.expect(vm.equals(v1, v2));
 }
 
 test "value::equals: queues" {
@@ -356,25 +356,25 @@ test "value::equals: queues" {
     var q1: Queue = .empty;
     try q1.append(a, intValue(1));
     try q1.append(a, intValue(2));
-    var v1 = queueValue(q1);
+    var v1 = try queueValue(a, q1);
 
     var q2: Queue = .empty;
     try q2.append(a, intValue(1));
     try q2.append(a, intValue(2));
-    var v2 = queueValue(q2);
+    var v2 = try queueValue(a, q2);
 
-    defer v1.deinit(a);
-    defer v2.deinit(a);
+    defer vm.valueDeinit(&v1, a);
+    defer vm.valueDeinit(&v2, a);
 
-    try std.testing.expect(v1.equals(v2));
+    try std.testing.expect(vm.equals(v1, v2));
 
     var q3: Queue = .empty;
     try q3.append(a, intValue(2));
     try q3.append(a, intValue(1));
-    var v3 = queueValue(q3);
-    defer v3.deinit(a);
+    var v3 = try queueValue(a, q3);
+    defer vm.valueDeinit(&v3, a);
 
-    try std.testing.expect(!v1.equals(v3));
+    try std.testing.expect(!vm.equals(v1, v3));
 }
 
 test "value::utf8CodepointCount: ASCII" {
@@ -419,17 +419,17 @@ test "value::utf8CodepointAt: multi-byte UTF-8" {
 test "value::clone: integer" {
     const a = std.heap.page_allocator;
     const v = intValue(42);
-    const c = try v.clone(a);
-    try std.testing.expect(c.type == .integer);
+    const c = try vm.clone(&v, a);
+    try std.testing.expect(std.meta.activeTag(c) == .integer);
     try std.testing.expect(c.integer == 42);
 }
 
 test "value::clone: string round-trip" {
     const a = std.heap.page_allocator;
     var v = try stringValue(a, "test");
-    var c = try v.clone(a);
-    defer v.deinit(a);
-    defer c.deinit(a);
+    var c = try vm.clone(&v, a);
+    defer vm.valueDeinit(&v, a);
+    defer vm.valueDeinit(&c, a);
     try std.testing.expect(std.mem.eql(u8, c.string, "test"));
 }
 
@@ -437,9 +437,9 @@ test "value::clone: atom shares data" {
     const a = std.heap.page_allocator;
     const init = intValue(42);
     var v = try atomValue(a, init);
-    var c = try v.clone(a);
-    defer v.deinit(a);
-    defer c.deinit(a);
+    var c = try vm.clone(&v, a);
+    defer vm.valueDeinit(&v, a);
+    defer vm.valueDeinit(&c, a);
     try std.testing.expect(v.atom == c.atom);
 }
 
@@ -447,41 +447,41 @@ test "value::atomValue: ref count is 1" {
     const a = std.heap.page_allocator;
     const init = intValue(42);
     var v = try atomValue(a, init);
-    defer v.deinit(a);
-    try std.testing.expect(v.atom.?.ref_count == 1);
+    defer vm.valueDeinit(&v, a);
+    try std.testing.expect(v.atom.ref_count == 1);
 }
 
 test "value::atomValueShared: increments ref count" {
     const a = std.heap.page_allocator;
     const init = intValue(42);
     var v = try atomValue(a, init);
-    const data = v.atom.?;
+    const data = v.atom;
     var shared = atomValueShared(data);
-    defer v.deinit(a);
-    defer shared.deinit(a);
+    defer vm.valueDeinit(&v, a);
+    defer vm.valueDeinit(&shared, a);
     try std.testing.expect(data.ref_count == 2);
 }
 
 test "value::fmt: nil" {
     const a = std.heap.page_allocator;
-    const s = try nilValue().fmt(a);
+    const s = try vm.fmt(nilValue(), a);
     defer a.free(s);
     try std.testing.expect(std.mem.eql(u8, s, "nil"));
 }
 
 test "value::fmt: bool" {
     const a = std.heap.page_allocator;
-    const s1 = try boolValue(true).fmt(a);
+    const s1 = try vm.fmt(boolValue(true), a);
     defer a.free(s1);
     try std.testing.expect(std.mem.eql(u8, s1, "true"));
-    const s2 = try boolValue(false).fmt(a);
+    const s2 = try vm.fmt(boolValue(false), a);
     defer a.free(s2);
     try std.testing.expect(std.mem.eql(u8, s2, "false"));
 }
 
 test "value::fmt: integer" {
     const a = std.heap.page_allocator;
-    const s = try intValue(42).fmt(a);
+    const s = try vm.fmt(intValue(42), a);
     defer a.free(s);
     try std.testing.expect(std.mem.eql(u8, s, "42"));
 }
@@ -489,8 +489,8 @@ test "value::fmt: integer" {
 test "value::fmt: string" {
     const a = std.heap.page_allocator;
     var v = try stringValue(a, "hello");
-    defer v.deinit(a);
-    const s = try v.fmt(a);
+    defer vm.valueDeinit(&v, a);
+    const s = try vm.fmt(v, a);
     defer a.free(s);
     try std.testing.expect(std.mem.eql(u8, s, "\"hello\""));
 }
@@ -498,8 +498,8 @@ test "value::fmt: string" {
 test "value::fmt: keyword" {
     const a = std.heap.page_allocator;
     var v = try keywordValue(a, "foo");
-    defer v.deinit(a);
-    const s = try v.fmt(a);
+    defer vm.valueDeinit(&v, a);
+    const s = try vm.fmt(v, a);
     defer a.free(s);
     try std.testing.expect(std.mem.eql(u8, s, ":foo"));
 }
@@ -507,8 +507,8 @@ test "value::fmt: keyword" {
 test "value::fmt: symbol" {
     const a = std.heap.page_allocator;
     var v = try symValue(a, "x");
-    defer v.deinit(a);
-    const s = try v.fmt(a);
+    defer vm.valueDeinit(&v, a);
+    const s = try vm.fmt(v, a);
     defer a.free(s);
     try std.testing.expect(std.mem.eql(u8, s, "x"));
 }
@@ -521,7 +521,7 @@ test "value::Env::put and get" {
     try env.put("x", intValue(42));
     const val = env.get("x");
     try std.testing.expect(val != null);
-    try std.testing.expect(val.?.type == .integer);
+    try std.testing.expect(std.meta.activeTag(val.?) == .integer);
     try std.testing.expect(val.?.integer == 42);
 }
 
@@ -613,125 +613,125 @@ test "value::Env::clone preserves parent" {
 
 test "value::charValue: creates ASCII char" {
     const v = charValue('A');
-    try std.testing.expect(v.type == .character);
+    try std.testing.expect(std.meta.activeTag(v) == .character);
     try std.testing.expect(v.character == 65);
 }
 
 test "value::charValue: creates zero char" {
     const v = charValue(0);
-    try std.testing.expect(v.type == .character);
+    try std.testing.expect(std.meta.activeTag(v) == .character);
     try std.testing.expect(v.character == 0);
 }
 
 test "value::charValue: creates unicode char" {
     const v = charValue(0x00F6); // ö
-    try std.testing.expect(v.type == .character);
+    try std.testing.expect(std.meta.activeTag(v) == .character);
     try std.testing.expect(v.character == 0x00F6);
 }
 
 test "value::charValue: creates emoji codepoint" {
     const v = charValue(0x1F468); // 👨
-    try std.testing.expect(v.type == .character);
+    try std.testing.expect(std.meta.activeTag(v) == .character);
     try std.testing.expect(v.character == 0x1F468);
 }
 
 test "value::charValue: deinit is no-op" {
     const a = std.heap.page_allocator;
     var v = charValue('A');
-    v.deinit(a); // should not crash or leak
+    vm.valueDeinit(&v, a); // should not crash or leak
 }
 
 test "value::equals: chars same" {
-    try std.testing.expect(charValue('A').equals(charValue('A')));
-    try std.testing.expect(charValue(0x00F6).equals(charValue(0x00F6)));
-    try std.testing.expect(charValue(0).equals(charValue(0)));
+    try std.testing.expect(vm.equals(charValue('A'), charValue('A')));
+    try std.testing.expect(vm.equals(charValue(0x00F6), charValue(0x00F6)));
+    try std.testing.expect(vm.equals(charValue(0), charValue(0)));
 }
 
 test "value::equals: chars different" {
-    try std.testing.expect(!charValue('A').equals(charValue('B')));
-    try std.testing.expect(!charValue(0x00F6).equals(charValue(0x00E4)));
+    try std.testing.expect(!vm.equals(charValue('A'), charValue('B')));
+    try std.testing.expect(!vm.equals(charValue(0x00F6), charValue(0x00E4)));
 }
 
 test "value::equals: char vs other types" {
-    try std.testing.expect(!charValue('A').equals(intValue(65)));
-    try std.testing.expect(!charValue('A').equals(nilValue()));
-    try std.testing.expect(!charValue(0).equals(intValue(0)));
+    try std.testing.expect(!vm.equals(charValue('A'), intValue(65)));
+    try std.testing.expect(!vm.equals(charValue('A'), nilValue()));
+    try std.testing.expect(!vm.equals(charValue(0), intValue(0)));
 }
 
 test "value::clone: char" {
     const a = std.heap.page_allocator;
     const v = charValue(0x1F468);
-    var c = try v.clone(a);
-    try std.testing.expect(c.type == .character);
+    var c = try vm.clone(&v, a);
+    try std.testing.expect(std.meta.activeTag(c) == .character);
     try std.testing.expect(c.character == 0x1F468);
-    c.deinit(a);
+    vm.valueDeinit(&c, a);
 }
 
 test "value::isTruthy: char is truthy" {
-    try std.testing.expect(charValue('A').isTruthy());
-    try std.testing.expect(charValue(0).isTruthy()); // even null char is truthy
-    try std.testing.expect(charValue(0x1F468).isTruthy());
+    try std.testing.expect(vm.isTruthy(charValue('A')));
+    try std.testing.expect(vm.isTruthy(charValue(0))); // even null char is truthy
+    try std.testing.expect(vm.isTruthy(charValue(0x1F468)));
 }
 
 test "value::fmt: char ASCII" {
     const a = std.heap.page_allocator;
-    const s = try charValue('A').fmt(a);
+    const s = try vm.fmt(charValue('A'), a);
     defer a.free(s);
     try std.testing.expect(std.mem.eql(u8, s, "\\A"));
 }
 
 test "value::fmt: char lowercase" {
     const a = std.heap.page_allocator;
-    const s = try charValue('a').fmt(a);
+    const s = try vm.fmt(charValue('a'), a);
     defer a.free(s);
     try std.testing.expect(std.mem.eql(u8, s, "\\a"));
 }
 
 test "value::fmt: char newline" {
     const a = std.heap.page_allocator;
-    const s = try charValue(10).fmt(a);
+    const s = try vm.fmt(charValue(10), a);
     defer a.free(s);
     try std.testing.expect(std.mem.eql(u8, s, "\\newline"));
 }
 
 test "value::fmt: char tab" {
     const a = std.heap.page_allocator;
-    const s = try charValue(9).fmt(a);
+    const s = try vm.fmt(charValue(9), a);
     defer a.free(s);
     try std.testing.expect(std.mem.eql(u8, s, "\\tab"));
 }
 
 test "value::fmt: char space" {
     const a = std.heap.page_allocator;
-    const s = try charValue(32).fmt(a);
+    const s = try vm.fmt(charValue(32), a);
     defer a.free(s);
     try std.testing.expect(std.mem.eql(u8, s, "\\space"));
 }
 
 test "value::fmt: char return" {
     const a = std.heap.page_allocator;
-    const s = try charValue(13).fmt(a);
+    const s = try vm.fmt(charValue(13), a);
     defer a.free(s);
     try std.testing.expect(std.mem.eql(u8, s, "\\return"));
 }
 
 test "value::fmt: char formfeed" {
     const a = std.heap.page_allocator;
-    const s = try charValue(12).fmt(a);
+    const s = try vm.fmt(charValue(12), a);
     defer a.free(s);
     try std.testing.expect(std.mem.eql(u8, s, "\\formfeed"));
 }
 
 test "value::fmt: char special punctuation" {
     const a = std.heap.page_allocator;
-    const s = try charValue('!').fmt(a);
+    const s = try vm.fmt(charValue('!'), a);
     defer a.free(s);
     try std.testing.expect(std.mem.eql(u8, s, "\\!"));
 }
 
 test "value::fmt: char unicode ö" {
     const a = std.heap.page_allocator;
-    const s = try charValue(0x00F6).fmt(a); // ö
+    const s = try vm.fmt(charValue(0x00F6), a); // ö
     defer a.free(s);
     // Should be \ö (backslash + UTF-8 bytes for ö)
     try std.testing.expect(s.len == 3); // 1 backslash + 2 bytes for ö
@@ -740,7 +740,7 @@ test "value::fmt: char unicode ö" {
 
 test "value::fmt: char emoji" {
     const a = std.heap.page_allocator;
-    const s = try charValue(0x1F468).fmt(a); // 👨
+    const s = try vm.fmt(charValue(0x1F468), a); // 👨
     defer a.free(s);
     // Should be \👨 (backslash + 4 bytes for emoji)
     try std.testing.expect(s.len == 5); // 1 backslash + 4 bytes for 👨
@@ -749,7 +749,7 @@ test "value::fmt: char emoji" {
 
 test "value::fmt: char zero" {
     const a = std.heap.page_allocator;
-    const s = try charValue(0).fmt(a);
+    const s = try vm.fmt(charValue(0), a);
     defer a.free(s);
     // Null char is printable ASCII range, formatted as \\0
     try std.testing.expect(s.len == 2);
@@ -789,7 +789,7 @@ test "value::Env: function closures with captured envs survive GC" {
 
     const fn_env = try root_env.clone(gc_alloc);
     var fn_val = try vm.fnValue(gc_alloc, arities, fn_env, false);
-    errdefer fn_val.deinit(gc_alloc);
+    errdefer vm.valueDeinit(&fn_val, gc_alloc);
 
     // Store the function in root env
     try root_env.put("my_fn", fn_val);
@@ -801,10 +801,10 @@ test "value::Env: function closures with captured envs survive GC" {
     // Retrieve the function and verify its env is still valid
     const retrieved = root_env.get("my_fn");
     try std.testing.expect(retrieved != null);
-    try std.testing.expect(retrieved.?.type == .function);
+    try std.testing.expect(std.meta.activeTag(retrieved.?) == .function);
 
     // The fn's env should still be accessible and not corrupt
-    const fn_data = retrieved.?.function orelse unreachable;
+    const fn_data = retrieved.?.function;
     _ = fn_data.env; // accessing the pointer should not crash
     try std.testing.expect(fn_data.env.entries.count == 0); // empty env (clone of empty root)
 }
