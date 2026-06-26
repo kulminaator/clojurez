@@ -102,6 +102,8 @@ pub fn valueHash(val: Value) i32 {
         .lazy_seq => hashIdentity(),
         .cons => hashIdentity(),
         .atom => hashIdentity(),
+        .future => hashIdentity(),
+        .promise => hashIdentity(),
         .wrapped => |w| @as(i32, @intCast(w)),
         .reduced => |data| valueHash(data.*),
         .record => |rd| {

@@ -50,6 +50,8 @@ pub fn valueScanFn(obj: *anyopaque, ctx: *gc.ScanContext) void {
         .queue_items => scanValueArray(obj, ctx, header.size),
         .lazy_seq_thunk => scanLazySeqThunk(obj, ctx),
         .atom_data => scanAtomData(obj, ctx),
+        .future_data => scanFutureData(obj, ctx),
+        .promise_data => scanPromiseData(obj, ctx),
         .fn_data => scanFnData(obj, ctx),
         .cons_data => scanConsData(obj, ctx),
         .hash_map_node => phm.scanHashMapNode(obj, ctx),
@@ -150,7 +152,7 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         .nil, .bool, .integer, .float, .bigint, .ratio, .decimal,
         .string, .regex, .character, .symbol, .keyword,
         .list, .vector, .map, .set, .queue, .function, .builtin_fn,
-        .lazy_seq, .cons, .atom, .reduced, .wrapped, .record,
+        .lazy_seq, .cons, .atom, .future, .promise, .reduced, .wrapped, .record,
     };
     var is_valid = false;
     for (valid_types) |vt| {
@@ -321,6 +323,18 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
             ctx.gc.markRecursive(data, ctx);
         },
 
+        .future => |data| {
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!isValidGCPtr(data, ctx)) return;
+            ctx.gc.markRecursive(data, ctx);
+        },
+
+        .promise => |data| {
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!isValidGCPtr(data, ctx)) return;
+            ctx.gc.markRecursive(data, ctx);
+        },
+
         .reduced => |data| {
             // Safety net: verify pointer is a real GC-tracked block
             if (!isValidGCPtr(data, ctx)) return;
@@ -373,6 +387,33 @@ fn scanLazySeqThunk(thunk_ptr: *anyopaque, ctx: *gc.ScanContext) void {
 fn scanAtomData(data_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     const data: *vm.AtomData = @ptrCast(@alignCast(data_ptr));
     scanValueChildrenDirect(&data.value, ctx);
+}
+
+/// Scan FutureData: { state: atomic u32, result: ?Value, fn_val: ?Value, error_msg: ?[]u8, allocator }.
+/// Scan fn_val (the cloned function) unconditionally — this keeps the function
+/// and its captured environment alive while the future thread is running.
+/// Only scan the result Value if the future is done (state == 1).
+fn scanFutureData(data_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const data: *vm.FutureData = @ptrCast(@alignCast(data_ptr));
+    // Scan the function value — this marks FnData, its captured Env, and all
+    // values in that env (like local bindings captured by closures).
+    if (data.fn_val != null) {
+        scanValueChildrenDirect(&data.fn_val.?, ctx);
+    }
+    const state = data.state.load(.monotonic);
+    if (state == 1 and data.result != null) {
+        scanValueChildrenDirect(&data.result.?, ctx);
+    }
+}
+
+/// Scan PromiseData: { state: atomic u32, value: ?Value, allocator }.
+/// Only scan the value if the promise is delivered (state == 1).
+fn scanPromiseData(data_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const data: *vm.PromiseData = @ptrCast(@alignCast(data_ptr));
+    const state = data.state.load(.monotonic);
+    if (state == 1 and data.value != null) {
+        scanValueChildrenDirect(&data.value.?, ctx);
+    }
 }
 
 /// Scan FnData: { arities: ArrayListUnmanaged(Arity), env: *Env }.

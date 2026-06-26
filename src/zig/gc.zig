@@ -43,6 +43,8 @@ pub const GCObjectType = enum(u8) {
     queue_items = 4, // array of Value objects (queue items)
     lazy_seq_thunk = 5, // LazySeqThunk { params: list.List, body: list.List, env: Env }
     atom_data = 6,  // AtomData { value: Value, ref_count: usize }
+    future_data = 27, // FutureData { state: atomic u32, result: ?Value, fn_val: ?Value, error_msg: ?[]u8, allocator }
+    promise_data = 28, // PromiseData { state: atomic u32, value: ?Value, allocator }
     fn_data = 8,    // FnData { arities: ArrayListUnmanaged(Arity), env: Env }
     cons_data = 9,  // ConsData { head: Value, tail: Value, allocator: Allocator }
     hash_map_node = 10, // PersistentHashMap HAMT node (Node union)
@@ -123,6 +125,11 @@ pub const GC = struct {
     // Debug flags
     sweep_enabled: bool = true,
     verbose: bool = false,
+
+    // Mutex to protect block list operations during multithreaded access.
+    // Child threads may allocate through the GC allocator while the main
+    // thread runs GC collect/sweep. This mutex ensures thread safety.
+    block_list_mutex: std.atomic.Mutex = .unlocked,
 
     // Auto-GC: trigger collection when memory grows past threshold since last sweep.
     // Threshold = max(last_collected_memory * 20%, 1MB).
@@ -233,6 +240,11 @@ pub const GC = struct {
             .prev = null,
         };
 
+        // Protect block list modification for thread safety.
+        // Use mutex to prevent corruption when child threads allocate
+        // while main thread runs GC collect/sweep.
+        while (!self.block_list_mutex.tryLock()) {}
+        defer self.block_list_mutex.unlock();
         if (self.blocks) |first| first.prev = header;
         self.blocks = header;
         self.block_count += 1;
@@ -287,6 +299,10 @@ pub const GC = struct {
 
     /// Internal: free a block given its header.
     fn freeHeader(self: *Self, header: *Header) bool {
+        // Protect block list modification for thread safety.
+        while (!self.block_list_mutex.tryLock()) {}
+        defer self.block_list_mutex.unlock();
+
         // Remove from linked list
         if (header.prev) |prev| {
             prev.next = header.next;
@@ -472,16 +488,19 @@ pub const GC = struct {
         self.log("[GC] === COLLECT START blocks={d} roots={d} gen={d} ===\n",
             .{ self.block_count, self.roots.items.len, self.generation });
 
-        // Build O(1) header lookup table for this collection cycle
+        // Build O(1) header lookup table for this collection cycle.
         self.buildHeaderTable();
         defer self.freeHeaderTable();
 
-        // Phase 1: Clear all marks
+        // Phase 1: Clear all marks.
+        // Protect block list traversal for thread safety.
+        while (!self.block_list_mutex.tryLock()) {}
         var block = self.blocks;
         while (block) |b| {
             b.marked = false;
             block = b.next;
         }
+        self.block_list_mutex.unlock();
 
         // Phase 2: Mark from static roots
         var ctx = ScanContext{ .gc = self, .scan_fn = scan_fn };
@@ -542,17 +561,24 @@ pub const GC = struct {
             return;
         }
 
+        // Protect block list traversal and modification for thread safety.
+        // Child threads may allocate while we sweep.
+        while (!self.block_list_mutex.tryLock()) {}
+        defer self.block_list_mutex.unlock();
+
         var block = self.blocks;
         var swept: usize = 0;
         var swept_bytes: usize = 0;
 
         while (block) |b| {
             const next = b.next;
-            // Generational protection: never sweep blocks from the current
-            // or previous generation. They may be referenced by in-flight
-            // evaluation state (stack-local pointers the GC can't see).
-            // A block must be at least 2 generations old to be swept.
-            const protected_gen = if (self.generation > 0) self.generation - 1 else 0;
+            // Generational protection: never sweep blocks from the current,
+            // previous, or second-previous generation. This provides safety
+            // for multithreaded access where child threads may hold references
+            // to blocks that the GC's mark phase can't discover (e.g., HAMT
+            // nodes reachable through stack-allocated Env structs in child threads).
+            // A block must be at least 3 generations old to be swept.
+            const protected_gen = if (self.generation > 1) self.generation - 2 else 0;
             if (!b.marked and b.generation < protected_gen) {
                 // Remove from linked list
                 if (b.prev) |prev| {
@@ -570,6 +596,8 @@ pub const GC = struct {
                 const sweep_offset = b.offset;
                 const total = sweep_offset + sweep_size;
                 const block_start = @as([*]u8, @ptrCast(b));
+                // Mark GC-swept memory with 0xFE so we can recognize it
+                @memset(block_start[sweep_offset .. sweep_offset + sweep_size], 0xFE);
                 self.wrapped.free(block_start[0..total]);
 
                 swept += 1;

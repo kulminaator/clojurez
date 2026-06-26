@@ -43,6 +43,8 @@ pub const Type = enum {
     lazy_seq,
     cons,    // Cons cell: (head . tail) — tail is any sequence value
     atom,
+    future,  // Future: computation running in another thread
+    promise, // Promise: one-time writable container
     reduced, // Wrapper for early reduction termination
     wrapped, // Raw pointer wrapper — stores a usize pointer
     record,  // defrecord instance: named struct-like data with fields
@@ -78,6 +80,33 @@ pub const LazySeqThunk = struct {
 
 pub const AtomData = struct {
     value: Value,
+    ref_count: usize = 1,
+};
+
+/// Future: a computation running in another thread.
+/// state: 0 = running, 1 = done (result set), 2 = error (error_msg set)
+/// Uses atomic state + sleep-based polling for thread safety.
+/// No mutex needed — result is written once (after completion),
+/// and the atomic state guards visibility.
+/// fn_val holds the cloned function value so the GC can discover
+/// the function and its captured environment, keeping them alive
+/// while the future thread is running.
+pub const FutureData = struct {
+    state: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    result: ?Value = null,
+    fn_val: ?Value = null,    // cloned function value (GC root for captured env)
+    error_msg: ?[]const u8 = null,
+    allocator: Allocator,
+};
+
+/// Promise: a one-time writable container.
+/// state: 0 = pending, 1 = delivered (value set)
+/// Uses atomic state + sleep-based polling for thread safety.
+/// ref_count tracks shared references (like AtomData).
+pub const PromiseData = struct {
+    state: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    value: ?Value = null,
+    allocator: Allocator,
     ref_count: usize = 1,
 };
 
@@ -162,6 +191,8 @@ pub const Value = union(Type) {
     lazy_seq: ?*LazySeqThunk,
     cons: *ConsData,
     atom: *AtomData,
+    future: *FutureData,
+    promise: *PromiseData,
     reduced: *Value,
     wrapped: usize,
     record: *RecordData,
@@ -315,6 +346,37 @@ pub fn atomValue(allocator: Allocator, initial: Value) anyerror!Value {
 pub fn atomValueShared(data: *AtomData) Value {
     data.ref_count += 1;
     return .{ .atom = data };
+}
+
+/// Create a future value (computation running in another thread).
+pub fn futureValue(allocator: Allocator) anyerror!Value {
+    const data = try allocator.create(FutureData);
+    data.* = .{ .allocator = allocator, .fn_val = null };
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(data)), gc_mod.GCObjectType.future_data);
+    }
+    return .{ .future = data };
+}
+
+/// Create a future value that shares an existing FutureData (for cloning).
+pub fn futureValueShared(data: *FutureData) Value {
+    return .{ .future = data };
+}
+
+/// Create a promise value (one-time writable container).
+pub fn promiseValue(allocator: Allocator) anyerror!Value {
+    const data = try allocator.create(PromiseData);
+    data.* = .{ .allocator = allocator };
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(data)), gc_mod.GCObjectType.promise_data);
+    }
+    return .{ .promise = data };
+}
+
+/// Create a promise value that shares an existing PromiseData (for cloning).
+pub fn promiseValueShared(data: *PromiseData) Value {
+    data.ref_count += 1;
+    return .{ .promise = data };
 }
 
 /// Create a reduced wrapper for early reduction termination
@@ -510,6 +572,27 @@ pub fn valueDeinit(val: *Value, allocator: Allocator) void {
                 allocator.destroy(data);
             }
         },
+        .future => |data| {
+            // FutureData is GC-managed. The GC's freeVTable is a no-op,
+            // so allocator.destroy(data) doesn't actually free the memory.
+            // But we should NOT call valueDeinit on child values (result, fn_val)
+            // because they are also GC-managed and will be cleaned up by the GC.
+            // Only clean up the error_msg string (dupe'd with allocator.dupe).
+            if (data.error_msg) |msg| {
+                allocator.free(msg);
+            }
+            // allocator.destroy(data) is a no-op through GC allocator.
+            allocator.destroy(data);
+        },
+        .promise => |data| {
+            data.ref_count -= 1;
+            if (data.ref_count == 0) {
+                if (data.value) |*v| {
+                    valueDeinit(v, allocator);
+                }
+                allocator.destroy(data);
+            }
+        },
         .reduced => |data| {
             valueDeinit(data, allocator);
             allocator.destroy(data);
@@ -624,6 +707,12 @@ pub fn clone(val: *const Value, allocator: Allocator) anyerror!Value {
         },
         .atom => |data| {
             return atomValueShared(data);
+        },
+        .future => |data| {
+            return futureValueShared(data);
+        },
+        .promise => |data| {
+            return promiseValueShared(data);
         },
         .function => |fn_data| {
             var cloned_arities: std.ArrayListUnmanaged(Arity) = .empty;
@@ -786,6 +875,8 @@ pub fn equals(val: Value, other: Value) bool {
             return equals(s_data.head, other.cons.head) and equals(s_data.tail, other.cons.tail);
         },
         .atom => return false,
+        .future => return false,
+        .promise => return false,
         .reduced => |s_data| {
             return equals(s_data.*, other.reduced.*);
         },
@@ -898,6 +989,37 @@ pub fn fmt(val: Value, allocator: Allocator) anyerror![]const u8 {
             const inner_str = try fmt(data.value, allocator);
             defer allocator.free(inner_str);
             return try std.fmt.allocPrint(allocator, "#atom({s})", .{inner_str});
+        },
+        .future => |data| {
+            const state = data.state.load(.monotonic);
+            return switch (state) {
+                0 => allocator.dupe(u8, "#future(running)"),
+                1 => blk: {
+                    if (data.result) |*r| {
+                        const inner_str = try fmt(r.*, allocator);
+                        defer allocator.free(inner_str);
+                        break :blk try std.fmt.allocPrint(allocator, "#future({s})", .{inner_str});
+                    }
+                    break :blk allocator.dupe(u8, "#future(done)");
+                },
+                2 => blk: {
+                    if (data.error_msg) |msg| {
+                        break :blk try std.fmt.allocPrint(allocator, "#future(error: {s})", .{msg});
+                    }
+                    break :blk allocator.dupe(u8, "#future(error)");
+                },
+                else => allocator.dupe(u8, "#future(unknown)"),
+            };
+        },
+        .promise => |data| {
+            const state = data.state.load(.monotonic);
+            if (state == 0) return allocator.dupe(u8, "#promise(pending)");
+            if (data.value) |*v| {
+                const inner_str = try fmt(v.*, allocator);
+                defer allocator.free(inner_str);
+                return try std.fmt.allocPrint(allocator, "#promise({s})", .{inner_str});
+            }
+            return allocator.dupe(u8, "#promise(delivered)");
         },
         .reduced => |data| {
             const inner_str = try fmt(data.*, allocator);

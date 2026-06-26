@@ -143,7 +143,10 @@ pub const Slab = struct {
         p.free_list = next_free;
         p.ref_count += 1;
 
-        return p.chunkPtr(chunk_idx, self.chunk_size);
+        const result = p.chunkPtr(chunk_idx, self.chunk_size);
+        // Mark newly allocated (not yet used) memory with 0x55
+        @memset(result[0..self.chunk_size], 0x55);
+        return result;
     }
 
     /// Free a chunk back to this slab.

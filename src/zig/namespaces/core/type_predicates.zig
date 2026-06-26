@@ -158,6 +158,20 @@ pub fn core_queue_q(self: *const Value, args: *const list.List, _: *Env) anyerro
     return vm.boolValue(std.meta.activeTag(args.items[0]) == .queue);
 }
 
+/// Returns true if x is a future value.
+pub fn core_future_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    return vm.boolValue(std.meta.activeTag(args.items[0]) == .future);
+}
+
+/// Returns true if x is a promise value.
+pub fn core_promise_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    return vm.boolValue(std.meta.activeTag(args.items[0]) == .promise);
+}
+
 pub fn core_coll_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
@@ -500,6 +514,8 @@ pub fn core_type(self: *const Value, args: *const list.List, env_env: *Env) anye
         .set => "set",
         .queue => "queue",
         .atom => "atom",
+        .future => "future",
+        .promise => "promise",
         .function => "function",
         .builtin_fn => "builtin_fn",
         .lazy_seq => "lazy_seq",
@@ -593,6 +609,8 @@ pub fn registerTypePredicateFunctions(env: *Env) anyerror!void {
     try env.put("map?", vm.builtinFnValue(core_map_q));
     try env.put("record?", vm.builtinFnValue(core_record_q));
     try env.put("queue?", vm.builtinFnValue(core_queue_q));
+    try env.put("future?", vm.builtinFnValue(core_future_q));
+    try env.put("promise?", vm.builtinFnValue(core_promise_q));
     try env.put("coll?", vm.builtinFnValue(core_coll_q));
     try env.put("sequential?", vm.builtinFnValue(core_sequential_q));
     try env.put("boolean?", vm.builtinFnValue(core_boolean_q));
