@@ -874,7 +874,8 @@ test "gc::collect: unreachable objects swept" {
     d.next = e;
 
     gc.addRoot(a);
-    // Two collects needed: first advances generation, second sweeps gen-0 blocks.
+    // Three collects needed for 3-generation protection.
+    gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
 
@@ -915,7 +916,8 @@ test "gc::collect: no roots sweeps everything" {
     a.next = b;
 
     // No roots registered
-    // Two collects needed for generational protection.
+    // Three collects needed for 3-generation protection.
+    gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
 
@@ -985,7 +987,8 @@ test "gc::collect: tree structure" {
     b.child = e;
 
     gc.addRoot(a);
-    // Two collects needed for generational protection.
+    // Three collects needed for 3-generation protection.
+    gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
 
@@ -1005,7 +1008,8 @@ test "gc::removeRoot then collect" {
     gc.addRoot(a);
     gc.removeRoot(a);
 
-    // Two collects needed for generational protection.
+    // Three collects needed for 3-generation protection.
+    gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
 
@@ -1073,14 +1077,15 @@ test "gc::stats accuracy" {
     a.next = b;
 
     gc.addRoot(a);
-    // Two collects needed for generational protection.
+    // Three collects needed for 3-generation protection.
+    gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
 
     const s = gc.stats();
     try std.testing.expect(s.alloc_count == 3);
     try std.testing.expect(s.free_count == 0); // no manual frees
-    try std.testing.expect(s.gc_count == 2);
+    try std.testing.expect(s.gc_count == 3);
     try std.testing.expect(s.block_count == 2); // a, b survive
     try std.testing.expect(s.swept_count > 0); // orphan swept
     try std.testing.expect(s.swept_bytes > 0);
@@ -1164,7 +1169,9 @@ test "gc::sweep toggle: disable then re-enable" {
     try std.testing.expect(gc.stats().block_count == 2); // nothing swept
 
     // Re-enable sweep
+    // Three collects total (1 disabled + 2 enabled) for 3-generation protection.
     gc.setSweepEnabled(true);
+    gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
     try std.testing.expect(gc.stats().block_count == 0); // now swept
 }
@@ -1213,7 +1220,8 @@ test "gc::complex graph with cycles and orphans" {
     g.next = f; // unreachable cycle
 
     gc.addRoot(a);
-    // Two collects needed for generational protection.
+    // Three collects needed for 3-generation protection.
+    gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
 
