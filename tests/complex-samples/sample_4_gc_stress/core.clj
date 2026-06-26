@@ -49,11 +49,15 @@
 
 (println (str "current (after small): " current2))
 
-;; Phase 4: Force a manual GC sweep.
+;; Phase 4: Force multiple manual GC sweeps.
+;; With generational GC protection (3 generations), blocks need multiple
+;; collection cycles before they become eligible for sweeping.
 (zig.core/gc-sweep)
-
-;; Deferred sweep runs at the next safe point (between forms).
-(def _noop nil)
+(def _noop1 nil)
+(zig.core/gc-sweep)
+(def _noop2 nil)
+(zig.core/gc-sweep)
+(def _noop3 nil)
 
 (def s3 (zig.core/gc-stats))
 (def current3 (get s3 :current-allocated))

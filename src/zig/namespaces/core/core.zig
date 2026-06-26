@@ -27,6 +27,7 @@ const eval_helpers = @import("eval_helpers.zig");
 const regexp_core = @import("regexp.zig");
 const records = @import("records.zig");
 const namespace = @import("namespace.zig");
+const threading = @import("threading.zig");
 
 // ---- Collection predicates (empty?, not-empty, seq) ----
 
@@ -366,6 +367,7 @@ pub fn registerCoreFunctions(env: *Env) anyerror!void {
     try random.registerRandomFunctions(env);
     try gc_builtins.registerGCFunctions(env);
     try regexp_core.registerRegexpFunctions(env);
+    try threading.registerThreadingFunctions(env);
 
     // Collection predicates (kept here)
     try env.put("empty?", vm.builtinFnValue(core_empty_q));

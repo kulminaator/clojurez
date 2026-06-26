@@ -46,7 +46,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = src_path,
             .target = target,
             .optimize = v.opt,
-            .single_threaded = true,
+            // Note: no .single_threaded — we need threading for futures/promises.
             .strip = if (v.strip) true else null,
         });
 

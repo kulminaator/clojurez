@@ -15,6 +15,7 @@ const eval_ns = @import("eval_ns.zig");
 const protocols = @import("namespaces/core/protocols.zig");
 const records = @import("namespaces/core/records.zig");
 const gc_mod = @import("gc.zig");
+const threading = @import("namespaces/core/threading.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -153,7 +154,7 @@ pub fn evalRec(allocator: Allocator, form: *const Value, env: *Env, depth: usize
     if (depth > MAX_RECURSION) return error.RecursionLimit;
 
     switch (form.*) {
-        .nil, .bool, .integer, .float, .bigint, .ratio, .decimal, .string, .regex, .character, .keyword, .set, .queue, .atom, .reduced, .wrapped, .record => {
+        .nil, .bool, .integer, .float, .bigint, .ratio, .decimal, .string, .regex, .character, .keyword, .set, .queue, .atom, .future, .promise, .reduced, .wrapped, .record => {
             return try vm.cloneGC(form, allocator);
         },
         .symbol => {
@@ -1459,7 +1460,7 @@ fn evalVar(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) a
     return try vm.cloneGC(&sym, allocator);
 }
 
-/// (deref form) / (@ form) — get value from atom/var/reduced
+/// (deref form) / (@ form) — get value from atom/var/reduced/future
 fn evalDeref(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     if (l.items.len != 2) return error.ArityError;
     const arg_ptr = try evalRec(allocator, &l.items[1], env, depth + 1);
@@ -1475,8 +1476,33 @@ fn evalDeref(allocator: Allocator, l: *const list.List, env: *Env, depth: usize)
         vm.valueDeinit(&arg_ptr.*, allocator);
         return try allocValue(allocator, val);
     }
+    if (std.meta.activeTag(arg_ptr.*) == .future) {
+        // Deref a future — blocks until done
+        const future_val = arg_ptr.*;
+        vm.valueDeinit(&arg_ptr.*, allocator);
+        var deref_args: list.List = .empty;
+        errdefer deref_args.deinit(allocator);
+        try deref_args.append(allocator, future_val);
+        const result = try threading.core_deref_future(testSelf(), &deref_args, env);
+        return try allocValue(allocator, result);
+    }
+    if (std.meta.activeTag(arg_ptr.*) == .promise) {
+        // Deref a promise — blocks until delivered
+        const promise_val = arg_ptr.*;
+        vm.valueDeinit(&arg_ptr.*, allocator);
+        var deref_args: list.List = .empty;
+        errdefer deref_args.deinit(allocator);
+        try deref_args.append(allocator, promise_val);
+        const result = try threading.core_deref_promise(testSelf(), &deref_args, env);
+        return try allocValue(allocator, result);
+    }
     vm.valueDeinit(&arg_ptr.*, allocator);
     return try allocValue(allocator, vm.nilValue());
+}
+
+/// Helper for evalDeref: create a dummy self Value for builtin calls.
+fn testSelf() *const vm.Value {
+    return undefined; // builtin functions ignore self
 }
 
 /// (or form*) — short-circuit or

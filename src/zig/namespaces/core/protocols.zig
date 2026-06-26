@@ -42,6 +42,8 @@ pub fn typeKeyword(v: Value) []const u8 {
         .set => "set",
         .queue => "queue",
         .atom => "atom",
+        .future => "future",
+        .promise => "promise",
         .function => "function",
         .builtin_fn => "builtin_fn",
         .lazy_seq => "lazy_seq",

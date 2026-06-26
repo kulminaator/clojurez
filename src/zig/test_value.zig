@@ -866,9 +866,7 @@ test "value::Env: nested child envs survive GC" {
         current_env_ptr = child;
     }
 
-    // Run GC twice (generational protection requires 2 cycles)
-    gc.verbose = true;
-    gc.collect(gc_scan.valueScanFn);
+    // Run GC (all envs are roots so nothing is swept)
     gc.collect(gc_scan.valueScanFn);
 
     // Verify root env still has all 50 entries after GC

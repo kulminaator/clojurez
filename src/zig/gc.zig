@@ -43,6 +43,8 @@ pub const GCObjectType = enum(u8) {
     queue_items = 4, // array of Value objects (queue items)
     lazy_seq_thunk = 5, // LazySeqThunk { params: list.List, body: list.List, env: Env }
     atom_data = 6,  // AtomData { value: Value, ref_count: usize }
+    future_data = 27, // FutureData { state: atomic u32, result: ?Value, fn_val: ?Value, error_msg: ?[]u8, allocator }
+    promise_data = 28, // PromiseData { state: atomic u32, value: ?Value, allocator }
     fn_data = 8,    // FnData { arities: ArrayListUnmanaged(Arity), env: Env }
     cons_data = 9,  // ConsData { head: Value, tail: Value, allocator: Allocator }
     hash_map_node = 10, // PersistentHashMap HAMT node (Node union)
@@ -123,6 +125,12 @@ pub const GC = struct {
     // Debug flags
     sweep_enabled: bool = true,
     verbose: bool = false,
+
+    // GC lock: prevents concurrent GC collection while child threads are running.
+    // 0 = unlocked (GC can run), 1 = locked (GC must wait).
+    // Child threads lock before starting, unlock after finishing.
+    // Main thread tries to lock before collect, skips if already locked.
+    gc_lock: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
 
     // Auto-GC: trigger collection when memory grows past threshold since last sweep.
     // Threshold = max(last_collected_memory * 20%, 1MB).
@@ -233,6 +241,9 @@ pub const GC = struct {
             .prev = null,
         };
 
+        // Append to head of block list. Concurrent allocs from child threads
+        // are safe since they only modify the head. The GC's sweep phase
+        // uses generational protection to avoid sweeping in-flight blocks.
         if (self.blocks) |first| first.prev = header;
         self.blocks = header;
         self.block_count += 1;
@@ -472,11 +483,11 @@ pub const GC = struct {
         self.log("[GC] === COLLECT START blocks={d} roots={d} gen={d} ===\n",
             .{ self.block_count, self.roots.items.len, self.generation });
 
-        // Build O(1) header lookup table for this collection cycle
+        // Build O(1) header lookup table for this collection cycle.
         self.buildHeaderTable();
         defer self.freeHeaderTable();
 
-        // Phase 1: Clear all marks
+        // Phase 1: Clear all marks.
         var block = self.blocks;
         while (block) |b| {
             b.marked = false;
@@ -548,11 +559,13 @@ pub const GC = struct {
 
         while (block) |b| {
             const next = b.next;
-            // Generational protection: never sweep blocks from the current
-            // or previous generation. They may be referenced by in-flight
-            // evaluation state (stack-local pointers the GC can't see).
-            // A block must be at least 2 generations old to be swept.
-            const protected_gen = if (self.generation > 0) self.generation - 1 else 0;
+            // Generational protection: never sweep blocks from the current,
+            // previous, or second-previous generation. This provides safety
+            // for multithreaded access where child threads may hold references
+            // to blocks that the GC's mark phase can't discover (e.g., HAMT
+            // nodes reachable through stack-allocated Env structs in child threads).
+            // A block must be at least 3 generations old to be swept.
+            const protected_gen = if (self.generation > 1) self.generation - 2 else 0;
             if (!b.marked and b.generation < protected_gen) {
                 // Remove from linked list
                 if (b.prev) |prev| {
@@ -570,6 +583,8 @@ pub const GC = struct {
                 const sweep_offset = b.offset;
                 const total = sweep_offset + sweep_size;
                 const block_start = @as([*]u8, @ptrCast(b));
+                // Mark GC-swept memory with 0xFE so we can recognize it
+                @memset(block_start[sweep_offset .. sweep_offset + sweep_size], 0xFE);
                 self.wrapped.free(block_start[0..total]);
 
                 swept += 1;
@@ -614,7 +629,15 @@ pub const GC = struct {
     /// Also handles deferred manual sweeps (from zig.core/gc-sweep called
     /// during evaluation). Call this at safe points (between form evaluations)
     /// where no in-flight allocations exist.
+    /// Skips collection if child threads are active to avoid concurrent GC access.
     pub fn tryAutoCollect(self: *Self) void {
+        // Try to acquire the GC lock. If a child thread holds it, skip collection.
+        // cmpxchgStrong(0, 1) atomically checks if lock is 0 and sets to 1.
+        // Returns null on success (was 0), some(prev) on failure (was 1).
+        const prev = self.gc_lock.cmpxchgStrong(0, 1, .acq_rel, .monotonic);
+        if (prev != null) return; // lock held by child thread, skip
+        defer self.gc_lock.store(0, .release); // release lock
+
         const need_collect = self.auto_gc_pending or self.manual_sweep_pending;
         if (need_collect) {
             if (self.scan_fn) |fn_ptr| {
@@ -630,12 +653,31 @@ pub const GC = struct {
     /// execution where auto-GC is unnecessary overhead (OS reclaims
     /// all memory on exit), but manual sweeps still need to run.
     pub fn tryDeferredSweep(self: *Self) void {
+        const prev = self.gc_lock.cmpxchgStrong(0, 1, .acq_rel, .monotonic);
+        if (prev != null) return; // lock held by child thread, skip
+        defer self.gc_lock.store(0, .release);
+
         if (self.manual_sweep_pending) {
             if (self.scan_fn) |fn_ptr| {
                 self.manual_sweep_pending = false;
                 self.collect(fn_ptr);
             }
         }
+    }
+
+    /// Lock the GC to prevent collection while a child thread runs.
+    /// Spins until the lock is acquired (GC is not running).
+    pub fn threadStart(self: *Self) void {
+        // Wait for GC to finish (lock == 0), then acquire the lock (set to 1).
+        while (self.gc_lock.cmpxchgStrong(0, 1, .acq_rel, .monotonic) != null) {
+            // Spin-wait: GC is running, wait for it to finish.
+            // The GC will set lock back to 0 when done.
+        }
+    }
+
+    /// Unlock the GC, allowing collection to proceed.
+    pub fn threadDone(self: *Self) void {
+        self.gc_lock.store(0, .release);
     }
 
     /// Statistics snapshot.
@@ -846,7 +888,8 @@ test "gc::collect: unreachable objects swept" {
     d.next = e;
 
     gc.addRoot(a);
-    // Two collects needed: first advances generation, second sweeps gen-0 blocks.
+    // Three collects needed for 3-generation protection.
+    gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
 
@@ -887,7 +930,8 @@ test "gc::collect: no roots sweeps everything" {
     a.next = b;
 
     // No roots registered
-    // Two collects needed for generational protection.
+    // Three collects needed for 3-generation protection.
+    gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
 
@@ -957,7 +1001,8 @@ test "gc::collect: tree structure" {
     b.child = e;
 
     gc.addRoot(a);
-    // Two collects needed for generational protection.
+    // Three collects needed for 3-generation protection.
+    gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
 
@@ -977,7 +1022,8 @@ test "gc::removeRoot then collect" {
     gc.addRoot(a);
     gc.removeRoot(a);
 
-    // Two collects needed for generational protection.
+    // Three collects needed for 3-generation protection.
+    gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
 
@@ -1045,14 +1091,15 @@ test "gc::stats accuracy" {
     a.next = b;
 
     gc.addRoot(a);
-    // Two collects needed for generational protection.
+    // Three collects needed for 3-generation protection.
+    gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
 
     const s = gc.stats();
     try std.testing.expect(s.alloc_count == 3);
     try std.testing.expect(s.free_count == 0); // no manual frees
-    try std.testing.expect(s.gc_count == 2);
+    try std.testing.expect(s.gc_count == 3);
     try std.testing.expect(s.block_count == 2); // a, b survive
     try std.testing.expect(s.swept_count > 0); // orphan swept
     try std.testing.expect(s.swept_bytes > 0);
@@ -1136,7 +1183,9 @@ test "gc::sweep toggle: disable then re-enable" {
     try std.testing.expect(gc.stats().block_count == 2); // nothing swept
 
     // Re-enable sweep
+    // Three collects total (1 disabled + 2 enabled) for 3-generation protection.
     gc.setSweepEnabled(true);
+    gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
     try std.testing.expect(gc.stats().block_count == 0); // now swept
 }
@@ -1185,7 +1234,8 @@ test "gc::complex graph with cycles and orphans" {
     g.next = f; // unreachable cycle
 
     gc.addRoot(a);
-    // Two collects needed for generational protection.
+    // Three collects needed for 3-generation protection.
+    gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
     gc.collect(testNodeScanFn);
 

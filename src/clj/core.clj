@@ -806,6 +806,59 @@
   []
   (zig.core/nano-time))
 
+(defn sleep
+  "Causes the current thread to sleep for the given number of milliseconds."
+  [ms]
+  (zig.core/sleep ms))
+
+;; ---- Futures ----
+
+(defn future-call
+  "Takes a function of no args and yields a future object that will
+   invoke the function in another thread, and will cache the result and
+   return it on all subsequent calls to deref/@. If the computation has
+   not yet finished, calls to deref/@ will block."
+  [f]
+  (zig.core/future-call f))
+
+(defmacro future
+  "Takes a body of expressions and yields a future object that will
+   invoke the body in another thread, and will cache the result and
+   return it on all subsequent calls to deref/@."
+  [& body]
+  `(zig.core/future-call (fn [] ~@body)))
+
+(defn future?
+  "Returns true if x is a future."
+  [x]
+  (zig.core/future? x))
+
+(defn future-done?
+  "Returns true if future f is done."
+  [f]
+  (zig.core/realized f))
+
+(defn realized?
+  "Returns true if a value has been produced for a promise, future or lazy sequence."
+  [x]
+  (zig.core/realized x))
+
+(defn promise
+  "Returns a promise object that can be delivered to at most once."
+  []
+  (zig.core/promise))
+
+(defn deliver
+  "Delivers the supplied value to the promise. If the promise has already
+   been delivered to, this has no effect. Returns the promise."
+  [p val]
+  (zig.core/deliver p val))
+
+(defn promise?
+  "Returns true if x is a promise."
+  [x]
+  (zig.core/promise? x))
+
 (defn rand-int
   "Returns a random integer between 0 (inclusive) and n (exclusive)."
   [n]
@@ -1194,9 +1247,14 @@
   (zig.core/reset! a new-val))
 
 (defn deref
-  "Returns the current value of the atom or var."
+  "Returns the current value of the atom, future, promise, or var.
+   For futures and promises, blocks until the computation completes.
+   For atoms, returns the current value."
   [v]
-  (zig.core/deref v))
+  (cond
+    (future? v) (zig.core/deref-future v)
+    (promise? v) (zig.core/deref-promise v)
+    :else (zig.core/deref v)))
 
 ;; ---- Type predicates ----
 

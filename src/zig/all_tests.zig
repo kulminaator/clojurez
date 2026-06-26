@@ -1,5 +1,5 @@
 // Test runner — imports all modules so their test blocks are discovered.
-// Usage: zig test -fsingle-threaded src/zig/all_tests.zig
+// Usage: zig test src/zig/all_tests.zig
 
 const test_value = @import("value.zig");
 const test_value_tests = @import("test_value.zig");
@@ -36,6 +36,7 @@ const test_persistent_hash_map = @import("persistent_hash_map.zig");
 const test_persistent_string_hash_map = @import("persistent_string_hash_map.zig");
 const test_debug = @import("debug.zig");
 const test_stack_stats = @import("stack_stats.zig");
+const test_threading = @import("namespaces/core/threading.zig");
 
 // Suppress unused import warnings
 comptime {
@@ -74,4 +75,5 @@ comptime {
     _ = test_persistent_string_hash_map;
     _ = test_debug;
     _ = test_stack_stats;
+    _ = test_threading;
 }
