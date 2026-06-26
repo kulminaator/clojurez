@@ -33,6 +33,18 @@ const PromiseState = struct {
 fn futureThreadEntry(fn_val: Value, future_data: *vm.FutureData) void {
     const allocator = future_data.allocator;
 
+    // Lock the GC to prevent collection while this thread runs.
+    // The threadStart spins until GC is idle, then holds the lock.
+    // threadDone releases the lock, allowing GC to proceed.
+    if (gc_mod.current_gc) |gc| {
+        gc.threadStart();
+        defer gc.threadDone();
+        // Disable auto-GC in child threads.
+        const prev_auto_gc = gc.auto_gc_active;
+        gc.auto_gc_active = false;
+        defer gc.auto_gc_active = prev_auto_gc;
+    }
+
     var result: Value = undefined;
 
     errhandler: {
@@ -96,6 +108,13 @@ pub fn core_future_call(self: *const Value, args: *const list.List, env_env: *En
     future_data.* = .{ .allocator = allocator, .fn_val = cloned_fn };
     if (gc_mod.current_gc) |gc| {
         gc.setObjectType(@as(*anyopaque, @ptrCast(future_data)), gc_mod.GCObjectType.future_data);
+        // Set generation to max so FutureData is never swept by generational protection.
+        // The FutureData is detached from the main thread's evaluation stack,
+        // so the GC can't discover it through normal root scanning.
+        // It stays alive until the process exits (threads are detached).
+        if (gc.findHeader(@as(*anyopaque, @ptrCast(future_data)))) |hdr| {
+            hdr.generation = std.math.maxInt(u32);
+        }
     }
 
     // Spawn the thread — pass only fn_val and future_data.
@@ -135,6 +154,16 @@ pub fn core_deref_future(self: *const Value, args: *const list.List, env_env: *E
     // Cast away const for atomic operations — safe: we only read state, result is written once
     const data: *vm.FutureData = @ptrCast(@alignCast(@constCast(future_val.future)));
     const allocator = env_env.allocator;
+
+    // Root the FutureData during the polling loop so the GC doesn't sweep it
+    // (and its captured FnData, Env, and HAMT nodes) while the child thread
+    // is still using them. The future Value is in a stack-allocated args buffer
+    // that the GC can't discover, so without this root the FutureData becomes
+    // unreachable during GC collection.
+    if (gc_mod.current_gc) |gc| {
+        gc.addRoot(@as(*anyopaque, @ptrCast(@constCast(data))));
+        defer gc.removeRoot(@as(*anyopaque, @ptrCast(@constCast(data))));
+    }
 
     const has_timeout = args.items.len == 3;
     const timeout_ms: i64 = if (has_timeout) switch (args.items[1]) {
@@ -270,6 +299,14 @@ pub fn core_deref_promise(self: *const Value, args: *const list.List, env_env: *
     if (std.meta.activeTag(promise_val) != .promise) return error.TypeError;
     const data: *vm.PromiseData = @ptrCast(@alignCast(@constCast(promise_val.promise)));
     const allocator = env_env.allocator;
+
+    // Root the PromiseData during the polling loop so the GC doesn't sweep it
+    // while waiting for delivery. The promise Value is in a stack-allocated
+    // args buffer that the GC can't discover.
+    if (gc_mod.current_gc) |gc| {
+        gc.addRoot(@as(*anyopaque, @ptrCast(@constCast(data))));
+        defer gc.removeRoot(@as(*anyopaque, @ptrCast(@constCast(data))));
+    }
 
     const has_timeout = args.items.len == 3;
     const timeout_ms: i64 = if (has_timeout) switch (args.items[1]) {

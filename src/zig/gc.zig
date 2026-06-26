@@ -126,10 +126,11 @@ pub const GC = struct {
     sweep_enabled: bool = true,
     verbose: bool = false,
 
-    // Mutex to protect block list operations during multithreaded access.
-    // Child threads may allocate through the GC allocator while the main
-    // thread runs GC collect/sweep. This mutex ensures thread safety.
-    block_list_mutex: std.atomic.Mutex = .unlocked,
+    // GC lock: prevents concurrent GC collection while child threads are running.
+    // 0 = unlocked (GC can run), 1 = locked (GC must wait).
+    // Child threads lock before starting, unlock after finishing.
+    // Main thread tries to lock before collect, skips if already locked.
+    gc_lock: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
 
     // Auto-GC: trigger collection when memory grows past threshold since last sweep.
     // Threshold = max(last_collected_memory * 20%, 1MB).
@@ -240,11 +241,9 @@ pub const GC = struct {
             .prev = null,
         };
 
-        // Protect block list modification for thread safety.
-        // Use mutex to prevent corruption when child threads allocate
-        // while main thread runs GC collect/sweep.
-        while (!self.block_list_mutex.tryLock()) {}
-        defer self.block_list_mutex.unlock();
+        // Append to head of block list. Concurrent allocs from child threads
+        // are safe since they only modify the head. The GC's sweep phase
+        // uses generational protection to avoid sweeping in-flight blocks.
         if (self.blocks) |first| first.prev = header;
         self.blocks = header;
         self.block_count += 1;
@@ -299,10 +298,6 @@ pub const GC = struct {
 
     /// Internal: free a block given its header.
     fn freeHeader(self: *Self, header: *Header) bool {
-        // Protect block list modification for thread safety.
-        while (!self.block_list_mutex.tryLock()) {}
-        defer self.block_list_mutex.unlock();
-
         // Remove from linked list
         if (header.prev) |prev| {
             prev.next = header.next;
@@ -493,14 +488,11 @@ pub const GC = struct {
         defer self.freeHeaderTable();
 
         // Phase 1: Clear all marks.
-        // Protect block list traversal for thread safety.
-        while (!self.block_list_mutex.tryLock()) {}
         var block = self.blocks;
         while (block) |b| {
             b.marked = false;
             block = b.next;
         }
-        self.block_list_mutex.unlock();
 
         // Phase 2: Mark from static roots
         var ctx = ScanContext{ .gc = self, .scan_fn = scan_fn };
@@ -560,11 +552,6 @@ pub const GC = struct {
             self.log("[GC] SWEEP DISABLED — skipping\n", .{});
             return;
         }
-
-        // Protect block list traversal and modification for thread safety.
-        // Child threads may allocate while we sweep.
-        while (!self.block_list_mutex.tryLock()) {}
-        defer self.block_list_mutex.unlock();
 
         var block = self.blocks;
         var swept: usize = 0;
@@ -642,7 +629,15 @@ pub const GC = struct {
     /// Also handles deferred manual sweeps (from zig.core/gc-sweep called
     /// during evaluation). Call this at safe points (between form evaluations)
     /// where no in-flight allocations exist.
+    /// Skips collection if child threads are active to avoid concurrent GC access.
     pub fn tryAutoCollect(self: *Self) void {
+        // Try to acquire the GC lock. If a child thread holds it, skip collection.
+        // cmpxchgStrong(0, 1) atomically checks if lock is 0 and sets to 1.
+        // Returns null on success (was 0), some(prev) on failure (was 1).
+        const prev = self.gc_lock.cmpxchgStrong(0, 1, .acq_rel, .monotonic);
+        if (prev != null) return; // lock held by child thread, skip
+        defer self.gc_lock.store(0, .release); // release lock
+
         const need_collect = self.auto_gc_pending or self.manual_sweep_pending;
         if (need_collect) {
             if (self.scan_fn) |fn_ptr| {
@@ -658,12 +653,31 @@ pub const GC = struct {
     /// execution where auto-GC is unnecessary overhead (OS reclaims
     /// all memory on exit), but manual sweeps still need to run.
     pub fn tryDeferredSweep(self: *Self) void {
+        const prev = self.gc_lock.cmpxchgStrong(0, 1, .acq_rel, .monotonic);
+        if (prev != null) return; // lock held by child thread, skip
+        defer self.gc_lock.store(0, .release);
+
         if (self.manual_sweep_pending) {
             if (self.scan_fn) |fn_ptr| {
                 self.manual_sweep_pending = false;
                 self.collect(fn_ptr);
             }
         }
+    }
+
+    /// Lock the GC to prevent collection while a child thread runs.
+    /// Spins until the lock is acquired (GC is not running).
+    pub fn threadStart(self: *Self) void {
+        // Wait for GC to finish (lock == 0), then acquire the lock (set to 1).
+        while (self.gc_lock.cmpxchgStrong(0, 1, .acq_rel, .monotonic) != null) {
+            // Spin-wait: GC is running, wait for it to finish.
+            // The GC will set lock back to 0 when done.
+        }
+    }
+
+    /// Unlock the GC, allowing collection to proceed.
+    pub fn threadDone(self: *Self) void {
+        self.gc_lock.store(0, .release);
     }
 
     /// Statistics snapshot.

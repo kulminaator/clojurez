@@ -369,6 +369,11 @@ pub fn promiseValue(allocator: Allocator) anyerror!Value {
     data.* = .{ .allocator = allocator };
     if (gc_mod.current_gc) |gc| {
         gc.setObjectType(@as(*anyopaque, @ptrCast(data)), gc_mod.GCObjectType.promise_data);
+        // Set generation to max so PromiseData is never swept.
+        // Promises may outlive their creating scope (e.g., passed to futures).
+        if (gc.findHeader(@as(*anyopaque, @ptrCast(data)))) |hdr| {
+            hdr.generation = std.math.maxInt(u32);
+        }
     }
     return .{ .promise = data };
 }
