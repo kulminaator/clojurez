@@ -468,7 +468,12 @@ test "ns::isReferredName: returns false for non-matching name" {
 test "ns::Env: referred_names init and deinit" {
     const allocator = std.testing.allocator;
     var env = Env.init(allocator);
-    defer env.deinit(allocator);
+    defer {
+        // Free individual strings then the buffer (GC would do this in real runtime).
+        for (env.referred_names.items) |s| allocator.free(s);
+        env.referred_names.deinit(allocator);
+        env.deinit(allocator);
+    }
     try std.testing.expect(env.referred_names.items.len == 0);
 
     // Append a referred name and verify
@@ -481,7 +486,12 @@ test "ns::Env: referred_names init and deinit" {
 test "ns::Env: clone preserves referred_names as empty" {
     const allocator = std.testing.allocator;
     var env = Env.init(allocator);
-    defer env.deinit(allocator);
+    defer {
+        // Free individual strings then the buffer (GC would do this in real runtime).
+        for (env.referred_names.items) |s| allocator.free(s);
+        env.referred_names.deinit(allocator);
+        env.deinit(allocator);
+    }
 
     // Add a referred name
     const name = try allocator.dupe(u8, "referred-fn");
