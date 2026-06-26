@@ -1,76 +1,72 @@
-# A replica of clojure programming language written in Zig.
+# ClojureZ - Clojure in Zig
 
-TL;DR - Clojure built in Zig. If you are looking for original clojure you can find it here: https://github.com/clojure/clojure
+A Clojure interpreter written in Zig. No JVM required.
 
 ## Quick Start
 
-Build the project:
-
+Clone the project then build it.
 ```bash
 zig build
-```
-
-Alternatively, if you don't want to build from source - you can also download the latest release from Github 
-Link: [https://github.com/kulminaator/clojurez/releases](https://github.com/kulminaator/clojurez/releases)
-
-
-The binary is placed at `zig-out/bin/clojurez`.
-
-### Evaluate an expression
-
-```bash
 ./zig-out/bin/clojurez -e '(+ 1 2 3)'
 ```
 
-### Run a single file
+Alternatively, if you don't want to build from source - you can also download the latest release from Github
+Link: [https://github.com/kulminaator/clojurez/releases](https://github.com/kulminaator/clojurez/releases)
+
+
+### Modes
 
 ```bash
+# Start the REPL
+./zig-out/bin/clojurez
+
+# Evaluate an expression
+./zig-out/bin/clojurez -e '(defn square [n] (* n n)) (square 5)'
+
+# Run a file
 ./zig-out/bin/clojurez my_script.clj
-```
 
-### Run a project with a main function
-
-Similar to `clojure -M` / `java -cp`:
-
-```bash
+# Run with classpath and main function
 ./zig-out/bin/clojurez -cp src -m my.namespace
 ```
 
-This resolves `my.namespace` to `src/my/namespace.clj` and calls its `-main` function.
+Type `(quit)`, `(exit)`, or press `CTRL+D` to exit the REPL.
 
-### Start the REPL
+### Build Variants
 
-```bash
-./zig-out/bin/clojurez
-```
-
-Type `(quit)` or `(exit)` or `CTRL+D` to exit.
-
-For full details — features, API, testing, and project structure — see [TECHNICAL_README.md](TECHNICAL_README.md).
+| Binary | Size | Use |
+|--------|------|-----|
+| `clojurez` | ~24MB | Debug (full safety checks) |
+| `clojurez-medium` | ~740KB | ReleaseSmall |
+| `clojurez-mini` | ~740KB | ReleaseSmall + stripped |
 
 ## Key Features
-- **Garbage collection** — automatic memory management for all runtime values
-- **Big number support** — BigInt, Ratio, and BigDecimal with arbitrary precision
-- **Macros** — full macro expansion with `defmacro`
-- **Namespaces** — `ns` declarations with `:require` and `:as` aliases
-- **Protocols** — `defprotocol`, `extend`, `extend-type`, `extend-protocol`, `satisfies?`
-- **Records** — `defrecord` with factory functions, map-like operations, and protocol support
-- **Lazy sequences** — `lazy-seq`, `map`, `filter`, `take`, `drop`, etc.
-- **UTF-8** — full Unicode support in strings, symbols, and keywords
 
-## Compatibility
-While the project strives for good compatibility, we are definitely not there yet and we will never be fully there, as we lack JVM.
+- **Garbage collection** - mark-and-sweep GC, all runtime values managed automatically
+- **Full numeric tower** - integer, float, BigInt (`123N`), Ratio (`(/ 22 7)` → `22/7`), BigDecimal (`123.456M`)
+- **Macros** - `defmacro` with full expansion, shorthand `#(%)` for anonymous functions
+- **Namespaces** - `ns` with `:require`/`:as`, classpath via `-cp`, main via `-m`
+- **Protocols** - `defprotocol`, `extend`, `extend-type`, `extend-protocol`, `satisfies?`
+- **Records** - `defrecord` with factory functions, map-like ops, protocol support
+- **Lazy sequences** - `lazy-seq`, `map`, `filter`, `take`, `drop`, `iterate`, `cycle`
+- **UTF-8** - full Unicode support in strings, symbols, keywords, characters
+- **Regex** - `#"..."` literals with a pure-Zig regex engine
+- **Bitwise ops** - `bit-and`, `bit-or`, `bit-xor`, `bit-shift-left`, etc.
+- **Atoms** - `atom`, `swap!`, `reset!`
 
-So here are the known differences:
- - no java support, not today, not ever
- - hence also no jit. we are pretty much a parsing machine most of the time
- - our strings are utf8, not utf16
- - our collections have a simpler design and don't have chunking etc.
- - our runtime is minuscule, less than a megabyte in the minimized form
+## Known Differences from JVM Clojure
 
-## License:
- Eclipse 1.0 license to be in harmony with original clojure project
+- No Java interop (not applicable for a standalone VM)
+- No JIT compilation
+- Strings are UTF-8 (not UTF-16)
+- Simpler collection internals (no chunking)
+- Minimal runtime (< 1MB stripped)
 
-## Copyright:
-- For parts that overlap with the implementation with original clojure, the copyright belongs to Rich Hickey and the according clojure team members.
-- For parts that do not overlap with original clojure project, the copyright belongs to Martin Roos
+## License
+
+Eclipse Public License 1.0
+
+## Copyright
+
+- Parts overlapping with original Clojure: Rich Hickey and Clojure team
+- Original parts: Martin Roos

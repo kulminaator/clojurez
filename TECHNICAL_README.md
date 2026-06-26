@@ -1,721 +1,295 @@
-# Clojure VM in Zig
+# ClojureZ - Technical Reference
 
-A minimalistic Clojure virtual machine written in Zig. Supports core data types, special forms, threading macros, sequence operations, destructuring, and a subset of Clojure's standard library — bootstrapped from Clojure source files.
+A Clojure interpreter written in Zig. Supports core data types, special forms, macros, namespaces, protocols, records, lazy sequences, and a bootstrapped Clojure standard library.
 
-## Features
+## Architecture
 
-### Data Types
-- `nil`, `true`, `false`
-- Integers and floats
-- **BigInt** — arbitrary precision integers (literal `123456789012345678901234567890N`)
-- **Ratio** — exact rational numbers (`(/ 22 7)` → `22/7`)
-- **BigDecimal** — arbitrary precision decimals (literal `123.456M`)
-- Strings (with escape sequences: `\n`, `\t`, `\\`, `\"`, `\uXXXX`, `\u{XXXXXX}`)
-- Symbols (`x`, `foo-bar`, `my-var?`) — supports Unicode characters
-- Keywords (`:foo`, `:bar-baz`) — supports Unicode characters
-- Lists (`(1 2 3)`)
-- Vectors (`[1 2 3]`)
-- Maps (`{:a 1 :b 2}`)
-- Sets (`#{1 2 3}`)
-- Queues (`#queue(1 2 3)`)
-- Atoms (`(atom 5)`)
-- Lazy sequences (`(lazy-seq ...)`)
-- Cons cells (`(cons 1 (list 2 3))`)
-- **Records** — named data types with fixed fields (`defrecord Person [name age]`)
-
-### Garbage Collection
-- **Mark-and-sweep GC** — automatic memory management for all runtime values
-- Tracked allocations with header-based block management
-- Eliminates manual memory management for Clojure values
-
-### Operating system support
-- Our code is expected to run the same on every major platform Linux, macOS, Windows
-- Do not use functionality or libraries that do not work cross platform
-- Always prefer cross platform functions over if-ing around os types and using special methods
-
-### UTF-8 Support
-- All strings are validated as UTF-8 on creation
-- `count` on strings returns Unicode code point count (not byte length)
-- `nth` on strings indexes by code point (not byte offset)
-- `utf8-valid?` checks if a string is valid UTF-8
-- Unicode escape sequences: `\uXXXX` (BMP) and `\u{XXXXXX}` (supplementary)
-- Symbols and keywords accept Unicode characters
-- Full support for Estonian (õäö), emoji (😀😃), Japanese (古池や), and all UTF-8 text
-
-### Special Forms
-- `def` — define a var in the current namespace
-- `defn` — define a named function in the current namespace (supports multi-arity)
-- `defmacro` — define a macro (full macro expansion support)
-- `fn` — create an anonymous function (supports multi-arity)
-- `if` — conditional (`(if test then else)`)
-- `when` — shorthand for `(if test (do body...))`
-- `when-not` — shorthand for `(if (not test) (do body...))`
-- `if-not` — if test is false, evaluate then
-- `cond` — multi-way conditional
-- `case` — multi-way constant dispatch
-- `let` — local bindings
-- `if-let` — conditional with binding
-- `when-let` — when test is truthy, bind and evaluate body
-- `when-some` — when test is not nil, bind and evaluate body
-- `do` — evaluate a sequence of forms
-- `quote` / `'` — prevent evaluation
-- `quasiquote` / `` ` `` — template with unquote (`unquote` / `~`) and unquote-splicing (`unquote-splicing` / `~@`)
-- `set!` — modify a variable
-- `and` / `or` — short-circuit logic
-- `loop` / `recur` — tail recursion (simplified)
-- `binding` — dynamic variable binding
-- `var` — create a mutable var
-- `deref` / `@` — get the value of a var
-- `lazy-seq` — create a lazy sequence
-- `ns` — namespace declaration (with `:require` and `:as` support)
-- `defrecord` — define a named record type with fixed fields
-- `defprotocol` — define a protocol (interface)
-- `extend` / `extend-type` / `extend-protocol` — implement protocols for types
-
-### Threading Macros
-- `->` — thread-first: inserts value as second argument
-- `->>` — thread-last: inserts value as last argument
-- `cond->` — conditional thread-first
-- `cond->>` — conditional thread-last
-
-### Sequence Functions
-- `iterate` — repeatedly apply a function, collecting results
-- `map` — apply a function to each element
-- `mapcat` — map and concat
-- `take` — take first n elements
-- `take-while` — take while predicate is true
-- `take-last` — take last n elements
-- `drop` — drop first n elements
-- `drop-last` — drop last n elements
-- `drop-while` — drop while predicate is true
-- `partition` — partition a collection into chunks of n
-- `cycle` — repeat collection infinitely (lazy)
-- `repeat` / `replicate` — repeat value n times (lazy)
-- `split-at` — split collection at index
-- `split-with` — split while predicate is true
-- `count`, `first`, `rest`, `nth`, `concat`, `list`, `vec`
-- `next`, `nthnext`, `last`, `reverse`, `flatten`, `distinct?`
-- `dorun`, `doall` — force lazy sequence evaluation
-- `sort`, `sort-by` — sort collection (with optional key function)
-- `shuffle` — random permutation
-- `interpose`, `interleave` — interleave collections
-
-### Destructuring
-- Vector destructuring in function parameters: `(fn [[a b]] (+ a b))`
-- Nested destructuring: `(fn [[[a b] c]] (+ a b c))`
-- Destructuring in `let` with `& rest`: `(let [[a b & rest] [1 2 3 4]] (list a b rest))` → `(1 2 (3 4))`
-
-### Built-in Functions
-- **Arithmetic:** `+`, `-`, `*`, `/`, `rem`, `mod`, `quot`, `rationalize`
-- **Comparison:** `=`, `!=`, `not=`, `==`, `<`, `>`, `<=`, `>=`, `compare`, `identical?`
-- **Boolean:** `not`, `boolean`
-- **Predicates:** `nil?`, `some?`, `true?`, `false?`, `zero?`, `pos?`, `neg?`, `even?`, `odd?`, `number?`, `string?`, `list?`, `symbol?`, `keyword?`, `vector?`, `map?`, `queue?`, `set?`, `coll?`, `sequential?`, `fn?`, `empty?`, `not-empty`, `utf8-valid?`
-- **Sequence predicates:** `some`, `every?`, `not-any?`
-- **Strings:** `str`, `utf8-valid?`, `subs`
-- **I/O:** `print`, `println`, `read-line`, `spit`, `slurp`
-- **Maps:** `get`, `assoc`, `keys`, `vals`, `dissoc`, `merge`, `contains?`, `hash-map`, `zipmap`, `get-in`, `assoc-in`, `select-keys`
-- **Sets:** `set`, `set?`, `disj`, `contains?`, `union`, `intersection`, `difference`, `subset?`, `superset?`, `hash-set`
-- **Collections:** `conj`, `pop`, `last`, `reverse`, `range`, `peek`, `empty?`, `not-empty`, `seq`, `count`, `empty`
-- **Sequence operations:** `reduce`, `flatten`, `filter`, `remove`, `every?`, `some`, `distinct?`, `next`, `nthnext`, `drop`, `drop-last`, `drop-while`, `dorun`, `doall`, `partition`, `interpose`, `take-while`, `take-last`, `cycle`, `repeat`, `replicate`, `split-at`, `split-with`, `sort`, `sort-by`, `shuffle`
-- **Random:** `rand`, `rand-int`, `rand-nth`
-- **Comparator:** `comparator` — create comparator from fn
-- **Functional tools:** `apply`, `if-not`, `partial`, `comp`, `fnil`, `juxt`, `trampoline`, `constantly`, `complement`
-- **Metaprogramming:** `gensym`
-- **Time:** `nano-time`
-- **Atoms:** `atom`, `swap!`, `reset!`
-- **Protocols:** `defprotocol`, `extend`, `extend-type`, `extend-protocol`, `satisfies?`, `extends?`, `extenders`
-- **Records:** `defrecord`, `record?`, `type`, `meta`, `with-meta`
-
-### Clojure Core Library
-Many common functions are implemented in Clojure source, keeping the Zig VM lean:
-- `even?`, `odd?`, `zero?`, `pos?`, `neg?`
-- `identity`, `inc`, `dec`, `abs`, `max`, `min`
-- `cons`, `second`, `third`
-- `into`, `keep`, `update`
-- `key`, `val`, `into-array`
-- `hash-set` — create set from args
-- `when-not`, `when-some`, `when-let`, `when-first` (macros)
-- `if-let` (macro), `time` (macro), `doseq` (macro), `for` (macro)
-
-### clojure.string Namespace
-The `clojure.string` namespace provides string utility functions. Use with `:require` and `:as`:
-
-```clojure
-(ns my.namespace
-  (:require [clojure.string :as str]))
+```
+src/
+├── clj/               - Clojure source libraries (baked into binary at compile time)
+├── zig/               - main.zig, eval*.zig  etc. - entry point, essential zig code for the language implementation
+│   └── namespaces/    - built-in namespaces functions implementations
+└── tests/
+    ├── clj/             - Clojure-based test suites (test_*.clj)
+    ├── test_*.sh        - shell-based integration tests
+    └── complex-samples/ - end-to-end sample programs
 ```
 
-**Case conversion:**
-- `upper-case` — converts string to all upper-case
-- `lower-case` — converts string to all lower-case
-- `capitalize` — converts first character to upper-case, rest to lower-case
+## Data Types
 
-**Whitespace trimming:**
-- `trim` — removes whitespace from both ends
-- `triml` — removes whitespace from the left
-- `trimr` — removes whitespace from the right
-- `trim-newline` — removes trailing `\n` or `\r` characters
+All values are represented by the `Value` tagged union in `value.zig`:
 
-**Predicates:**
-- `blank?` — true if nil, empty, or whitespace only
-- `starts-with?` — true if string starts with substring
-- `ends-with?` — true if string ends with substring
-- `includes?` — true if string contains substring
+| Type | Literal / Constructor | Notes |
+|------|----------------------|-------|
+| `nil` | `nil` | |
+| `bool` | `true`, `false` | |
+| `integer` | `42` | i64 |
+| `float` | `3.14` | f64 |
+| `bigint` | `123456789012345678901234567890N` | arbitrary precision |
+| `ratio` | `(/ 22 7)` → `22/7` | exact rational |
+| `decimal` | `123.456M` | arbitrary precision decimal |
+| `string` | `"hello"` | UTF-8, escape sequences |
+| `regex` | `#"pattern"` | compiled regex |
+| `character` | `\a`, `\newline`, `\u0041` | single Unicode code point |
+| `symbol` | `x`, `foo-bar`, `my-var?` | UTF-8 |
+| `keyword` | `:foo`, `:bar-baz` | UTF-8 |
+| `list` | `(1 2 3)` | |
+| `vector` | `[1 2 3]` | |
+| `map` | `{:a 1 :b 2}` | |
+| `set` | `#{1 2 3}` | |
+| `queue` | `#queue(1 2 3)` | |
+| `atom` | `(atom 5)` | mutable reference |
+| `function` | `(fn [x] ...)`, `#(%)` | user-defined, multi-arity |
+| `lazy_seq` | `(lazy-seq ...)` | deferred computation |
+| `cons` | `(cons 1 (list 2 3))` | cons cell |
+| `reduced` | `(reduced val)` | early reduction termination |
+| `record` | `(defrecord Person [name age])` | named data type |
 
-**String manipulation:**
-- `reverse` — reverses the string
-- `join` — joins collection elements with optional separator
-- `escape` — replaces characters using a mapping
+## Special Forms
 
-**Index operations:**
-- `index-of` — finds first index of substring/char (optionally from index)
-- `last-index-of` — finds last index of substring/char (optionally from index)
+Implemented in `eval.zig` and related modules via a dispatch table:
 
-**Note:** Regular expression functions (`replace`, `replace-first`, `split`, `split-lines`) are not yet implemented.
+| Form | Description |
+|------|-------------|
+| `def` | define a var in current namespace |
+| `defn` / `defn-` | define a named function (multi-arity) |
+| `defmacro` | define a macro |
+| `fn` | anonymous function (multi-arity, `#(%)` shorthand) |
+| `if` | conditional |
+| `when` / `when-not` / `when-let` / `when-some` / `when-first` | conditionals with body |
+| `if-let` | conditional with binding |
+| `cond` | multi-way conditional |
+| `case` | multi-way constant dispatch |
+| `let` / `letfn` | local bindings |
+| `do` | evaluate sequence of forms |
+| `quote` / `'` | prevent evaluation |
+| `quasiquote` / `` ` `` | template with unquote (`~`) and unquote-splicing (`~@`) |
+| `set!` | modify a variable |
+| `and` / `or` | short-circuit logic |
+| `loop` / `recur` | tail recursion |
+| `binding` | dynamic variable binding |
+| `var` / `deref` / `@` | mutable var |
+| `lazy-seq` | create a lazy sequence |
+| `dorun` / `doall` | force lazy sequence evaluation |
+| `ns` / `in-ns` | namespace declaration |
+| `defprotocol` | define a protocol |
+| `extend` / `extend-type` / `extend-protocol` | implement protocols |
+| `defrecord` | define a record type |
+| `->` / `->>` / `cond->` / `cond->>` | threading macros |
+| `quit` / `exit` | exit the REPL |
 
-### Protocols and Records
+## Namespace Architecture
 
-**Protocols** define a set of methods that types can implement:
+Three namespace layers:
 
-```clojure
-(defprotocol Greetable
-  (greet [this]))
-
-(extend-type :string Greetable
-  (greet [this] (str "Hello, " this)))
-
-(greet "Alice")  ;; => "Hello, Alice"
-(satisfies? Greetable "Alice")  ;; => true
-```
-
-**Records** are named data types with a fixed set of fields. They behave like maps
-but with type identity, factory functions, and protocol support:
-
-```clojure
-(defrecord Person [name age]
-  Greetable
-    (greet [this] (str "Hi, I'm " name)))
-
-;; Factory functions
-(def p1 (->Person "Alice" 30))
-(def p2 (map->Person {:name "Bob" :age 25}))
-
-;; Map-like operations
-(get p1 :name)           ;; => "Alice"
-(assoc p1 :age 31)       ;; => new record with updated age
-(assoc p1 :city "NYC")   ;; => new record with extmap {:city "NYC"}
-(dissoc p1 :name)        ;; => {:age 30} (plain map — field dissoc demotes)
-(contains? p1 :name)     ;; => true
-
-;; Type and equality
-(type p1)                ;; => :user.Person
-(record? p1)             ;; => true
-(= (->Person "Alice" 30) (->Person "Alice" 30))  ;; => true
-
-;; Metadata
-(meta (with-meta p1 {:role "admin"}))  ;; => {:role "admin"}
-
-;; Protocol dispatch uses record type keyword (:user.Person)
-(greet p1)               ;; => "Hi, I'm Alice"
-```
-
-**Key design decisions:**
-- Records are a dedicated `Value.Type` (`.record`) with fields map, extension map, and optional metadata
-- Fields are stored as a map (keyword → value) for dynamic lookup by keyword
-- `assoc` on a non-field key adds to the extension map (record is never demoted)
-- `dissoc` on a defined field returns a plain map (matches Clojure behavior)
-- Protocol dispatch uses the record type keyword (e.g., `:user.Person`) as the dispatch key
-- Factory functions `->Name` and `map->Name` are created at `defrecord` evaluation time
-- Field names are accessible directly in protocol method bodies (e.g., `(greet [this] (str name))`)
-- Records are callable as functions: `(record :key)` and `(record :key "default")`
-- Keywords are callable on records: `(:key record)`
-
-## Build
-
-```bash
-# Build all 3 variants (copies core.clj automatically)
-zig build
-
-# Binaries are placed in zig-out/bin/:
-#   clojurez          — Debug build (full, ~14MB)
-#   clojurez-medium   — ReleaseSmall (~400KB)
-#   clojurez-mini     — ReleaseSmall + stripped (~400KB)
-```
-
-## Usage
-
-### REPL
-
-```bash
-./zig-out/bin/clojurez
-```
-
-or explicitly:
-
-```bash
-./zig-out/bin/clojurez --repl
-```
-
-Type `(quit)` or `(exit)` or `CTRL+D` to exit.
-
-### Evaluate an Expression
-
-```bash
-./zig-out/bin/clojurez -e '(+ 1 2 3 4)'
-./zig-out/bin/clojurez -e '(defn square [n] (* n n))'
-```
-
-### Run a File
-
-```bash
-./zig-out/bin/clojurez my_script.clj
-```
-
-### Namespaces and Classpath
-
-Support for Clojure-style namespaces with classpath-based file loading:
-
-```bash
-# Run with classpath and main function
-./zig-out/bin/clojurez -cp src -m main
-```
-
-This is equivalent to Clojure's:
-```bash
-java -cp src clojure.main -m main
-```
-
-The `-cp` flag accepts colon-separated directories (Unix) or semicolon-separated (Windows).
-Namespaces are resolved to files: `hello.hello` → `hello/hello.clj`.
-
-Example with `:require`:
-```clojure
-;; main.clj
-(ns main
-  (:require [hello.hello :as h]
-            [hello.world :as w]))
-
-(defn -main []
-  (println (str (h/get-hello) " " (w/get-world))))
-```
-
-### Namespace Architecture
-
-The VM follows Clojure's namespace model. There are no "global" functions — everything lives in a namespace:
-
-- **`user`** — the default namespace. REPL, `-e`, and file execution start here.
-- **`clojure.core`** — the public API namespace. All built-in functions and `core.clj` definitions live here. `user` inherits from `clojure.core` by default, so all functions are available without qualification.
-- **`zig.core`** — internal implementation namespace. Raw Zig builtins live here. Clojure wrappers in `clojure.core` delegate to `zig.core/` internally.
+1. **`user`** - default namespace. REPL, `-e`, and file execution start here. Inherits from `clojure.core`.
+2. **`clojure.core`** - public API namespace. Built-in functions and `core.clj` definitions live here.
+3. **`zig.core`** - internal implementation namespace. Raw Zig builtins live here. Clojure wrappers in `clojure.core` delegate to `zig.core/` internally.
 
 **Symbol resolution chain:**
 ```
 (+ 1 2) from user namespace:
-  user → (not found) → clojure.core → (+ wrapper) → (apply zig.core/+ args) → zig.core → (+ builtin) → 3
+  user → (not found) → clojure.core → (+ wrapper) → zig.core/+ builtin → 3
 ```
 
-Qualified names work as expected:
-```clojure
-user/x          ;; looks up x in user namespace
-clojure.core/+  ;; looks up + in clojure.core namespace
-zig.core/+      ;; looks up + in zig.core namespace (raw Zig builtin)
-```
-
-### Core Functions
-
-Core functions (`inc`, `dec`, `into`, `even?`, `odd?`, `cons`, `update`, etc.) are baked into the binary and always available — no need to load a separate file:
-
-```bash
-./zig-out/bin/clojurez -e '(even? 42)'       ;; => true
-./zig-out/bin/clojurez -e '(inc 5)'          ;; => 6
-./zig-out/bin/clojurez -e '(into [] (list 1 2 3))'  ;; => [1 2 3]
-```
-
-### Clojure data structures design principles
-- Our data structures are persistent and immutable.
-- Therefor, if we need to add something in front of a sequence or after a list - we do not clone the list, it's perfectly safe to make a new "shallow object" that just says (here in the beginning we have this new immutable thing and in the tail we have a reference to that immutable list that we had before). Avoid unnecessary cloning and duplication of data.
-- If you need to use tree like structures, branch agrssively (4 or 8 leaves per node), don't make just binary trees (to make lookups cheaper).
-
-### PersistentHashMap (`src/zig/persistent_hash_map.zig`)
-Our map implementation uses a Hash Array Mapped Trie (HAMT), the same algorithm as Clojure's `PersistentHashMap`.
-It is a 32-way branching trie where each level consumes 5 bits of the key's hash code, giving O(log₃₂ n) lookups, inserts, and deletes.
-Three node types handle different densities: `BitmapIndexedNode` (sparse, ≤16 entries with a bitmap), `ArrayNode` (dense, fixed 32 slots),
-and `HashCollisionNode` (all keys share the same full hash). All nodes are immutable — `assoc` and `without` return new maps
-via path copying, sharing unchanged subtrees with the original. Nil keys are handled separately via a `has_null` flag.
-The `valueHash(Value) i32` function computes hash codes for all Clojure value types, matching Clojure's `hasheq` semantics.
-This eliminates the deep-clone headaches of the previous `ArrayListUnmanaged(MapEntry)` approach: mutations are purely functional
-(`new_map = old_map.assoc(key, val)`) with no in-place modification, no clone-vs-deep-clone decisions, and structural sharing
-for memory efficiency. The GC tracks nodes via `scanHashMapNode` for proper mark-and-sweep collection.
-
-### PersistentStringHashMap (`src/zig/persistent_string_hash_map.zig`)
-A string-keyed variant of PersistentHashMap for VM infrastructure that works with `[]const u8` keys instead of `Value` keys.
-It wraps PersistentHashMap internally by converting string keys to `Value.symbol`, reusing all proven HAMT logic without duplication.
-Provides `StringHashMap` (for `[]u8 → Value` maps like `Env.entries`) and `PersistentStringHashMap(T)` (generic, for any value type).
-Pointer types use `IdentityWrap(T)` to provide no-op `clone`/`deinit` methods. This is the target replacement for all
-`StringArrayHashMapUnmanaged` usages across the codebase: `Env.entries`, `NamespaceManager.namespaces`, `NamespaceManager.aliases`,
-and `NamespaceAliases`. Migration changes the pattern from `map.put(key, val)` (in-place mutation) to
-`map = try map.assoc(allocator, key, val)` (returns new immutable map), eliminating allocator corruption bugs
-and the clone-vs-deep-clone decisions that plagued the previous HashMap-based implementations.
-
-### Memory management & Garbage collector (GC)
-
-Remember these important key principles:
-- All of our clojurez memory is managed by our mark and sweep GC.
-- If we build new structures we must assure GC can track these.
-- If we run into memory issues like corruption or confusing pointers - do not hesistate, just disable GC sweeping first via code and verify if the issue disappears.
-- If troubles do not disappear then the issue was not with GC sweeps.
-
-### GC Sweep Control
-
-The GC's sweep phase can be disabled at startup via the `CLJVM_GC_SWEEP` environment variable. Sweeping is enabled by default.
-
-**Disable GC sweeping:**
-```bash
-CLJVM_GC_SWEEP=0 ./zig-out/bin/clojurez -e '(+ 1 2 3)'
-```
-
-When sweeping is disabled, the GC still runs its mark phase (marking all reachable objects from roots) but never frees unreachable blocks. This is useful for debugging memory issues:
-
-- **Suspected GC bug**: If you see crashes or corrupted pointers, disable sweeping with `CLJVM_GC_SWEEP=0`. If the problem disappears, the issue was likely caused by the GC freeing objects that were still in use.
-- **Memory leak investigation**: With sweeping disabled, unreachable objects accumulate. By comparing GC stats before and after, you can identify which objects are (or aren't) being reached by the mark phase.
-- **Pointer debugging**: Objects that should be reachable but are being swept can be identified by running with sweep disabled and inspecting the mark phase output (enable with `CLJVM_GC_VERBOSE=1` or set `gc_instance.verbose = true` in code).
-
-To re-enable sweeping, simply omit the variable or set `CLJVM_GC_SWEEP=1`.
-
-### Memory Tracing
- 
-The VM includes a built-in memory trace allocator for debugging memory issues. Toggle it via the `CLJVM_MEM_TRACE` environment variable. Off by default with zero overhead.
-
-**Trace to stderr:**
-```bash
-CLJVM_MEM_TRACE=1 ./zig-out/bin/clojurez -e '(+ 1 2 3)'
-```
-
-**Trace to a file:**
-```bash
-CLJVM_MEM_TRACE=/tmp/mem.log ./zig-out/bin/clojurez -e '(+ 1 2 3)'
-```
-
-Each allocation, free, resize, and remap is logged with size, pointer address, and running live memory count. At program exit a summary is printed:
-
-```
-=== Memory trace summary ===
-  Allocations:     1234
-  Frees:           1200
-  Net allocs:       34
-  Total allocated: 98765 bytes
-  Total freed:     95000 bytes
-  Peak memory:     12000 bytes
-  Current memory:  3765 bytes
-=== Memory trace ended ===
-```
-
-This is useful for verifying that `def` rebindings, `let` scopes, and function calls properly free unreachable values.
-
-### Debug Output (`CLJVM_DEBUG`)
-
-The VM includes a conditional debug output system via the `CLJVM_DEBUG` environment variable. Off by default with zero overhead when disabled.
-
-**Enable all debug output:**
-```bash
-CLJVM_DEBUG=1 ./zig-out/bin/clojurez -e '(+ 1 2 3)'
-```
-
-**Enable specific categories (comma-separated):**
-```bash
-CLJVM_DEBUG=gc,eval ./zig-out/bin/clojurez -e '(+ 1 2 3)'
-```
-
-**Supported values:**
-- `1`, `true`, `all` — enable all debug categories
-- `gc` — garbage collection debug output
-- `eval` — evaluator debug output
-- Any comma-separated combination of category names
-
-**Usage in code:**
-```zig
-const debug = @import("debug.zig");
-debug.log("gc", "collected {} bytes", .{bytes_collected});
-debug.dbg("generic message {}", .{value});
-```
-
-Debug output is written to stderr. The environment variable is read once at startup; debug calls have zero overhead when the category is disabled (no format string evaluation).
-
-This is useful for diagnosing GC issues, evaluator state, and HAMT (persistent hash map) behavior during development.
-
-### Parse Debug (`--parse-debug`)
-
-**STRONGLY RECOMMENDED** for diagnosing Clojure syntax errors. Use this before attempting to evaluate any `.clj` file.
-
-```bash
-./zig-out/bin/clojurez --parse-debug myfile.clj
-```
-
-This runs the file through the parser only (no evaluation, no library loading) and reports:
-- **Form nesting context**: Which form is currently being parsed and what contains it
-- **Open/Close events**: Every list, vector, map, and set open and close with line numbers
-- **Parse errors**: Exact line and error type for syntax issues
-- **Unmatched forms**: Any forms left open on the stack at the end
-- **Function ends**: Pay attention that after every defn or defmacro at the root level of the file the debug tool should show a return to top level!
-
-**Output format:**
-```
-## PARSEDEBUG Line:10 InForm:top OpeningForm:list (defn)
-## PARSEDEBUG Line:10 InForm:defn OpeningForm:vector
-## PARSEDEBUG Line:10 InForm:defn ClosingForm:vector ()
-## PARSEDEBUG Line:12 InForm:defn ClosingForm:list (defn)
-
-## PARSEDEBUG All forms matched. Total: 24 forms.
-```
-
-**Fields:**
-- `Line:N` — Source line number (1-based)
-- `InForm:name` — The containing form's name (e.g., `defn`, `let`, `top` for root)
-- `OpeningForm:type (name)` — Form being opened: `list`, `vector`, `map`, `set`
-- `ClosingForm:type (name)` — Form being closed, with its original name
-
-**Common errors:**
-- `UnmatchedParenthesis` — Extra `)` with no matching `(`
-- `UnmatchedBracket` — Extra `]` with no matching `[`
-- `UnexpectedEof` — File ended while a form was still open
-- `UnexpectedToken` — Wrong closing delimiter (e.g., `]` where `)` expected)
-
-**Always use `--parse-debug` first** when a `.clj` file fails to load. It isolates syntax errors from runtime errors and shows exactly which form is malformed.
-## Examples
-
-```bash
-./zig-out/bin/clojurez
-```
-
-```clojure
-;; Arithmetic
-(+ 1 2 3 4)           ;; => 10
-(* 6 7)               ;; => 42
-
-;; BigInt arithmetic
-(+ 123456789012345678901234567890 987654321098765432109876543210)  ;; => 1111111110111111111011111111100
-
-;; Ratios (exact rational arithmetic)
-(/ 22 7)              ;; => 22/7
-(+ (/ 1 3) (/ 1 6))   ;; => 1/2
-
-;; Modulo and quotient
-(mod -7 3)            ;; => 2  (sign follows divisor)
-(rem -7 3)            ;; => -1 (sign follows dividend)
-(quot -7 3)           ;; => -2 (truncates toward zero)
-
-;; Numeric equality (type-independent)
-(== 1 1.0)            ;; => true
-(compare 1 2)         ;; => -1
-
-;; Rationalize
-(rationalize 1.5)     ;; => 3/2
-(rationalize 0.25)    ;; => 1/4
-
-;; Definitions
-(defn factorial [n]
-  (if (<= n 1)
-    1
-    (* n (factorial (- n 1)))))
-
-(factorial 10)        ;; => 3628800
-
-;; Lists and sequences
-(def xs (list 1 2 3 4 5))
-(first xs)            ;; => 1
-(rest xs)             ;; => (2 3 4 5)
-(count xs)            ;; => 5
-
-;; Quote
-'(1 2 3)              ;; => (1 2 3)
-
-;; Conditionals
-(if (> 5 3) "yes" "no")  ;; => "yes"
-
-(cond
-  (= 1 2) "no"
-  (= 1 1) "yes"
-  :else "maybe")         ;; => "yes"
-
-;; Threading macros
-(->> [0 1]
-     (iterate (fn [[a b]] [b (+ a b)]))
-     (map first)
-     (take 10))
-;; => (0 1 1 2 3 5 8 13 21 34)
-
-;; Destructuring
-((fn [[a b]] (+ a b)) [3 4])  ;; => 7
-(let [[a b & rest] [1 2 3 4 5]] (list a b rest))  ;; => (1 2 (3 4 5))
-
-;; Sequences
-(partition 2 (list 1 2 3 4 5 6))  ;; => ((1 2) (3 4) (5 6)) (lazy)
-(doall (partition 2 (list 1 2 3 4 5 6)))  ;; => ((1 2) (3 4) (5 6))
-
-;; Metaprogramming
-(gensym)           ;; => G__1
-(gensym "tmp")     ;; => tmpG__2
-
-;; Maps
-(get {:a 1 :b 2} :a)          ;; => 1
-(assoc {:a 1} :b 2)           ;; => {:a 1 :b 2}
-(merge {:a 1} {:b 2})         ;; => {:a 1 :b 2}
-(get-in {:a {:b 3}} [:a :b])  ;; => 3
-
-;; Sets
-(conj #{1 2} 3)               ;; => #{1 2 3}
-(disj #{1 2 3} 2)             ;; => #{1 3}
-(union #{1 2} #{2 3})         ;; => #{1 2 3}
-
-;; Sequence Operations
-(reduce + 0 (list 1 2 3 4))   ;; => 10
-(filter (fn [x] (> x 2)) (list 1 2 3 4))  ;; => (3 4)
-
-;; Atoms
-(def a (atom 5))              ;; => #atom(5)
-(swap! a inc)                 ;; => 6
-
-;; File I/O
-(spit "hello.txt" "Hello, World!")  ;; => nil
-(slurp "hello.txt")                  ;; => "Hello, World!"
-
-;; Protocols
-(defprotocol Greetable (greet [this]))
-(extend-type :string Greetable (greet [this] (str "Hello, " this)))
-(greet "Alice")  ;; => "Hello, Alice"
-
-;; Records
-(defrecord Person [name age]
-  Greetable
-    (greet [this] (str "Hi, I'm " name)))
-(->Person "Alice" 30)           ;; => #user.Person{:name "Alice" :age 30}
-(get (->Person "Alice" 30) :name)  ;; => "Alice"
-(greet (->Person "Bob" 25))     ;; => "Hi, I'm Bob"
-```
-
-## Samples
-
-### Fibonacci
-```bash
-./zig-out/bin/clojurez tests/complex-samples/sample_1_fibonacci/core.clj
-```
-Output: `(0 1 1 2 3 5 8 13 21 34)`
-
-### Tower of Hanoi
-```bash
-./zig-out/bin/clojurez tests/complex-samples/sample_2_hanoi/hanoi/core.clj
-```
-
-## Project Structure
-
-```
-src/
-├── clj/
-│   ├── core.clj      — Clojure core library (baked into binary at compile time)
-│   └── string.clj    — clojure.string namespace (baked into binary at compile time)
-└── zig/
-    ├── namespaces/
-    │   └── core/     — Zig builtin implementations (arithmetic, comparison, maps, etc.)
-    ├── *.zig         — Core VM modules (eval, lexer, parser, value, gc, etc.)
-    └── ...
-
-tests/
-├── helpers.sh        — Shared test infrastructure
-├── test_*.sh         — Integration test suites (domain-based)
-└── complex-samples/  — Sample programs (fibonacci, hanoi, etc.)
-
-run_tests.sh          — Test runner
-GUIDELINES.md         — Development & testing guidelines
-```
-The tmp folder in project directory exists for local debugging purposes only and is not intended for automated builds or any i/o from our codebase.
+## Built-in Functions (zig.core)
+
+Built-in functions are registered in `src/zig/namespaces/core/` across domain-specific modules. They are exposed through `zig.core` and wrapped by `clojure.core` Clojure functions.
+
+### Arithmetic (`arithmetic.zig`)
+`+`, `-`, `*`, `/`, `rem`, `mod`, `quot`, `rationalize`, `numerator`, `denominator`, `num`, `denom`
+
+### Comparison (`comparison.zig`)
+`=`, `!=`, `not=`, `==`, `<`, `>`, `<=`, `>=`, `compare`, `identical?`, `not`
+
+### Type Predicates (`type_predicates.zig`)
+`nil?`, `number?`, `string?`, `regex?`, `list?`, `symbol?`, `keyword?`, `true?`, `false?`, `fn?`, `vector?`, `map?`, `record?`, `queue?`, `coll?`, `sequential?`, `boolean?`, `char?`, `int?`, `integer?`, `double?`, `float?`, `NaN?`, `infinite?`, `type`, `meta`, `with-meta`
+
+Plus type coercions: `char`, `int`, `integer`, `float`, `double`, `bigint`, `bigdec`, `byte`, `short`, `keyword`
+
+### String Operations (`strings.zig`)
+`str`, `utf8-valid?`, `subs`, `upper-case`, `lower-case`, `capitalize`, `trim`, `triml`, `trimr`, `trim-newline`, `blank?`, `index-of`, `last-index-of`, `starts-with?`, `ends-with?`, `includes?`
+
+### Map Operations (`maps.zig`)
+`get`, `assoc`, `keys`, `vals`, `dissoc`, `merge`, `hash-map`
+
+### Set Operations (`sets.zig`)
+`set`, `set?`, `disj`
+
+### Collection Operations (`collections.zig`)
+`conj`, `pop`, `last`, `reverse`, `peek`, `contains?`
+
+### Sequence Functions (`sequences.zig`, `seq_ops.zig`, `seq_sort.zig`)
+`count`, `first`, `rest`, `nth`, `concat`, `list`, `vec`, `seq`, `range`, `subvec`, `cons`, `gensym`, `take`, `map`, `mapcat`, `reduce`, `flatten`, `filter`, `remove`, `every?`, `some`, `distinct?`, `next`, `nthnext`, `drop`, `iterate`, `cycle`, `reduced`, `reduced?`, `ensure-reduced`, `unreduced`, `sort`, `sort-by`, `reductions`, `map-indexed`, `keep-indexed`, `bounded-count`, `group-by`, `distinct`, `replace`
+
+### I/O (`io.zig`)
+`print`, `println`, `read-line`, `spit`, `slurp`, `nano-time`, `read-string`, `eval`, `load-file`, `temp-dir`
+
+### Atoms (`atoms.zig`)
+`atom`, `deref`, `swap!`, `reset!`
+
+### Bitwise (`bitwise.zig`)
+`bit-not`, `bit-and`, `bit-or`, `bit-xor`, `bit-and-not`, `bit-clear`, `bit-set`, `bit-flip`, `bit-test`, `bit-shift-left`, `bit-shift-right`, `unsigned-bit-shift-right`
+
+### Random (`random.zig`)
+`rand`, `rand-int`
+
+### Namespace (`namespace.zig`)
+`find-ns`, `create-ns`, `all-ns`, `the-ns`, `ns-resolve`, `resolve`, `refer`, `alias`, `ns-aliases`, `ns-unalias`, `require`, `loaded-libs`, `ns-publics`, `ns-interns`, `ns-refers`, `ns-map`, `ns-unmap`, `intern`, `load-string`
+
+### GC (`gc.zig`)
+`gc-sweep`, `gc-stats`
+
+### Protocols (`protocols.zig`)
+`defprotocol`, `extend`, `extend-type`, `extend-protocol`, `satisfies?`, `extends?`, `extenders`
+
+### Records (`records.zig`)
+`defrecord`, `record-ctor`
+
+### Regex (`regexp.zig`, `regexp/`)
+`re-matches`, `re-find`, `re-seq`, `re-pattern`, `re-groups`
+
+### Core helpers (`core.zig`)
+`empty?`, `not-empty`, `apply`, `trampoline`, `partial`, `comp`, `fnil`, `juxt`, `constantly`, `complement`, `comparator`
+
+## Clojure Core Library (`src/clj/core.clj`)
+
+Functions implemented in Clojure (bootstrapped from `core.clj`, embedded at compile time):
+
+### Predicates
+`even?`, `odd?`, `zero?`, `pos?`, `neg?`, `pos-int?`, `neg-int?`, `nat-int?`
+
+### Math
+`identity`, `inc`, `dec`, `abs`, `max`, `min`
+
+### Sequences
+`cons`, `second`, `third`, `into`, `keep`, `filterv`, `mapv`, `keepv`, `reducev`, `completing`, `dedupe`, `frequencies`, `repeatedly`, `replace`, `shuffle`, `interleave`, `interpose`, `repeat`, `replicate`
+
+### Sets
+`union`, `intersection`, `difference`, `subset?`, `superset?`
+
+### Maps
+`select-keys`, `key`, `val`, `find`, `zipmap`, `get-in`, `assoc-in`, `update`
+
+### Misc
+`memoize`, `constantly`, `complement`, `into-array`, `doall`
+
+### Macros
+`when-not`, `when-some`, `if-let`, `when-let`, `time`, `doseq`, `when-first`, `for`, `defonce`
+
+## Clojure String Library (`src/clj/string.clj`)
+
+Functions in `clojure.string` namespace (loaded via `:require`):
+
+`upper-case`, `lower-case`, `capitalize`, `trim`, `triml`, `trimr`, `trim-newline`, `blank?`, `starts-with?`, `ends-with?`, `includes?`, `reverse`, `join`, `escape`, `index-of`, `last-index-of`, `split`, `split-lines`, `re-quote-replacement`, `replace`, `replace-first`
+
+## Garbage Collection
+
+Mark-and-sweep GC in `gc.zig` with type-aware scanning in `gc_scan.zig`.
+
+- All Clojure runtime values are allocated through the GC allocator
+- Each allocation has a header with type tag for correct child pointer scanning
+- Auto-GC triggers when memory grows by max(20% of last collected, 1MB)
+- Generational protection: blocks from current generation are never swept
+- Deferred sweep: `gc-sweep` called during evaluation defers actual freeing to safe points
+
+**Debug controls:**
+- `CLJVM_GC_SWEEP=0` - disable sweep (objects accumulate, useful for debugging)
+- `CLJVM_GC_VERBOSE=1` - verbose GC logging
+- `CLJVM_MEM_TRACE=1` - trace allocations to stderr
+- `CLJVM_MEM_TRACE=/tmp/mem.log` - trace allocations to file
+
+## Persistent HashMap (HAMT)
+
+`persistent_hash_map.zig` implements a 32-way branching Hash Array Mapped Trie:
+
+- **BitmapIndexedNode** - sparse, bitmap tracks occupied slots (≤16 entries)
+- **ArrayNode** - dense, fixed 32 slots (16+ entries)
+- **HashCollisionNode** - all keys share the same full hash
+- Path copying for structural sharing - mutations return new maps sharing unchanged subtrees
+- Nil keys handled separately via `has_null` flag
+
+`persistent_string_hash_map.zig` wraps the HAMT for `[]const u8` keys (VM infrastructure).
+
+## Memory Management
+
+Three-layer allocator stack:
+1. **Page allocator** - OS memory allocation
+2. **Slab allocator** (`slab_allocator.zig`) - batches small allocations into large pages, reduces syscalls
+3. **GC allocator** (`gc.zig`) - mark-and-sweep on top of slab
 
 ## Testing
 
-**Whenever you make changes to the codebase, you must run BOTH test suites.** Each covers a different layer and neither alone is sufficient to verify correctness.
+### Clojure-based tests (`tests/clj/test_*.clj`)
 
-### 1. Zig Unit Tests
+Clojure test suites using the `check`/`check-true`/`check-false` helper. Run via the VM:
 
-Tests individual functions and modules in isolation:
+```bash
+./run_tests.sh                    # all tests
+./run_tests.sh test_arithmetics   # specific suite
+```
+
+### Shell-based tests (`tests/test_*.sh`)
+
+Integration tests for I/O, namespaces, samples, and REPL behavior.
+
+### Complex samples (`tests/complex-samples/`)
+
+End-to-end programs with expected output verification:
+- Fibonacci (lazy sequences)
+- Tower of Hanoi (recursion)
+- Namespaces (`-cp -m` usage)
+- GC stress test
+- Regex GC test
+
+### Zig unit tests (`src/zig/all_tests.zig`)
+
+Tests individual modules:
 
 ```bash
 zig test -fsingle-threaded src/zig/all_tests.zig
 ```
 
-### 2. CLI / Integration Tests
-
-Tests the full pipeline — lexer, parser, evaluator, and runtime — through the CLI interface. This script also copies `core.clj` and builds the binary automatically:
+### Running all tests
 
 ```bash
-./run_tests.sh
-```
-
-### Always Run Both
-
-| Change type | Run Zig tests | Run integration tests |
-| ----------- | :-----------: | :-------------------: |
-| Lexer / Parser changes | ✅ | ✅ |
-| Evaluator / special forms | ✅ | ✅ |
-| Core built-in functions | ✅ | ✅ |
-| GC / memory management | ✅ | ✅ |
-| `core.clj` (Clojure library) | — | ✅ (still run Zig tests too) |
-| Any other change | ✅ | ✅ |
-
-```bash
-# Quick way to run both in sequence:
 zig test -fsingle-threaded src/zig/all_tests.zig && ./run_tests.sh
 ```
 
-### Build
+## Build
 
 ```bash
-# Build all 3 variants (copies core.clj automatically)
-zig build
+zig build                          # all 3 variants
+zig build -Doptimize=ReleaseSmall  # specific optimize mode
 ```
 
-See [GUIDELINES.md](GUIDELINES.md) for testing standards and detailed coverage requirements.
+Build copies `src/clj/core.clj` → `src/zig/namespaces/core/clj/core.clj` and `src/clj/string.clj` → `src/zig/namespaces/core/clj/string.clj` for `@embedFile`.
 
-## What Works
+## Debugging
 
-- Core data types (nil, bool, int, float, bigint, ratio, decimal, string, symbol, keyword, list, vector, map, set, queue, atom, lazy-seq, cons)
-- **Garbage collection** (mark-and-sweep, automatic memory management)
-- Special forms (def, defn, defmacro, fn, if, when, cond, case, let, do, quote, quasiquote, set!, and, or, loop, recur, binding, var, deref, lazy-seq, ns)
-- **Namespaces** (`user` default namespace, `clojure.core` public API, `zig.core` raw builtins, `ns` with `:require` and `:as` aliases, classpath via `-cp`, main function via `-m`)
-- **Macros** (`defmacro` with full macro expansion support, when-not, when-some, when-let, when-first, if-let, for, doseq, time)
-- Threading macros (`->`, `->>`, `cond->`, `cond->>`)
-- Sequence operations (iterate, map, mapcat, take, take-while, take-last, drop, drop-last, drop-while, partition, interpose, reduce, flatten, filter, remove, every?, some, distinct?, next, nthnext, dorun, doall, cycle, repeat, replicate, split-at, split-with, sort, sort-by, shuffle)
-- Random functions (rand, rand-int, rand-nth)
-- Comparator (comparator)
-- Vector destructuring in function parameters and `let` (including `& rest`)
-- Metaprogramming (`gensym`)
-- Arithmetic (+, -, *, /, rem, mod, quot, rationalize) with bigint/ratio/decimal support
-- Comparison (=, !=, not=, ==, <, >, <=, >=, compare, identical?)
-- Boolean, type check, string, I/O functions (including `spit`/`slurp` for file I/O)
-- **clojure.string namespace** (upper-case, lower-case, capitalize, trim, triml, trimr, trim-newline, blank?, starts-with?, ends-with?, includes?, reverse, join, escape, index-of, last-index-of)
-- Map operations (get, assoc, keys, vals, dissoc, merge, contains?, hash-map, zipmap, get-in, assoc-in, select-keys)
-- Set operations (set, set?, disj, union, intersection, difference, subset?, superset?, hash-set)
-- Collection operations (conj, pop, last, reverse, range, peek, empty?, not-empty, seq, count, empty)
-- Functional tools (apply, if-not, partial, comp, fnil, juxt, trampoline, constantly, complement)
-- Atoms (atom, swap!, reset!)
-- Time functions (nano-time)
-- Clojure core library bootstrapped from `.clj` files
-- **Protocols** (`defprotocol`, `extend`, `extend-type`, `extend-protocol`, `satisfies?`, `extends?`, `extenders`, multi-arity methods)
-- **Records** (`defrecord`, `->Name`, `map->Name`, `record?`, field access via `get`/keyword, `assoc`/`dissoc`/`merge`/`into`/`conj`, metadata, equality, type-based protocol dispatch)
+### Parse debug
+
+```bash
+./zig-out/bin/clojurez --parse-debug myfile.clj
+```
+
+Runs the file through the parser only (no evaluation). Reports form nesting, open/close events, and syntax errors.
+
+### Debug output
+
+```bash
+CLJVM_DEBUG=1 ./zig-out/bin/clojurez -e '(+ 1 2 3)'
+CLJVM_DEBUG=gc,eval ./zig-out/bin/clojurez -e '(+ 1 2 3)'
+```
+
+Categories: `gc`, `eval`, or `all`/`1`/`true` for everything.
 
 ## What's Missing
 
-- **Transients** (mutable versions of persistent data structures)
-- **Shorthand syntax** (`~` for unquote, `~@` for unquote-splicing, backtick for quasiquote, `@` for deref — use full names instead)
-- **Java interop** (not applicable for a standalone VM)
-- **JIT compilation** (we are a parsing/interpreting VM)
-- **Chunked sequences** (simpler sequence implementation)
-- **Full spec system** (no `s/def`, `s/valid?`, etc.)
-- **Multimethods** (`defmulti`, `defmethod`)
-- **clojure.string regex functions** (`replace`, `replace-first`, `split`, `split-lines` — regex variants not yet implemented)
-
-## Design Philosophy
-
-- **Lean VM:** Keep the Zig core minimal — only implement what can't be expressed in Clojure
-- **Bootstrap from Clojure:** Build library functions in `.clj` files when possible
-- **Small steps:** Incremental development with tests after every change
-- **10s timeout:** All tests complete within 10 seconds
-- **80%+ coverage:** Target minimum line coverage
-- **GC-managed memory:** All Clojure runtime values managed by garbage collector. 
+- **Transients** - mutable versions of persistent data structures
+- **Multimethods** - `defmulti`, `defmethod`
+- **Spec system** - no `clojure.spec`
+- **Java interop** - not applicable for a standalone VM
+- **JIT compilation** - we are an interpreting VM
+- **Chunked sequences** - simpler sequence implementation
+- **Full regex in `clojure.string`** - `split`, `replace`, `replace-first` use regex via the built-in engine but some edge cases may differ from JVM Clojure
