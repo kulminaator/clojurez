@@ -30,7 +30,7 @@ jobs:
       - name: Set TMPDIR
         run: echo "TMPDIR=$RUNNER_TEMP" >> $GITHUB_ENV
       - name: Run zig tests
-        run: zig test -fsingle-threaded src/zig/all_tests.zig
+        run: zig test src/zig/all_tests.zig
       - name: Run full test suite (Bash)
         shell: bash
         run: ./run_tests.sh
