@@ -105,10 +105,14 @@ const TempRootGuard = struct {
 
 fn pushEnvTempRoot(env: *const Env) TempRootGuard {
     if (gc_mod.current_gc) |gc_inst| {
+        // Push the Env struct itself as a temp root so the GC doesn't sweep
+        // the Env while it's in use by the evaluation stack.
+        gc_inst.pushTempRoot(@as(*anyopaque, @ptrCast(@constCast(env))));
+        // Also push the HAMT root for thorough coverage.
         if (env.entries.root) |root| {
             gc_inst.pushTempRoot(root);
-            return TempRootGuard{ .gc = gc_inst };
         }
+        return TempRootGuard{ .gc = gc_inst };
     }
     return TempRootGuard{ .gc = null };
 }
@@ -472,9 +476,12 @@ fn evalLet(allocator: Allocator, l: *const list.List, env: *Env, depth: usize) a
     const new_env = try allocator.create(Env);
     errdefer allocator.destroy(new_env);
     new_env.* = try env.clone(allocator);
-    defer new_env.deinit(allocator);
-    defer pushEnvTempRoot(new_env).deinit();
+    // Root the Env IMMEDIATELY so GC doesn't sweep it during body evaluation.
+    const env_guard = pushEnvTempRoot(new_env);
+    defer env_guard.deinit();
+    // NOTE: defer order matters! deinit must run BEFORE destroy.
     defer allocator.destroy(new_env);
+    defer new_env.deinit(allocator);
 
     const items = switch (std.meta.activeTag(bindings.*)) {
         .list => bindings.*.list.items.items,
@@ -780,9 +787,12 @@ fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, 
     const new_env = try allocator.create(Env);
     errdefer allocator.destroy(new_env);
     new_env.* = try cloneFnEnv(allocator, fn_data.env);
-    defer new_env.deinit(allocator);
-    defer pushEnvTempRoot(new_env).deinit();
+    // Root the Env IMMEDIATELY so GC doesn't sweep it during body evaluation.
+    const env_guard = pushEnvTempRoot(new_env);
+    defer env_guard.deinit();
+    // NOTE: defer order matters! deinit must run BEFORE destroy.
     defer allocator.destroy(new_env);
+    defer new_env.deinit(allocator);
 
     // Bind function name for self-reference (e.g., (fn self [x] (self (dec x))))
     if (fn_data.name) |fn_name| {

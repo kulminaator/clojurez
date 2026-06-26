@@ -33,13 +33,11 @@ const PromiseState = struct {
 fn futureThreadEntry(fn_val: Value, future_data: *vm.FutureData) void {
     const allocator = future_data.allocator;
 
-    // Lock the GC to prevent collection while this thread runs.
-    // The threadStart spins until GC is idle, then holds the lock.
-    // threadDone releases the lock, allowing GC to proceed.
+    // The GC lock was acquired BEFORE Thread.spawn in core_future_call.
+    // We release it when the thread finishes via threadDone().
+    // Disable auto-GC in child threads since they're short-lived.
     if (gc_mod.current_gc) |gc| {
-        gc.threadStart();
         defer gc.threadDone();
-        // Disable auto-GC in child threads.
         const prev_auto_gc = gc.auto_gc_active;
         gc.auto_gc_active = false;
         defer gc.auto_gc_active = prev_auto_gc;
@@ -115,6 +113,11 @@ pub fn core_future_call(self: *const Value, args: *const list.List, env_env: *En
         if (gc.findHeader(@as(*anyopaque, @ptrCast(future_data)))) |hdr| {
             hdr.generation = std.math.maxInt(u32);
         }
+        // Lock GC BEFORE spawning the thread. This prevents the main thread's
+        // GC from sweeping the captured Env/HAMT between spawn and when the
+        // child thread starts running. The child thread will release the lock
+        // via threadDone() when it finishes.
+        gc.threadStart();
     }
 
     // Spawn the thread — pass only fn_val and future_data.
@@ -124,7 +127,8 @@ pub fn core_future_call(self: *const Value, args: *const list.List, env_env: *En
         .allocator = null,
     };
     const thread = std.Thread.spawn(config, futureThreadEntry, .{ cloned_fn, future_data }) catch {
-        // Thread spawn failed — clean up
+        // Thread spawn failed — unlock GC and clean up
+        if (gc_mod.current_gc) |gc| gc.threadDone();
         var fn_copy = cloned_fn;
         vm.valueDeinit(&fn_copy, allocator);
         future_data.fn_val = null;
