@@ -108,9 +108,13 @@ pub const GC = struct {
 
     wrapped: Allocator,
 
-    // Doubly-linked list of all allocated blocks
+    // Doubly-linked list of all allocated blocks.
+    // Protected by block_mutex for thread safety.
     blocks: ?*Header = null,
     block_count: usize = 0,
+    // Simple spin-lock for block list access.
+    // 0 = unlocked, 1 = locked. Acquired before any block list modification.
+    block_mutex: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
 
     // Root pointers (always considered reachable)
     roots: std.ArrayListUnmanaged(*anyopaque) = .empty,
@@ -241,9 +245,11 @@ pub const GC = struct {
             .prev = null,
         };
 
-        // Append to head of block list. Concurrent allocs from child threads
-        // are safe since they only modify the head. The GC's sweep phase
-        // uses generational protection to avoid sweeping in-flight blocks.
+        // Append to head of block list under mutex for thread safety.
+        while (self.block_mutex.cmpxchgStrong(0, 1, .acq_rel, .monotonic) != null) {}
+        defer self.block_mutex.store(0, .release);
+        header.next = self.blocks;
+        header.prev = null;
         if (self.blocks) |first| first.prev = header;
         self.blocks = header;
         self.block_count += 1;
@@ -298,7 +304,9 @@ pub const GC = struct {
 
     /// Internal: free a block given its header.
     fn freeHeader(self: *Self, header: *Header) bool {
-        // Remove from linked list
+        // Remove from linked list under mutex for thread safety.
+        while (self.block_mutex.cmpxchgStrong(0, 1, .acq_rel, .monotonic) != null) {}
+        defer self.block_mutex.store(0, .release);
         if (header.prev) |prev| {
             prev.next = header.next;
         } else {
@@ -433,6 +441,9 @@ pub const GC = struct {
     /// Walk the block list to find the header for a data pointer.
     /// Slow fallback for pointers not allocated through gc.alloc.
     fn findHeaderSlow(self: *Self, dataPtr: *anyopaque) ?*Header {
+        // Hold block mutex to prevent concurrent modification.
+        while (self.block_mutex.cmpxchgStrong(0, 1, .acq_rel, .monotonic) != null) {}
+        defer self.block_mutex.store(0, .release);
         var block = self.blocks;
         while (block) |b| {
             const data = @as(*anyopaque, @ptrCast(@as([*]u8, @ptrCast(b)) + b.offset));
@@ -487,12 +498,14 @@ pub const GC = struct {
         self.buildHeaderTable();
         defer self.freeHeaderTable();
 
-        // Phase 1: Clear all marks.
+        // Phase 1: Clear all marks under block mutex.
+        while (self.block_mutex.cmpxchgStrong(0, 1, .acq_rel, .monotonic) != null) {}
         var block = self.blocks;
         while (block) |b| {
             b.marked = false;
             block = b.next;
         }
+        self.block_mutex.store(0, .release);
 
         // Phase 2: Mark from static roots
         var ctx = ScanContext{ .gc = self, .scan_fn = scan_fn };
@@ -552,6 +565,10 @@ pub const GC = struct {
             self.log("[GC] SWEEP DISABLED — skipping\n", .{});
             return;
         }
+
+        // Hold block mutex for entire sweep to prevent concurrent alloc/free.
+        while (self.block_mutex.cmpxchgStrong(0, 1, .acq_rel, .monotonic) != null) {}
+        defer self.block_mutex.store(0, .release);
 
         var block = self.blocks;
         var swept: usize = 0;

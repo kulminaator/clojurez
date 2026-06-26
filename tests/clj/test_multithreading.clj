@@ -125,4 +125,13 @@
     (= (deref p) 55))
   true)
 
+;; ==== Make sure we don't lose variables as we pass them on ====
+(check "Double future passing works"
+  (let [arg-x 3
+        f1 (future arg-x)
+        f2 (future (deref f1))]
+    (zig.core/gc-sweep)
+    (= (deref f2) 3))
+  true)
+
 (print-summary)

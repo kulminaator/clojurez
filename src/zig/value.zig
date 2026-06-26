@@ -1364,12 +1364,16 @@ pub const Env = struct {
         self.entries.root = null;
         self.entries.count = 0;
         self.entries.has_null = false;
-        for (self.referred_names.items) |name| {
-            allocator.free(name);
-        }
-        self.referred_names.deinit(allocator);
+        // Do NOT free referred_names here — it is GC-managed.
+        // The GC will reclaim the buffer and strings during sweep.
+        // Freeing here causes use-after-free when child threads share
+        // the buffer via shallow Env.clone (even though clone sets
+        // referred_names to .empty, the original env's buffer could
+        // be freed while the GC hasn't swept it yet).
+        self.referred_names.items = &.{};
         _ = self.parent;
         _ = self.ns_manager;
+        _ = allocator;
     }
 
     pub fn clone(self: *const Env, allocator: Allocator) anyerror!Env {
