@@ -343,7 +343,8 @@ fn processRecordProtocolSpec(
 ) anyerror!Value {
 
     // Evaluate the protocol symbol to get the protocol value
-    const proto_ptr = try eval.evalRec(allocator, &proto_sym, env, depth + 1);
+    const proto_ptr_r = try eval.evalRec(allocator, &proto_sym, env, depth + 1, null);
+        const proto_ptr = proto_ptr_r.value;
     defer vm.valueDeinit(&proto_ptr.*, allocator);
 
     // Validate it's a protocol (has :sigs key)
@@ -456,7 +457,8 @@ fn processRecordProtocolSpec(
         }
 
         // Evaluate to get a function value
-        const fn_ptr = try eval.evalRec(allocator, &(try vm.listValue(allocator, fn_form)), env, depth + 1);
+        const fn_ptr_r = try eval.evalRec(allocator, &(try vm.listValue(allocator, fn_form)), env, depth + 1, null);
+        const fn_ptr = fn_ptr_r.value;
         fn_form = .empty;
         const persistent_fn = try vm.clone(&fn_ptr.*, allocator);
         vm.valueDeinit(&fn_ptr.*, allocator);

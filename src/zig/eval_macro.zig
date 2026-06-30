@@ -18,13 +18,14 @@ pub fn unquoteProcess(allocator: Allocator, form: Value, env: *Env, depth: usize
             if (std.meta.activeTag(first) == .symbol) {
                 if (std.mem.eql(u8, first.symbol, "unquote")) {
                     if (form.list.items.items.len != 2) return error.ArityError;
-                    const ptr = try eval.evalRec(allocator, &form.list.items.items[1], env, depth);
-                    const result = ptr.*;
+                    const r = try eval.evalRec(allocator, &form.list.items.items[1], env, depth, null);
+                    const result = r.value.*;
                     return result;
                 }
                 if (std.mem.eql(u8, first.symbol, "unquote-splicing")) {
                     if (form.list.items.items.len != 2) return error.ArityError;
-                    const result_ptr = try eval.evalRec(allocator, &form.list.items.items[1], env, depth);
+                    const result_r = try eval.evalRec(allocator, &form.list.items.items[1], env, depth, null);
+                    const result_ptr = result_r.value;
                     if (std.meta.activeTag(result_ptr.*) == .list) return result_ptr.*;
                     return error.TypeError;
                 }
@@ -37,7 +38,8 @@ pub fn unquoteProcess(allocator: Allocator, form: Value, env: *Env, depth: usize
                 if (std.meta.activeTag(item) == .list and item.list.items.items.len == 2) {
                     const uq_first = item.list.items.items[0];
                     if (std.meta.activeTag(uq_first) == .symbol and std.mem.eql(u8, uq_first.symbol, "unquote-splicing")) {
-                        const splice_ptr = try eval.evalRec(allocator, &item.list.items.items[1], env, depth);
+                        const splice_r = try eval.evalRec(allocator, &item.list.items.items[1], env, depth, null);
+                        const splice_ptr = splice_r.value;
                         if (std.meta.activeTag(splice_ptr.*) == .list) {
                             for (splice_ptr.*.list.items.items) |elem| {
                                 try result.append(allocator, try vm.clone(&elem, allocator));

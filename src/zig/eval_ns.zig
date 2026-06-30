@@ -388,7 +388,8 @@ pub fn loadNamespaceFile(allocator: Allocator, ns_mgr: *vm.NamespaceManager, ns_
     for (forms.items) |form| {
         // Use current namespace's env for evaluation (ns form may change it)
         const eval_env = getCurrentNsEnvForLoad(root_env, ns_mgr) orelse root_env;
-        const result_ptr = try eval.evalRec(allocator, &form, eval_env, 0);
+        const result_r = try eval.evalRec(allocator, &form, eval_env, 0, null);
+        const result_ptr = result_r.value;
         vm.valueDeinit(result_ptr, allocator);
     }
 }
