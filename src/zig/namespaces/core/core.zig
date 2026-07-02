@@ -13,6 +13,7 @@ const comparison = @import("comparison.zig");
 const type_predicates = @import("type_predicates.zig");
 const strings = @import("strings.zig");
 const sequences = @import("sequences.zig");
+const chunks = @import("chunks.zig");
 const seq_ops = @import("seq_ops.zig");
 const seq_sort = @import("seq_sort.zig");
 const maps = @import("maps.zig");
@@ -356,6 +357,7 @@ pub fn registerCoreFunctions(env: *Env) anyerror!void {
     try type_predicates.registerTypePredicateFunctions(env);
     try strings.registerStringFunctions(env);
     try sequences.registerSequenceFunctions(env);
+    try chunks.registerChunkFunctions(env);
     try seq_ops.registerSequenceOpFunctions(env);
     try seq_sort.registerSeqSortFunctions(env);
     try maps.registerMapFunctions(env);

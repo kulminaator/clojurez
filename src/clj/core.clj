@@ -985,7 +985,10 @@
 (defn bounded-count
   "Returns the count of coll if it is <= n, else returns n."
   [n coll]
-  (zig.core/bounded-count n coll))
+  (if (or (list? coll) (vector? coll) (map? coll) (set? coll) (queue? coll))
+    (zig.core/bounded-count n coll)
+    ;; For lazy sequences, use count on (take n coll)
+    (count (take n coll))))
 
 ;; ---- Arithmetic ----
 ;; Wrapped Zig builtins. For max performance in tight loops, use zig.core/+ etc.

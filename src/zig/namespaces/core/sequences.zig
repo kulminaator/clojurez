@@ -8,6 +8,7 @@ const Env = vm.Env;
 const phm = @import("../../persistent_hash_map.zig");
 const eval_helpers = @import("eval_helpers.zig");
 const helpers = @import("helpers.zig");
+const chunks = @import("chunks.zig");
 const test_utils = @import("test_utils.zig");
 const gc_mod = @import("../../gc.zig");
 const Allocator = std.mem.Allocator;
@@ -62,6 +63,9 @@ pub fn forceLazySeqHelper(allocator: Allocator, lazy: Value) anyerror!Value {
             .cons => {
                 try flattenConsToList(allocator, result, &final_list);
             },
+            .chunked_cons => {
+                try flattenConsToList(allocator, result, &final_list);
+            },
             else => {
                 try final_list.append(allocator, result);
             },
@@ -91,6 +95,18 @@ fn flattenConsToList(allocator: Allocator, val: Value, target: *list.List) anyer
                 // Move to tail
                 const tail = try vm.clone(&cdata.tail, allocator);
                 vm.valueDeinit(&current, cdata.allocator);
+                current = tail;
+            },
+            .chunked_cons => {
+                const ccd = current.chunked_cons;
+                // Append all chunk elements
+                var i: usize = ccd.chunk.off;
+                while (i < ccd.chunk.end) : (i += 1) {
+                    try target.append(allocator, try vm.clone(&ccd.chunk.items[i], allocator));
+                }
+                // Move to tail
+                const tail = try vm.clone(&ccd.tail, allocator);
+                vm.valueDeinit(&current, ccd.allocator);
                 current = tail;
             },
             .list => {
@@ -171,6 +187,14 @@ pub fn core_count(self: *const Value, args: *const list.List, env_env: *Env) any
             // Count = 1 + count of tail (recursively)
             return countConsSeq(allocator, val);
         },
+        .chunk => {
+            // Count elements in the chunk
+            return vm.intValue(@as(i64, @intCast(val.chunk.count())));
+        },
+        .chunked_cons => {
+            // Count = chunk elements + count of tail
+            return countConsSeq(allocator, val);
+        },
         else => return error.TypeError,
     }
 }
@@ -188,6 +212,12 @@ fn countConsSeq(allocator: Allocator, val: Value) anyerror!Value {
                 const cdata = current.cons;
                 const tail = try vm.clone(&cdata.tail, allocator);
                 vm.valueDeinit(&current, cdata.allocator);
+                current = tail;
+            },
+            .chunked_cons => {
+                count += @as(i64, @intCast(current.chunked_cons.chunk.count()));
+                const tail = try vm.clone(&current.chunked_cons.tail, allocator);
+                vm.valueDeinit(&current, current.chunked_cons.allocator);
                 current = tail;
             },
             .list => {
@@ -236,6 +266,11 @@ pub fn core_first(self: *const Value, args: *const list.List, env_env: *Env) any
             const cdata = val.cons;
             return try vm.clone(&cdata.head, allocator);
         },
+        .chunked_cons => {
+            // Chunked cons: first is the first element of the chunk
+            const ccd = val.chunked_cons;
+            return try vm.clone(&ccd.chunk.items[ccd.chunk.off], allocator);
+        },
         .string => {
             const s = val.string;
             if (s.len == 0) return vm.nilValue();
@@ -249,7 +284,6 @@ pub fn core_first(self: *const Value, args: *const list.List, env_env: *Env) any
 }
 
 pub fn core_rest(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
-    _ = self;
     if (args.items.len != 1) return error.ArityError;
     const allocator = env_env.allocator;
     var val = try vm.clone(&args.items[0], allocator);
@@ -288,6 +322,24 @@ pub fn core_rest(self: *const Value, args: *const list.List, env_env: *Env) anye
             }
             return try vm.clone(&cdata.tail, allocator);
         },
+        .chunked_cons => {
+            const ccd = val.chunked_cons;
+            const chunk = ccd.chunk;
+            // Clone tail before using — the caller may deinit the original
+            const tail = try vm.clone(&ccd.tail, allocator);
+            if (chunk.off + 1 < chunk.end) {
+                // More elements in this chunk — return new chunked_cons with dropped first
+                const dropped = chunk.dropFirst();
+                const new_chunk = try vm.chunkValue(
+                    allocator, dropped.items, dropped.off, dropped.end, false);
+                return chunks.chunkedCons(allocator, new_chunk, tail);
+            }
+            // Chunk exhausted — return seq of cloned tail
+            var seq_args: list.List = .empty;
+            errdefer seq_args.deinit(allocator);
+            try seq_args.append(allocator, tail);
+            return try core_seq(self, &seq_args, env_env);
+        },
         .string => {
             const s = val.string;
             const codepoint_count = vm.utf8CodepointCount(s);
@@ -311,7 +363,7 @@ pub fn core_rest(self: *const Value, args: *const list.List, env_env: *Env) anye
 /// Caches the result so subsequent forces return the cached value.
 /// Force a lazy-seq by evaluating its thunk once.
 /// Returns the direct result (cons, list, vector, nil, or lazy_seq).
-fn forceLazySeqGetResult(allocator: Allocator, lazy: *const Value) anyerror!Value {
+pub fn forceLazySeqGetResult(allocator: Allocator, lazy: *const Value) anyerror!Value {
     if (lazy.lazy_seq) |thunk| {
         // Check for custom handler (bypasses Clojure evaluator)
         if (thunk.custom_handler) |handler| {
@@ -336,6 +388,8 @@ fn forceLazySeqGetResult(allocator: Allocator, lazy: *const Value) anyerror!Valu
 fn forceLazySeqCustomHandler(allocator: Allocator, handler: vm.LazySeqHandler, env: *Env, thunk: *const vm.LazySeqThunk) anyerror!Value {
     return switch (handler) {
         .map => forceMapStep(allocator, env, thunk),
+        .range => forceRangeStep(allocator, env),
+        .filter => forceFilterStep(allocator, env, thunk),
     };
 }
 
@@ -370,7 +424,7 @@ fn forceMapStep(allocator: Allocator, env: *Env, thunk: *const vm.LazySeqThunk) 
 }
 
 /// Index-based iteration for concrete collections (list/vector).
-/// No cloning — just advance an integer index.
+/// Produces chunked_cons: accumulates CHUNK_SIZE elements per step.
 /// Uses shared_coll pointer so the collection is never cloned.
 fn forceMapStepConcrete(allocator: Allocator, f: Value, coll: *const Value, env: *Env, idx: usize) anyerror!Value {
     const items = switch (std.meta.activeTag(coll.*)) {
@@ -381,13 +435,28 @@ fn forceMapStepConcrete(allocator: Allocator, f: Value, coll: *const Value, env:
 
     if (idx >= items.len) return vm.nilValue();
 
-    // Apply f to current element
-    var arg_list: list.List = .empty;
-    defer arg_list.deinit(allocator);
-    try arg_list.append(allocator, try vm.clone(&items[idx], allocator));
-    const mapped_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env);
-    const mapped = mapped_ptr.*;
-    allocator.destroy(mapped_ptr);
+    // Calculate chunk size: up to CHUNK_SIZE elements
+    const remaining = items.len - idx;
+    const chunk_size = if (remaining < vm.CHUNK_SIZE) remaining else vm.CHUNK_SIZE;
+    const end_idx = idx + chunk_size;
+
+    // Accumulate mapped elements into a chunk buffer
+    var buf = try chunks.ChunkBuffer.init(allocator, chunk_size);
+    errdefer buf.deinit();
+
+    var i: usize = idx;
+    while (i < end_idx) : (i += 1) {
+        var arg_list: list.List = .empty;
+        defer arg_list.deinit(allocator);
+        try arg_list.append(allocator, try vm.clone(&items[i], allocator));
+        const mapped_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env);
+        const mapped = mapped_ptr.*;
+        try buf.append(mapped);
+        allocator.destroy(mapped_ptr);
+    }
+
+    // Seal buffer into a chunk
+    const chunk_val = try buf.seal();
 
     // Create next thunk — share the collection pointer, no clone!
     const thunk = try allocator.create(vm.LazySeqThunk);
@@ -408,10 +477,10 @@ fn forceMapStepConcrete(allocator: Allocator, f: Value, coll: *const Value, env:
         gc.setObjectType(@as(*anyopaque, @ptrCast(thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
     }
     try thunk.env.put("f", try vm.clone(&f, allocator));
-    try thunk.env.put("idx", vm.intValue(@as(i64, @intCast(idx + 1))));
+    try thunk.env.put("idx", vm.intValue(@as(i64, @intCast(end_idx))));
 
     const tail = vm.lazySeqValue(thunk);
-    return vm.consValue(allocator, mapped, tail);
+    return chunks.chunkedCons(allocator, chunk_val, tail);
 }
 
 /// Step-by-step iteration for lazy collections.
@@ -433,6 +502,12 @@ fn forceMapStepLazy(allocator: Allocator, f: Value, coll: Value, env: *Env) anye
         return vm.nilValue();
     }
 
+    // If the forced sequence is chunked_cons, process the whole chunk
+    if (std.meta.activeTag(s) == .chunked_cons) {
+        return forceMapStepChunkedFromLazy(allocator, f, s, env);
+    }
+
+    // Non-chunked path: step by step with cons cells
     // Get first element (does not consume s)
     var first_val = try getFirstValue(allocator, s);
     defer vm.valueDeinit(&first_val, allocator);
@@ -472,19 +547,344 @@ fn forceMapStepLazy(allocator: Allocator, f: Value, coll: Value, env: *Env) anye
     return vm.consValue(allocator, mapped, tail);
 }
 
+/// Process a chunked_cons from a lazy map step.
+/// Maps f over all chunk elements and produces chunked_cons output.
+fn forceMapStepChunkedFromLazy(allocator: Allocator, f: Value, s: Value, env: *Env) anyerror!Value {
+    var seq = s;
+    const ccd = seq.chunked_cons;
+    const chunk = ccd.chunk;
+
+    // Accumulate mapped elements into a chunk buffer
+    var buf = try chunks.ChunkBuffer.init(allocator, chunk.count());
+    errdefer buf.deinit();
+
+    var i: usize = chunk.off;
+    while (i < chunk.end) : (i += 1) {
+        var arg_list: list.List = .empty;
+        defer arg_list.deinit(allocator);
+        try arg_list.append(allocator, try vm.clone(&chunk.items[i], allocator));
+        const mapped_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env);
+        try buf.append(mapped_ptr.*);
+        allocator.destroy(mapped_ptr);
+    }
+
+    // Seal buffer into a chunk
+    const chunk_val = try buf.seal();
+
+    // Get the tail (rest after this chunk)
+    const tail = try vm.clone(&ccd.tail, allocator);
+    vm.valueDeinit(&seq, allocator);
+
+    // Create next thunk with the remaining tail
+    const thunk = try allocator.create(vm.LazySeqThunk);
+    thunk.* = .{
+        .params = list.empty(),
+        .body = list.empty(),
+        .env = .{
+            .allocator = allocator,
+            .entries = phm.PersistentHashMap.empty(),
+            .parent = null,
+            .ns_manager = null,
+            .referred_names = .empty,
+        },
+        .custom_handler = vm.LazySeqHandler.map,
+    };
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
+    }
+    try thunk.env.put("f", try vm.clone(&f, allocator));
+    try thunk.env.put("coll", tail);
+
+    const tail_lazy = vm.lazySeqValue(thunk);
+    return chunks.chunkedCons(allocator, chunk_val, tail_lazy);
+}
+
+/// Execute one step of (range start end step) producing a chunked_cons.
+/// Reads start/end/step from env, produces up to CHUNK_SIZE integers.
+fn forceRangeStep(allocator: Allocator, env: *Env) anyerror!Value {
+    const start_val = env.get("start") orelse return vm.nilValue();
+    const end_val = env.get("end") orelse return vm.nilValue();
+    const step_val = env.get("step") orelse return vm.nilValue();
+
+    const cur: i64 = start_val.integer;
+    const end: i64 = end_val.integer;
+    const step: i64 = step_val.integer;
+
+    // Check if range is exhausted
+    if ((step > 0 and cur >= end) or (step < 0 and cur <= end)) {
+        return vm.nilValue();
+    }
+
+    // Calculate how many elements to produce (up to CHUNK_SIZE)
+    var chunk_count: usize = 0;
+    var i = cur;
+    while (((step > 0 and i < end) or (step < 0 and i > end)) and chunk_count < vm.CHUNK_SIZE) : ({
+        i += step;
+        chunk_count += 1;
+    }) {}
+
+    // Build chunk
+    var buf = try chunks.ChunkBuffer.init(allocator, chunk_count);
+    errdefer buf.deinit();
+    i = cur;
+    var c: usize = 0;
+    while (c < chunk_count) : ({
+        c += 1;
+        i += step;
+    }) {
+        try buf.append(vm.intValue(i));
+    }
+
+    const chunk_val = try buf.seal();
+
+    // Create next thunk with updated start
+    const next_start = cur + (step * @as(i64, @intCast(chunk_count)));
+    const thunk = try allocator.create(vm.LazySeqThunk);
+    thunk.* = .{
+        .params = list.empty(),
+        .body = list.empty(),
+        .env = .{
+            .allocator = allocator,
+            .entries = phm.PersistentHashMap.empty(),
+            .parent = null,
+            .ns_manager = null,
+            .referred_names = .empty,
+        },
+        .custom_handler = vm.LazySeqHandler.range,
+        .shared_coll = null,
+    };
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
+    }
+    try thunk.env.put("start", vm.intValue(next_start));
+    try thunk.env.put("end", vm.intValue(end));
+    try thunk.env.put("step", vm.intValue(step));
+
+    const tail = vm.lazySeqValue(thunk);
+    return chunks.chunkedCons(allocator, chunk_val, tail);
+}
+
+/// Execute one step of (filter pred coll) directly in Zig.
+/// When input is chunked, produces chunked_cons output.
+/// When input is not chunked, produces cons cells.
+fn forceFilterStep(allocator: Allocator, env: *Env, thunk: *const vm.LazySeqThunk) anyerror!Value {
+    const pred = env.get("pred") orelse return error.RuntimeError;
+
+    // Get collection: from shared_coll pointer if available, else from env
+    var coll_ptr: *const Value = undefined;
+    if (thunk.shared_coll) |sc| {
+        coll_ptr = @ptrCast(@alignCast(sc));
+    } else {
+        const coll_ref = env.getPtr("coll") orelse return error.RuntimeError;
+        coll_ptr = coll_ref;
+    }
+
+    // Get seq of coll (forces one step for lazy_seq)
+    var s = try getSeqValue(allocator, coll_ptr.*);
+    // Check if collection is empty
+    if (std.meta.activeTag(s) == .nil) {
+        vm.valueDeinit(&s, allocator);
+        return vm.nilValue();
+    }
+    if (std.meta.activeTag(s) == .list and s.list.items.items.len == 0) {
+        vm.valueDeinit(&s, allocator);
+        return vm.nilValue();
+    }
+    if (std.meta.activeTag(s) == .vector and s.vector.items.items.len == 0) {
+        vm.valueDeinit(&s, allocator);
+        return vm.nilValue();
+    }
+
+    // If input is chunked_cons, produce chunked output
+    if (std.meta.activeTag(s) == .chunked_cons) {
+        return forceFilterStepChunked(allocator, pred, s, env, thunk);
+    }
+
+    // Non-chunked path: step by step with cons cells
+    return forceFilterStepLazy(allocator, pred, s, env);
+}
+
+/// Chunked filter path: process a chunk and produce chunked_cons output.
+fn forceFilterStepChunked(allocator: Allocator, pred: Value, s: Value, env: *Env, thunk: *const vm.LazySeqThunk) anyerror!Value {
+    var seq = s; // copy so we can deinit
+    const ccd = seq.chunked_cons;
+    const chunk = ccd.chunk;
+
+    // Accumulate matching elements into a chunk buffer
+    var buf = try chunks.ChunkBuffer.init(allocator, chunk.count());
+    errdefer buf.deinit();
+
+    var i: usize = chunk.off;
+    while (i < chunk.end) : (i += 1) {
+        var arg_list: list.List = .empty;
+        defer arg_list.deinit(allocator);
+        try arg_list.append(allocator, try vm.clone(&chunk.items[i], allocator));
+        const pred_result_ptr = try eval_helpers.callBuiltin(allocator, &pred, &arg_list, env);
+        if (vm.isTruthy(pred_result_ptr.*)) {
+            // Append the element, not the predicate result
+            vm.valueDeinit(&pred_result_ptr.*, allocator);
+            allocator.destroy(pred_result_ptr);
+            try buf.append(try vm.clone(&chunk.items[i], allocator));
+        } else {
+            vm.valueDeinit(&pred_result_ptr.*, allocator);
+            allocator.destroy(pred_result_ptr);
+        }
+    }
+
+    // If no elements matched, we need to continue to the next chunk
+    if (buf.count == 0) {
+        buf.deinit();
+        vm.valueDeinit(&seq, allocator);
+        // Get the tail and recurse
+        const tail = ccd.tail;
+        if (std.meta.activeTag(tail) == .nil) return vm.nilValue();
+        // Create a new thunk for the tail
+        var new_thunk = try allocator.create(vm.LazySeqThunk);
+        new_thunk.* = .{
+            .params = list.empty(),
+            .body = list.empty(),
+            .env = .{
+                .allocator = allocator,
+                .entries = phm.PersistentHashMap.empty(),
+                .parent = null,
+                .ns_manager = null,
+                .referred_names = .empty,
+            },
+            .custom_handler = vm.LazySeqHandler.filter,
+            .shared_coll = null,
+        };
+        if (gc_mod.current_gc) |gc| {
+            gc.setObjectType(@as(*anyopaque, @ptrCast(new_thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
+        }
+        try new_thunk.env.put("pred", try vm.clone(&pred, allocator));
+        try new_thunk.env.put("coll", try vm.clone(&tail, allocator));
+        const new_lazy = vm.lazySeqValue(new_thunk);
+        // Force the new lazy-seq to get the next step
+        return try forceLazySeqGetResult(allocator, &new_lazy);
+    }
+
+    // Seal buffer into a chunk
+    const chunk_val = try buf.seal();
+
+    // Get the tail (rest after this chunk)
+    const tail = try vm.clone(&ccd.tail, allocator);
+    vm.valueDeinit(&seq, allocator);
+
+    // Create next thunk with the remaining tail
+    const next_thunk = try allocator.create(vm.LazySeqThunk);
+    next_thunk.* = .{
+        .params = list.empty(),
+        .body = list.empty(),
+        .env = .{
+            .allocator = allocator,
+            .entries = phm.PersistentHashMap.empty(),
+            .parent = null,
+            .ns_manager = null,
+            .referred_names = .empty,
+        },
+        .custom_handler = vm.LazySeqHandler.filter,
+        .shared_coll = thunk.shared_coll, // share the same coll pointer
+    };
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(next_thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
+    }
+    try next_thunk.env.put("pred", try vm.clone(&pred, allocator));
+    try next_thunk.env.put("coll", tail);
+
+    const tail_lazy = vm.lazySeqValue(next_thunk);
+    return chunks.chunkedCons(allocator, chunk_val, tail_lazy);
+}
+
+/// Lazy (non-chunked) filter path: step by step with cons cells.
+fn forceFilterStepLazy(allocator: Allocator, pred: Value, s: Value, env: *Env) anyerror!Value {
+    // Get first element
+    var first_val = try getFirstValue(allocator, s);
+    defer vm.valueDeinit(&first_val, allocator);
+
+    // Apply predicate
+    var arg_list: list.List = .empty;
+    defer arg_list.deinit(allocator);
+    try arg_list.append(allocator, try vm.clone(&first_val, allocator));
+    const pred_result_ptr = try eval_helpers.callBuiltin(allocator, &pred, &arg_list, env);
+    const truthy = vm.isTruthy(pred_result_ptr.*);
+
+    // Get rest (consumes s)
+    const rest_val = try getRestValue(allocator, s);
+
+    if (truthy) {
+        // Element passes — cons it onto the filtered rest
+        vm.valueDeinit(&pred_result_ptr.*, allocator);
+        allocator.destroy(pred_result_ptr);
+        // Use the actual element, not the predicate result
+        const element = try vm.clone(&first_val, allocator);
+
+        // Create next thunk
+        const thunk = try allocator.create(vm.LazySeqThunk);
+        thunk.* = .{
+            .params = list.empty(),
+            .body = list.empty(),
+            .env = .{
+                .allocator = allocator,
+                .entries = phm.PersistentHashMap.empty(),
+                .parent = null,
+                .ns_manager = null,
+                .referred_names = .empty,
+            },
+            .custom_handler = vm.LazySeqHandler.filter,
+            .shared_coll = null,
+        };
+        if (gc_mod.current_gc) |gc| {
+            gc.setObjectType(@as(*anyopaque, @ptrCast(thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
+        }
+        try thunk.env.put("pred", try vm.clone(&pred, allocator));
+        try thunk.env.put("coll", rest_val);
+
+        const tail = vm.lazySeqValue(thunk);
+        return vm.consValue(allocator, element, tail);
+    } else {
+        // Element doesn't pass — skip it, continue filtering
+        vm.valueDeinit(&pred_result_ptr.*, allocator);
+        allocator.destroy(pred_result_ptr);
+
+        // Create next thunk with rest
+        const thunk = try allocator.create(vm.LazySeqThunk);
+        thunk.* = .{
+            .params = list.empty(),
+            .body = list.empty(),
+            .env = .{
+                .allocator = allocator,
+                .entries = phm.PersistentHashMap.empty(),
+                .parent = null,
+                .ns_manager = null,
+                .referred_names = .empty,
+            },
+            .custom_handler = vm.LazySeqHandler.filter,
+            .shared_coll = null,
+        };
+        if (gc_mod.current_gc) |gc| {
+            gc.setObjectType(@as(*anyopaque, @ptrCast(thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
+        }
+        try thunk.env.put("pred", try vm.clone(&pred, allocator));
+        try thunk.env.put("coll", rest_val);
+
+        return vm.lazySeqValue(thunk);
+    }
+}
+
 /// Get seq of a value (handles lazy_seq forcing, passes through others).
 /// Returns a value allocated from `allocator`.
 fn getSeqValue(allocator: Allocator, val: Value) anyerror!Value {
-    if (std.meta.activeTag(val) == .lazy_seq) {
-        var v = try vm.clone(&val, allocator);
-        var result = try forceLazySeqGetResult(allocator, &v);
+    var v = try vm.clone(&val, allocator);
+    // Keep forcing nested lazy_seqs until we get a concrete result
+    while (std.meta.activeTag(v) == .lazy_seq) {
+        const result = try forceLazySeqGetResult(allocator, &v);
         vm.valueDeinit(&v, allocator);
-        // Clone result to our allocator (forceLazySeqGetResult may use different allocator)
-        const cloned = try vm.clone(&result, allocator);
-        vm.valueDeinit(&result, allocator);
-        return cloned;
+        v = result;
     }
-    return try vm.clone(&val, allocator);
+    // Clone result to our allocator (forceLazySeqGetResult may use different allocator)
+    const cloned = try vm.clone(&v, allocator);
+    vm.valueDeinit(&v, allocator);
+    return cloned;
 }
 
 /// Get the first element of a seq value. Does not consume the value.
@@ -493,6 +893,10 @@ fn getFirstValue(allocator: Allocator, val: Value) anyerror!Value {
         .cons => {
             const cdata = val.cons;
             return try vm.clone(&cdata.head, allocator);
+        },
+        .chunked_cons => {
+            const ccd = val.chunked_cons;
+            return try vm.clone(&ccd.chunk.items[ccd.chunk.off], allocator);
         },
         .list => {
             if (val.list.items.items.len == 0) return vm.nilValue();
@@ -513,6 +917,24 @@ fn getRestValue(allocator: Allocator, val: Value) anyerror!Value {
         .cons => {
             const cdata = v.cons;
             const tail = try vm.clone(&cdata.tail, allocator);
+            vm.valueDeinit(&v, allocator);
+            return tail;
+        },
+        .chunked_cons => {
+            const ccd = v.chunked_cons;
+            const chunk = ccd.chunk;
+            // Clone tail BEFORE deinit — valueDeinit would free the tail
+            // if this is the last reference.
+            const tail = try vm.clone(&ccd.tail, allocator);
+            if (chunk.off + 1 < chunk.end) {
+                // More elements in this chunk
+                const dropped = chunk.dropFirst();
+                const new_chunk = try vm.chunkValue(
+                    allocator, dropped.items, dropped.off, dropped.end, false);
+                vm.valueDeinit(&v, allocator);
+                return chunks.chunkedCons(allocator, new_chunk, tail);
+            }
+            // Chunk exhausted — return cloned tail
             vm.valueDeinit(&v, allocator);
             return tail;
         },
@@ -917,6 +1339,7 @@ pub fn core_vec(self: *const Value, args: *const list.List, env_env: *Env) anyer
     errdefer new_vec.deinit(env_env.allocator);
     for (args.items) |arg| {
         switch (std.meta.activeTag(arg)) {
+            .nil => {}, // (vec nil) returns [], not [nil]
             .list => {
                 for (arg.list.items.items) |item| {
                     try new_vec.append(env_env.allocator, try vm.clone(&item, env_env.allocator));
@@ -983,6 +1406,7 @@ pub fn core_seq(self: *const Value, args: *const list.List, env_env: *Env) anyer
         // After forcing, handle the result type
         switch (std.meta.activeTag(val)) {
             .cons => return val, // cons is non-empty seq
+            .chunked_cons => return val, // chunked_cons is non-empty seq
             .nil => return vm.nilValue(),
             .list => {
                 if (val.list.items.items.len == 0) {
@@ -1011,6 +1435,10 @@ pub fn core_seq(self: *const Value, args: *const list.List, env_env: *Env) anyer
     if (std.meta.activeTag(coll) == .cons) {
         return try vm.clone(&coll, allocator);
     }
+    // Handle chunked_cons: it's already a seq, return it directly
+    if (std.meta.activeTag(coll) == .chunked_cons) {
+        return try vm.clone(&coll, allocator);
+    }
 
     const len: usize = switch (std.meta.activeTag(coll)) {
         .list => coll.list.items.items.len,
@@ -1037,10 +1465,8 @@ pub fn core_seq(self: *const Value, args: *const list.List, env_env: *Env) anyer
     return try vm.clone(&coll, allocator);
 }
 
-// range - generate a sequence of integers (eager, iterative)
-// Implemented as a built-in to avoid the lazy-seq recursion that causes
-// stack overflow with large ranges (range's Clojure impl uses cons->concat
-// which forces lazy-seqs, creating deep recursion).
+// range - generate a lazy sequence of integers using chunked_cons.
+// Produces CHUNK_SIZE integers per chunk for memory efficiency.
 pub fn core_range(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
@@ -1065,28 +1491,34 @@ pub fn core_range(self: *const Value, args: *const list.List, env_env: *Env) any
 
     if (step == 0) return error.ArityError;
 
-    // Calculate the number of elements to pre-allocate
-    var count: usize = 0;
-    if (step > 0) {
-        if (start < end) {
-            count = @as(usize, @intCast(@divFloor(end - start + step - 1, step)));
-        }
-    } else {
-        if (start > end) {
-            count = @as(usize, @intCast(@divFloor(start - end - step - 1, -step)));
-        }
+    // Empty range
+    if ((step > 0 and start >= end) or (step < 0 and start <= end)) {
+        return vm.nilValue();
     }
 
-    var result: list.List = .empty;
-    errdefer result.deinit(allocator);
-    try result.ensureTotalCapacity(allocator, count);
-
-    var i = start;
-    while ((step > 0 and i < end) or (step < 0 and i > end)) : (i += step) {
-        try result.append(allocator, vm.intValue(i));
+    // Create a lazy-seq with custom range handler
+    const thunk = try allocator.create(vm.LazySeqThunk);
+    thunk.* = .{
+        .params = list.empty(),
+        .body = list.empty(),
+        .env = .{
+            .allocator = allocator,
+            .entries = phm.PersistentHashMap.empty(),
+            .parent = null,
+            .ns_manager = null,
+            .referred_names = .empty,
+        },
+        .custom_handler = vm.LazySeqHandler.range,
+        .shared_coll = null,
+    };
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
     }
+    try thunk.env.put("start", vm.intValue(start));
+    try thunk.env.put("end", vm.intValue(end));
+    try thunk.env.put("step", vm.intValue(step));
 
-    return try vm.listValue(allocator, result);
+    return vm.lazySeqValue(thunk);
 }
 
 // cons - returns a lazy-seq where x is the first element and xs is the rest.

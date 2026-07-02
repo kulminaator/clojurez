@@ -63,6 +63,8 @@ pub const GCObjectType = enum(u8) {
     ratio_data = 25,   // Ratio struct { num: BigInt, den: BigInt }
     decimal_data = 26, // BigDecimal struct { unscaled: BigInt, scale: i32 }
     bytecode_program = 29, // BytecodeProgram { instructions, constants, symbols, source_markers, fn_pool }
+    chunk_data = 30,         // ChunkData { items, off, end }
+    chunked_cons_data = 31,  // ChunkedConsData { chunk, tail }
 };
 
 const Header = struct {

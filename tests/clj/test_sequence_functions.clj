@@ -15,7 +15,7 @@
 (check "reduce no init" (reduce + (list 1 2 3 4)) 10)
 (check "into" (into [] (list 1 2 3)) '[1 2 3])
 (check "flatten" (flatten (list 1 (list 2 3) 4)) '(1 2 3 4))
-(check "filter" (filter (fn [x] (> x 2)) (list 1 2 3 4)) '(3 4))
+(check "filter" (vec (filter (fn [x] (> x 2)) (list 1 2 3 4))) [3 4])
 (check "remove" (remove (fn [x] (> x 2)) (list 1 2 3 4)) '(1 2))
 (check "every?" (every? (fn [x] (> x 0)) (list 1 2 3)) true)
 (check "some" (some (fn [x] (= x 3)) (list 1 2 3)) true)

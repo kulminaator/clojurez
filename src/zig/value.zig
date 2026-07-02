@@ -43,6 +43,8 @@ pub const Type = enum {
     builtin_fn,
     lazy_seq,
     cons,    // Cons cell: (head . tail) — tail is any sequence value
+    chunk,          // ChunkData — batch of values (IChunk equivalent)
+    chunked_cons,   // ChunkedConsData — chunk + lazy tail
     atom,
     future,  // Future: computation running in another thread
     promise, // Promise: one-time writable container
@@ -64,7 +66,55 @@ pub fn getType(val: Value) Type {
 // ============================================================
 
 pub const LazySeqHandler = enum {
-    map,  // (map f coll) — apply f to each element of coll
+    map,    // (map f coll) — apply f to each element of coll
+    range,  // (range start end step) — produce chunked sequence of integers
+    filter, // (filter pred coll) — filter elements by predicate
+};
+
+// ============================================================
+// Chunked sequence support
+// ============================================================
+
+pub const CHUNK_SIZE: usize = 32;
+
+/// Immutable chunk of values — a slice into a shared backing array.
+/// Multiple ChunkData can share the same backing array with different
+/// off/end ranges (structural sharing, like Clojure's ArrayChunk).
+pub const ChunkData = struct {
+    items: []Value,        // backing array (GC-allocated)
+    off: usize = 0,        // start offset
+    end: usize = 0,        // end offset (exclusive)
+    allocator: Allocator,
+    owns_array: bool = false, // true if we should free items on deinit
+
+    pub fn count(self: *const ChunkData) usize {
+        return self.end - self.off;
+    }
+
+    pub fn nth(self: *const ChunkData, i: usize) Value {
+        return self.items[self.off + i];
+    }
+
+    /// Return a new ChunkData with off advanced by 1 (dropFirst).
+    /// Shares the same backing array — no allocation.
+    pub fn dropFirst(self: *const ChunkData) ChunkData {
+        return .{
+            .items = self.items,
+            .off = self.off + 1,
+            .end = self.end,
+            .allocator = self.allocator,
+            .owns_array = false, // original owns it
+        };
+    }
+};
+
+/// Chunked cons cell — head is a Chunk (batch of values), tail is a seq.
+/// Like ConsData but holds CHUNK_SIZE values instead of one.
+pub const ChunkedConsData = struct {
+    chunk: *ChunkData,     // current chunk of values
+    tail: Value,           // lazy-seq for remaining (or nil)
+    allocator: Allocator,
+    ref_count: usize = 1,
 };
 
 // ============================================================
@@ -193,6 +243,8 @@ pub const Value = union(Type) {
     builtin_fn: BuiltinFn,
     lazy_seq: ?*LazySeqThunk,
     cons: *ConsData,
+    chunk: *ChunkData,
+    chunked_cons: *ChunkedConsData,
     atom: *AtomData,
     future: *FutureData,
     promise: *PromiseData,
@@ -435,6 +487,39 @@ pub fn consValueShared(data: *ConsData) Value {
     return .{ .cons = data };
 }
 
+/// Create a chunk value (batch of values with shared backing array).
+pub fn chunkValue(allocator: Allocator, items: []Value, off: usize, end: usize, owns: bool) anyerror!Value {
+    const data = try allocator.create(ChunkData);
+    errdefer allocator.destroy(data);
+    data.* = .{
+        .items = items,
+        .off = off,
+        .end = end,
+        .allocator = allocator,
+        .owns_array = owns,
+    };
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(data)), gc_mod.GCObjectType.chunk_data);
+    }
+    return .{ .chunk = data };
+}
+
+/// Create a chunked-cons value (chunk + lazy tail).
+pub fn chunkedConsValue(allocator: Allocator, chunk: *ChunkData, tail: Value) anyerror!Value {
+    const data = try allocator.create(ChunkedConsData);
+    errdefer allocator.destroy(data);
+    data.* = .{
+        .chunk = chunk,
+        .tail = tail,
+        .allocator = allocator,
+        .ref_count = 1,
+    };
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(data)), gc_mod.GCObjectType.chunked_cons_data);
+    }
+    return .{ .chunked_cons = data };
+}
+
 pub fn fnValue(allocator: Allocator, arities: std.ArrayListUnmanaged(Arity), env: Env, is_macro: bool) anyerror!Value {
     return fnValueNamed(allocator, arities, env, is_macro, null);
 }
@@ -573,6 +658,28 @@ pub fn valueDeinit(val: *Value, allocator: Allocator) void {
             if (data.ref_count == 0) {
                 const a = data.allocator;
                 valueDeinit(&data.head, a);
+                valueDeinit(&data.tail, a);
+                a.destroy(data);
+            }
+        },
+        .chunk => |data| {
+            const a = data.allocator;
+            // Deinit all Values in the chunk slice
+            var i: usize = data.off;
+            while (i < data.end) : (i += 1) {
+                valueDeinit(&data.items[i], a);
+            }
+            if (data.owns_array) {
+                a.free(data.items);
+            }
+            a.destroy(data);
+        },
+        .chunked_cons => |data| {
+            data.ref_count -= 1;
+            if (data.ref_count == 0) {
+                const a = data.allocator;
+                // Chunk is shared — don't deinit here, it's a separate Value
+                // when extracted. Only deinit the tail.
                 valueDeinit(&data.tail, a);
                 a.destroy(data);
             }
@@ -716,6 +823,43 @@ pub fn clone(val: *const Value, allocator: Allocator) anyerror!Value {
         },
         .cons => |data| {
             return consValueShared(data);
+        },
+        .chunk => |data| {
+            // Share the backing array, clone the ChunkData wrapper
+            const new_data = try allocator.create(ChunkData);
+            errdefer allocator.destroy(new_data);
+            new_data.* = .{
+                .items = data.items,  // shared backing array
+                .off = data.off,
+                .end = data.end,
+                .allocator = allocator,
+                .owns_array = false,  // original owns it
+            };
+            if (gc_mod.current_gc) |gc| {
+                gc.setObjectType(@as(*anyopaque, @ptrCast(new_data)), gc_mod.GCObjectType.chunk_data);
+            }
+            // Clone each Value in the chunk
+            var i: usize = data.off;
+            while (i < data.end) : (i += 1) {
+                new_data.items[i] = try clone(&data.items[i], allocator);
+            }
+            return .{ .chunk = new_data };
+        },
+        .chunked_cons => |data| {
+            data.ref_count += 1;
+            const new_tail = try clone(&data.tail, allocator);
+            const new_ccd = try allocator.create(ChunkedConsData);
+            errdefer allocator.destroy(new_ccd);
+            new_ccd.* = .{
+                .chunk = data.chunk,  // shared chunk
+                .tail = new_tail,
+                .allocator = allocator,
+                .ref_count = 1,
+            };
+            if (gc_mod.current_gc) |gc| {
+                gc.setObjectType(@as(*anyopaque, @ptrCast(new_ccd)), gc_mod.GCObjectType.chunked_cons_data);
+            }
+            return .{ .chunked_cons = new_ccd };
         },
         .atom => |data| {
             return atomValueShared(data);
@@ -998,6 +1142,8 @@ pub fn fmt(val: Value, allocator: Allocator) anyerror![]const u8 {
         .builtin_fn => allocator.dupe(u8, "#builtin"),
         .lazy_seq => allocator.dupe(u8, "#lazy-seq"),
         .cons => |data| return try consFmt(data, allocator),
+        .chunk => |data| return try chunkFmt(data, allocator),
+        .chunked_cons => |data| return try chunkedConsFmt(data, allocator),
         .atom => |data| {
             const inner_str = try fmt(data.value, allocator);
             defer allocator.free(inner_str);
@@ -1224,6 +1370,46 @@ pub fn consFmt(data: *const ConsData, allocator: Allocator) anyerror![]const u8 
     return buf.toOwnedSlice(allocator);
 }
 
+/// Format a ChunkData as a parenthesized list of elements.
+fn chunkFmt(data: *const ChunkData, allocator: Allocator) anyerror![]const u8 {
+    var buf: std.ArrayList(u8) = .empty;
+    errdefer buf.deinit(allocator);
+
+    try buf.append(allocator, '(');
+    var i: usize = data.off;
+    while (i < data.end) : (i += 1) {
+        if (i > data.off) try buf.append(allocator, ' ');
+        const s = try fmt(data.items[i], allocator);
+        defer allocator.free(s);
+        try buf.appendSlice(allocator, s);
+    }
+    try buf.append(allocator, ')');
+    return buf.toOwnedSlice(allocator);
+}
+
+/// Format a ChunkedConsData: chunk elements followed by tail.
+fn chunkedConsFmt(data: *const ChunkedConsData, allocator: Allocator) anyerror![]const u8 {
+    var buf: std.ArrayList(u8) = .empty;
+    errdefer buf.deinit(allocator);
+
+    try buf.append(allocator, '(');
+    var i: usize = data.chunk.off;
+    while (i < data.chunk.end) : (i += 1) {
+        if (i > data.chunk.off) try buf.append(allocator, ' ');
+        const s = try fmt(data.chunk.items[i], allocator);
+        defer allocator.free(s);
+        try buf.appendSlice(allocator, s);
+    }
+    if (std.meta.activeTag(data.tail) != .nil) {
+        try buf.append(allocator, ' ');
+        const tail_str = try fmt(data.tail, allocator);
+        defer allocator.free(tail_str);
+        try buf.appendSlice(allocator, tail_str);
+    }
+    try buf.append(allocator, ')');
+    return buf.toOwnedSlice(allocator);
+}
+
 /// Format a RecordData as #ns.RecordName{:field1 val1 :field2 val2 ...}
 fn recordFmt(rd: *const RecordData, allocator: Allocator) anyerror![]const u8 {
     var buf: std.ArrayList(u8) = .empty;
@@ -1402,8 +1588,12 @@ pub const Env = struct {
         self.entries.count = 0;
         self.entries.has_null = false;
         self.entries = new_entries;
-        var val = value;
-        valueDeinit(&val, allocator);
+        // NOTE: Do NOT call valueDeinit on the stored value.
+        // The HashMap stores a shallow copy of the Value union. For GC-managed
+        // types (lazy_seq, chunked_cons, function, etc.), valueDeinit would free
+        // the shared heap data, corrupting the HashMap's copy. The GC handles
+        // cleanup of unreachable objects. For non-GC types, the caller retains
+        // ownership of their original value.
     }
 
     pub fn get(self: *Env, name: []const u8) ?Value {

@@ -37,6 +37,8 @@ pub fn typeKeyword(v: Value) []const u8 {
         .symbol => "symbol",
         .keyword => "keyword",
         .list => "list",
+        .chunk => "chunk",
+        .chunked_cons => "chunked_cons",
         .vector => "vector",
         .map => "map",
         .set => "set",

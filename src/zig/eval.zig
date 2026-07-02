@@ -441,7 +441,7 @@ fn evalRecV(allocator: Allocator, form: *const Value, env: *Env, depth: usize, c
 /// pushes a frame onto ctx and returns .trampoline instead of recursing.
 pub fn evalRec(allocator: Allocator, form: *const Value, env: *Env, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
     switch (form.*) {
-        .nil, .bool, .integer, .float, .bigint, .ratio, .decimal, .string, .regex, .character, .keyword, .set, .queue, .atom, .future, .promise, .reduced, .wrapped, .record => {
+        .nil, .bool, .integer, .float, .bigint, .ratio, .decimal, .string, .regex, .character, .keyword, .set, .queue, .chunk, .chunked_cons, .atom, .future, .promise, .reduced, .wrapped, .record => {
             return .{ .value = try vm.cloneGC(form, allocator) };
         },
         .symbol => {

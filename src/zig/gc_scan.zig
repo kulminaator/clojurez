@@ -72,6 +72,8 @@ pub fn valueScanFn(obj: *anyopaque, ctx: *gc.ScanContext) void {
         .ratio_data => scanRatioData(obj, ctx),
         .decimal_data => scanDecimalData(obj, ctx),
         .bytecode_program => scanBytecodeProgram(obj, ctx),
+        .chunk_data => scanChunkData(obj, ctx),
+        .chunked_cons_data => scanChunkedConsData(obj, ctx),
     }
 }
 
@@ -153,7 +155,7 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         .nil, .bool, .integer, .float, .bigint, .ratio, .decimal,
         .string, .regex, .character, .symbol, .keyword,
         .list, .vector, .map, .set, .queue, .function, .builtin_fn,
-        .lazy_seq, .cons, .atom, .future, .promise, .reduced, .wrapped, .record,
+        .lazy_seq, .cons, .chunk, .chunked_cons, .atom, .future, .promise, .reduced, .wrapped, .record,
     };
     var is_valid = false;
     for (valid_types) |vt| {
@@ -318,6 +320,20 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
             ctx.gc.markRecursive(data, ctx);
         },
 
+        .chunk => |data| {
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!isValidGCPtr(data, ctx)) return;
+            // Mark the ChunkData struct so GC can find the items array
+            ctx.gc.markRecursive(data, ctx);
+        },
+
+        .chunked_cons => |data| {
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!isValidGCPtr(data, ctx)) return;
+            // Mark the ChunkedConsData struct so GC can find chunk and tail
+            ctx.gc.markRecursive(data, ctx);
+        },
+
         .atom => |data| {
             // Safety net: verify pointer is a real GC-tracked block
             if (!isValidGCPtr(data, ctx)) return;
@@ -448,6 +464,26 @@ fn scanFnData(fndata_ptr: *anyopaque, ctx: *gc.ScanContext) void {
 fn scanConsData(data_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     const data: *vm.ConsData = @ptrCast(@alignCast(data_ptr));
     scanValueChildrenDirect(&data.head, ctx);
+    scanValueChildrenDirect(&data.tail, ctx);
+}
+
+/// Scan ChunkData: { items: []Value, off, end, allocator, owns_array }.
+/// Marks the items array so GC can discover the Values inside.
+fn scanChunkData(data_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const data: *vm.ChunkData = @ptrCast(@alignCast(data_ptr));
+    // Mark the backing array so GC can find the Value objects inside
+    if (data.items.len > 0) {
+        ctx.gc.setObjectType(data.items.ptr, gc.GCObjectType.value_array);
+        ctx.gc.markRecursive(data.items.ptr, ctx);
+    }
+}
+
+/// Scan ChunkedConsData: { chunk: *ChunkData, tail: Value, allocator, ref_count }.
+fn scanChunkedConsData(data_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const data: *vm.ChunkedConsData = @ptrCast(@alignCast(data_ptr));
+    // Mark the chunk (triggers scanChunkData which marks the items array)
+    ctx.gc.markRecursive(data.chunk, ctx);
+    // Mark the tail value
     scanValueChildrenDirect(&data.tail, ctx);
 }
 

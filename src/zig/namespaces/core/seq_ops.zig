@@ -11,6 +11,7 @@ const helpers = @import("helpers.zig");
 const eval_helpers = @import("eval_helpers.zig");
 const arithmetic = @import("arithmetic.zig");
 const sequences_mod = @import("sequences.zig");
+const chunks = @import("chunks.zig");
 const test_utils = @import("test_utils.zig");
 const gc_mod = @import("../../gc.zig");
 
@@ -93,9 +94,12 @@ pub fn core_map(self: *const Value, args: *const list.List, env_env: *Env) anyer
     const f = args.items[0];
     const coll = args.items[1];
 
+    // Handle nil — (map f nil) returns nil
+    if (std.meta.activeTag(coll) == .nil) return vm.nilValue();
+
     // Validate collection type
     switch (std.meta.activeTag(coll)) {
-        .list, .vector, .lazy_seq => {},
+        .list, .vector, .lazy_seq, .chunked_cons => {},
         else => return error.TypeError,
     }
 
@@ -216,6 +220,7 @@ pub fn core_reduce(self: *const Value, args: *const list.List, env_env: *Env) an
     _ = self;
     if (args.items.len < 2 or args.items.len > 3) return error.ArityError;
 
+    const allocator = env_env.allocator;
     const f = args.items[0];
     var coll: Value = undefined;
     var init_val: ?Value = null;
@@ -227,28 +232,18 @@ pub fn core_reduce(self: *const Value, args: *const list.List, env_env: *Env) an
         coll = args.items[1];
     }
 
-    // Force lazy sequences to concrete lists before reducing
-    var owned_coll: bool = false;
-    defer {
-        if (owned_coll) {
-            vm.valueDeinit(&coll, env_env.allocator);
-        }
-    }
+    // Handle lazy_seq, cons, chunked_cons with streaming reduce
     switch (std.meta.activeTag(coll)) {
-        .lazy_seq => {
-            const concrete_list = try forceToConcreteList(env_env.allocator, coll);
-            // Null out the thunk before deinit so we don't free caller-owned data
-            coll.lazy_seq = null;
-            vm.valueDeinit(&coll, env_env.allocator);
-            coll = try vm.listValue(env_env.allocator, concrete_list);
-            owned_coll = true;
+        .lazy_seq, .cons, .chunked_cons => {
+            return reduceSeq(allocator, f, coll, init_val, env_env);
         },
         else => {},
     }
 
+    // Concrete collection path
     var items: []const Value = undefined;
     var owned_items: ?list.List = null;
-    defer if (owned_items) |*ol| ol.deinit(env_env.allocator);
+    defer if (owned_items) |*ol| ol.deinit(allocator);
 
     switch (std.meta.activeTag(coll)) {
         .list => items = coll.list.items.items,
@@ -256,33 +251,31 @@ pub fn core_reduce(self: *const Value, args: *const list.List, env_env: *Env) an
         .set => items = coll.set.items.items,
         .queue => items = coll.queue.items.items,
         .map => {
-            // Convert map to list of [key value] pairs (same as seq)
             var pairs: list.List = .empty;
-            errdefer pairs.deinit(env_env.allocator);
+            errdefer pairs.deinit(allocator);
             for (coll.map.entries.items) |entry| {
                 var pair: vec.Vector = .empty;
-                try pair.append(env_env.allocator, try vm.clone(&entry.key, env_env.allocator));
-                try pair.append(env_env.allocator, try vm.clone(&entry.value, env_env.allocator));
-                try pairs.append(env_env.allocator, try vm.vectorValue(env_env.allocator, pair));
+                try pair.append(allocator, try vm.clone(&entry.key, allocator));
+                try pair.append(allocator, try vm.clone(&entry.value, allocator));
+                try pairs.append(allocator, try vm.vectorValue(allocator, pair));
             }
             items = pairs.items;
             owned_items = pairs;
         },
         .record => {
-            // Convert record to list of [key value] pairs (same as seq)
             var pairs: list.List = .empty;
-            errdefer pairs.deinit(env_env.allocator);
+            errdefer pairs.deinit(allocator);
             for (coll.record.fields.items) |entry| {
                 var pair: vec.Vector = .empty;
-                try pair.append(env_env.allocator, try vm.clone(&entry.key, env_env.allocator));
-                try pair.append(env_env.allocator, try vm.clone(&entry.value, env_env.allocator));
-                try pairs.append(env_env.allocator, try vm.vectorValue(env_env.allocator, pair));
+                try pair.append(allocator, try vm.clone(&entry.key, allocator));
+                try pair.append(allocator, try vm.clone(&entry.value, allocator));
+                try pairs.append(allocator, try vm.vectorValue(allocator, pair));
             }
             for (coll.record.extmap.items) |entry| {
                 var pair: vec.Vector = .empty;
-                try pair.append(env_env.allocator, try vm.clone(&entry.key, env_env.allocator));
-                try pair.append(env_env.allocator, try vm.clone(&entry.value, env_env.allocator));
-                try pairs.append(env_env.allocator, try vm.vectorValue(env_env.allocator, pair));
+                try pair.append(allocator, try vm.clone(&entry.key, allocator));
+                try pair.append(allocator, try vm.clone(&entry.value, allocator));
+                try pairs.append(allocator, try vm.vectorValue(allocator, pair));
             }
             items = pairs.items;
             owned_items = pairs;
@@ -291,7 +284,7 @@ pub fn core_reduce(self: *const Value, args: *const list.List, env_env: *Env) an
     }
 
     if (items.len == 0) {
-        if (init_val) |iv| return try vm.clone(&iv, env_env.allocator);
+        if (init_val) |iv| return try vm.clone(&iv, allocator);
         return vm.nilValue();
     }
 
@@ -324,14 +317,160 @@ pub fn core_reduce(self: *const Value, args: *const list.List, env_env: *Env) an
         }
     }
 
-    // General path
+    // General path for concrete collections
+    return reduceItems(allocator, f, items, init_val, env_env);
+}
+
+/// Reduce over a sequence (lazy_seq, cons, or chunked_cons).
+/// Streams through elements without forcing the entire sequence.
+fn reduceSeq(allocator: Allocator, f: Value, coll: Value, init_val: ?Value, env: *Env) anyerror!Value {
+    var acc: ?Value = if (init_val) |iv| try vm.clone(&iv, allocator) else null;
+    var owned_acc: bool = false;
+    defer if (owned_acc) if (acc) |*a| vm.valueDeinit(a, allocator);
+
+    var current = try vm.clone(&coll, allocator);
+    defer vm.valueDeinit(&current, allocator);
+
+    while (true) {
+        // Force lazy_seq if needed
+        if (std.meta.activeTag(current) == .lazy_seq) {
+            const forced = try sequences_mod.forceLazySeqGetResult(allocator, &current);
+            vm.valueDeinit(&current, allocator);
+            current = forced;
+            continue;
+        }
+
+        // Handle chunked_cons — process chunk elements in tight loop
+        if (std.meta.activeTag(current) == .chunked_cons) {
+            const ccd = current.chunked_cons;
+            const chunk = ccd.chunk;
+            var i: usize = chunk.off;
+            while (i < chunk.end) : (i += 1) {
+                const elem = try vm.clone(&chunk.items[i], allocator);
+                const step_result = try reduceStep(allocator, f, acc, owned_acc, elem, env);
+                acc = step_result.new_acc;
+                owned_acc = step_result.owned;
+                // Check for early reduction termination
+                if (step_result.reduced) return acc.?;
+            }
+            // Move to tail
+            const tail = try vm.clone(&ccd.tail, allocator);
+            vm.valueDeinit(&current, ccd.allocator);
+            current = tail;
+            continue;
+        }
+
+        // Handle cons
+        if (std.meta.activeTag(current) == .cons) {
+            const cdata = current.cons;
+            const elem = try vm.clone(&cdata.head, allocator);
+            const step_result = try reduceStep(allocator, f, acc, owned_acc, elem, env);
+            acc = step_result.new_acc;
+            owned_acc = step_result.owned;
+            if (step_result.reduced) return acc.?;
+            const tail = try vm.clone(&cdata.tail, allocator);
+            vm.valueDeinit(&current, cdata.allocator);
+            current = tail;
+            continue;
+        }
+
+        // Handle list (can come from forcing a lazy-seq)
+        if (std.meta.activeTag(current) == .list) {
+            const items = current.list.items.items;
+            var idx: usize = 0;
+            while (idx < items.len) : (idx += 1) {
+                const elem = try vm.clone(&items[idx], allocator);
+                const step_result = try reduceStep(allocator, f, acc, owned_acc, elem, env);
+                acc = step_result.new_acc;
+                owned_acc = step_result.owned;
+                if (step_result.reduced) {
+                    vm.valueDeinit(&current, allocator);
+                    return acc.?;
+                }
+            }
+            vm.valueDeinit(&current, allocator);
+            break;
+        }
+
+        // Handle vector (can come from forcing a lazy-seq)
+        if (std.meta.activeTag(current) == .vector) {
+            const items = current.vector.items.items;
+            var idx: usize = 0;
+            while (idx < items.len) : (idx += 1) {
+                const elem = try vm.clone(&items[idx], allocator);
+                const step_result = try reduceStep(allocator, f, acc, owned_acc, elem, env);
+                acc = step_result.new_acc;
+                owned_acc = step_result.owned;
+                if (step_result.reduced) {
+                    vm.valueDeinit(&current, allocator);
+                    return acc.?;
+                }
+            }
+            vm.valueDeinit(&current, allocator);
+            break;
+        }
+
+        // Sequence ended (nil) or non-sequence type
+        break;
+    }
+
+    // Return accumulator or nil
+    if (acc) |a| return a;
+    return vm.nilValue();
+}
+
+/// Result of a single reduce step.
+const ReduceStepResult = struct {
+    new_acc: Value,
+    owned: bool,
+    reduced: bool,
+};
+
+/// Single reduce step: (f acc elem).
+fn reduceStep(allocator: Allocator, f: Value, acc: ?Value, owned_acc: bool, elem: Value, env: *Env) anyerror!ReduceStepResult {
+    var e = elem;
+    defer vm.valueDeinit(&e, allocator);
+
+    var new_acc: Value = undefined;
+    var new_owned: bool = false;
+
+    if (acc) |old_acc| {
+        var arg_list: list.List = .empty;
+        defer arg_list.deinit(allocator);
+        try arg_list.append(allocator, try vm.clone(&old_acc, allocator));
+        try arg_list.append(allocator, e);
+        const result_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env);
+        new_acc = result_ptr.*;
+        allocator.destroy(result_ptr);
+        if (owned_acc) {
+            var mutable_old = old_acc;
+            vm.valueDeinit(&mutable_old, allocator);
+        }
+        new_owned = true;
+    } else {
+        new_acc = e;
+        new_owned = true;
+    }
+
+    // Check for reduced wrapper
+    if (std.meta.activeTag(new_acc) == .reduced) {
+        const data = new_acc.reduced;
+        const unwrapped = data.*;
+        return .{ .new_acc = unwrapped, .owned = true, .reduced = true };
+    }
+
+    return .{ .new_acc = new_acc, .owned = new_owned, .reduced = false };
+}
+
+/// Reduce over a concrete items array.
+fn reduceItems(allocator: Allocator, f: Value, items: []const Value, init_val: ?Value, env: *Env) anyerror!Value {
     var acc: Value = undefined;
     if (init_val) |iv| {
-        acc = try vm.clone(&iv, env_env.allocator);
+        acc = try vm.clone(&iv, allocator);
     } else if (items.len == 1) {
-        return try vm.clone(&items[0], env_env.allocator);
+        return try vm.clone(&items[0], allocator);
     } else {
-        acc = try vm.clone(&items[0], env_env.allocator);
+        acc = try vm.clone(&items[0], allocator);
     }
 
     var start: usize = 0;
@@ -340,19 +479,18 @@ pub fn core_reduce(self: *const Value, args: *const list.List, env_env: *Env) an
     var i = start;
     while (i < items.len) : (i += 1) {
         var arg_list: list.List = .empty;
-        defer arg_list.deinit(env_env.allocator);
-        try arg_list.append(env_env.allocator, try vm.clone(&acc, env_env.allocator));
-        try arg_list.append(env_env.allocator, try vm.clone(&items[i], env_env.allocator));
+        defer arg_list.deinit(allocator);
+        try arg_list.append(allocator, try vm.clone(&acc, allocator));
+        try arg_list.append(allocator, try vm.clone(&items[i], allocator));
 
-        const new_acc_ptr = try eval_helpers.callBuiltin(env_env.allocator, &f, &arg_list, env_env);
+        const new_acc_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env);
         const new_acc = new_acc_ptr.*;
-        env_env.allocator.destroy(new_acc_ptr);
-        vm.valueDeinit(&acc, env_env.allocator);
+        allocator.destroy(new_acc_ptr);
+        vm.valueDeinit(&acc, allocator);
         // Check for early reduction termination
         if (std.meta.activeTag(new_acc) == .reduced) {
             const data = new_acc.reduced;
             acc = data.*;
-            // Don't deinit new_acc since it owns data; we transfer ownership to acc
             return acc;
         }
         acc = new_acc;
@@ -474,33 +612,51 @@ pub fn core_nthnext(self: *const Value, args: *const list.List, env_env: *Env) a
 pub fn core_filter(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
-    const f = args.items[0];
+    const allocator = env_env.allocator;
+    const pred = args.items[0];
     const coll = args.items[1];
 
-    var items: []const Value = undefined;
+    // Handle nil — (filter pred nil) returns nil
+    if (std.meta.activeTag(coll) == .nil) return vm.nilValue();
+
+    // Validate collection type
     switch (std.meta.activeTag(coll)) {
-        .list => items = coll.list.items.items,
-        .vector => items = coll.vector.items.items,
+        .list, .vector, .lazy_seq, .chunked_cons => {},
         else => return error.TypeError,
     }
 
-    var result: list.List = .empty;
-    errdefer result.deinit(env_env.allocator);
-
-    for (items) |item| {
-        var arg_list: list.List = .empty;
-        defer arg_list.deinit(env_env.allocator);
-        try arg_list.append(env_env.allocator, try vm.clone(&item, env_env.allocator));
-        const pred_result_ptr = try eval_helpers.callBuiltin(env_env.allocator, &f, &arg_list, env_env);
-        const pred_result = pred_result_ptr.*;
-        const truthy = vm.isTruthy(pred_result);
-        vm.valueDeinit(&pred_result_ptr.*, env_env.allocator);
-        env_env.allocator.destroy(pred_result_ptr);
-        if (truthy) {
-            try result.append(env_env.allocator, try vm.clone(&item, env_env.allocator));
-        }
+    // Create thunk with custom handler — bypasses the Clojure evaluator
+    const thunk = try allocator.create(vm.LazySeqThunk);
+    thunk.* = .{
+        .params = list.empty(),
+        .body = list.empty(),
+        .env = .{
+            .allocator = allocator,
+            .entries = phm.PersistentHashMap.empty(),
+            .parent = null,
+            .ns_manager = null,
+            .referred_names = .empty,
+        },
+        .custom_handler = vm.LazySeqHandler.filter,
+        .shared_coll = null,
+    };
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
     }
-    return try vm.listValue(env_env.allocator, result);
+    try thunk.env.put("pred", try vm.clone(&pred, allocator));
+
+    // For concrete collections (list/vector), store the collection stably
+    const cloned_coll = try vm.clone(&coll, allocator);
+    if (std.meta.activeTag(coll) == .list or std.meta.activeTag(coll) == .vector) {
+        // For concrete collections, we don't use shared_coll for filter
+        // since filter processes element by element
+        try thunk.env.put("coll", cloned_coll);
+    } else {
+        // Lazy collections: store in env
+        try thunk.env.put("coll", cloned_coll);
+    }
+
+    return vm.lazySeqValue(thunk);
 }
 
 pub fn core_remove(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
@@ -620,10 +776,10 @@ pub fn core_drop(self: *const Value, args: *const list.List, env_env: *Env) anye
     const n = try toInt(args.items[0]);
     const coll = args.items[1];
 
-    // For lazy_seq and cons, return a lazy-seq that preserves laziness
+    // For lazy_seq, cons, and chunked_cons, return a lazy-seq that preserves laziness
     // Mirrors Clojure: (lazy-seq (when (pos? n) (when-let [s (seq coll)]
     //   (if (zero? (dec n)) s (drop (dec n) (rest s))))))
-    if (std.meta.activeTag(coll) == .lazy_seq or std.meta.activeTag(coll) == .cons) {
+    if (std.meta.activeTag(coll) == .lazy_seq or std.meta.activeTag(coll) == .cons or std.meta.activeTag(coll) == .chunked_cons) {
         if (n <= 0) return try vm.clone(&coll, allocator);
         return dropLazySeq(allocator, n, coll, env_env);
     }
