@@ -520,6 +520,8 @@ pub fn core_type(self: *const Value, args: *const list.List, env_env: *Env) anye
         .builtin_fn => "builtin_fn",
         .lazy_seq => "lazy_seq",
         .cons => "cons",
+        .chunk => "chunk",
+        .chunked_cons => "chunked_cons",
         .reduced => "reduced",
         .wrapped => "wrapped",
         .record => args.items[0].record.type_name,
@@ -639,6 +641,15 @@ pub fn registerTypePredicateFunctions(env: *Env) anyerror!void {
     // Metadata
     try env.put("meta", vm.builtinFnValue(core_meta));
     try env.put("with-meta", vm.builtinFnValue(core_with_meta));
+    // Chunked sequence predicate
+    try env.put("chunked-seq?", vm.builtinFnValue(core_chunked_seq_q));
+}
+
+// chunked-seq? - check if s is a chunked sequence
+pub fn core_chunked_seq_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    return vm.boolValue(std.meta.activeTag(args.items[0]) == .chunked_cons);
 }
 
 // ===== Unit Tests =====

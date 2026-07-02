@@ -20,6 +20,7 @@ const Allocator = std.mem.Allocator;
 const vm = @import("value.zig");
 const Value = vm.Value;
 const gc = @import("gc.zig");
+const gc_scan = @import("gc_scan.zig");
 const list = @import("list.zig");
 
 // ============================================================
@@ -55,8 +56,15 @@ fn newSubNodesArray(allocator: Allocator, items: []const (?*Node)) []?*Node {
 }
 
 /// Allocate a Kvp array of given length and register it with the GC.
+/// Initializes all entries to nil values so errdefer cleanup is safe.
 fn newKvpArrayLen(allocator: Allocator, len: usize) []Kvp {
     const arr = allocator.alloc(Kvp, len) catch @panic("OOM");
+    // Initialize to nil values — errdefer in callers may deinit these
+    // if the function fails partway through.
+    var i: usize = 0;
+    while (i < len) : (i += 1) {
+        arr[i] = .{ .key = vm.nilValue(), .val = vm.nilValue() };
+    }
     if (gc.current_gc) |gc_inst| {
         gc_inst.setObjectType(@as(*anyopaque, @ptrCast(arr.ptr)), gc.GCObjectType.hash_map_kvp_array);
     }
@@ -101,6 +109,8 @@ pub fn valueHash(val: Value) i32 {
         .builtin_fn => hashIdentity(),
         .lazy_seq => hashIdentity(),
         .cons => hashIdentity(),
+        .chunk => hashIdentity(),
+        .chunked_cons => hashIdentity(),
         .atom => hashIdentity(),
         .future => hashIdentity(),
         .promise => hashIdentity(),
@@ -1580,15 +1590,15 @@ pub fn scanHashMapNode(node_ptr: *anyopaque, ctx: *gc.ScanContext) void {
             if (bnode.sub_nodes.len > 0) {
                 ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(bnode.sub_nodes.ptr))), ctx);
             }
-            for (bnode.array) |kvp| {
-                if (vm.getType(kvp.key) != .nil) {
-                    ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(&kvp.key))), ctx);
-                    ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(&kvp.val))), ctx);
-                    // Mark wrapped pointers (e.g., *Env stored in NamespaceManager)
-                    if (vm.getType(kvp.val) == .wrapped and kvp.val.wrapped != 0) {
-                        const ptr = @as(*anyopaque, @ptrFromInt(kvp.val.wrapped));
-                        ctx.gc.markRecursive(ptr, ctx);
-                    }
+            // Scan each Value in the Kvp array — use pointers into the actual array
+            // (not copies) so the GC can discover child pointers.
+            for (bnode.array) |*kvp| {
+                gc_scan.scanValueChildrenDirect(&kvp.key, ctx);
+                gc_scan.scanValueChildrenDirect(&kvp.val, ctx);
+                // Mark wrapped pointers (e.g., *Env stored in NamespaceManager)
+                if (vm.getType(kvp.val) == .wrapped and kvp.val.wrapped != 0) {
+                    const ptr = @as(*anyopaque, @ptrFromInt(kvp.val.wrapped));
+                    ctx.gc.markRecursive(ptr, ctx);
                 }
             }
             for (bnode.sub_nodes) |sub| {
@@ -1608,9 +1618,10 @@ pub fn scanHashMapNode(node_ptr: *anyopaque, ctx: *gc.ScanContext) void {
             if (hnode.kvs.len > 0) {
                 ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(hnode.kvs.ptr))), ctx);
             }
-            for (hnode.kvs) |kvp| {
-                ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(&kvp.key))), ctx);
-                ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(&kvp.val))), ctx);
+            // Scan each Value in the Kvp array — use pointers into the actual array
+            for (hnode.kvs) |*kvp| {
+                gc_scan.scanValueChildrenDirect(&kvp.key, ctx);
+                gc_scan.scanValueChildrenDirect(&kvp.val, ctx);
                 // Mark wrapped pointers
                 if (vm.getType(kvp.val) == .wrapped and kvp.val.wrapped != 0) {
                     const ptr = @as(*anyopaque, @ptrFromInt(kvp.val.wrapped));

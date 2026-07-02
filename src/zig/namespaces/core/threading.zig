@@ -61,11 +61,12 @@ fn futureThreadEntry(fn_val: Value, future_data: *vm.FutureData) void {
 
         // Call the function with no arguments using eval.call
         const empty_args: list.List = .empty;
-        result = eval.call(allocator, &fn_val, &empty_args, &child_env, 0) catch {
+        const call_result = eval.call(allocator, &fn_val, &empty_args, &child_env, 0, null) catch {
             future_data.error_msg = allocator.dupe(u8, "evaluation error") catch null;
             future_data.state.store(FutureState.error_state, .release);
             break :errhandler;
         };
+        result = call_result.value.*;
 
         // Store result and mark done
         future_data.result = result;

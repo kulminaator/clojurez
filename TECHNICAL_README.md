@@ -44,6 +44,8 @@ All values are represented by the `Value` tagged union in `value.zig`:
 | `cons` | `(cons 1 (list 2 3))` | cons cell |
 | `reduced` | `(reduced val)` | early reduction termination |
 | `record` | `(defrecord Person [name age])` | named data type |
+| `future` | `(future ...)` | computation running in another thread |
+| `promise` | `(promise)` | one-time writable container |
 
 ## Special Forms
 
@@ -152,6 +154,9 @@ Plus type coercions: `char`, `int`, `integer`, `float`, `double`, `bigint`, `big
 ### Core helpers (`core.zig`)
 `empty?`, `not-empty`, `apply`, `trampoline`, `partial`, `comp`, `fnil`, `juxt`, `constantly`, `complement`, `comparator`
 
+### Threading (`threading.zig`)
+`sleep`, `future-call`, `deref-future`, `deref-promise`, `promise`, `deliver`, `realized`
+
 ## Clojure Core Library (`src/clj/core.clj`)
 
 Functions implemented in Clojure (bootstrapped from `core.clj`, embedded at compile time):
@@ -177,6 +182,9 @@ Functions implemented in Clojure (bootstrapped from `core.clj`, embedded at comp
 ### Macros
 `when-not`, `when-some`, `if-let`, `when-let`, `time`, `doseq`, `when-first`, `for`, `defonce`
 
+### Multithreading
+`future` (macro), `future-call`, `future?`, `future-done?`, `promise`, `deliver`, `realized?`, `promise?`, `deref` (extended for futures/promises), `sleep`
+
 ## Clojure String Library (`src/clj/string.clj`)
 
 Functions in `clojure.string` namespace (loaded via `:require`):
@@ -192,6 +200,7 @@ Mark-and-sweep GC in `gc.zig` with type-aware scanning in `gc_scan.zig`.
 - Auto-GC triggers when memory grows by max(20% of last collected, 1MB)
 - Generational protection: blocks from current generation are never swept
 - Deferred sweep: `gc-sweep` called during evaluation defers actual freeing to safe points
+- **Thread-safe**: block list protected by atomic spinlock; GC collection blocked while child threads are active via `gc_lock`; slab allocator uses per-slab spinlocks for concurrent alloc/free
 
 **Debug controls:**
 - `CLJVM_GC_SWEEP=0` - disable sweep (objects accumulate, useful for debugging)
@@ -215,7 +224,7 @@ Mark-and-sweep GC in `gc.zig` with type-aware scanning in `gc_scan.zig`.
 
 Three-layer allocator stack:
 1. **Page allocator** - OS memory allocation
-2. **Slab allocator** (`slab_allocator.zig`) - batches small allocations into large pages, reduces syscalls
+2. **Slab allocator** (`slab_allocator.zig`) - batches small allocations into large pages, reduces syscalls; thread-safe via per-slab spinlocks
 3. **GC allocator** (`gc.zig`) - mark-and-sweep on top of slab
 
 ## Testing
@@ -247,13 +256,13 @@ End-to-end programs with expected output verification:
 Tests individual modules:
 
 ```bash
-zig test -fsingle-threaded src/zig/all_tests.zig
+zig test src/zig/all_tests.zig
 ```
 
 ### Running all tests
 
 ```bash
-zig test -fsingle-threaded src/zig/all_tests.zig && ./run_tests.sh
+zig test src/zig/all_tests.zig && ./run_tests.sh
 ```
 
 ## Build

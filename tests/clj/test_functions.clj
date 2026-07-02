@@ -22,4 +22,9 @@
 (check "multi-arity defn three arities 1" (do (defn bar2 [] 0 [a] a [a b] (+ a b)) (bar2 5)) 5)
 (check "multi-arity defn three arities 2" (do (defn bar3 [] 0 [a] a [a b] (+ a b)) (bar3 3 4)) 7)
 
+;; ---- Deep Recursion Tests (trampolining) ----
+(check "deep recursion 1000" (do (defn _deep-count [n] (if (zero? n) 0 (inc (_deep-count (dec n))))) (_deep-count 1000)) 1000)
+(check "deep recursion accumulates" (do (defn _deep-sum [n] (if (zero? n) 0 (+ n (_deep-sum (dec n))))) (_deep-sum 1000)) 500500)
+(check "mutual recursion 1000" (do (defn _even? [n] (if (zero? n) true (_odd? (dec n)))) (defn _odd? [n] (if (zero? n) false (_even? (dec n)))) (_even? 1000)) true)
+
 (print-summary)

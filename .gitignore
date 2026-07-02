@@ -9,3 +9,4 @@ src/zig/namespaces/**/*.clj
 src/zig/namespaces/*.clj
 tmp/
 *.swp
+.idea

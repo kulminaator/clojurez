@@ -53,6 +53,7 @@ Type `(quit)`, `(exit)`, or press `CTRL+D` to exit the REPL.
 - **Regex** - `#"..."` literals with a pure-Zig regex engine
 - **Bitwise ops** - `bit-and`, `bit-or`, `bit-xor`, `bit-shift-left`, etc.
 - **Atoms** - `atom`, `swap!`, `reset!`
+- **Multithreading** - `future`, `future-call`, `promise`, `deliver`, `realized?`, `sleep`
 
 ## Known Differences from JVM Clojure
 

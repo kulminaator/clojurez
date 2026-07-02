@@ -340,10 +340,12 @@ fn processRecordProtocolSpec(
     method_indices: []const usize,
     full_type_name: []const u8,
     field_names: []const []const u8,
+    ctx: ?*eval.TrampolineStack,
 ) anyerror!Value {
 
     // Evaluate the protocol symbol to get the protocol value
-    const proto_ptr = try eval.evalRec(allocator, &proto_sym, env, depth + 1);
+    const proto_ptr_r = try eval.evalRec(allocator, &proto_sym, env, depth + 1, ctx);
+        const proto_ptr = proto_ptr_r.value;
     defer vm.valueDeinit(&proto_ptr.*, allocator);
 
     // Validate it's a protocol (has :sigs key)
@@ -456,7 +458,8 @@ fn processRecordProtocolSpec(
         }
 
         // Evaluate to get a function value
-        const fn_ptr = try eval.evalRec(allocator, &(try vm.listValue(allocator, fn_form)), env, depth + 1);
+        const fn_ptr_r = try eval.evalRec(allocator, &(try vm.listValue(allocator, fn_form)), env, depth + 1, ctx);
+        const fn_ptr = fn_ptr_r.value;
         fn_form = .empty;
         const persistent_fn = try vm.clone(&fn_ptr.*, allocator);
         vm.valueDeinit(&fn_ptr.*, allocator);
@@ -480,7 +483,7 @@ fn processRecordProtocolSpec(
     mmap = .empty;
 
     // Call evalExtend
-    return protocols.evalExtend(allocator, extend_args, env, depth);
+    return protocols.evalExtend(allocator, extend_args, env, depth, ctx);
 }
 
 /// Look up a key in a map, returning the value or null.
@@ -500,6 +503,7 @@ pub fn evalDefRecord(
     l: list.List,
     env: *Env,
     depth: usize,
+    ctx: ?*eval.TrampolineStack,
 ) anyerror!Value {
     // (defrecord name [fields*] options* specs*)
     if (l.items.len < 3) {
@@ -620,6 +624,7 @@ pub fn evalDefRecord(
                     method_indices.items,
                     full_name,
                     field_names.items,
+                    ctx,
                 ) catch {};
             }
         } else {

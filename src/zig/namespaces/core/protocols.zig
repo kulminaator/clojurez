@@ -37,6 +37,8 @@ pub fn typeKeyword(v: Value) []const u8 {
         .symbol => "symbol",
         .keyword => "keyword",
         .list => "list",
+        .chunk => "chunk",
+        .chunked_cons => "chunked_cons",
         .vector => "vector",
         .map => "map",
         .set => "set",
@@ -127,7 +129,8 @@ pub fn dispatchProtocolMethod(
 
     // Call the implementation function with all arguments
     const call_env: *Env = @constCast(proto_env);
-    return try eval.call(allocator, &impl_fn, &args, call_env, depth);
+    const call_result = try eval.call(allocator, &impl_fn, &args, call_env, depth, null);
+    return call_result.value.*;
 }
 
 /// Evaluate a (defprotocol ...) form.
@@ -137,8 +140,10 @@ pub fn evalDefProtocol(
     l: list.List,
     env: *Env,
     _depth: usize,
+    ctx: ?*eval.TrampolineStack,
 ) anyerror!Value {
     _ = _depth;
+    _ = ctx;
     // (defprotocol name docstring? options? (method [params]... docstring?)+)
     if (l.items.len < 2) return error.ArityError;
 
@@ -508,8 +513,10 @@ pub fn evalExtend(
     l: list.List,
     env: *Env,
     depth: usize,
+    ctx: ?*eval.TrampolineStack,
 ) anyerror!Value {
     _ = depth;
+    _ = ctx;
     // (extend atype protocol mmap & more...)
     // l has: atype (unevaluated), protocol (evaluated), mmap (evaluated), ...
     if (l.items.len < 3) return error.ArityError;
@@ -710,6 +717,7 @@ pub fn evalExtendType(
     l: list.List,
     env: *Env,
     depth: usize,
+    ctx: ?*eval.TrampolineStack,
 ) anyerror!Value {
     // (extend-type atype protocol (method [params] body...)+ & more...)
     if (l.items.len < 3) return error.ArityError;
@@ -731,7 +739,8 @@ pub fn evalExtendType(
 
     while (idx < l.items.len) {
         // Evaluate the protocol
-        const proto_ptr = try eval.evalRec(allocator, &l.items[idx], env, depth + 1);
+        const proto_ptr_r = try eval.evalRec(allocator, &l.items[idx], env, depth + 1, ctx);
+        const proto_ptr = proto_ptr_r.value;
         try extend_args.append(allocator, proto_ptr.*);
 
         // Collect method definitions until next protocol or end
@@ -822,7 +831,8 @@ pub fn evalExtendType(
             }
 
             // Evaluate to get a function value
-            const fn_ptr = try eval.evalRec(allocator, &try vm.listValue(allocator, fn_form), env, depth + 1);
+            const fn_ptr_r = try eval.evalRec(allocator, &try vm.listValue(allocator, fn_form), env, depth + 1, ctx);
+        const fn_ptr = fn_ptr_r.value;
             fn_form = .empty;
             const persistent_fn = try vm.clone(&fn_ptr.*, allocator);
             vm.valueDeinit(fn_ptr, allocator);
@@ -838,7 +848,7 @@ pub fn evalExtendType(
     }
 
     // Now call extend with the built args
-    return evalExtend(allocator, extend_args, env, depth);
+    return evalExtend(allocator, extend_args, env, depth, ctx);
 }
 
 // Import helpers for listFromVector
@@ -852,12 +862,14 @@ pub fn evalExtendProtocol(
     l: list.List,
     env: *Env,
     depth: usize,
+    ctx: ?*eval.TrampolineStack,
 ) anyerror!Value {
     // (extend-protocol protocol atype1 (method [params] body...)+ atype2 ...)
     if (l.items.len < 3) return error.ArityError;
 
     // Evaluate the protocol (index 1)
-    const proto_ptr = try eval.evalRec(allocator, &l.items[1], env, depth + 1);
+    const proto_ptr_r = try eval.evalRec(allocator, &l.items[1], env, depth + 1, ctx);
+        const proto_ptr = proto_ptr_r.value;
     defer vm.valueDeinit(proto_ptr, allocator);
 
     // Validate it's a protocol
@@ -950,7 +962,8 @@ pub fn evalExtendProtocol(
                 arity_form = .empty;
             }
 
-            const fn_ptr = try eval.evalRec(allocator, &try vm.listValue(allocator, fn_form), env, depth + 1);
+            const fn_ptr_r = try eval.evalRec(allocator, &try vm.listValue(allocator, fn_form), env, depth + 1, ctx);
+        const fn_ptr = fn_ptr_r.value;
             fn_form = .empty;
             const persistent_fn = try vm.clone(&fn_ptr.*, allocator);
             vm.valueDeinit(fn_ptr, allocator);
@@ -971,7 +984,7 @@ pub fn evalExtendProtocol(
 
         // Call evalExtend directly
         vm.valueDeinit(&result, allocator);
-        result = try evalExtend(allocator, ext_args, env, depth + 1);
+        result = try evalExtend(allocator, ext_args, env, depth + 1, ctx);
         ext_args = .empty;
     }
 

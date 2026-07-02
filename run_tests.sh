@@ -46,13 +46,13 @@ run_clj_suite() {
     local exit_code=0
     output=$(tests/timeout.sh "$TIMEOUT_SECONDS" "$VM" "$test_file" 2>&1) || exit_code=$?
 
-    if [ "$exit_code" -eq 124 ] || [ "$exit_code" -eq 137 ] || [ "$exit_code" -eq 134 ] || [ "$exit_code" -eq 143 ]; then
+    if [ "$exit_code" -eq 124 ]; then
         echo "TIMEOUT: $suite_name (${TIMEOUT_SECONDS}s)"
         CLJ_FAILED=$((CLJ_FAILED + 1))
         return
     elif [ "$exit_code" -ne 0 ]; then
         echo "CRASH: $suite_name (exit code $exit_code)"
-        echo "$output" | head -20
+        echo "$output" | head -30
         CLJ_FAILED=$((CLJ_FAILED + 1))
         return
     fi

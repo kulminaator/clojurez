@@ -290,7 +290,7 @@ fn evalQuote(allocator: Allocator, form: *const Value) anyerror!*Value {
 /// (quasiquote form) — template with unquote.
 fn evalQuasiquote(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Value {
     if (form.list.items.items.len != 2) return error.ArityError;
-    const result = try eval_macro.unquoteProcess(allocator, form.list.items.items[1], env, 0);
+    const result = try eval_macro.unquoteProcess(allocator, form.list.items.items[1], env, 0, null);
     return try allocBuiltinResult(allocator, result);
 }
 

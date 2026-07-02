@@ -132,6 +132,7 @@ pub const Parser = struct {
             .queue_tag => return self.readQueue(),
             .quote => {
                 // 'x is shorthand for (quote x)
+                const line = self.lexer.currentLine();
                 self.current.deinit(self.allocator);
                 self.current = .{ .eof = {} };
                 try self.advance();
@@ -140,10 +141,11 @@ pub const Parser = struct {
                 errdefer quoted.deinit(self.allocator);
                 try quoted.append(self.allocator, try self.symValue("quote"));
                 try quoted.append(self.allocator, form);
-                return try vm.listValue(self.allocator, quoted);
+                return try vm.listValueWithLine(self.allocator, quoted, line);
             },
             .backtick => {
                 // `x is shorthand for (quasiquote x)
+                const line = self.lexer.currentLine();
                 self.current.deinit(self.allocator);
                 self.current = .{ .eof = {} };
                 try self.advance();
@@ -152,10 +154,11 @@ pub const Parser = struct {
                 errdefer qq.deinit(self.allocator);
                 try qq.append(self.allocator, try self.symValue("quasiquote"));
                 try qq.append(self.allocator, form);
-                return try vm.listValue(self.allocator, qq);
+                return try vm.listValueWithLine(self.allocator, qq, line);
             },
             .deref => {
                 // @x is shorthand for (deref x)
+                const line = self.lexer.currentLine();
                 self.current.deinit(self.allocator);
                 self.current = .{ .eof = {} };
                 try self.advance();
@@ -164,10 +167,11 @@ pub const Parser = struct {
                 errdefer deref_list.deinit(self.allocator);
                 try deref_list.append(self.allocator, try self.symValue("deref"));
                 try deref_list.append(self.allocator, form);
-                return try vm.listValue(self.allocator, deref_list);
+                return try vm.listValueWithLine(self.allocator, deref_list, line);
             },
             .unquote => {
                 // ~x is shorthand for (unquote x)
+                const line = self.lexer.currentLine();
                 self.current.deinit(self.allocator);
                 self.current = .{ .eof = {} };
                 try self.advance();
@@ -176,10 +180,11 @@ pub const Parser = struct {
                 errdefer uq.deinit(self.allocator);
                 try uq.append(self.allocator, try self.symValue("unquote"));
                 try uq.append(self.allocator, form);
-                return try vm.listValue(self.allocator, uq);
+                return try vm.listValueWithLine(self.allocator, uq, line);
             },
             .unquote_splicing => {
                 // ~@x is shorthand for (unquote-splicing x)
+                const line = self.lexer.currentLine();
                 self.current.deinit(self.allocator);
                 self.current = .{ .eof = {} };
                 try self.advance();
@@ -188,7 +193,7 @@ pub const Parser = struct {
                 errdefer uqs.deinit(self.allocator);
                 try uqs.append(self.allocator, try self.symValue("unquote-splicing"));
                 try uqs.append(self.allocator, form);
-                return try vm.listValue(self.allocator, uqs);
+                return try vm.listValueWithLine(self.allocator, uqs, line);
             },
             .string => |s| {
                 const val = try vm.stringValue(self.allocator, s);
@@ -250,6 +255,7 @@ pub const Parser = struct {
     }
 
     fn readList(self: *Parser) anyerror!Value {
+        const line = self.lexer.currentLine();
         try self.advance(); // consume '('
         var items = list.empty();
         errdefer items.deinit(self.allocator);
@@ -267,7 +273,7 @@ pub const Parser = struct {
                 .close_paren => {
                     self.debugCloseForm("list");
                     try self.advance();
-                    return try vm.listValue(self.allocator, items);
+                    return try vm.listValueWithLine(self.allocator, items, line);
                 },
                 .eof => return error.UnexpectedEof,
                 else => {},
@@ -471,6 +477,7 @@ pub const Parser = struct {
     /// Expand #(body) shorthand into (fn [params] body).
     /// Parses body with arg tracking: % symbols are intercepted during parsing.
     fn readFnShorthand(self: *Parser, body_text: []const u8) anyerror!Value {
+        const line = self.lexer.currentLine();
         // Wrap body in parens so it parses as a single form
         const wrapped_len = body_text.len + 2;
         var wrapped_buf: [1024]u8 = undefined;
@@ -511,7 +518,7 @@ pub const Parser = struct {
         // Don't deinit params_vec — items transferred to fn_form
         try fn_form.append(self.allocator, body_form);
 
-        return try vm.listValue(self.allocator, fn_form);
+        return try vm.listValueWithLine(self.allocator, fn_form, line);
     }
 
     /// Tracks % arg references during fn shorthand parsing.

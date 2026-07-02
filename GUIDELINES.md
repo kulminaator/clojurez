@@ -210,7 +210,7 @@ test "regression: <bug_description_or_issue_number>"
 
 ```bash
 # Zig unit tests
-zig test -fsingle-threaded src/zig/all_tests.zig
+zig test src/zig/all_tests.zig
 
 # CLI/integration tests (builds + runs everything)
 ./run_tests.sh
@@ -222,7 +222,7 @@ zig test -fsingle-threaded src/zig/all_tests.zig
 ### Running Both
 
 ```bash
-zig test -fsingle-threaded src/zig/all_tests.zig && ./run_tests.sh
+zig test src/zig/all_tests.zig && ./run_tests.sh
 ```
 
 ### Sample Program Verification
