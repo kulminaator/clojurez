@@ -373,7 +373,12 @@ fn runExpression(allocator: Allocator, expr: []const u8, env: *Env) anyerror!voi
     for (forms.items) |form| {
         // Use current namespace's env for evaluation
         const eval_env = getCurrentNsEnv(env) orelse env;
-        const result_ptr = try eval.eval(allocator, form, eval_env);
+        const result_ptr = eval.evalWithFile(allocator, form, eval_env, "<string>") catch |err| {
+            // Error already formatted with source location in evalWithFile
+            std.process.exit(1);
+            _ = err;
+            unreachable;
+        };
 
         if (!vm.equals(result_ptr.*, vm.nilValue())) {
             const print_val = if (std.meta.activeTag(result_ptr.*) == .lazy_seq) blk: {
@@ -430,7 +435,12 @@ fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void 
     for (forms.items) |form| {
         // Get current namespace's env for each form (ns form may change it)
         const eval_env = getCurrentNsEnv(env) orelse env;
-        const result_ptr = try eval.eval(allocator, form, eval_env);
+        const result_ptr = eval.evalWithFile(allocator, form, eval_env, filename) catch |err| {
+            // Error already formatted with source location in evalWithFile
+            std.process.exit(1);
+            _ = err; // unreachable but silences unused warning
+            unreachable;
+        };
 
         if (print_results and !vm.equals(result_ptr.*, vm.nilValue())) {
             const print_val = if (std.meta.activeTag(result_ptr.*) == .lazy_seq) blk: {
@@ -547,7 +557,7 @@ fn runMain(allocator: Allocator, env: *Env, ns_name: []const u8) anyerror!void {
     // GC handles cleanup.
 
     for (forms.items) |form| {
-        const result_ptr = try eval.eval(allocator, form, env);
+        const result_ptr = try eval.evalWithFile(allocator, form, env, file_path);
         vm.valueDeinit(&result_ptr.*, allocator);
         // GC handles result cleanup.
     }
@@ -572,7 +582,7 @@ fn runMain(allocator: Allocator, env: *Env, ns_name: []const u8) anyerror!void {
     var call_list: list.List = .empty;
     defer call_list.deinit(allocator);
     try call_list.append(allocator, try vm.clone(&main_fn, allocator));
-    const call_result_ptr = try eval.eval(allocator, try vm.listValue(allocator, call_list), ns_env);
+    const call_result_ptr = try eval.evalWithFile(allocator, try vm.listValue(allocator, call_list), ns_env, file_path);
     vm.valueDeinit(&call_result_ptr.*, allocator);
 
 }

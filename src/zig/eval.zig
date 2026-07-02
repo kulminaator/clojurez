@@ -32,6 +32,17 @@ pub const TrampolineFrame = struct {
     body_form: Value,       // the function body to evaluate (a list)
     env: *Env,              // the function's environment (heap-allocated)
     env_guard_active: bool = false, // whether pushEnvTempRoot was called
+    src_loc: SourceLoc = .{}, // source location of the call site
+};
+
+/// Source location for error reporting.
+pub const SourceLoc = struct {
+    file: []const u8 = "",
+    line: usize = 0, // 1-based line number (0 = unknown)
+
+    pub fn isEmpty(self: SourceLoc) bool {
+        return self.file.len == 0;
+    }
 };
 
 /// Heap-based evaluation stack for trampolining.
@@ -61,10 +72,16 @@ pub const TrampolineStack = struct {
 
     /// Push a frame for function body evaluation.
     pub fn push(self: *TrampolineStack, body: Value, env: *Env) anyerror!void {
+        return self.pushWithLoc(body, env, .{});
+    }
+
+    /// Push a frame for function body evaluation with source location.
+    pub fn pushWithLoc(self: *TrampolineStack, body: Value, env: *Env, src_loc: SourceLoc) anyerror!void {
         try self.frames.append(self.allocator, .{
             .body_form = body,
             .env = env,
             .env_guard_active = false,
+            .src_loc = src_loc,
         });
     }
 
@@ -237,15 +254,102 @@ pub const EvalError = error{
 
 const MAX_RECURSION = 1000000;
 
+/// Extract the function name from a body form (typically a (do ...) list).
+/// Returns the symbol name or "<anonymous>" if not available.
+fn extractFnName(body: *const Value) []const u8 {
+    // The body is typically a list like (do body...)
+    // We look for the function name in the environment or use the body form
+    if (std.meta.activeTag(body.*) == .list) {
+        const items = body.*.list.items.items;
+        if (items.len > 0 and std.meta.activeTag(items[0]) == .symbol) {
+            const sym = items[0].symbol;
+            // Skip "do" and internal markers
+            if (!std.mem.eql(u8, sym, "do") and
+                !std.mem.eql(u8, sym, "__protocol_dispatch__"))
+            {
+                return sym;
+            }
+        }
+    }
+    return "<anonymous>";
+}
+
+/// Format a user-friendly error message with source location and stack trace.
+fn formatEvalError(allocator: Allocator, err: anyerror, file: []const u8, form: *const Value, tramp: *const TrampolineStack) ![]const u8 {
+    const err_name = @errorName(err);
+    var msg: std.ArrayList(u8) = .empty;
+    errdefer msg.deinit(allocator);
+
+    // Get source line from the form if it's a list
+    var src_line: usize = 0;
+    if (std.meta.activeTag(form.*) == .list) {
+        src_line = form.*.list.src_line;
+    }
+
+    // Print the error with source location
+    if (src_line > 0) {
+        try msg.appendSlice(allocator, "Runtime error at ");
+        try msg.appendSlice(allocator, file);
+        try msg.appendSlice(allocator, ":");
+        var line_buf: [20]u8 = undefined;
+        try msg.appendSlice(allocator, std.fmt.bufPrint(&line_buf, "{d}", .{src_line}) catch "?");
+        try msg.appendSlice(allocator, ": ");
+        try msg.appendSlice(allocator, err_name);
+    } else {
+        try msg.appendSlice(allocator, "Runtime error: ");
+        try msg.appendSlice(allocator, err_name);
+    }
+
+    // Add stack trace from trampoline stack
+    if (tramp.frames.items.len > 0) {
+        try msg.appendSlice(allocator, "\n\nStack trace:");
+        // Print frames from bottom (oldest) to top (newest)
+        var i: usize = 0;
+        while (i < tramp.frames.items.len) : (i += 1) {
+            const frame = &tramp.frames.items[i];
+            const fn_name = extractFnName(&frame.body_form);
+            const loc = frame.src_loc;
+            try msg.appendSlice(allocator, "\n  at ");
+            try msg.appendSlice(allocator, fn_name);
+            if (loc.line > 0) {
+                var loc_buf: [20]u8 = undefined;
+                try msg.appendSlice(allocator, " (at ");
+                if (loc.file.len > 0) {
+                    try msg.appendSlice(allocator, loc.file);
+                    try msg.appendSlice(allocator, ":");
+                }
+                try msg.appendSlice(allocator, std.fmt.bufPrint(&loc_buf, "{d}", .{loc.line}) catch "?");
+                try msg.appendSlice(allocator, ")");
+            }
+        }
+    }
+
+    return msg.toOwnedSlice(allocator);
+}
+
 /// Main entry point for evaluation.
 /// Uses trampolining: function body evaluations are pushed onto a heap stack
 /// instead of recursing on the C stack. This enables unlimited Clojure recursion depth.
 pub fn eval(allocator: Allocator, form: Value, env: *Env) anyerror!*Value {
+    return evalWithFile(allocator, form, env, "");
+}
+
+/// Main entry point for evaluation with source file tracking.
+pub fn evalWithFile(allocator: Allocator, form: Value, env: *Env, file: []const u8) anyerror!*Value {
     var tramp = TrampolineStack.init(allocator);
     errdefer tramp.deinit();
 
     // Evaluate the initial form
-    var result: ?EvalResult = try evalRec(allocator, &form, env, 0, &tramp);
+    var result: ?EvalResult = evalRec(allocator, &form, env, 0, &tramp) catch |err| {
+        // Don't format internal control errors like ReplExit
+        if (err == EvalError.ReplExit) return err;
+        const msg = formatEvalError(allocator, err, file, &form, &tramp) catch {
+            return err; // errdefer will clean up tramp
+        };
+        defer allocator.free(msg);
+        std.debug.print("{s}\n", .{msg});
+        return err; // errdefer will clean up tramp
+    };
 
     // Trampoline loop: process pending frames
     while (true) {
@@ -276,7 +380,27 @@ pub fn eval(allocator: Allocator, form: Value, env: *Env) anyerror!*Value {
         frame.env_guard_active = true;
 
         const body_val = frame.body_form;
-        result = try evalRec(allocator, &body_val, frame.env, 0, &tramp);
+        result = evalRec(allocator, &body_val, frame.env, 0, &tramp) catch |err| {
+            // Don't format internal control errors like ReplExit
+            if (err == EvalError.ReplExit) {
+                popEnvTempRoot(frame.env);
+                frame.env.deinit(allocator);
+                allocator.destroy(frame.env);
+                return err; // errdefer will clean up tramp
+            }
+            const msg = formatEvalError(allocator, err, file, &body_val, &tramp) catch {
+                popEnvTempRoot(frame.env);
+                frame.env.deinit(allocator);
+                allocator.destroy(frame.env);
+                return err; // errdefer will clean up tramp
+            };
+            defer allocator.free(msg);
+            std.debug.print("{s}\n", .{msg});
+            popEnvTempRoot(frame.env);
+            frame.env.deinit(allocator);
+            allocator.destroy(frame.env);
+            return err; // errdefer will clean up tramp
+        };
 
         // Clean up the frame
         popEnvTempRoot(frame.env);
@@ -361,7 +485,7 @@ pub fn evalRec(allocator: Allocator, form: *const Value, env: *Env, depth: usize
             return error.UndefinedSymbol;
         },
         .list => {
-            return try evalList(allocator, &form.*.list.items, env, depth, ctx);
+            return try evalList(allocator, form, env, depth, ctx);
         },
         .vector => {
             return try evalVector(allocator, form, env, depth, ctx);
@@ -517,7 +641,8 @@ fn parseParams(allocator: Allocator, params: list.List) anyerror!ParsedParams {
     };
 }
 
-fn evalList(allocator: Allocator, l: *const list.List, env: *Env, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+fn evalList(allocator: Allocator, form: *const Value, env: *Env, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+    const l = &form.*.list.items;
     if (l.items.len == 0) return .{ .value = try allocValue(allocator, try vm.listValue(allocator, list.empty())) };
 
     const first = l.items[0];
@@ -530,7 +655,7 @@ fn evalList(allocator: Allocator, l: *const list.List, env: *Env, depth: usize, 
     }
 
     // Non-special-form: evaluate as function call
-    return try evalFunctionCall(allocator, l, env, depth + 1, ctx);
+    return try evalFunctionCall(allocator, form, env, depth + 1, ctx);
 }
 
 /// Evaluate a vector element-wise.
@@ -589,10 +714,12 @@ fn evalCons(allocator: Allocator, form: *const Value, env: *Env, depth: usize, c
         // Improper list - append the tail as a final element
         try new_list.append(allocator, try vm.clone(&current_val, allocator));
     }
-    return try evalList(allocator, &new_list, env, depth, ctx);
+    const list_val = try vm.listValue(allocator, new_list);
+    return try evalList(allocator, &list_val, env, depth, ctx);
 }
 
-fn evalFunctionCall(allocator: Allocator, l: *const list.List, env: *Env, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+fn evalFunctionCall(allocator: Allocator, form: *const Value, env: *Env, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+    const l = &form.*.list.items;
     // Evaluate the operator (synchronously — operator is typically a symbol lookup)
     const op_ptr = try evalRecV(allocator, &l.items[0], env, depth, null);
     defer allocator.destroy(op_ptr);
@@ -625,7 +752,9 @@ fn evalFunctionCall(allocator: Allocator, l: *const list.List, env: *Env, depth:
     }
 
     // Call the function — may return trampoline for user-defined functions
-    const result = try call(allocator, op_ptr, &args, env, depth, ctx);
+    // Pass source line from the original form list for error reporting
+    const src_line = form.*.list.src_line;
+    const result = try callWithSrc(allocator, op_ptr, &args, env, depth, ctx, src_line);
     if (std.meta.activeTag(result) == .trampoline) return result;
     // For builtins, result.value is already a *Value — return it directly
     return result;
@@ -945,8 +1074,12 @@ fn evalLoop(allocator: Allocator, l: *const list.List, env: *Env, depth: usize, 
 }
 
 pub fn call(allocator: Allocator, op: *const Value, args_list: *const list.List, env: *Env, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+    return callWithSrc(allocator, op, args_list, env, depth, ctx, 0);
+}
+
+pub fn callWithSrc(allocator: Allocator, op: *const Value, args_list: *const list.List, env: *Env, depth: usize, ctx: ?*TrampolineStack, src_line: usize) anyerror!EvalResult {
     switch (std.meta.activeTag(op.*)) {
-        .function => return callFunction(allocator, op, args_list, env, depth, ctx),
+        .function => return callFunction(allocator, op, args_list, env, depth, ctx, src_line),
         .builtin_fn => return .{ .value = try allocValue(allocator, try callBuiltinFn(allocator, op, args_list, env)) },
         .set => return .{ .value = try allocValue(allocator, try callSet(allocator, op, args_list)) },
         .keyword => return .{ .value = try allocValue(allocator, try callKeyword(allocator, op, args_list)) },
@@ -963,7 +1096,7 @@ pub fn call(allocator: Allocator, op: *const Value, args_list: *const list.List,
 /// Call a user-defined function: match arity, bind params, evaluate body.
 /// KEY TRAMPOLINE POINT: Instead of recursing into evalRec for body evaluation,
 /// pushes a frame onto the trampoline stack. The eval() loop processes it.
-fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, env: *Env, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, env: *Env, depth: usize, ctx: ?*TrampolineStack, src_line: usize) anyerror!EvalResult {
     _ = env;
     _ = depth;
     const fn_data = op.function;
@@ -1019,9 +1152,12 @@ fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, 
     for (arity.body.items) |item| {
         try body_clone.append(allocator, try vm.clone(&item, allocator));
     }
-    const body_val = try vm.listValue(allocator, body_clone);
+    // Set source line on the body form for error reporting
+    const body_val = try vm.listValueWithLine(allocator, body_clone, src_line);
     if (ctx) |tramp| {
-        try tramp.push(body_val, new_env);
+        // Set source location on the trampoline frame for error reporting
+        const src_loc = if (src_line > 0) SourceLoc{ .line = src_line } else SourceLoc{};
+        try tramp.pushWithLoc(body_val, new_env, src_loc);
         return .trampoline;
     }
 

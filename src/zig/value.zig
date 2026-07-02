@@ -148,6 +148,7 @@ pub const FnData = struct {
 
 pub const ListData = struct {
     items: std.ArrayListUnmanaged(Value),
+    src_line: usize = 0, // 1-based line number from parser (0 = unknown)
 };
 
 pub const VectorData = struct {
@@ -292,11 +293,15 @@ pub fn keywordValue(allocator: Allocator, s: []const u8) anyerror!Value {
 }
 
 pub fn listValue(allocator: Allocator, l: list.List) anyerror!Value {
+    return listValueWithLine(allocator, l, 0);
+}
+
+pub fn listValueWithLine(allocator: Allocator, l: list.List, src_line: usize) anyerror!Value {
     const data = try allocator.create(ListData);
     if (gc_mod.current_gc) |gc| {
         gc.setObjectType(@as(*anyopaque, @ptrCast(data)), gc_mod.GCObjectType.list_data);
     }
-    data.* = .{ .items = l };
+    data.* = .{ .items = l, .src_line = src_line };
     return .{ .list = data };
 }
 
@@ -644,7 +649,7 @@ pub fn clone(val: *const Value, allocator: Allocator) anyerror!Value {
         .character => |c| return charValue(c),
         .symbol => |s| return symValue(allocator, s),
         .keyword => |s| return keywordValue(allocator, s),
-        .list => |data| return try listValue(allocator, try list.clone(&data.items, allocator)),
+        .list => |data| return try listValueWithLine(allocator, try list.clone(&data.items, allocator), data.src_line),
         .vector => |data| return try vectorValue(allocator, try vec.clone(&data.items, allocator)),
         .map => |data| {
             var new_map: Map = .empty;
