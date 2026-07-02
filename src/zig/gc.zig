@@ -62,6 +62,7 @@ pub const GCObjectType = enum(u8) {
     bigint_data = 24,  // BigInt struct { sign, limbs, allocator, owns_limbs }
     ratio_data = 25,   // Ratio struct { num: BigInt, den: BigInt }
     decimal_data = 26, // BigDecimal struct { unscaled: BigInt, scale: i32 }
+    bytecode_program = 29, // BytecodeProgram { instructions, constants, symbols, source_markers, fn_pool }
 };
 
 const Header = struct {

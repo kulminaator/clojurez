@@ -71,6 +71,7 @@ pub fn valueScanFn(obj: *anyopaque, ctx: *gc.ScanContext) void {
         .bigint_data => scanBigIntData(obj, ctx),
         .ratio_data => scanRatioData(obj, ctx),
         .decimal_data => scanDecimalData(obj, ctx),
+        .bytecode_program => scanBytecodeProgram(obj, ctx),
     }
 }
 
@@ -596,6 +597,11 @@ fn scanFnArities(arities_ptr: *anyopaque, ctx: *gc.ScanContext, total_size: usiz
         if (arity.rest_name) |rn| {
             if (rn.len > 0) markPtr(rn.ptr, ctx);
         }
+        // Mark bytecode program so GC doesn't free it
+        if (arity.bytecode) |bc| {
+            ctx.gc.setObjectType(bc, gc.GCObjectType.bytecode_program);
+            ctx.gc.markRecursive(bc, ctx);
+        }
     }
 }
 
@@ -626,6 +632,38 @@ fn scanDecimalData(d_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     // Mark unscaled value limbs
     if (d.unscaled.limbs.len > 0 and d.unscaled.owns_limbs) {
         ctx.gc.markRecursive(d.unscaled.limbs.ptr, ctx);
+    }
+}
+
+/// Scan BytecodeProgram: marks internal arrays and constant pool Values.
+fn scanBytecodeProgram(bc_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const bc_mod = @import("bytecode.zig");
+    const bc: *bc_mod.BytecodeProgram = @ptrCast(@alignCast(bc_ptr));
+
+    // Mark instructions array
+    if (bc.instructions.items.len > 0) {
+        markPtr(bc.instructions.items.ptr, ctx);
+    }
+    // Mark constants array and scan each Value in it
+    if (bc.constants.items.len > 0) {
+        ctx.gc.setObjectType(bc.constants.items.ptr, gc.GCObjectType.value_array);
+        ctx.gc.markRecursive(bc.constants.items.ptr, ctx);
+    }
+    // Mark symbol strings
+    for (bc.symbols.items) |s| {
+        if (s.len > 0) markPtr(s.ptr, ctx);
+    }
+    // Mark source_markers array
+    if (bc.source_markers.items.len > 0) {
+        markPtr(bc.source_markers.items.ptr, ctx);
+    }
+    // Mark source_file string
+    if (bc.source_file.len > 0) {
+        markPtr(bc.source_file.ptr, ctx);
+    }
+    // Mark fn_pool
+    if (bc.fn_pool) |pool| {
+        if (pool.len > 0) markPtr(pool.ptr, ctx);
     }
 }
 
