@@ -325,18 +325,20 @@ pub fn core_reduce(self: *const Value, args: *const list.List, env_env: *Env) an
 /// Streams through elements without forcing the entire sequence.
 fn reduceSeq(allocator: Allocator, f: Value, coll: Value, init_val: ?Value, env: *Env) anyerror!Value {
     var acc: ?Value = if (init_val) |iv| try vm.clone(&iv, allocator) else null;
-    var owned_acc: bool = false;
-    defer if (owned_acc) if (acc) |*a| vm.valueDeinit(a, allocator);
+    var owned_acc: bool = acc != null; // we own the clone of init_val
+    errdefer if (acc) |*a| vm.valueDeinit(a, allocator);
 
     var current = try vm.clone(&coll, allocator);
-    defer vm.valueDeinit(&current, allocator);
+    var current_alloc = allocator;
+    defer vm.valueDeinit(&current, current_alloc);
 
     while (true) {
         // Force lazy_seq if needed
         if (std.meta.activeTag(current) == .lazy_seq) {
             const forced = try sequences_mod.forceLazySeqGetResult(allocator, &current);
-            vm.valueDeinit(&current, allocator);
+            vm.valueDeinit(&current, current_alloc);
             current = forced;
+            current_alloc = allocator;
             continue;
         }
 
@@ -351,12 +353,18 @@ fn reduceSeq(allocator: Allocator, f: Value, coll: Value, init_val: ?Value, env:
                 acc = step_result.new_acc;
                 owned_acc = step_result.owned;
                 // Check for early reduction termination
-                if (step_result.reduced) return acc.?;
+                if (step_result.reduced) {
+                    vm.valueDeinit(&current, current_alloc);
+                    current = vm.nilValue();
+                    owned_acc = false; // transfer ownership to caller
+                    return acc.?;
+                }
             }
             // Move to tail
             const tail = try vm.clone(&ccd.tail, allocator);
-            vm.valueDeinit(&current, ccd.allocator);
+            vm.valueDeinit(&current, current_alloc);
             current = tail;
+            current_alloc = allocator;
             continue;
         }
 
@@ -367,10 +375,16 @@ fn reduceSeq(allocator: Allocator, f: Value, coll: Value, init_val: ?Value, env:
             const step_result = try reduceStep(allocator, f, acc, owned_acc, elem, env);
             acc = step_result.new_acc;
             owned_acc = step_result.owned;
-            if (step_result.reduced) return acc.?;
+            if (step_result.reduced) {
+                vm.valueDeinit(&current, current_alloc);
+                current = vm.nilValue();
+                owned_acc = false; // transfer ownership to caller
+                return acc.?;
+            }
             const tail = try vm.clone(&cdata.tail, allocator);
-            vm.valueDeinit(&current, cdata.allocator);
+            vm.valueDeinit(&current, current_alloc);
             current = tail;
+            current_alloc = allocator;
             continue;
         }
 
@@ -384,11 +398,15 @@ fn reduceSeq(allocator: Allocator, f: Value, coll: Value, init_val: ?Value, env:
                 acc = step_result.new_acc;
                 owned_acc = step_result.owned;
                 if (step_result.reduced) {
-                    vm.valueDeinit(&current, allocator);
+                    vm.valueDeinit(&current, current_alloc);
+                    current = vm.nilValue();
+                    owned_acc = false; // transfer ownership to caller
                     return acc.?;
                 }
             }
-            vm.valueDeinit(&current, allocator);
+            // Deinit and set to nil so defer is a no-op
+            vm.valueDeinit(&current, current_alloc);
+            current = vm.nilValue();
             break;
         }
 
@@ -402,11 +420,15 @@ fn reduceSeq(allocator: Allocator, f: Value, coll: Value, init_val: ?Value, env:
                 acc = step_result.new_acc;
                 owned_acc = step_result.owned;
                 if (step_result.reduced) {
-                    vm.valueDeinit(&current, allocator);
+                    vm.valueDeinit(&current, current_alloc);
+                    current = vm.nilValue();
+                    owned_acc = false; // transfer ownership to caller
                     return acc.?;
                 }
             }
-            vm.valueDeinit(&current, allocator);
+            // Deinit and set to nil so defer is a no-op
+            vm.valueDeinit(&current, current_alloc);
+            current = vm.nilValue();
             break;
         }
 
@@ -415,6 +437,7 @@ fn reduceSeq(allocator: Allocator, f: Value, coll: Value, init_val: ?Value, env:
     }
 
     // Return accumulator or nil
+    // Transfer ownership to caller - don't deinit
     if (acc) |a| return a;
     return vm.nilValue();
 }
@@ -429,19 +452,24 @@ const ReduceStepResult = struct {
 /// Single reduce step: (f acc elem).
 fn reduceStep(allocator: Allocator, f: Value, acc: ?Value, owned_acc: bool, elem: Value, env: *Env) anyerror!ReduceStepResult {
     var e = elem;
-    defer vm.valueDeinit(&e, allocator);
+    var e_owned = true;
+    defer if (e_owned) vm.valueDeinit(&e, allocator);
 
     var new_acc: Value = undefined;
     var new_owned: bool = false;
 
     if (acc) |old_acc| {
         var arg_list: list.List = .empty;
-        defer arg_list.deinit(allocator);
+        errdefer arg_list.deinit(allocator);
+        // Clone values directly into arg_list
         try arg_list.append(allocator, try vm.clone(&old_acc, allocator));
-        try arg_list.append(allocator, e);
+        try arg_list.append(allocator, try vm.clone(&e, allocator));
+        // Call the function - arg_list is only used during the call
         const result_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env);
         new_acc = result_ptr.*;
         allocator.destroy(result_ptr);
+        // Explicitly deinit arg_list before continuing
+        arg_list.deinit(allocator);
         if (owned_acc) {
             var mutable_old = old_acc;
             vm.valueDeinit(&mutable_old, allocator);
@@ -449,6 +477,7 @@ fn reduceStep(allocator: Allocator, f: Value, acc: ?Value, owned_acc: bool, elem
         new_owned = true;
     } else {
         new_acc = e;
+        e_owned = false; // transferred ownership to new_acc
         new_owned = true;
     }
 
