@@ -8,6 +8,7 @@ const RatioMod = @import("ratio.zig");
 const BD = @import("big_decimal.zig");
 const phm = @import("persistent_hash_map.zig");
 const gc_mod = @import("gc.zig");
+const bytecode_mod = @import("bytecode.zig");
 
 /// Helper: tag a string data allocation so the GC doesn't misidentify it as a Value.
 fn tagStringData(ptr: *anyopaque) void {
@@ -130,6 +131,7 @@ pub const ConsData = struct {
 pub const Arity = struct {
     params: list.List,
     body: list.List,
+    bytecode: ?*bytecode_mod.BytecodeProgram = null,
     rest_name: ?[]const u8 = null,
 };
 
@@ -740,6 +742,7 @@ pub fn clone(val: *const Value, allocator: Allocator) anyerror!Value {
                 try cloned_arities.append(allocator, Arity{
                     .params = try list.clone(&arity.params, allocator),
                     .body = try list.clone(&arity.body, allocator),
+                    .bytecode = arity.bytecode, // share bytecode pointer (no deep clone needed)
                     .rest_name = cloned_rest,
                 });
             }

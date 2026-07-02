@@ -37,6 +37,7 @@ const test_persistent_string_hash_map = @import("persistent_string_hash_map.zig"
 const test_debug = @import("debug.zig");
 const test_stack_stats = @import("stack_stats.zig");
 const test_threading = @import("namespaces/core/threading.zig");
+const test_bytecode = @import("bytecode.zig");
 
 // Suppress unused import warnings
 comptime {
@@ -76,4 +77,5 @@ comptime {
     _ = test_debug;
     _ = test_stack_stats;
     _ = test_threading;
+    _ = test_bytecode;
 }
