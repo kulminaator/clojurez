@@ -115,6 +115,12 @@ pub const SourceMarker = struct {
     col: usize,
 };
 
+/// Loop binding information for loop/recur support.
+pub const LoopInfo = struct {
+    body_pc: usize,               // PC of first body instruction (after loop_start)
+    binding_sym_indices: []usize, // indices into symbol pool for binding names
+};
+
 /// A compiled bytecode program.
 pub const BytecodeProgram = struct {
     instructions: std.ArrayListUnmanaged(Instruction),
@@ -122,6 +128,7 @@ pub const BytecodeProgram = struct {
     symbols: std.ArrayListUnmanaged([]const u8),     // symbol pool (for load_var/store_var)
     source_markers: std.ArrayListUnmanaged(SourceMarker),
     fn_pool: ?[]*FnMetadata = null,                 // function metadata pool (for make_fn)
+    loop_infos: std.ArrayListUnmanaged(LoopInfo) = .empty, // loop binding info (for loop/recur)
     source_file: []const u8 = "",
 
     pub fn init(allocator: Allocator) BytecodeProgram {
@@ -148,6 +155,10 @@ pub const BytecodeProgram = struct {
             allocator.free(m.file);
         }
         self.source_markers.deinit(allocator);
+        for (self.loop_infos.items) |info| {
+            allocator.free(info.binding_sym_indices);
+        }
+        self.loop_infos.deinit(allocator);
         if (self.fn_pool) |pool| {
             for (pool) |meta| {
                 meta.deinit();
@@ -156,6 +167,16 @@ pub const BytecodeProgram = struct {
             allocator.free(pool);
         }
         self.instructions.deinit(allocator);
+    }
+
+    /// Add loop binding info. Returns the index.
+    pub fn addLoopInfo(self: *BytecodeProgram, allocator: Allocator, body_pc: usize, binding_sym_indices: []usize) anyerror!usize {
+        const idx = self.loop_infos.items.len;
+        try self.loop_infos.append(allocator, .{
+            .body_pc = body_pc,
+            .binding_sym_indices = binding_sym_indices,
+        });
+        return idx;
     }
 
     /// Append an instruction. Returns the PC (index) of the appended instruction.
@@ -897,14 +918,16 @@ pub fn execute(
             },
 
             .loop_start => {
-                const body_pc = inst.operand;
+                const loop_info_idx = inst.operand;
+                if (loop_info_idx >= program.loop_infos.items.len) return error.BytecodeError;
+                const info = program.loop_infos.items[loop_info_idx];
                 // Push a loop frame onto the loop stack
                 const frame = try allocator.create(LoopFrame);
                 frame.* = .{
                     .loop_pc = pc - 1,
-                    .body_pc = body_pc,
-                    .binding_count = 0,
-                    .binding_sym_indices = &.{},
+                    .body_pc = info.body_pc,
+                    .binding_count = info.binding_sym_indices.len,
+                    .binding_sym_indices = info.binding_sym_indices,
                 };
                 try loop_stack.append(allocator, frame);
             },
@@ -1634,9 +1657,17 @@ const Compiler = struct {
                 return;
             }
 
-            // Note: loop/recur are NOT handled here. Functions containing
-            // loop/recur should skip bytecode compilation (checked in evalDefn).
-            // This ensures loop/recur works through the AST interpreter.
+            // (loop [bindings] body...)
+            if (std.mem.eql(u8, sym, "loop")) {
+                try self.compileLoop(l.items);
+                return;
+            }
+
+            // (recur val1 val2 ...)
+            if (std.mem.eql(u8, sym, "recur")) {
+                try self.compileRecur(l.items);
+                return;
+            }
 
             // Not a special form we handle — fall through to function call
             // But first check if it's a macro that needs expansion
@@ -1878,10 +1909,10 @@ const Compiler = struct {
                 if (parsed.rest_name) |rn| self.allocator.free(rn);
             }
 
-            // Check if body contains loop/recur or unhandled special forms — skip bytecode if so
+            // Check if body contains unhandled special forms — skip bytecode if so
+            // loop/recur is now supported in bytecode (Phase 5).
             var skip_bytecode = false;
             for (body_forms) |bf| {
-                if (containsLoopRecur(bf)) { skip_bytecode = true; break; }
                 if (containsUnhandledSpecialFormHelper(bf)) { skip_bytecode = true; break; }
             }
             // Also skip if params contain destructuring patterns
@@ -2067,6 +2098,78 @@ const Compiler = struct {
         _ = try self.program.emit0(self.allocator, .push_nil);
         const past_else_pc = self.program.instructions.items.len;
         self.program.instructions.items[jump_past_else_pc].operand = past_else_pc;
+    }
+
+    /// Compile (loop [bindings] body...).
+    /// Emits: binding value compilations + store_var for each binding,
+    /// then loop_start (with index into loop_infos), then body forms.
+    fn compileLoop(self: *Compiler, items: []const Value) anyerror!void {
+        if (items.len < 3) {
+            _ = try self.program.emit0(self.allocator, .push_nil);
+            return;
+        }
+
+        const bindings = items[1];
+        const body = items[2..];
+
+        // Parse bindings: [sym1 val1 sym2 val2 ...]
+        const bind_items: []const Value = switch (std.meta.activeTag(bindings)) {
+            .list => bindings.list.items.items,
+            .vector => bindings.vector.items.items,
+            else => {
+                _ = try self.program.emit0(self.allocator, .push_nil);
+                return;
+            },
+        };
+
+        // Collect binding symbol indices
+        const binding_count = bind_items.len / 2;
+        var sym_indices: []usize = try self.allocator.alloc(usize, binding_count);
+
+        // Compile initial bindings: evaluate values, store in env
+        var i: usize = 0;
+        while (i < bind_items.len) : (i += 2) {
+            const sym = bind_items[i];
+            const val = bind_items[i + 1];
+
+            // Record symbol index for recur
+            if (std.meta.activeTag(sym) == .symbol) {
+                sym_indices[i / 2] = try self.program.addSymbol(self.allocator, sym.symbol);
+            }
+
+            // Compile value and store
+            try self.compileForm(val);
+            if (std.meta.activeTag(sym) == .symbol) {
+                _ = try self.program.emit(self.allocator, .store_var, sym_indices[i / 2]);
+            }
+        }
+
+        // Record body_pc (PC after loop_start)
+        const body_pc = self.program.instructions.items.len;
+
+        // Add loop info and emit loop_start
+        const loop_info_idx = try self.program.addLoopInfo(self.allocator, body_pc, sym_indices);
+        _ = try self.program.emit(self.allocator, .loop_start, loop_info_idx);
+
+        // Compile body forms
+        for (body) |form| {
+            try self.compileForm(form);
+        }
+    }
+
+    /// Compile (recur val1 val2 ...).
+    /// Values must be compiled in REVERSE order so that the recur handler
+    /// (which pops all values then iterates in reverse) assigns them correctly.
+    /// Stack after: ..., valN, ..., val2, val1  (val1 on top = first binding)
+    fn compileRecur(self: *Compiler, items: []const Value) anyerror!void {
+        const args = items[1..];
+        // Compile in reverse order: last arg first, first arg last
+        var i: usize = args.len;
+        while (i > 0) : (i -= 1) {
+            try self.compileForm(args[i - 1]);
+        }
+        // Emit recur opcode
+        _ = try self.program.emit0(self.allocator, .recur);
     }
 };
 
@@ -2825,6 +2928,156 @@ test "bytecode::negate: bigint" {
             const result_str = try v.*.bigint.toString(allocator);
             defer allocator.free(result_str);
             try std.testing.expectEqualStrings("-123456789012345678", result_str);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+// ============================================================
+// Phase 5: loop/recur bytecode tests
+// ============================================================
+
+test "bytecode::loop_recur: simple counter" {
+    const allocator = std.testing.allocator;
+    var program = BytecodeProgram.init(allocator);
+    defer program.deinit(allocator);
+
+    // Simulate: (loop [i 0] (if (>= i 5) i (recur (inc i))))
+    // But without function calls, we use direct comparisons and arithmetic
+    // loop [i 0] -> push 0, store i, loop_start
+    // if (>= i 5) i (recur (inc i))
+    //   load i, push 5, ge, jump_if_nil -> recur_branch, load i, jump -> end
+    //   recur_branch: load i, push 1, add, recur
+
+    const sym_i = try program.addSymbol(allocator, "i");
+
+    // Initial binding: i = 0
+    const zero_idx = try program.addConstant(allocator, vm.intValue(0));
+    _ = try program.emit(allocator, .push_const, zero_idx);
+    _ = try program.emit(allocator, .store_var, sym_i);
+
+    // loop_start (body starts at next instruction)
+    const body_pc = program.instructions.items.len;
+    const sym_indices = try allocator.alloc(usize, 1);
+    sym_indices[0] = sym_i;
+    const loop_idx = try program.addLoopInfo(allocator, body_pc, sym_indices);
+    _ = try program.emit(allocator, .loop_start, loop_idx);
+
+    // Body: (if (>= i 5) i (recur (inc i)))
+    // Load i
+    _ = try program.emit(allocator, .load_var, sym_i);
+    // Push 5
+    const five_idx = try program.addConstant(allocator, vm.intValue(5));
+    _ = try program.emit(allocator, .push_const, five_idx);
+    // ge (>=)
+    _ = try program.emit0(allocator, .ge);
+    // jump_if_nil -> recur_branch
+    const jump_nil_pc = try program.emit(allocator, .jump_if_nil, 0);
+    // Then branch: load i (return it)
+    _ = try program.emit(allocator, .load_var, sym_i);
+    // Jump to end
+    const jump_end_pc = try program.emit(allocator, .jump, 0);
+
+    // Recur branch: load i, push 1, add, recur
+    const recur_pc = program.instructions.items.len;
+    program.instructions.items[jump_nil_pc].operand = recur_pc;
+    _ = try program.emit(allocator, .load_var, sym_i);
+    const one_idx = try program.addConstant(allocator, vm.intValue(1));
+    _ = try program.emit(allocator, .push_const, one_idx);
+    _ = try program.emit0(allocator, .add);
+    _ = try program.emit0(allocator, .recur);
+
+    // End
+    const end_pc = program.instructions.items.len;
+    program.instructions.items[jump_end_pc].operand = end_pc;
+    _ = try program.emit0(allocator, .stop);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(std.meta.activeTag(v.*) == .integer);
+            try std.testing.expect(v.*.integer == 5);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::loop_recur: accumulator" {
+    const allocator = std.testing.allocator;
+    var program = BytecodeProgram.init(allocator);
+    defer program.deinit(allocator);
+
+    // Simulate: (loop [i 3 s 0] (if (<= i 0) s (recur (dec i) (+ s i))))
+    // Result: 3 + 2 + 1 = 6
+
+    const sym_i = try program.addSymbol(allocator, "i");
+    const sym_s = try program.addSymbol(allocator, "s");
+
+    // Initial bindings: i = 3, s = 0
+    const three_idx = try program.addConstant(allocator, vm.intValue(3));
+    _ = try program.emit(allocator, .push_const, three_idx);
+    _ = try program.emit(allocator, .store_var, sym_i);
+    const zero_idx = try program.addConstant(allocator, vm.intValue(0));
+    _ = try program.emit(allocator, .push_const, zero_idx);
+    _ = try program.emit(allocator, .store_var, sym_s);
+
+    // loop_start
+    const body_pc = program.instructions.items.len;
+    const sym_indices = try allocator.alloc(usize, 2);
+    sym_indices[0] = sym_i;
+    sym_indices[1] = sym_s;
+    const loop_idx = try program.addLoopInfo(allocator, body_pc, sym_indices);
+    _ = try program.emit(allocator, .loop_start, loop_idx);
+
+    // Body: (if (<= i 0) s (recur (dec i) (+ s i)))
+    // Load i, push 0, le
+    _ = try program.emit(allocator, .load_var, sym_i);
+    _ = try program.emit(allocator, .push_const, zero_idx);
+    _ = try program.emit0(allocator, .le);
+    // jump_if_nil -> recur_branch
+    const jump_nil_pc = try program.emit(allocator, .jump_if_nil, 0);
+    // Then: load s
+    _ = try program.emit(allocator, .load_var, sym_s);
+    // Jump to end
+    const jump_end_pc = try program.emit(allocator, .jump, 0);
+
+    // Recur: values must be pushed in REVERSE binding order.
+    // The recur handler pops all values, then iterates in reverse.
+    // So: push last binding value first, first binding value last.
+    // Stack after pushes: ..., new_s, new_i  (new_i on top)
+    // recur pops: val0=new_i, val1=new_s → reverse → binding[0]=new_i, binding[1]=new_s ✓
+    const recur_pc = program.instructions.items.len;
+    program.instructions.items[jump_nil_pc].operand = recur_pc;
+    const one_idx = try program.addConstant(allocator, vm.intValue(1));
+    // (+ s i) — push first (last binding value)
+    _ = try program.emit(allocator, .load_var, sym_s);
+    _ = try program.emit(allocator, .load_var, sym_i);
+    _ = try program.emit0(allocator, .add);
+    // (dec i) = (- i 1) — push second (first binding value, on top)
+    _ = try program.emit(allocator, .load_var, sym_i);
+    _ = try program.emit(allocator, .push_const, one_idx);
+    _ = try program.emit0(allocator, .sub);
+    _ = try program.emit0(allocator, .recur);
+
+    const end_pc = program.instructions.items.len;
+    program.instructions.items[jump_end_pc].operand = end_pc;
+    _ = try program.emit0(allocator, .stop);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(std.meta.activeTag(v.*) == .integer);
+            try std.testing.expect(v.*.integer == 6);
             vm.valueDeinit(v, allocator);
             allocator.destroy(v);
         },
