@@ -9,6 +9,10 @@ const vec = @import("vector.zig");
 const eval_mod = @import("eval.zig");
 const gc_mod = @import("gc.zig");
 const phm = @import("persistent_hash_map.zig");
+const BI = @import("big_int.zig");
+const RatioMod = @import("ratio.zig");
+const BD = @import("big_decimal.zig");
+const arithmetic = @import("namespaces/core/arithmetic.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -639,7 +643,7 @@ pub fn execute(
             .add, .sub, .mul, .div, .rem => {
                 const b = stack.pop() orelse return error.BytecodeError;
                 const a = stack.pop() orelse return error.BytecodeError;
-                const result = try arithmeticOp(inst.opcode, a.*, b.*, allocator);
+                const result = try arithmeticOp(inst.opcode, a.*, b.*, allocator, env);
                 const result_ptr = try eval_mod.allocValue(allocator, result);
                 vm.valueDeinit(a, allocator);
                 allocator.destroy(a);
@@ -650,10 +654,11 @@ pub fn execute(
 
             .neg => {
                 const a = stack.pop() orelse return error.BytecodeError;
-                const result = try eval_mod.allocValue(allocator, vm.intValue(-a.*.integer));
+                const result = try negateOp(a.*, allocator);
+                const result_ptr = try eval_mod.allocValue(allocator, result);
                 vm.valueDeinit(a, allocator);
                 allocator.destroy(a);
-                try stack.push(result);
+                try stack.push(result_ptr);
             },
 
             .is_nil => {
@@ -958,20 +963,42 @@ fn compareOp(op: OpCode, a: Value, b: Value) anyerror!Value {
 }
 
 /// Perform an arithmetic operation.
-fn arithmeticOp(op: OpCode, a: Value, b: Value, allocator: Allocator) anyerror!Value {
-    // For now, implement integer arithmetic directly.
-    // Full numeric tower support will be added later.
-    const ai: i64 = switch (a) {
-        .integer => |v| v,
-        .float => |v| @as(i64, @intFromFloat(v)),
-        else => return error.TypeError,
-    };
-    const bi: i64 = switch (b) {
-        .integer => |v| v,
-        .float => |v| @as(i64, @intFromFloat(v)),
-        else => return error.TypeError,
-    };
-    _ = allocator;
+/// For integer/float operands, computes directly.
+/// For bigint/ratio/decimal, delegates to the corresponding zig.core builtin.
+fn arithmeticOp(op: OpCode, a: Value, b: Value, allocator: Allocator, env: *vm.Env) anyerror!Value {
+    const a_tag = std.meta.activeTag(a);
+    const b_tag = std.meta.activeTag(b);
+
+    // Delegate to zig.core builtin for non-integer/float types
+    if (needsDelegation(a_tag) or needsDelegation(b_tag)) {
+        return delegateArithmetic(op, a, b, allocator, env);
+    }
+
+    // Fast path: integer and float arithmetic
+    if (a_tag == .float or b_tag == .float) {
+        const af: f64 = switch (a_tag) {
+            .float => a.float,
+            .integer => @as(f64, @floatFromInt(a.integer)),
+            else => unreachable,
+        };
+        const bf: f64 = switch (b_tag) {
+            .float => b.float,
+            .integer => @as(f64, @floatFromInt(b.integer)),
+            else => unreachable,
+        };
+        return switch (op) {
+            .add => vm.floatValue(af + bf),
+            .sub => vm.floatValue(af - bf),
+            .mul => vm.floatValue(af * bf),
+            .div => if (bf == 0) error.DivisionByZero else vm.floatValue(af / bf),
+            .rem => if (bf == 0) error.DivisionByZero else vm.floatValue(@rem(af, bf)),
+            else => unreachable,
+        };
+    }
+
+    // Both integers
+    const ai = a.integer;
+    const bi = b.integer;
     return switch (op) {
         .add => vm.intValue(ai + bi),
         .sub => vm.intValue(ai - bi),
@@ -979,6 +1006,75 @@ fn arithmeticOp(op: OpCode, a: Value, b: Value, allocator: Allocator) anyerror!V
         .div => if (bi == 0) error.DivisionByZero else vm.intValue(@divTrunc(ai, bi)),
         .rem => if (bi == 0) error.DivisionByZero else vm.intValue(ai - @divTrunc(ai, bi) * bi),
         else => unreachable,
+    };
+}
+
+/// Check if a value type needs delegation to zig.core builtins.
+fn needsDelegation(tag: std.meta.Tag(Value)) bool {
+    return switch (tag) {
+        .bigint, .ratio, .decimal => true,
+        else => false,
+    };
+}
+
+/// Delegate arithmetic to the corresponding zig.core builtin.
+/// Looks up the builtin (e.g., "+", "-", "*", "/", "rem") and calls it
+/// with the two operands as arguments.
+fn delegateArithmetic(op: OpCode, a: Value, b: Value, allocator: Allocator, env: *vm.Env) anyerror!Value {
+    const op_name = switch (op) {
+        .add => "+",
+        .sub => "-",
+        .mul => "*",
+        .div => "/",
+        .rem => "rem",
+        else => unreachable,
+    };
+
+    // Look up the zig.core builtin in the environment
+    const fn_val = try resolveSymbol(env, op_name);
+
+    // Build args list: [a, b]
+    var args: list.List = .empty;
+    errdefer args.deinit(allocator);
+    try args.append(allocator, try vm.clone(&a, allocator));
+    try args.append(allocator, try vm.clone(&b, allocator));
+
+    // Call the builtin
+    const call_result = try eval_mod.call(allocator, &fn_val, &args, env, 0, null);
+
+    switch (call_result) {
+        .value => |v| return try vm.clone(v, allocator),
+        .trampoline => return error.NotImplemented,
+    }
+}
+
+/// Perform negation on a numeric value, supporting the full numeric tower.
+fn negateOp(val: Value, allocator: Allocator) anyerror!Value {
+    return switch (val) {
+        .integer => |v| vm.intValue(-v),
+        .float => |v| vm.floatValue(-v),
+        .bigint => {
+            // Clone, negate in-place, then pass to bigIntValue which allocates a new pointer.
+            // We must clone the negated result to avoid sharing the limbs array with the original.
+            var cloned = try val.bigint.clone(allocator);
+            defer cloned.deinit();
+            cloned.negate();
+            const negated = try cloned.clone(allocator);
+            return try vm.bigIntValue(allocator, negated);
+        },
+        .ratio => {
+            var cloned = try val.ratio.clone(allocator);
+            defer cloned.deinit();
+            const negated = RatioMod.negate(cloned);
+            return try vm.ratioValue(allocator, negated);
+        },
+        .decimal => {
+            var cloned = try val.decimal.clone(allocator);
+            defer cloned.deinit();
+            const negated = BD.negate(cloned);
+            return try vm.decimalValue(allocator, negated);
+        },
+        else => return error.TypeError,
     };
 }
 
@@ -2475,3 +2571,263 @@ test "bytecode::compile: store and load variable" {
 // full Clojure test suite (test_lists_sequences.clj, test_collections.clj).
 // Standalone unit tests have subtle allocator interactions with ListData
 // ownership that are exercised correctly through the normal eval path.
+
+// ============================================================
+// Phase 4: Full numeric tower arithmetic tests
+// ============================================================
+
+/// Create a test environment with arithmetic builtins registered.
+fn createTestEnvWithArithmetic(allocator: Allocator) vm.Env {
+    var env = createTestEnv(allocator);
+    // Register arithmetic builtins for delegation path
+    env.put("+", vm.builtinFnValue(arithmetic.core_plus)) catch unreachable;
+    env.put("-", vm.builtinFnValue(arithmetic.core_minus)) catch unreachable;
+    env.put("*", vm.builtinFnValue(arithmetic.core_mult)) catch unreachable;
+    env.put("/", vm.builtinFnValue(arithmetic.core_div)) catch unreachable;
+    env.put("rem", vm.builtinFnValue(arithmetic.core_rem)) catch unreachable;
+    return env;
+}
+
+test "bytecode::arithmetic: bigint add" {
+    const allocator = std.testing.allocator;
+    var program = BytecodeProgram.init(allocator);
+    defer program.deinit(allocator);
+
+    // Use values that produce a result exceeding i64 max
+    const bi1 = try BI.bigIntFromString(allocator, "9223372036854775807");
+    const bi1_val = try vm.bigIntValue(allocator, bi1);
+    const bi2 = try BI.bigIntFromString(allocator, "9223372036854775807");
+    const bi2_val = try vm.bigIntValue(allocator, bi2);
+    const idx1 = try program.addConstant(allocator, bi1_val);
+    const idx2 = try program.addConstant(allocator, bi2_val);
+    _ = try program.emit(allocator, .push_const, idx1);
+    _ = try program.emit(allocator, .push_const, idx2);
+    _ = try program.emit0(allocator, .add);
+    _ = try program.emit0(allocator, .stop);
+
+    var env = createTestEnvWithArithmetic(allocator);
+    defer env.deinit(allocator);
+
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            // i64.max + i64.max = 18446744073709551614 (exceeds i64, must be bigint)
+            try std.testing.expect(std.meta.activeTag(v.*) == .bigint);
+            const result_str = try v.*.bigint.toString(allocator);
+            defer allocator.free(result_str);
+            try std.testing.expectEqualStrings("18446744073709551614", result_str);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::arithmetic: bigint sub" {
+    const allocator = std.testing.allocator;
+    var program = BytecodeProgram.init(allocator);
+    defer program.deinit(allocator);
+
+    const bi1 = try BI.bigIntFromString(allocator, "10000000000000000000");
+    const bi1_val = try vm.bigIntValue(allocator, bi1);
+    const bi2 = try BI.bigIntFromString(allocator, "42");
+    const bi2_val = try vm.bigIntValue(allocator, bi2);
+    const idx1 = try program.addConstant(allocator, bi1_val);
+    const idx2 = try program.addConstant(allocator, bi2_val);
+    _ = try program.emit(allocator, .push_const, idx1);
+    _ = try program.emit(allocator, .push_const, idx2);
+    _ = try program.emit0(allocator, .sub);
+    _ = try program.emit0(allocator, .stop);
+
+    var env = createTestEnvWithArithmetic(allocator);
+    defer env.deinit(allocator);
+
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            // 10000000000000000000 - 42 = 9999999999999999958 (exceeds i64)
+            try std.testing.expect(std.meta.activeTag(v.*) == .bigint);
+            const result_str = try v.*.bigint.toString(allocator);
+            defer allocator.free(result_str);
+            try std.testing.expectEqualStrings("9999999999999999958", result_str);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::arithmetic: bigint mul" {
+    const allocator = std.testing.allocator;
+    var program = BytecodeProgram.init(allocator);
+    defer program.deinit(allocator);
+
+    const bi1 = try BI.bigIntFromString(allocator, "1000000000000000000");
+    const bi1_val = try vm.bigIntValue(allocator, bi1);
+    const bi2 = try BI.bigIntFromString(allocator, "1000000000000000000");
+    const bi2_val = try vm.bigIntValue(allocator, bi2);
+    const idx1 = try program.addConstant(allocator, bi1_val);
+    const idx2 = try program.addConstant(allocator, bi2_val);
+    _ = try program.emit(allocator, .push_const, idx1);
+    _ = try program.emit(allocator, .push_const, idx2);
+    _ = try program.emit0(allocator, .mul);
+    _ = try program.emit0(allocator, .stop);
+
+    var env = createTestEnvWithArithmetic(allocator);
+    defer env.deinit(allocator);
+
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            // 10^18 * 10^18 = 10^36 (way exceeds i64)
+            try std.testing.expect(std.meta.activeTag(v.*) == .bigint);
+            const result_str = try v.*.bigint.toString(allocator);
+            defer allocator.free(result_str);
+            try std.testing.expectEqualStrings("1000000000000000000000000000000000000", result_str);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::arithmetic: mixed int+bigint add" {
+    const allocator = std.testing.allocator;
+    var program = BytecodeProgram.init(allocator);
+    defer program.deinit(allocator);
+
+    const int_val = vm.intValue(42);
+    const bi = try BI.bigIntFromString(allocator, "12345678901234567890");
+    const bi_val = try vm.bigIntValue(allocator, bi);
+    const idx1 = try program.addConstant(allocator, int_val);
+    const idx2 = try program.addConstant(allocator, bi_val);
+    _ = try program.emit(allocator, .push_const, idx1);
+    _ = try program.emit(allocator, .push_const, idx2);
+    _ = try program.emit0(allocator, .add);
+    _ = try program.emit0(allocator, .stop);
+
+    var env = createTestEnvWithArithmetic(allocator);
+    defer env.deinit(allocator);
+
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            // 42 + 12345678901234567890 = 12345678901234567932
+            try std.testing.expect(std.meta.activeTag(v.*) == .bigint);
+            const result_str = try v.*.bigint.toString(allocator);
+            defer allocator.free(result_str);
+            try std.testing.expectEqualStrings("12345678901234567932", result_str);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::arithmetic: int+float add" {
+    const allocator = std.testing.allocator;
+    var program = BytecodeProgram.init(allocator);
+    defer program.deinit(allocator);
+
+    const int_val = vm.intValue(3);
+    const float_val = vm.floatValue(1.5);
+    const idx1 = try program.addConstant(allocator, int_val);
+    const idx2 = try program.addConstant(allocator, float_val);
+    _ = try program.emit(allocator, .push_const, idx1);
+    _ = try program.emit(allocator, .push_const, idx2);
+    _ = try program.emit0(allocator, .add);
+    _ = try program.emit0(allocator, .stop);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(std.meta.activeTag(v.*) == .float);
+            try std.testing.expect(v.*.float == 4.5);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::negate: integer" {
+    const allocator = std.testing.allocator;
+    var program = BytecodeProgram.init(allocator);
+    defer program.deinit(allocator);
+
+    const val_idx = try program.addConstant(allocator, vm.intValue(42));
+    _ = try program.emit(allocator, .push_const, val_idx);
+    _ = try program.emit0(allocator, .neg);
+    _ = try program.emit0(allocator, .stop);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(std.meta.activeTag(v.*) == .integer);
+            try std.testing.expect(v.*.integer == -42);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::negate: float" {
+    const allocator = std.testing.allocator;
+    var program = BytecodeProgram.init(allocator);
+    defer program.deinit(allocator);
+
+    const val_idx = try program.addConstant(allocator, vm.floatValue(3.14));
+    _ = try program.emit(allocator, .push_const, val_idx);
+    _ = try program.emit0(allocator, .neg);
+    _ = try program.emit0(allocator, .stop);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(std.meta.activeTag(v.*) == .float);
+            try std.testing.expect(v.*.float == -3.14);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::negate: bigint" {
+    const allocator = std.testing.allocator;
+    var program = BytecodeProgram.init(allocator);
+    defer program.deinit(allocator);
+
+    const bi = BI.bigIntFromI64(allocator, 123456789012345678);
+    const bi_val = try vm.bigIntValue(allocator, bi);
+    const idx = try program.addConstant(allocator, bi_val);
+    _ = try program.emit(allocator, .push_const, idx);
+    _ = try program.emit0(allocator, .neg);
+    _ = try program.emit0(allocator, .stop);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(std.meta.activeTag(v.*) == .bigint);
+            const result_str = try v.*.bigint.toString(allocator);
+            defer allocator.free(result_str);
+            try std.testing.expectEqualStrings("-123456789012345678", result_str);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
