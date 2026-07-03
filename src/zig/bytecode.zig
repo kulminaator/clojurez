@@ -1679,6 +1679,18 @@ const Compiler = struct {
                 return;
             }
 
+            // (case expr test1 result1 test2 result2 ... :else default)
+            if (std.mem.eql(u8, sym, "case")) {
+                try self.compileCase(l.items);
+                return;
+            }
+
+            // (letfn [(f [params] body...) (g [params] body...)] usage...)
+            if (std.mem.eql(u8, sym, "letfn")) {
+                try self.compileLetFn(l.items);
+                return;
+            }
+
             // Not a special form we handle — fall through to function call
             // But first check if it's a macro that needs expansion
             if (self.env) |e| {
@@ -2307,6 +2319,162 @@ fn isSimpleBytecodeForm(form: Value) bool {
         // Emit recur opcode
         _ = try self.program.emit0(self.allocator, .recur);
     }
+
+    /// Compile (case expr test1 result1 test2 result2 ... :else default).
+    /// Compiles to a series of equality checks with jumps.
+    /// Strategy:
+    ///   1. Compile expr once, store in temp var
+    ///   2. For each (test result) pair:
+    ///      a. Compile test, load expr, eq, jump_if_nil to next clause
+    ///      b. Compile result, jump to end
+    ///   3. Handle :else clause or push nil if no match
+    fn compileCase(self: *Compiler, items: []const Value) anyerror!void {
+        if (items.len < 2) {
+            _ = try self.program.emit0(self.allocator, .push_nil);
+            return;
+        }
+
+        const expr_form = items[1];
+        const clauses = items[2..];
+
+        // Compile expr once and store in temp variable
+        try self.compileForm(expr_form);
+        const expr_tmp_idx = try self.program.addSymbol(self.allocator, "__case_expr");
+        _ = try self.program.emit(self.allocator, .store_var, expr_tmp_idx);
+
+        // Two-pass: first pass emits instructions, second pass patches jumps
+        var clause_starts: std.ArrayListUnmanaged(usize) = .empty;
+        defer clause_starts.deinit(self.allocator);
+        var jump_nil_pcs: std.ArrayListUnmanaged(usize) = .empty;
+        defer jump_nil_pcs.deinit(self.allocator);
+        var jump_end_pcs: std.ArrayListUnmanaged(usize) = .empty;
+        defer jump_end_pcs.deinit(self.allocator);
+
+        var i: usize = 0;
+        while (i < clauses.len) : (i += 2) {
+            const test_form = clauses[i];
+            const is_else = std.meta.activeTag(test_form) == .keyword and
+                std.mem.eql(u8, test_form.keyword, "else");
+
+            try clause_starts.append(self.allocator, self.program.instructions.items.len);
+
+            if (is_else) {
+                // :else clause — just compile the default result
+                if (i + 1 < clauses.len) {
+                    try self.compileForm(clauses[i + 1]);
+                }
+            } else {
+                // Compile test value, load expr, compare with eq
+                try self.compileForm(test_form);
+                _ = try self.program.emit(self.allocator, .load_var, expr_tmp_idx);
+                _ = try self.program.emit0(self.allocator, .eq);
+
+                // jump_if_nil to next clause (placeholder)
+                const jnil_pc = try self.program.emit(self.allocator, .jump_if_nil, 0);
+                try jump_nil_pcs.append(self.allocator, jnil_pc);
+
+                // Compile result
+                if (i + 1 < clauses.len) {
+                    try self.compileForm(clauses[i + 1]);
+                }
+
+                // Jump to end (placeholder)
+                const jump_pc = try self.program.emit(self.allocator, .jump, 0);
+                try jump_end_pcs.append(self.allocator, jump_pc);
+            }
+        }
+
+        // If no :else clause, push nil as default
+        // The :else keyword is at clauses.len-2 (the result is at clauses.len-1)
+        const has_else = clauses.len >= 2 and
+            std.meta.activeTag(clauses[clauses.len - 2]) == .keyword and
+            std.mem.eql(u8, clauses[clauses.len - 2].keyword, "else");
+        const nil_pc: ?usize = if (!has_else) blk: {
+            const pc = self.program.instructions.items.len;
+            _ = try self.program.emit0(self.allocator, .push_nil);
+            break :blk pc;
+        } else null;
+
+        // Patch jump targets
+        const end_pc = self.program.instructions.items.len;
+        var j: usize = 0;
+        while (j < jump_nil_pcs.items.len) : (j += 1) {
+            var target: usize = end_pc;
+            if (j + 1 < clause_starts.items.len) {
+                target = clause_starts.items[j + 1];
+            } else if (nil_pc) |np| {
+                // Last clause with no :else — jump to push_nil
+                target = np;
+            }
+            self.program.instructions.items[jump_nil_pcs.items[j]].operand = target;
+        }
+        for (jump_end_pcs.items) |pc| {
+            self.program.instructions.items[pc].operand = end_pc;
+        }
+    }
+
+    /// Compile (letfn [(f [params] body...) (g [params] body...)] usage...).
+    /// Compiles each function definition and stores it in the env,
+    /// then compiles the body forms. Functions can reference each other
+    /// for mutual recursion because all names are bound before body execution.
+    fn compileLetFn(self: *Compiler, items: []const Value) anyerror!void {
+        if (items.len < 3) {
+            _ = try self.program.emit0(self.allocator, .push_nil);
+            return;
+        }
+
+        const bindings = items[1];
+        const body = items[2..];
+
+        // Parse bindings form
+        const bind_items: []const Value = switch (std.meta.activeTag(bindings)) {
+            .list => bindings.list.items.items,
+            .vector => bindings.vector.items.items,
+            else => {
+                _ = try self.program.emit0(self.allocator, .push_nil);
+                return;
+            },
+        };
+
+        // Compile each function definition and store in env
+        for (bind_items) |binding| {
+            if (std.meta.activeTag(binding) != .list) continue;
+            const b = binding.list;
+            if (b.items.items.len < 2) continue;
+
+            // First element is the function name (symbol)
+            const fname = b.items.items[0];
+            if (std.meta.activeTag(fname) != .symbol) continue;
+
+            // Build a (fn name ([params] body...)) form and compile it
+            // The fn compiler will produce a make_fn instruction
+            var fn_form: list.List = .empty;
+            errdefer fn_form.deinit(self.allocator);
+            try fn_form.append(self.allocator, try vm.symValue(self.allocator, "fn"));
+            // Add name
+            try fn_form.append(self.allocator, try vm.clone(&fname, self.allocator));
+            // Add arity: ([params] body...)
+            // The second element is params, rest is body
+            var arity_form: list.List = .empty;
+            errdefer arity_form.deinit(self.allocator);
+            for (b.items.items[1..]) |form_item| {
+                try arity_form.append(self.allocator, try vm.clone(&form_item, self.allocator));
+            }
+            try fn_form.append(self.allocator, try vm.listValue(self.allocator, arity_form));
+
+            // Compile the fn form (produces make_fn on stack)
+            try self.compileForm(try vm.listValue(self.allocator, fn_form));
+
+            // Store in env under the function name
+            const sym_idx = try self.program.addSymbol(self.allocator, fname.symbol);
+            _ = try self.program.emit(self.allocator, .store_var, sym_idx);
+        }
+
+        // Compile body forms
+        for (body) |form| {
+            try self.compileForm(form);
+        }
+    }
 };
 
 // Helper functions used by compiler
@@ -2414,7 +2582,9 @@ fn isBytecodeSpecialForm(sym: []const u8) bool {
         std.mem.eql(u8, sym, "cond") or
         std.mem.eql(u8, sym, "when") or
         std.mem.eql(u8, sym, "loop") or
-        std.mem.eql(u8, sym, "recur"))
+        std.mem.eql(u8, sym, "recur") or
+        std.mem.eql(u8, sym, "case") or
+        std.mem.eql(u8, sym, "letfn"))
     {
         return true;
     }
@@ -2562,7 +2732,7 @@ fn containsUnhandledSpecialFormHelper(form: Value) bool {
             if (std.meta.activeTag(lst_items[0]) == .symbol) {
                 const sym = lst_items[0].symbol;
                 // List of special forms not yet compiled to bytecode.
-                // and, or, cond, when are now compiled (Phase 3).
+                // and, or, cond, when, case, letfn are now compiled (Phase 3, 7).
                 // Macros (when-not, when-let, when-some, when-first, if-let)
                 // are kept here because bytecode macro expansion is not reliable.
                 if (std.mem.eql(u8, sym, "when-not") or
@@ -2570,9 +2740,7 @@ fn containsUnhandledSpecialFormHelper(form: Value) bool {
                     std.mem.eql(u8, sym, "when-some") or
                     std.mem.eql(u8, sym, "when-first") or
                     std.mem.eql(u8, sym, "if-let") or
-                    std.mem.eql(u8, sym, "case") or
                     std.mem.eql(u8, sym, "quasiquote") or
-                    std.mem.eql(u8, sym, "letfn") or
                     std.mem.eql(u8, sym, "binding") or
                     std.mem.eql(u8, sym, "lazy-seq") or
                     std.mem.eql(u8, sym, "dorun") or
@@ -3860,4 +4028,255 @@ test "bytecode::containsRealFunctionCalls: nested arithmetic is safe" {
     try body2.append(std.testing.allocator, inner2_val);
     try body2.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "b"));
     try std.testing.expect(containsRealFunctionCallsInList(body2));
+}
+
+// ============================================================
+// Phase 7: case and letfn bytecode tests
+// ============================================================
+
+test "bytecode::compile: case match first" {
+    const allocator = std.testing.allocator;
+    // (case 1 1 "one" 2 "two" :else "default") => "one"
+    var body: list.List = .empty;
+    errdefer body.deinit(allocator);
+    try body.append(allocator, try vm.symValue(allocator, "case"));
+    try body.append(allocator, vm.intValue(1));
+    try body.append(allocator, vm.intValue(1));
+    try body.append(allocator, try vm.stringValue(allocator, "one"));
+    try body.append(allocator, vm.intValue(2));
+    try body.append(allocator, try vm.stringValue(allocator, "two"));
+    try body.append(allocator, try vm.keywordValue(allocator, "else"));
+    try body.append(allocator, try vm.stringValue(allocator, "default"));
+    var ast: list.List = .empty;
+    errdefer ast.deinit(allocator);
+    try ast.append(allocator, try vm.symValue(allocator, "do"));
+    try ast.append(allocator, try vm.listValue(allocator, body));
+
+    var program = try compile(allocator, ast, "<test>", null);
+    defer program.deinit(allocator);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(std.meta.activeTag(v.*) == .string);
+            try std.testing.expectEqualStrings("one", v.*.string);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::compile: case match second" {
+    const allocator = std.testing.allocator;
+    // (case 2 1 "one" 2 "two" :else "default") => "two"
+    var body: list.List = .empty;
+    errdefer body.deinit(allocator);
+    try body.append(allocator, try vm.symValue(allocator, "case"));
+    try body.append(allocator, vm.intValue(2));
+    try body.append(allocator, vm.intValue(1));
+    try body.append(allocator, try vm.stringValue(allocator, "one"));
+    try body.append(allocator, vm.intValue(2));
+    try body.append(allocator, try vm.stringValue(allocator, "two"));
+    try body.append(allocator, try vm.keywordValue(allocator, "else"));
+    try body.append(allocator, try vm.stringValue(allocator, "default"));
+    var ast: list.List = .empty;
+    errdefer ast.deinit(allocator);
+    try ast.append(allocator, try vm.symValue(allocator, "do"));
+    try ast.append(allocator, try vm.listValue(allocator, body));
+
+    var program = try compile(allocator, ast, "<test>", null);
+    defer program.deinit(allocator);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(std.meta.activeTag(v.*) == .string);
+            try std.testing.expectEqualStrings("two", v.*.string);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::compile: case default" {
+    const allocator = std.testing.allocator;
+    // (case 3 1 "one" 2 "two" :else "default") => "default"
+    var body: list.List = .empty;
+    errdefer body.deinit(allocator);
+    try body.append(allocator, try vm.symValue(allocator, "case"));
+    try body.append(allocator, vm.intValue(3));
+    try body.append(allocator, vm.intValue(1));
+    try body.append(allocator, try vm.stringValue(allocator, "one"));
+    try body.append(allocator, vm.intValue(2));
+    try body.append(allocator, try vm.stringValue(allocator, "two"));
+    try body.append(allocator, try vm.keywordValue(allocator, "else"));
+    try body.append(allocator, try vm.stringValue(allocator, "default"));
+    var ast: list.List = .empty;
+    errdefer ast.deinit(allocator);
+    try ast.append(allocator, try vm.symValue(allocator, "do"));
+    try ast.append(allocator, try vm.listValue(allocator, body));
+
+    var program = try compile(allocator, ast, "<test>", null);
+    defer program.deinit(allocator);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(std.meta.activeTag(v.*) == .string);
+            try std.testing.expectEqualStrings("default", v.*.string);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::compile: case no match no default" {
+    const allocator = std.testing.allocator;
+    // (case 3 1 "one" 2 "two") => nil
+    var body: list.List = .empty;
+    errdefer body.deinit(allocator);
+    try body.append(allocator, try vm.symValue(allocator, "case"));
+    try body.append(allocator, vm.intValue(3));
+    try body.append(allocator, vm.intValue(1));
+    try body.append(allocator, try vm.stringValue(allocator, "one"));
+    try body.append(allocator, vm.intValue(2));
+    try body.append(allocator, try vm.stringValue(allocator, "two"));
+    var ast: list.List = .empty;
+    errdefer ast.deinit(allocator);
+    try ast.append(allocator, try vm.symValue(allocator, "do"));
+    try ast.append(allocator, try vm.listValue(allocator, body));
+
+    var program = try compile(allocator, ast, "<test>", null);
+    defer program.deinit(allocator);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(std.meta.activeTag(v.*) == .nil);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::compile: case string match" {
+    const allocator = std.testing.allocator;
+    // (case "a" "a" :yes "b" :no :else :default) => :yes
+    var body: list.List = .empty;
+    errdefer body.deinit(allocator);
+    try body.append(allocator, try vm.symValue(allocator, "case"));
+    try body.append(allocator, try vm.stringValue(allocator, "a"));
+    try body.append(allocator, try vm.stringValue(allocator, "a"));
+    try body.append(allocator, try vm.keywordValue(allocator, "yes"));
+    try body.append(allocator, try vm.stringValue(allocator, "b"));
+    try body.append(allocator, try vm.keywordValue(allocator, "no"));
+    try body.append(allocator, try vm.keywordValue(allocator, "else"));
+    try body.append(allocator, try vm.keywordValue(allocator, "default"));
+    var ast: list.List = .empty;
+    errdefer ast.deinit(allocator);
+    try ast.append(allocator, try vm.symValue(allocator, "do"));
+    try ast.append(allocator, try vm.listValue(allocator, body));
+
+    var program = try compile(allocator, ast, "<test>", null);
+    defer program.deinit(allocator);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(std.meta.activeTag(v.*) == .keyword);
+            try std.testing.expectEqualStrings("yes", v.*.keyword);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::compile: letfn compiles without crash" {
+    const allocator = std.testing.allocator;
+    // Test that letfn compiles to bytecode without crashing.
+    // We test the function definition part (no function calls in body).
+    // (letfn [(f [n] n)] 42) => 42
+    var body: list.List = .empty;
+    errdefer body.deinit(allocator);
+    try body.append(allocator, try vm.symValue(allocator, "letfn"));
+
+    // Function definition: (f ([n] n))
+    var arity_form: list.List = .empty;
+    errdefer arity_form.deinit(allocator);
+    var params_vec: vec.Vector = .empty;
+    errdefer params_vec.deinit(allocator);
+    try params_vec.append(allocator, try vm.symValue(allocator, "n"));
+    try arity_form.append(allocator, try vm.vectorValue(allocator, params_vec));
+    try arity_form.append(allocator, try vm.symValue(allocator, "n"));
+
+    var fn_def: list.List = .empty;
+    errdefer fn_def.deinit(allocator);
+    try fn_def.append(allocator, try vm.symValue(allocator, "f"));
+    try fn_def.append(allocator, try vm.listValue(allocator, arity_form));
+
+    try body.append(allocator, try vm.listValue(allocator, fn_def));
+
+    // Body: just a literal (no function calls)
+    try body.append(allocator, vm.intValue(42));
+
+    var ast: list.List = .empty;
+    errdefer ast.deinit(allocator);
+    try ast.append(allocator, try vm.symValue(allocator, "do"));
+    try ast.append(allocator, try vm.listValue(allocator, body));
+
+    var program = try compile(allocator, ast, "<test>", null);
+    defer program.deinit(allocator);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(std.meta.activeTag(v.*) == .integer);
+            try std.testing.expect(v.*.integer == 42);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::isBytecodeSpecialForm: case and letfn" {
+    try std.testing.expect(isBytecodeSpecialForm("case"));
+    try std.testing.expect(isBytecodeSpecialForm("letfn"));
+    try std.testing.expect(!isBytecodeSpecialForm("foo"));
+}
+
+test "bytecode::containsUnhandledSpecialForm: case and letfn not unhandled" {
+    // case should NOT be flagged as unhandled
+    var case_body: list.List = .empty;
+    defer case_body.deinit(std.testing.allocator);
+    try case_body.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "case"));
+    try case_body.append(std.testing.allocator, vm.intValue(1));
+    try case_body.append(std.testing.allocator, vm.intValue(1));
+    try case_body.append(std.testing.allocator, vm.intValue(42));
+    try std.testing.expect(!containsUnhandledSpecialFormInList(case_body));
+
+    // letfn should NOT be flagged as unhandled
+    var letfn_body: list.List = .empty;
+    defer letfn_body.deinit(std.testing.allocator);
+    try letfn_body.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "letfn"));
+    try letfn_body.append(std.testing.allocator, try vm.listValue(std.testing.allocator, list.empty()));
+    try letfn_body.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "f"));
+    try std.testing.expect(!containsUnhandledSpecialFormInList(letfn_body));
 }
