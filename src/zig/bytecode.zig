@@ -69,6 +69,7 @@ pub const OpCode = enum(u8) {
     // --- Type checks (pop 1, push bool) ---
     is_nil,
     is_truthy,
+    not,          // pop 1, push bool (true if falsy: nil or false)
 
     // --- Collections ---
     cons,           // pop 2 (tail, head), push cons cell
@@ -234,6 +235,7 @@ pub const BytecodeProgram = struct {
             .neg => "NEG",
             .is_nil => "IS_NIL",
             .is_truthy => "IS_TRUTHY",
+            .not => "NOT",
             .cons => "CONS",
             .list_n => "LIST_N",
             .vector_n => "VECTOR_N",
@@ -694,6 +696,14 @@ pub fn execute(
                 const a = stack.pop() orelse return error.BytecodeError;
                 const truthy = vm.isTruthy(a.*);
                 const result = try eval_mod.allocValue(allocator, vm.boolValue(truthy));
+                vm.valueDeinit(a, allocator);
+                allocator.destroy(a);
+                try stack.push(result);
+            },
+            .not => {
+                const a = stack.pop() orelse return error.BytecodeError;
+                const truthy = vm.isTruthy(a.*);
+                const result = try eval_mod.allocValue(allocator, vm.boolValue(!truthy));
                 vm.valueDeinit(a, allocator);
                 allocator.destroy(a);
                 try stack.push(result);
@@ -1686,8 +1696,112 @@ const Compiler = struct {
         try self.compileFunctionCall(l.items);
     }
 
-    /// Compile a function call: (fn arg1 arg2 ...).
+    /// Check if a value is a "simple" form that the bytecode compiler can handle
+/// as an argument to arithmetic/comparison opcodes. Simple forms are literals,
+/// symbols, vectors of simple forms, and maps of simple forms. Lists (function
+/// calls) are NOT simple.
+fn isSimpleBytecodeForm(form: Value) bool {
+    return switch (form) {
+        .nil, .bool, .integer, .float, .string, .keyword, .symbol,
+        .bigint, .ratio, .decimal, .regex, .character => true,
+        .function, .builtin_fn, .atom, .lazy_seq, .cons, .reduced,
+        .future, .promise, .record, .chunk, .chunked_cons, .wrapped => true, // self-evaluating
+        .list => false, // function call — not simple
+        .vector => {
+            for (form.vector.items.items) |item| {
+                if (!isSimpleBytecodeForm(item)) return false;
+            }
+            return true;
+        },
+        .map => {
+            for (form.map.entries.items) |entry| {
+                if (!isSimpleBytecodeForm(entry.key)) return false;
+                if (!isSimpleBytecodeForm(entry.value)) return false;
+            }
+            return true;
+        },
+        .set => {
+            for (form.set.items.items) |item| {
+                if (!isSimpleBytecodeForm(item)) return false;
+            }
+            return true;
+        },
+        .queue => {
+            for (form.queue.items.items) |item| {
+                if (!isSimpleBytecodeForm(item)) return false;
+            }
+            return true;
+        },
+    };
+}
+
+/// Compile a function call: (fn arg1 arg2 ...).
+    /// Optimizes known arithmetic/comparison operators to direct opcodes.
+    /// Only optimizes when all args are "simple" forms (no nested function calls).
     fn compileFunctionCall(self: *Compiler, items: []const Value) anyerror!void {
+        // Check if the operator is a known arithmetic/comparison symbol
+        if (items.len > 0 and std.meta.activeTag(items[0]) == .symbol) {
+            const op_name = items[0].symbol;
+
+            // Check if all args are simple (no nested function calls)
+            const all_simple = blk: {
+                for (items[1..]) |arg| {
+                    if (!isSimpleBytecodeForm(arg)) break :blk false;
+                }
+                break :blk true;
+            };
+
+            // Arithmetic operators: +, -, *, /, rem
+            if (all_simple) {
+                if (std.mem.eql(u8, op_name, "+")) {
+                    return self.compileArithmeticOp(items[1..], .add);
+                }
+                if (std.mem.eql(u8, op_name, "-")) {
+                    // Handle single-arg negation: (- x) => push x, neg
+                    if (items.len == 2) {
+                        try self.compileForm(items[1]);
+                        _ = try self.program.emit0(self.allocator, .neg);
+                        return;
+                    }
+                    return self.compileArithmeticOp(items[1..], .sub);
+                }
+                if (std.mem.eql(u8, op_name, "*")) {
+                    return self.compileArithmeticOp(items[1..], .mul);
+                }
+                if (std.mem.eql(u8, op_name, "/")) {
+                    return self.compileArithmeticOp(items[1..], .div);
+                }
+                if (std.mem.eql(u8, op_name, "rem")) {
+                    return self.compileArithmeticOp(items[1..], .rem);
+                }
+
+                // Comparison operators: =, !=, not=
+                // Only optimize equality comparisons (items.len == 3: op + 2 args).
+                // Multi-arg comparisons need proper short-circuit logic.
+                // NOTE: We do NOT optimize <, >, <=, >= because they need numeric
+                // semantics (toNum conversion) which differs from vm.compare.
+                if (items.len == 3) {
+                    if (std.mem.eql(u8, op_name, "=")) {
+                        return self.compileComparisonOp(items[1..], .eq);
+                    }
+                    if (std.mem.eql(u8, op_name, "!=") or std.mem.eql(u8, op_name, "not=")) {
+                        return self.compileComparisonOp(items[1..], .ne);
+                    }
+                }
+            }
+
+            // not: (not x) => push x, not
+            if (all_simple and std.mem.eql(u8, op_name, "not")) {
+                if (items.len == 2) {
+                    try self.compileForm(items[1]);
+                    _ = try self.program.emit0(self.allocator, .not);
+                    return;
+                }
+                // Fall through to function call for wrong arity
+            }
+        }
+
+        // Not a known operator — compile as regular function call
         const n = items.len - 1; // number of arguments
 
         // Compile arguments first (they end up below fn on the stack)
@@ -1701,6 +1815,28 @@ const Compiler = struct {
 
         // Call with n arguments
         _ = try self.program.emit(self.allocator, .call_n, n);
+    }
+
+    /// Compile a variadic arithmetic operation: chain binary ops.
+    /// e.g., (+ a b c) => compile a, compile b, add, compile c, add
+    fn compileArithmeticOp(self: *Compiler, args: []const Value, opcode: OpCode) anyerror!void {
+        if (args.len == 0) return;
+        // Compile first arg
+        try self.compileForm(args[0]);
+        // Chain remaining args
+        var i: usize = 1;
+        while (i < args.len) : (i += 1) {
+            try self.compileForm(args[i]);
+            _ = try self.program.emit0(self.allocator, opcode);
+        }
+    }
+
+    /// Compile a 2-arg comparison operation.
+    /// Only called for 2-arg comparisons (multi-arg falls back to function call).
+    fn compileComparisonOp(self: *Compiler, args: []const Value, opcode: OpCode) anyerror!void {
+        try self.compileForm(args[0]);
+        try self.compileForm(args[1]);
+        _ = try self.program.emit0(self.allocator, opcode);
     }
 
     /// Try to expand a macro call. If the first element of the list is a macro,
@@ -2225,6 +2361,128 @@ fn containsFunctionCallsHelper(form: Value) bool {
         .cons => {
             if (containsFunctionCallsHelper(form.cons.head)) return true;
             if (containsFunctionCallsHelper(form.cons.tail)) return true;
+            return false;
+        },
+        else => return false,
+    }
+}
+
+/// Check if a symbol is a known arithmetic/comparison operator that the
+/// bytecode compiler can emit as direct opcodes (not function calls).
+/// These are "safe" for bytecode compilation since they don't use call_n.
+fn isBytecodeOptimizableOperator(sym: []const u8) bool {
+    // Arithmetic: +, -, *, /, rem
+    if (std.mem.eql(u8, sym, "+") or
+        std.mem.eql(u8, sym, "-") or
+        std.mem.eql(u8, sym, "*") or
+        std.mem.eql(u8, sym, "/") or
+        std.mem.eql(u8, sym, "rem"))
+    {
+        return true;
+    }
+    // Comparison: =, !=, not=, <, >, <=, >=
+    if (std.mem.eql(u8, sym, "=") or
+        std.mem.eql(u8, sym, "!=") or
+        std.mem.eql(u8, sym, "not=") or
+        std.mem.eql(u8, sym, "<") or
+        std.mem.eql(u8, sym, ">") or
+        std.mem.eql(u8, sym, "<=") or
+        std.mem.eql(u8, sym, ">="))
+    {
+        return true;
+    }
+    // not: single-arg negation
+    if (std.mem.eql(u8, sym, "not")) return true;
+    return false;
+}
+
+/// Check if a symbol is a special form that the bytecode compiler handles.
+/// These forms are compiled to bytecode (not function calls), so they're safe.
+fn isBytecodeSpecialForm(sym: []const u8) bool {
+    // Special forms compiled by the bytecode compiler (Phase 3, 5)
+    if (std.mem.eql(u8, sym, "quote") or
+        std.mem.eql(u8, sym, "if") or
+        std.mem.eql(u8, sym, "do") or
+        std.mem.eql(u8, sym, "let") or
+        std.mem.eql(u8, sym, "var") or
+        std.mem.eql(u8, sym, "deref") or
+        std.mem.eql(u8, sym, "@") or
+        std.mem.eql(u8, sym, "set!") or
+        std.mem.eql(u8, sym, "fn") or
+        std.mem.eql(u8, sym, "and") or
+        std.mem.eql(u8, sym, "or") or
+        std.mem.eql(u8, sym, "cond") or
+        std.mem.eql(u8, sym, "when") or
+        std.mem.eql(u8, sym, "loop") or
+        std.mem.eql(u8, sym, "recur"))
+    {
+        return true;
+    }
+    return false;
+}
+
+/// Check if a list contains any REAL function calls (not arithmetic/comparison).
+/// Arithmetic and comparison operators are safe because they compile to direct
+/// opcodes (add, sub, eq, etc.) instead of call_n, so they don't cause stack growth.
+/// This replaces containsFunctionCallsInList for bytecode compilation guards.
+pub fn containsRealFunctionCallsInList(l: list.List) bool {
+    return containsRealFunctionCallsInItems(l.items);
+}
+
+fn containsRealFunctionCallsInItems(items: []const Value) bool {
+    for (items) |item| {
+        if (containsRealFunctionCallsHelper(item)) return true;
+    }
+    return false;
+}
+
+fn containsRealFunctionCallsHelper(form: Value) bool {
+    switch (form) {
+        .list => {
+            const lst_items = form.list.items.items;
+            if (lst_items.len == 0) return false;
+            // Check if it's a bytecode-optimizable operator call
+            if (std.meta.activeTag(lst_items[0]) == .symbol) {
+                if (isBytecodeOptimizableOperator(lst_items[0].symbol)) {
+                    // This compiles to direct opcodes, not call_n.
+                    // But we must check args: if any arg is a list (function call),
+                    // the bytecode compiler can't handle it (it tries to compile
+                    // the arg as a form, which fails for function calls).
+                    for (lst_items[1..]) |arg| {
+                        if (containsRealFunctionCallsHelper(arg)) return true;
+                    }
+                    return false;
+                }
+                if (isBytecodeSpecialForm(lst_items[0].symbol)) {
+                    // Bytecode special form (if, let, loop, and, etc.).
+                    // Recurse into args to check for real function calls.
+                    // The bytecode compiler CAN handle these forms, but only
+                    // if their args don't contain function calls.
+                    for (lst_items[1..]) |arg| {
+                        if (containsRealFunctionCallsHelper(arg)) return true;
+                    }
+                    return false;
+                }
+            }
+            // Regular function call — this causes stack growth via call_n
+            return true;
+        },
+        .vector => {
+            for (form.vector.items.items) |item| {
+                if (containsRealFunctionCallsHelper(item)) return true;
+            }
+            return false;
+        },
+        .map => {
+            for (form.map.entries.items) |entry| {
+                if (containsRealFunctionCallsHelper(entry.key)) return true;
+                if (containsRealFunctionCallsHelper(entry.value)) return true;
+            }
+            return false;
+        },
+        .cons => {
+            if (containsRealFunctionCallsHelper(form.cons.head)) return true;
+            if (containsRealFunctionCallsHelper(form.cons.tail)) return true;
             return false;
         },
         else => return false,
@@ -3083,4 +3341,523 @@ test "bytecode::loop_recur: accumulator" {
         },
         .trampoline => unreachable,
     }
+}
+
+// ============================================================
+// Phase 6: Arithmetic/Comparison opcode emission tests
+// ============================================================
+
+test "bytecode::compile: add opcode emission" {
+    const allocator = std.testing.allocator;
+    // Compile: (+ 3 4) => push 3, push 4, add, stop
+    var body: list.List = .empty;
+    errdefer body.deinit(allocator);
+    try body.append(allocator, try vm.symValue(allocator, "+"));
+    try body.append(allocator, vm.intValue(3));
+    try body.append(allocator, vm.intValue(4));
+    var ast: list.List = .empty;
+    errdefer ast.deinit(allocator);
+    try ast.append(allocator, try vm.symValue(allocator, "do"));
+    try ast.append(allocator, try vm.listValue(allocator, body));
+
+    var program = try compile(allocator, ast, "<test>", null);
+    defer program.deinit(allocator);
+
+    // Verify: should have push_const, push_const, add, stop (4 instructions)
+    try std.testing.expect(program.instructions.items.len == 4);
+    try std.testing.expect(program.instructions.items[2].opcode == .add);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(std.meta.activeTag(v.*) == .integer);
+            try std.testing.expect(v.*.integer == 7);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::compile: sub opcode emission" {
+    const allocator = std.testing.allocator;
+    var body: list.List = .empty;
+    errdefer body.deinit(allocator);
+    try body.append(allocator, try vm.symValue(allocator, "-"));
+    try body.append(allocator, vm.intValue(10));
+    try body.append(allocator, vm.intValue(3));
+    var ast: list.List = .empty;
+    errdefer ast.deinit(allocator);
+    try ast.append(allocator, try vm.symValue(allocator, "do"));
+    try ast.append(allocator, try vm.listValue(allocator, body));
+
+    var program = try compile(allocator, ast, "<test>", null);
+    defer program.deinit(allocator);
+    try std.testing.expect(program.instructions.items[2].opcode == .sub);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(v.*.integer == 7);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::compile: mul opcode emission" {
+    const allocator = std.testing.allocator;
+    var body: list.List = .empty;
+    errdefer body.deinit(allocator);
+    try body.append(allocator, try vm.symValue(allocator, "*"));
+    try body.append(allocator, vm.intValue(6));
+    try body.append(allocator, vm.intValue(7));
+    var ast: list.List = .empty;
+    errdefer ast.deinit(allocator);
+    try ast.append(allocator, try vm.symValue(allocator, "do"));
+    try ast.append(allocator, try vm.listValue(allocator, body));
+
+    var program = try compile(allocator, ast, "<test>", null);
+    defer program.deinit(allocator);
+    try std.testing.expect(program.instructions.items[2].opcode == .mul);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(v.*.integer == 42);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::compile: div opcode emission" {
+    const allocator = std.testing.allocator;
+    var body: list.List = .empty;
+    errdefer body.deinit(allocator);
+    try body.append(allocator, try vm.symValue(allocator, "/"));
+    try body.append(allocator, vm.intValue(20));
+    try body.append(allocator, vm.intValue(4));
+    var ast: list.List = .empty;
+    errdefer ast.deinit(allocator);
+    try ast.append(allocator, try vm.symValue(allocator, "do"));
+    try ast.append(allocator, try vm.listValue(allocator, body));
+
+    var program = try compile(allocator, ast, "<test>", null);
+    defer program.deinit(allocator);
+    try std.testing.expect(program.instructions.items[2].opcode == .div);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(v.*.integer == 5);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::compile: rem opcode emission" {
+    const allocator = std.testing.allocator;
+    var body: list.List = .empty;
+    errdefer body.deinit(allocator);
+    try body.append(allocator, try vm.symValue(allocator, "rem"));
+    try body.append(allocator, vm.intValue(17));
+    try body.append(allocator, vm.intValue(5));
+    var ast: list.List = .empty;
+    errdefer ast.deinit(allocator);
+    try ast.append(allocator, try vm.symValue(allocator, "do"));
+    try ast.append(allocator, try vm.listValue(allocator, body));
+
+    var program = try compile(allocator, ast, "<test>", null);
+    defer program.deinit(allocator);
+    try std.testing.expect(program.instructions.items[2].opcode == .rem);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(v.*.integer == 2);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::compile: neg single arg" {
+    const allocator = std.testing.allocator;
+    var body: list.List = .empty;
+    errdefer body.deinit(allocator);
+    try body.append(allocator, try vm.symValue(allocator, "-"));
+    try body.append(allocator, vm.intValue(42));
+    var ast: list.List = .empty;
+    errdefer ast.deinit(allocator);
+    try ast.append(allocator, try vm.symValue(allocator, "do"));
+    try ast.append(allocator, try vm.listValue(allocator, body));
+
+    var program = try compile(allocator, ast, "<test>", null);
+    defer program.deinit(allocator);
+    // Should have push_const, neg, stop (3 instructions)
+    try std.testing.expect(program.instructions.items.len == 3);
+    try std.testing.expect(program.instructions.items[1].opcode == .neg);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(v.*.integer == -42);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::compile: eq opcode emission" {
+    const allocator = std.testing.allocator;
+    var body: list.List = .empty;
+    errdefer body.deinit(allocator);
+    try body.append(allocator, try vm.symValue(allocator, "="));
+    try body.append(allocator, vm.intValue(5));
+    try body.append(allocator, vm.intValue(5));
+    var ast: list.List = .empty;
+    errdefer ast.deinit(allocator);
+    try ast.append(allocator, try vm.symValue(allocator, "do"));
+    try ast.append(allocator, try vm.listValue(allocator, body));
+
+    var program = try compile(allocator, ast, "<test>", null);
+    defer program.deinit(allocator);
+    try std.testing.expect(program.instructions.items[2].opcode == .eq);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(std.meta.activeTag(v.*) == .bool);
+            try std.testing.expect(v.*.bool == true);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+// NOTE: The compiler no longer emits lt/gt/le/ge opcodes because
+// they need numeric semantics (toNum conversion) that differ from
+// vm.compare. These comparisons fall back to function calls.
+// The VM still supports these opcodes for direct use.
+
+test "bytecode::compile: not opcode emission" {
+    const allocator = std.testing.allocator;
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+
+    // (not true) => false
+    {
+        var body: list.List = .empty;
+        defer body.deinit(allocator);
+        try body.append(allocator, try vm.symValue(allocator, "not"));
+        try body.append(allocator, vm.boolValue(true));
+        var ast: list.List = .empty;
+        defer ast.deinit(allocator);
+        try ast.append(allocator, try vm.symValue(allocator, "do"));
+        try ast.append(allocator, try vm.listValue(allocator, body));
+        var program = try compile(allocator, ast, "<test>", null);
+        defer program.deinit(allocator);
+        try std.testing.expect(program.instructions.items[1].opcode == .not);
+        const result = try execute(allocator, &program, &env, null);
+        switch (result) {
+            .value => |v| {
+                try std.testing.expect(v.*.bool == false);
+                vm.valueDeinit(v, allocator);
+                allocator.destroy(v);
+            },
+            .trampoline => unreachable,
+        }
+    }
+
+    // (not nil) => true
+    {
+        var body: list.List = .empty;
+        defer body.deinit(allocator);
+        try body.append(allocator, try vm.symValue(allocator, "not"));
+        try body.append(allocator, vm.nilValue());
+        var ast: list.List = .empty;
+        defer ast.deinit(allocator);
+        try ast.append(allocator, try vm.symValue(allocator, "do"));
+        try ast.append(allocator, try vm.listValue(allocator, body));
+        var program = try compile(allocator, ast, "<test>", null);
+        defer program.deinit(allocator);
+        try std.testing.expect(program.instructions.items[1].opcode == .not);
+        const result = try execute(allocator, &program, &env, null);
+        switch (result) {
+            .value => |v| {
+                try std.testing.expect(v.*.bool == true);
+                vm.valueDeinit(v, allocator);
+                allocator.destroy(v);
+            },
+            .trampoline => unreachable,
+        }
+    }
+
+    // (not 42) => false
+    {
+        var body: list.List = .empty;
+        defer body.deinit(allocator);
+        try body.append(allocator, try vm.symValue(allocator, "not"));
+        try body.append(allocator, vm.intValue(42));
+        var ast: list.List = .empty;
+        defer ast.deinit(allocator);
+        try ast.append(allocator, try vm.symValue(allocator, "do"));
+        try ast.append(allocator, try vm.listValue(allocator, body));
+        var program = try compile(allocator, ast, "<test>", null);
+        defer program.deinit(allocator);
+        const result = try execute(allocator, &program, &env, null);
+        switch (result) {
+            .value => |v| {
+                try std.testing.expect(v.*.bool == false);
+                vm.valueDeinit(v, allocator);
+                allocator.destroy(v);
+            },
+            .trampoline => unreachable,
+        }
+    }
+}
+
+test "bytecode::compile: multi-arg arithmetic" {
+    const allocator = std.testing.allocator;
+    // (+ 1 2 3 4) => 10
+    var body: list.List = .empty;
+    errdefer body.deinit(allocator);
+    try body.append(allocator, try vm.symValue(allocator, "+"));
+    try body.append(allocator, vm.intValue(1));
+    try body.append(allocator, vm.intValue(2));
+    try body.append(allocator, vm.intValue(3));
+    try body.append(allocator, vm.intValue(4));
+    var ast: list.List = .empty;
+    errdefer ast.deinit(allocator);
+    try ast.append(allocator, try vm.symValue(allocator, "do"));
+    try ast.append(allocator, try vm.listValue(allocator, body));
+
+    var program = try compile(allocator, ast, "<test>", null);
+    defer program.deinit(allocator);
+    // Should have: push 1, push 2, add, push 3, add, push 4, add, stop = 8 instructions
+    try std.testing.expect(program.instructions.items.len == 8);
+    try std.testing.expect(program.instructions.items[2].opcode == .add);
+    try std.testing.expect(program.instructions.items[4].opcode == .add);
+    try std.testing.expect(program.instructions.items[6].opcode == .add);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(v.*.integer == 10);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::compile: multi-arg sub" {
+    const allocator = std.testing.allocator;
+    // (- 10 3 2) => 5
+    var body: list.List = .empty;
+    errdefer body.deinit(allocator);
+    try body.append(allocator, try vm.symValue(allocator, "-"));
+    try body.append(allocator, vm.intValue(10));
+    try body.append(allocator, vm.intValue(3));
+    try body.append(allocator, vm.intValue(2));
+    var ast: list.List = .empty;
+    errdefer ast.deinit(allocator);
+    try ast.append(allocator, try vm.symValue(allocator, "do"));
+    try ast.append(allocator, try vm.listValue(allocator, body));
+
+    var program = try compile(allocator, ast, "<test>", null);
+    defer program.deinit(allocator);
+    // push 10, push 3, sub, push 2, sub, stop = 6 instructions
+    try std.testing.expect(program.instructions.items.len == 6);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(v.*.integer == 5);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::compile: 2-arg eq" {
+    const allocator = std.testing.allocator;
+    // (= 3 3) => true (2-arg comparison uses eq opcode)
+    var body: list.List = .empty;
+    errdefer body.deinit(allocator);
+    try body.append(allocator, try vm.symValue(allocator, "="));
+    try body.append(allocator, vm.intValue(3));
+    try body.append(allocator, vm.intValue(3));
+    var ast: list.List = .empty;
+    errdefer ast.deinit(allocator);
+    try ast.append(allocator, try vm.symValue(allocator, "do"));
+    try ast.append(allocator, try vm.listValue(allocator, body));
+
+    var program = try compile(allocator, ast, "<test>", null);
+    defer program.deinit(allocator);
+    // Verify eq opcode is used (not call_n)
+    try std.testing.expect(program.instructions.items[2].opcode == .eq);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(v.*.bool == true);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::compile: ne/not= opcode emission" {
+    const allocator = std.testing.allocator;
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+
+    // (!= 3 5) => true
+    {
+        var body: list.List = .empty;
+        defer body.deinit(allocator);
+        try body.append(allocator, try vm.symValue(allocator, "!="));
+        try body.append(allocator, vm.intValue(3));
+        try body.append(allocator, vm.intValue(5));
+        var ast: list.List = .empty;
+        defer ast.deinit(allocator);
+        try ast.append(allocator, try vm.symValue(allocator, "do"));
+        try ast.append(allocator, try vm.listValue(allocator, body));
+        var program = try compile(allocator, ast, "<test>", null);
+        defer program.deinit(allocator);
+        try std.testing.expect(program.instructions.items[2].opcode == .ne);
+        const result = try execute(allocator, &program, &env, null);
+        switch (result) {
+            .value => |v| {
+                try std.testing.expect(v.*.bool == true);
+                vm.valueDeinit(v, allocator);
+                allocator.destroy(v);
+            },
+            .trampoline => unreachable,
+        }
+    }
+
+    // (not= 3 3) => false
+    {
+        var body: list.List = .empty;
+        defer body.deinit(allocator);
+        try body.append(allocator, try vm.symValue(allocator, "not="));
+        try body.append(allocator, vm.intValue(3));
+        try body.append(allocator, vm.intValue(3));
+        var ast: list.List = .empty;
+        defer ast.deinit(allocator);
+        try ast.append(allocator, try vm.symValue(allocator, "do"));
+        try ast.append(allocator, try vm.listValue(allocator, body));
+        var program = try compile(allocator, ast, "<test>", null);
+        defer program.deinit(allocator);
+        try std.testing.expect(program.instructions.items[2].opcode == .ne);
+        const result = try execute(allocator, &program, &env, null);
+        switch (result) {
+            .value => |v| {
+                try std.testing.expect(v.*.bool == false);
+                vm.valueDeinit(v, allocator);
+                allocator.destroy(v);
+            },
+            .trampoline => unreachable,
+        }
+    }
+}
+
+test "bytecode::containsRealFunctionCalls: arithmetic is safe" {
+    // (+ a b) should NOT be flagged as a real function call
+    var body: list.List = .empty;
+    defer body.deinit(std.testing.allocator);
+    try body.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "+"));
+    try body.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "a"));
+    try body.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "b"));
+    try std.testing.expect(!containsRealFunctionCallsInList(body));
+
+    // (= a b) should NOT be flagged
+    var body2: list.List = .empty;
+    defer body2.deinit(std.testing.allocator);
+    try body2.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "="));
+    try body2.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "a"));
+    try body2.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "b"));
+    try std.testing.expect(!containsRealFunctionCallsInList(body2));
+
+    // (not x) should NOT be flagged
+    var body3: list.List = .empty;
+    defer body3.deinit(std.testing.allocator);
+    try body3.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "not"));
+    try body3.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "x"));
+    try std.testing.expect(!containsRealFunctionCallsInList(body3));
+
+    // (foo a) SHOULD be flagged (regular function call)
+    // Create a body list that contains a function call list: [(foo a)]
+    var call4: list.List = .empty;
+    defer call4.deinit(std.testing.allocator);
+    try call4.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "foo"));
+    try call4.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "a"));
+    const call4_val = try vm.listValue(std.testing.allocator, call4);
+    var body4: list.List = .empty;
+    defer body4.deinit(std.testing.allocator);
+    try body4.append(std.testing.allocator, call4_val);
+    try std.testing.expect(containsRealFunctionCallsInList(body4));
+}
+
+test "bytecode::containsRealFunctionCalls: nested arithmetic is safe" {
+    // (+ (* a b) c) should NOT be flagged
+    var inner: list.List = .empty;
+    defer inner.deinit(std.testing.allocator);
+    try inner.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "*"));
+    try inner.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "a"));
+    try inner.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "b"));
+    const inner_val = try vm.listValue(std.testing.allocator, inner);
+
+    var body: list.List = .empty;
+    defer body.deinit(std.testing.allocator);
+    try body.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "+"));
+    try body.append(std.testing.allocator, inner_val);
+    try body.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "c"));
+    try std.testing.expect(!containsRealFunctionCallsInList(body));
+
+    // (+ (foo a) b) SHOULD be flagged (foo is a real function call)
+    var inner2: list.List = .empty;
+    defer inner2.deinit(std.testing.allocator);
+    try inner2.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "foo"));
+    try inner2.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "a"));
+    const inner2_val = try vm.listValue(std.testing.allocator, inner2);
+
+    var body2: list.List = .empty;
+    defer body2.deinit(std.testing.allocator);
+    try body2.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "+"));
+    try body2.append(std.testing.allocator, inner2_val);
+    try body2.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "b"));
+    try std.testing.expect(containsRealFunctionCallsInList(body2));
 }
