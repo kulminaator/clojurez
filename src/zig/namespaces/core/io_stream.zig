@@ -147,9 +147,11 @@ fn ensureBuffer(is_data: *InputStreamData) anyerror!void {
 
     const io = std.Options.debug_io;
     var slices = [_][]u8{is_data.buffer};
-    const reader = is_data.file.reader(io, &[_]u8{});
-    const bytes_read = @constCast(&reader.interface).readVec(&slices) catch |err| {
-        if (std.mem.eql(u8, @errorName(err), "UnexpectedEof")) {
+    const bytes_read = is_data.file.readStreaming(io, &slices) catch |err| {
+        const err_name = @errorName(err);
+        if (std.mem.eql(u8, err_name, "EndOfStream") or
+            std.mem.eql(u8, err_name, "UnexpectedEof"))
+        {
             is_data.eof = true;
             return;
         }
@@ -266,6 +268,13 @@ pub fn core_open_output_stream(self: *const Value, args: *const list.List, env_e
     const buffer = try allocator.alloc(u8, buf_size);
 
     const handle = StreamHandle.createOutputStream(allocator, file, buffer);
+    // In append mode, seek to end of file to get correct offset
+    if (append) {
+        const io = std.Options.debug_io;
+        if (file.stat(io) catch null) |stat| {
+            handle.data.output_stream.offset = @as(i64, @intCast(stat.size));
+        }
+    }
     if (gc_mod.current_gc) |gc| {
         gc.setObjectType(@as(*anyopaque, @ptrCast(handle)), gc_mod.GCObjectType.unknown);
     }
@@ -410,6 +419,13 @@ pub fn core_open_writer(self: *const Value, args: *const list.List, env_env: *En
     const buffer = try allocator.alloc(u8, buf_size);
 
     const stream_handle = StreamHandle.createOutputStream(allocator, file, buffer);
+    // In append mode, seek to end of file to get correct offset
+    if (append) {
+        const io = std.Options.debug_io;
+        if (file.stat(io) catch null) |stat| {
+            stream_handle.data.output_stream.offset = @as(i64, @intCast(stat.size));
+        }
+    }
     if (gc_mod.current_gc) |gc| {
         gc.setObjectType(@as(*anyopaque, @ptrCast(stream_handle)), gc_mod.GCObjectType.unknown);
     }

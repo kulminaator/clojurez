@@ -61,7 +61,7 @@
 (defn- split-path
   "Split a path string into directory and name components."
   [path]
-  (let [last-slash (last-index-of path \/)]
+  (let [last-slash (clojure.string/last-index-of path \/)]
     (if last-slash
       {:dir (subs path 0 last-slash)
        :name (subs path (inc last-slash))}
@@ -69,16 +69,16 @@
        :name path})))
 
 (extend-protocol Coercions
-  nil
+  :nil
   (as-file [_] nil)
 
-  String
+  :string
   (as-file [s]
     (let [parts (split-path s)]
       (merge {:path s} parts)))
 
   ;; File maps pass through
-  Object
+  :map
   (as-file [x]
     (if (and (map? x) (:path x))
       x
@@ -239,10 +239,9 @@
   "Returns a lazy sequence of lines from a reader handle.
    Each line is a string without the newline character."
   [reader]
-  (let [next-line (fn []
-                    (let [line (read-chunk reader {})]
-                      (when line (cons line (lazy-seq (next-line))))))]
-    (next-line)))
+  ((fn next-line []
+     (let [line (read-chunk reader {})]
+       (when line (cons line (lazy-seq (next-line))))))))
 
 ;; ============================================================
 ;; Resource management

@@ -568,7 +568,12 @@ pub fn core_copy(self: *const Value, args: *const list.List, env_env: *Env) anye
 
     // For now, handle string-to-string (file-to-file) copy
     if (std.meta.activeTag(input) == .string and std.meta.activeTag(output) == .string) {
-        return core_copy_file(self, args, env_env);
+        // Build a 2-arg list for core_copy_file
+        var copy_args: list.List = .empty;
+        defer copy_args.deinit(env_env.allocator);
+        try copy_args.append(env_env.allocator, try vm.clone(&input, env_env.allocator));
+        try copy_args.append(env_env.allocator, try vm.clone(&output, env_env.allocator));
+        return core_copy_file(self, &copy_args, env_env);
     }
 
     // For stream-to-stream copy, we'll implement in Phase 2
