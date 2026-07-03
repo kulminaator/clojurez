@@ -105,18 +105,19 @@
   (zig.core/file-size "/tmp/zzz_nonexistent_xyz.txt")
   nil)
 
-;; list-dir
+;; list-dir (use temp-dir for cross-platform compatibility)
+(def tmp-list-dir (zig.core/temp-dir))
 (check "list-dir returns vector"
-  (vector? (zig.core/list-dir "/tmp"))
+  (vector? (zig.core/list-dir tmp-list-dir))
   true)
 (check "list-dir entries are maps"
-  (every? map? (zig.core/list-dir "/tmp"))
+  (every? map? (zig.core/list-dir tmp-list-dir))
   true)
 (check "list-dir entries have :name"
-  (every? #(string? (:name %)) (zig.core/list-dir "/tmp"))
+  (every? #(string? (:name %)) (zig.core/list-dir tmp-list-dir))
   true)
 (check "list-dir entries have :kind"
-  (every? #(keyword? (:kind %)) (zig.core/list-dir "/tmp"))
+  (every? #(keyword? (:kind %)) (zig.core/list-dir tmp-list-dir))
   true)
 
 ;; walk-dir

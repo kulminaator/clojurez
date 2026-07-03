@@ -23,12 +23,15 @@ pub fn core_temp_dir(self: *const Value, args: *const list.List, env_env: *Env) 
     const builtin = @import("builtin");
 
     if (builtin.target.os.tag == .windows) {
-        // Windows: check TEMP, then TMP
+        // Windows: check TEMP, then TMP, then TMPDIR (set by CI/cross-platform tools)
         if (env_vars.get("TEMP")) |temp| {
             return vm.stringValue(env_env.allocator, temp);
         }
         if (env_vars.get("TMP")) |tmp| {
             return vm.stringValue(env_env.allocator, tmp);
+        }
+        if (env_vars.get("TMPDIR")) |tmpdir| {
+            return vm.stringValue(env_env.allocator, tmpdir);
         }
         // Fallback for Windows
         return vm.stringValue(env_env.allocator, "C:\\Windows\\Temp");
