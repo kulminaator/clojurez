@@ -685,13 +685,29 @@ fn scanBytecodeProgram(bc_ptr: *anyopaque, ctx: *gc.ScanContext) void {
         ctx.gc.setObjectType(bc.constants.items.ptr, gc.GCObjectType.value_array);
         ctx.gc.markRecursive(bc.constants.items.ptr, ctx);
     }
-    // Mark symbol strings
-    for (bc.symbols.items) |s| {
-        if (s.len > 0) markPtr(s.ptr, ctx);
+    // Mark symbols array backing memory + individual symbol strings
+    if (bc.symbols.items.len > 0) {
+        markPtr(bc.symbols.items.ptr, ctx);
+        var i: usize = 0;
+        const max_symbols = bc.symbols.items.len;
+        if (max_symbols < 10000) {
+            while (i < max_symbols) : (i += 1) {
+                const s = bc.symbols.items[i];
+                if (s.len > 0) markPtr(s.ptr, ctx);
+            }
+        }
     }
-    // Mark source_markers array
+    // Mark source_markers array (backing memory + individual file strings)
     if (bc.source_markers.items.len > 0) {
         markPtr(bc.source_markers.items.ptr, ctx);
+        var i: usize = 0;
+        const max_markers = bc.source_markers.items.len;
+        if (max_markers < 10000) {
+            while (i < max_markers) : (i += 1) {
+                const m = bc.source_markers.items[i];
+                if (m.file.len > 0) markPtr(m.file.ptr, ctx);
+            }
+        }
     }
     // Mark source_file string
     if (bc.source_file.len > 0) {

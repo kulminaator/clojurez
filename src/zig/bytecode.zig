@@ -377,6 +377,89 @@ pub const FnMetadata = struct {
 // VM execution
 // ============================================================
 
+/// Resolve a symbol name in the environment, handling qualified symbols.
+/// Qualified symbols like "zig.core/+" are split on "/" and resolved
+/// through the namespace manager, matching the AST evaluator's behavior.
+fn resolveSymbol(env: *vm.Env, sym_name: []const u8) anyerror!Value {
+    // Check for qualified symbol: alias/name or namespace/name
+    if (std.mem.indexOfScalar(u8, sym_name, '/')) |slash_idx| {
+        const alias = sym_name[0..slash_idx];
+        const name = sym_name[slash_idx + 1 ..];
+
+        // Try to resolve through namespace manager
+        const ns_mgr = eval_mod.findNsManager(env) orelse {
+            // No namespace manager — fall back to simple lookup
+            const val = env.get(sym_name);
+            if (val) |v| return v;
+            std.debug.print("Undefined symbol: '{s}'\n", .{sym_name});
+            return error.UndefinedSymbol;
+        };
+
+        // Resolve alias to namespace name
+        const current_ns = ns_mgr.getCurrentNamespace();
+        const target_ns = ns_mgr.resolveAlias(current_ns, alias) orelse alias;
+
+        // Get target namespace's env
+        const target_env = ns_mgr.getNamespace(target_ns) orelse {
+            // Target namespace doesn't exist — fall back to simple lookup
+            const val = env.get(sym_name);
+            if (val) |v| return v;
+            std.debug.print("Undefined symbol: '{s}'\n", .{sym_name});
+            return error.UndefinedSymbol;
+        };
+
+        // Look up name in target namespace
+        const val = target_env.get(name);
+        if (val) |v| return v;
+        std.debug.print("Undefined symbol: '{s}'\n", .{sym_name});
+        return error.UndefinedSymbol;
+    }
+
+    // Unqualified symbol — simple environment lookup (traverses parent chain)
+    const val = env.get(sym_name);
+    if (val) |v| return v;
+    std.debug.print("Undefined symbol: '{s}'\n", .{sym_name});
+    return error.UndefinedSymbol;
+}
+
+/// Find the nearest source marker at or before the given PC.
+/// Scans instructions backwards from pc to find the last source_marker.
+fn findSourceMarkerAtPC(program: *const BytecodeProgram, pc: usize) ?SourceMarker {
+    const instrs = program.instructions.items;
+    var i: usize = if (pc == 0) 0 else pc - 1;
+    while (true) {
+        if (instrs[i].opcode == .source_marker) {
+            const idx = instrs[i].operand;
+            if (idx < program.source_markers.items.len) {
+                return program.source_markers.items[idx];
+            }
+        }
+        if (i == 0) break;
+        i -= 1;
+    }
+    return null;
+}
+
+/// Print a detailed error message with both CLJ source location and Zig bytecode PC.
+fn reportBytecodeError(program: *const BytecodeProgram, pc: usize, err: anyerror) void {
+    const instrs = program.instructions.items;
+    // pc is already past the failing instruction (pc was incremented before the switch)
+    const fail_pc: usize = if (pc == 0) 0 else pc - 1;
+    const opcode_name = if (fail_pc < instrs.len) OpCode.opcodeName(instrs[fail_pc].opcode) else "?";
+
+    if (findSourceMarkerAtPC(program, fail_pc)) |marker| {
+        std.debug.print(
+            "\nBytecode error at {s}:{d} (col {d})\n  Zig PC={d} opcode={s}\n  Error: {s}\n",
+            .{ marker.file, marker.line, marker.col, fail_pc, opcode_name, @errorName(err) },
+        );
+    } else {
+        std.debug.print(
+            "\nBytecode error at PC={d} opcode={s}\n  Error: {s}\n",
+            .{ fail_pc, opcode_name, @errorName(err) },
+        );
+    }
+}
+
 /// Execute a BytecodeProgram with the given environment.
 /// The VM is stack-based: values are pushed and popped from the operand stack.
 /// Returns VMResult.value with the result, or VMResult.trampoline if a
@@ -441,10 +524,7 @@ pub fn execute(
                 const sym_idx = inst.operand;
                 if (sym_idx >= program.symbols.items.len) return error.BytecodeError;
                 const sym_name = program.symbols.items[sym_idx];
-                const val = env.get(sym_name) orelse {
-                    std.debug.print("Undefined symbol: '{s}'\n", .{sym_name});
-                    return error.UndefinedSymbol;
-                };
+                const val = try resolveSymbol(env, sym_name);
                 const cloned = try vm.cloneGC(&val, allocator);
                 try stack.push(cloned);
             },
@@ -453,7 +533,7 @@ pub fn execute(
                 if (sym_idx >= program.symbols.items.len) return error.BytecodeError;
                 const sym_name = program.symbols.items[sym_idx];
                 const val_ptr = stack.pop() orelse return error.BytecodeError;
-                const val = val_ptr.*;
+                const val = try vm.clone(val_ptr, allocator);
                 vm.valueDeinit(val_ptr, allocator);
                 allocator.destroy(val_ptr);
                 try env.put(sym_name, val);
@@ -467,24 +547,44 @@ pub fn execute(
 
                 // Collect args in reverse, then build list in correct order
                 var temp_args: std.ArrayListUnmanaged(*Value) = .empty;
-                errdefer temp_args.deinit(allocator);
                 var i: usize = 0;
                 while (i < n) : (i += 1) {
-                    const arg_ptr = stack.pop() orelse return error.BytecodeError;
+                    const arg_ptr = stack.pop() orelse {
+                        // Clean up any args collected so far
+                        for (temp_args.items) |ap| {
+                            vm.valueDeinit(ap, allocator);
+                            allocator.destroy(ap);
+                        }
+                        allocator.free(temp_args.items);
+                        return error.BytecodeError;
+                    };
                     try temp_args.append(allocator, arg_ptr);
                 }
 
                 var args: list.List = .empty;
-                errdefer args.deinit(allocator);
+                var remaining_count: usize = temp_args.items.len;
+                errdefer {
+                    // Clean up args
+                    args.deinit(allocator);
+                    // Clean up remaining temp_args (those not yet processed)
+                    for (temp_args.items[0..remaining_count]) |ap| {
+                        vm.valueDeinit(ap, allocator);
+                        allocator.destroy(ap);
+                    }
+                    allocator.free(temp_args.items);
+                }
                 // temp_args has args in reverse order (argN, argN-1, ..., arg1)
                 var j: usize = temp_args.items.len;
                 while (j > 0) : (j -= 1) {
+                    remaining_count -= 1;
                     const arg_ptr = temp_args.items[j - 1];
-                    try args.append(allocator, arg_ptr.*);
+                    // Deep clone to avoid sharing internal pointers with the original
+                    const cloned = try vm.clone(arg_ptr, allocator);
+                    try args.append(allocator, cloned);
                     vm.valueDeinit(arg_ptr, allocator);
                     allocator.destroy(arg_ptr);
                 }
-                temp_args.deinit(allocator);
+                allocator.free(temp_args.items);
 
                 const call_result = try eval_mod.call(allocator, fn_ptr, &args, env, 0, ctx);
 
@@ -503,7 +603,10 @@ pub fn execute(
             },
             .jump_if_nil => {
                 const top = stack.pop() orelse return error.BytecodeError;
-                if (std.meta.activeTag(top.*) == .nil) {
+                // Both nil and false are falsy in Clojure
+                if (std.meta.activeTag(top.*) == .nil or
+                    (std.meta.activeTag(top.*) == .bool and top.*.bool == false))
+                {
                     pc = inst.operand;
                 }
                 vm.valueDeinit(top, allocator);
@@ -592,7 +695,7 @@ pub fn execute(
                 var j: usize = temp_items.items.len;
                 while (j > 0) : (j -= 1) {
                     const item_ptr = temp_items.items[j - 1];
-                    try l.append(allocator, item_ptr.*);
+                    try l.append(allocator, try vm.clone(item_ptr, allocator));
                     vm.valueDeinit(item_ptr, allocator);
                     allocator.destroy(item_ptr);
                 }
@@ -616,7 +719,7 @@ pub fn execute(
                 var j: usize = temp_items.items.len;
                 while (j > 0) : (j -= 1) {
                     const item_ptr = temp_items.items[j - 1];
-                    try v.append(allocator, item_ptr.*);
+                    try v.append(allocator, try vm.clone(item_ptr, allocator));
                     vm.valueDeinit(item_ptr, allocator);
                     allocator.destroy(item_ptr);
                 }
@@ -694,8 +797,8 @@ pub fn execute(
                     const key_ptr = temp_entries.items[j - 1];
                     const val_ptr = temp_entries.items[j - 2];
                     try m.append(allocator, .{
-                        .key = key_ptr.*,
-                        .value = val_ptr.*,
+                        .key = try vm.clone(key_ptr, allocator),
+                        .value = try vm.clone(val_ptr, allocator),
                     });
                     vm.valueDeinit(key_ptr, allocator);
                     allocator.destroy(key_ptr);
@@ -825,7 +928,7 @@ pub fn execute(
             .make_fn => {
                 const idx = inst.operand;
                 const fn_meta = fn_pool.?[idx];
-                const fn_val = try vmMakeFn(allocator, fn_meta);
+                const fn_val = try vmMakeFn(allocator, fn_meta, env);
                 const fn_ptr = try eval_mod.allocValue(allocator, fn_val);
                 try stack.push(fn_ptr);
             },
@@ -1214,7 +1317,7 @@ fn vmDeref(allocator: Allocator, val: Value) anyerror!Value {
 }
 
 /// Create a function value from FnMetadata, capturing current environment.
-fn vmMakeFn(allocator: Allocator, meta: *const FnMetadata) anyerror!Value {
+fn vmMakeFn(allocator: Allocator, meta: *const FnMetadata, env: *const vm.Env) anyerror!Value {
     var arities: std.ArrayListUnmanaged(vm.Arity) = .empty;
     errdefer {
         for (arities.items) |*a| {
@@ -1239,11 +1342,18 @@ fn vmMakeFn(allocator: Allocator, meta: *const FnMetadata) anyerror!Value {
             .rest_name = cloned_rest,
         });
     }
+    // Create closure environment with a copy of current entries.
+    // We can't share the HAMT because the current env may be freed.
+    var new_entries = phm.PersistentHashMap.empty();
+    var it = env.entries.entryIterator();
+    while (it.next()) |entry| {
+        new_entries = try new_entries.mapAssoc(allocator, entry.key, entry.val);
+    }
     const fn_env: vm.Env = .{
         .allocator = allocator,
-        .entries = phm.PersistentHashMap.empty(),
-        .parent = null, // will be set by caller
-        .ns_manager = null,
+        .entries = new_entries,
+        .parent = env.parent,
+        .ns_manager = env.ns_manager,
     };
     var fn_val = try vm.fnValue(allocator, arities, fn_env, false);
     const persistent_fn = try vm.clone(&fn_val, allocator);
@@ -1257,8 +1367,9 @@ fn vmMakeFn(allocator: Allocator, meta: *const FnMetadata) anyerror!Value {
 
 /// Compile a Clojure AST (list.List) to bytecode.
 /// The AST is a list where the first element is the operator and the rest are arguments.
+/// env is optional — needed for macro expansion.
 /// Returns a BytecodeProgram that can be executed by the VM.
-pub fn compile(allocator: Allocator, ast: list.List, source_file: []const u8) anyerror!BytecodeProgram {
+pub fn compile(allocator: Allocator, ast: list.List, source_file: []const u8, env: ?*vm.Env) anyerror!BytecodeProgram {
     var program = BytecodeProgram.init(allocator);
     errdefer program.deinit(allocator);
     program.source_file = source_file;
@@ -1266,6 +1377,7 @@ pub fn compile(allocator: Allocator, ast: list.List, source_file: []const u8) an
     var compiler = Compiler{
         .allocator = allocator,
         .program = &program,
+        .env = env,
     };
 
     // Compile each form in the body list.
@@ -1288,6 +1400,7 @@ pub fn compile(allocator: Allocator, ast: list.List, source_file: []const u8) an
 const Compiler = struct {
     allocator: Allocator,
     program: *BytecodeProgram,
+    env: ?*vm.Env, // for macro expansion
 
     /// Compile a form (any Clojure expression).
     fn compileForm(self: *Compiler, form: Value) anyerror!void {
@@ -1403,6 +1516,16 @@ const Compiler = struct {
             // This ensures loop/recur works through the AST interpreter.
 
             // Not a special form we handle — fall through to function call
+            // But first check if it's a macro that needs expansion
+            if (self.env) |e| {
+                if (try self.tryExpandMacro(l, e)) |expanded_list| {
+                    // Compile the expanded form(s)
+                    for (expanded_list.items) |form| {
+                        try self.compileForm(form);
+                    }
+                    return;
+                }
+            }
         }
 
         // Function call: compile all elements, then call_n
@@ -1424,6 +1547,42 @@ const Compiler = struct {
 
         // Call with n arguments
         _ = try self.program.emit(self.allocator, .call_n, n);
+    }
+
+    /// Try to expand a macro call. If the first element of the list is a macro,
+    /// expand it and return the expanded form as a list.List.
+    /// Returns null if the form is not a macro call or expansion fails.
+    fn tryExpandMacro(self: *Compiler, l: list.List, env: *vm.Env) anyerror!?list.List {
+        if (l.items.len == 0) return null;
+        const first = l.items[0];
+        if (std.meta.activeTag(first) != .symbol) return null;
+
+        // Look up the symbol in the environment
+        const op_val = env.get(first.symbol);
+        if (op_val == null) return null;
+
+        // Check if it's a macro
+        if (std.meta.activeTag(op_val.?) != .function) return null;
+        if (!op_val.?.function.is_macro) return null;
+
+        // Build unevaluated args list
+        var macro_args: list.List = .empty;
+        defer macro_args.deinit(self.allocator);
+        var i: usize = 1;
+        while (i < l.items.len) : (i += 1) {
+            try macro_args.append(self.allocator, try vm.clone(&l.items[i], self.allocator));
+        }
+
+        // Call the macro
+        const macro_r = try eval_mod.call(self.allocator, &op_val.?, &macro_args, env, 0, null);
+        defer vm.valueDeinit(macro_r.value, self.allocator);
+
+        // The macro returns a form (usually a list). Clone and wrap it in a list for compilation.
+        const cloned = try vm.clone(macro_r.value, self.allocator);
+        var expanded: list.List = .empty;
+        errdefer expanded.deinit(self.allocator);
+        try expanded.append(self.allocator, cloned);
+        return expanded;
     }
 
     /// Compile (if test then else?).
@@ -1596,11 +1755,21 @@ const Compiler = struct {
                 if (parsed.rest_name) |rn| self.allocator.free(rn);
             }
 
-            // Check if body contains loop/recur or function calls — skip bytecode if so
+            // Check if body contains loop/recur or unhandled special forms — skip bytecode if so
             var skip_bytecode = false;
             for (body_forms) |bf| {
                 if (containsLoopRecur(bf)) { skip_bytecode = true; break; }
-                if (containsFunctionCallsHelper(bf)) { skip_bytecode = true; break; }
+                if (containsUnhandledSpecialFormHelper(bf)) { skip_bytecode = true; break; }
+            }
+            // Also skip if params contain destructuring patterns
+            if (!skip_bytecode) {
+                var pi: usize = 0;
+                while (pi < parsed.params.items.len) : (pi += 1) {
+                    switch (std.meta.activeTag(parsed.params.items[pi])) {
+                        .vector, .list => { skip_bytecode = true; break; },
+                        else => {},
+                    }
+                }
             }
 
             var bc_ptr: ?*BytecodeProgram = null;
@@ -1612,7 +1781,7 @@ const Compiler = struct {
                 for (body_forms) |bf| {
                     try body_list.append(self.allocator, try vm.clone(&bf, self.allocator));
                 }
-                const bc = try compile(self.allocator, body_list, "<fn>");
+                const bc = try compile(self.allocator, body_list, "<fn>", self.env);
                 const bc_created = try self.allocator.create(BytecodeProgram);
                 bc_created.* = bc;
                 bc_ptr = bc_created;
@@ -1747,6 +1916,93 @@ fn containsLoopRecurHelper(form: Value) bool {
     }
 }
 
+/// Check if a params list contains destructuring patterns (vectors/lists).
+/// Bytecode VM does not support destructuring.
+pub fn containsDestructuring(params: list.List) bool {
+    for (params.items) |param| {
+        switch (std.meta.activeTag(param)) {
+            .vector, .list => return true,
+            else => {},
+        }
+    }
+    return false;
+}
+
+/// Check if a list contains any special forms that the bytecode compiler
+/// does not yet handle. These forms would be incorrectly treated as
+/// function calls, causing "Undefined symbol" errors at runtime.
+pub fn containsUnhandledSpecialFormInList(l: list.List) bool {
+    return containsUnhandledSpecialFormInItems(l.items);
+}
+
+fn containsUnhandledSpecialFormInItems(items: []const Value) bool {
+    for (items) |item| {
+        if (containsUnhandledSpecialFormHelper(item)) return true;
+    }
+    return false;
+}
+
+fn containsUnhandledSpecialFormHelper(form: Value) bool {
+    switch (form) {
+        .list => {
+            const lst_items = form.list.items.items;
+            if (lst_items.len == 0) return false;
+            // Check if the first element is a symbol matching an unhandled special form
+            if (std.meta.activeTag(lst_items[0]) == .symbol) {
+                const sym = lst_items[0].symbol;
+                // List of special forms not yet compiled to bytecode
+                if (std.mem.eql(u8, sym, "cond") or
+                    std.mem.eql(u8, sym, "and") or
+                    std.mem.eql(u8, sym, "or") or
+                    std.mem.eql(u8, sym, "when") or
+                    std.mem.eql(u8, sym, "when-not") or
+                    std.mem.eql(u8, sym, "when-let") or
+                    std.mem.eql(u8, sym, "when-some") or
+                    std.mem.eql(u8, sym, "when-first") or
+                    std.mem.eql(u8, sym, "if-let") or
+                    std.mem.eql(u8, sym, "case") or
+                    std.mem.eql(u8, sym, "quasiquote") or
+                    std.mem.eql(u8, sym, "letfn") or
+                    std.mem.eql(u8, sym, "binding") or
+                    std.mem.eql(u8, sym, "lazy-seq") or
+                    std.mem.eql(u8, sym, "dorun") or
+                    std.mem.eql(u8, sym, "doall") or
+                    std.mem.eql(u8, sym, "->") or
+                    std.mem.eql(u8, sym, "->>") or
+                    std.mem.eql(u8, sym, "cond->") or
+                    std.mem.eql(u8, sym, "cond->>"))
+                {
+                    return true;
+                }
+            }
+            // Recurse into all items
+            for (lst_items) |item| {
+                if (containsUnhandledSpecialFormHelper(item)) return true;
+            }
+            return false;
+        },
+        .vector => {
+            for (form.vector.items.items) |item| {
+                if (containsUnhandledSpecialFormHelper(item)) return true;
+            }
+            return false;
+        },
+        .map => {
+            for (form.map.entries.items) |entry| {
+                if (containsUnhandledSpecialFormHelper(entry.key)) return true;
+                if (containsUnhandledSpecialFormHelper(entry.value)) return true;
+            }
+            return false;
+        },
+        .cons => {
+            if (containsUnhandledSpecialFormHelper(form.cons.head)) return true;
+            if (containsUnhandledSpecialFormHelper(form.cons.tail)) return true;
+            return false;
+        },
+        else => return false,
+    }
+}
+
 fn listFromVector(allocator: Allocator, v: vec.Vector) anyerror!list.List {
     var l: list.List = .empty;
     errdefer l.deinit(allocator);
@@ -1849,6 +2105,205 @@ test "bytecode::vm: push and return" {
         .ns_manager = null,
         .referred_names = .empty,
     };
+    defer env.deinit(allocator);
+
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(std.meta.activeTag(v.*) == .integer);
+            try std.testing.expect(v.*.integer == 42);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+// ============================================================
+// Test helper: compile-and-execute pipeline
+// ============================================================
+// Helper to create a minimal environment for bytecode testing.
+fn createTestEnv(allocator: Allocator) vm.Env {
+    return .{
+        .allocator = allocator,
+        .entries = phm.PersistentHashMap.empty(),
+        .parent = null,
+        .ns_manager = null,
+        .referred_names = .empty,
+    };
+}
+
+test "bytecode::compile: literal nil" {
+    const allocator = std.testing.allocator;
+    var program = BytecodeProgram.init(allocator);
+    defer program.deinit(allocator);
+    _ = try program.emit0(allocator, .push_nil);
+    _ = try program.emit0(allocator, .stop);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(std.meta.activeTag(v.*) == .nil);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::compile: literal integer" {
+    const allocator = std.testing.allocator;
+    var program = BytecodeProgram.init(allocator);
+    defer program.deinit(allocator);
+    _ = try program.emit(allocator, .push_int, 123);
+    _ = try program.emit0(allocator, .stop);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(std.meta.activeTag(v.*) == .integer);
+            try std.testing.expect(v.*.integer == 123);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::compile: literal boolean" {
+    const allocator = std.testing.allocator;
+    var program = BytecodeProgram.init(allocator);
+    defer program.deinit(allocator);
+    _ = try program.emit0(allocator, .push_true);
+    _ = try program.emit0(allocator, .stop);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(std.meta.activeTag(v.*) == .bool);
+            try std.testing.expect(v.*.bool == true);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::compile: variable reference" {
+    const allocator = std.testing.allocator;
+    var program = BytecodeProgram.init(allocator);
+    defer program.deinit(allocator);
+    const sym_idx = try program.addSymbol(allocator, "x");
+    _ = try program.emit(allocator, .load_var, sym_idx);
+    _ = try program.emit0(allocator, .stop);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+    try env.put("x", vm.intValue(99));
+
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(std.meta.activeTag(v.*) == .integer);
+            try std.testing.expect(v.*.integer == 99);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::compile: if true branch" {
+    const allocator = std.testing.allocator;
+    var program = BytecodeProgram.init(allocator);
+    defer program.deinit(allocator);
+
+    // push true, jump-if-nil -> else, push 1, jump -> end, push 2
+    _ = try program.emit0(allocator, .push_true);
+    const jump_nil_pc = try program.emit(allocator, .jump_if_nil, 0);
+    const one_idx = try program.addConstant(allocator, vm.intValue(1));
+    _ = try program.emit(allocator, .push_const, one_idx);
+    const jump_end_pc = try program.emit(allocator, .jump, 0);
+    const else_pc = program.instructions.items.len;
+    program.instructions.items[jump_nil_pc].operand = else_pc;
+    const two_idx = try program.addConstant(allocator, vm.intValue(2));
+    _ = try program.emit(allocator, .push_const, two_idx);
+    const end_pc = program.instructions.items.len;
+    program.instructions.items[jump_end_pc].operand = end_pc;
+    _ = try program.emit0(allocator, .stop);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(std.meta.activeTag(v.*) == .integer);
+            try std.testing.expect(v.*.integer == 1);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::compile: if nil branch" {
+    const allocator = std.testing.allocator;
+    var program = BytecodeProgram.init(allocator);
+    defer program.deinit(allocator);
+
+    // push nil, jump-if-nil -> else, push 1, jump -> end, push 2
+    // nil triggers jump_if_nil, so we get the else branch (2)
+    _ = try program.emit0(allocator, .push_nil);
+    const jump_nil_pc = try program.emit(allocator, .jump_if_nil, 0);
+    const one_idx = try program.addConstant(allocator, vm.intValue(1));
+    _ = try program.emit(allocator, .push_const, one_idx);
+    const jump_end_pc = try program.emit(allocator, .jump, 0);
+    const else_pc = program.instructions.items.len;
+    program.instructions.items[jump_nil_pc].operand = else_pc;
+    const two_idx = try program.addConstant(allocator, vm.intValue(2));
+    _ = try program.emit(allocator, .push_const, two_idx);
+    const end_pc = program.instructions.items.len;
+    program.instructions.items[jump_end_pc].operand = end_pc;
+    _ = try program.emit0(allocator, .stop);
+
+    var env = createTestEnv(allocator);
+    defer env.deinit(allocator);
+
+    const result = try execute(allocator, &program, &env, null);
+    switch (result) {
+        .value => |v| {
+            try std.testing.expect(std.meta.activeTag(v.*) == .integer);
+            try std.testing.expect(v.*.integer == 2);
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+        .trampoline => unreachable,
+    }
+}
+
+test "bytecode::compile: store and load variable" {
+    const allocator = std.testing.allocator;
+    var program = BytecodeProgram.init(allocator);
+    defer program.deinit(allocator);
+
+    const sym_idx = try program.addSymbol(allocator, "x");
+    const val_idx = try program.addConstant(allocator, vm.intValue(42));
+    _ = try program.emit(allocator, .push_const, val_idx);
+    _ = try program.emit(allocator, .store_var, sym_idx);
+    _ = try program.emit(allocator, .load_var, sym_idx);
+    _ = try program.emit0(allocator, .stop);
+
+    var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
     const result = try execute(allocator, &program, &env, null);
