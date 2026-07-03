@@ -10,6 +10,10 @@ const eval = @import("eval.zig");
 const repl = @import("repl.zig");
 const core_clj = @import("namespaces/core/core_clj.zig");
 const string_clj = @import("namespaces/core/string_clj.zig");
+const io_clj = @import("namespaces/core/io_clj.zig");
+const io_fs = @import("namespaces/core/io_fs.zig");
+const io_stream = @import("namespaces/core/io_stream.zig");
+const io_shell = @import("namespaces/core/io_shell.zig");
 const strings = @import("namespaces/core/strings.zig");
 const regexp_api = @import("namespaces/regexp/api.zig");
 const debug_allocator = @import("debug_allocator.zig");
@@ -19,6 +23,7 @@ const gc_mod = @import("gc.zig");
 const gc_scan = @import("gc_scan.zig");
 const stack_stats = @import("stack_stats.zig");
 const sequences = @import("namespaces/core/sequences.zig");
+const phm = @import("persistent_hash_map.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -188,6 +193,36 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // Register regexp built-in functions into zig.regexp namespace.
     try regexp_api.registerRegexpFunctions(zr_env);
 
+    // Register zig.io filesystem built-in functions in zig.core.
+    // The Clojure wrappers in io.clj reference zig.core/file-stat etc.
+    try io_fs.registerFsFunctions(zc_env);
+    // Register zig.io stream functions in zig.core.
+    try io_stream.registerStreamFunctions(zc_env);
+    // Register zig.io shell functions in zig.core.
+    try io_shell.registerShellFunctions(zc_env);
+    // Copy fs builtins to clojure.core for direct access
+    try copyBuiltinsToNamespaceSelective(zc_env, clojure_core_env, &.{
+        "file-stat", "file-exists?", "file-size", "is-directory?", "is-file?",
+        "is-symlink?", "list-dir", "walk-dir", "make-dir", "make-parents",
+        "delete-file", "delete-dir", "delete-tree", "rename", "copy-file",
+        "sym-link", "read-link", "file-modified-time", "file-parent",
+        "file-name", "absolute-path", "sh-execute", "copy",
+        "open-input-stream", "open-output-stream", "read-bytes", "write-bytes",
+        "open-reader", "open-writer", "read-line-stream", "write-string",
+        "close-stream", "flush-stream",
+        "sh-execute-stream", "sh-read-output", "sh-read-error",
+        "sh-write-input", "sh-wait", "sh-kill", "sh-close-input",
+    });
+
+    // Create zig.io namespace — I/O utilities for ClojureZ.
+    // Parent set to clojure.core so io code can use core functions.
+    const zio_env = try ns_mgr.createNamespace("zig.io");
+    zio_env.parent = clojure_core_env;
+    zio_env.ns_manager = ns_mgr;
+
+    // Load embedded Clojure I/O library into zig.io namespace.
+    try loadIoLibrary(allocator, zio_env);
+
     // Set "user" namespace's parent to clojure.core so all functions are visible.
     // This mirrors real Clojure where user namespace refers to clojure.core by default.
     if (ns_mgr.getNamespace("user")) |user_env| {
@@ -294,6 +329,22 @@ fn copyBuiltinsToNamespace(root_env: *Env, target_env: *Env) anyerror!void {
     }
 }
 
+/// Copy only specific builtin_fn values from root env into a target namespace.
+fn copyBuiltinsToNamespaceSelective(
+    root_env: *Env,
+    target_env: *Env,
+    names: []const []const u8,
+) anyerror!void {
+    for (names) |name| {
+        const key = phm.sym(name);
+        if (root_env.entries.find(key)) |val| {
+            if (std.meta.activeTag(val) == .builtin_fn) {
+                try target_env.put(name, vm.builtinFnValue(val.builtin_fn));
+            }
+        }
+    }
+}
+
 /// Load the embedded Clojure core library silently (no output for defn names).
 /// Uses main allocator directly since all values must persist.
 fn loadCoreLibrary(allocator: Allocator, env: *Env) anyerror!void {
@@ -328,6 +379,24 @@ fn loadStringLibrary(allocator: Allocator, env: *Env) anyerror!void {
         vm.valueDeinit(&result_ptr.*, allocator);
         // GC handles result cleanup.
         // Silent: don't print results during string library loading
+    }
+}
+
+/// Load the embedded Clojure I/O library silently (no output for defn names).
+fn loadIoLibrary(allocator: Allocator, env: *Env) anyerror!void {
+    const content = io_clj.io_clj_source;
+
+    var p = try parser.Parser.init(allocator, content);
+    defer p.deinit();
+
+    const forms = try p.parseAll();
+    // GC handles cleanup.
+
+    for (forms.items) |form| {
+        const result_ptr = try eval.eval(allocator, form, env);
+        vm.valueDeinit(&result_ptr.*, allocator);
+        // GC handles result cleanup.
+        // Silent: don't print results during io library loading
     }
 }
 
