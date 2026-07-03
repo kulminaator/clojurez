@@ -74,11 +74,13 @@ const Header = struct {
     generation: u32 = 0, // generation this block was allocated in
     size: usize = 0,
     offset: usize = 0, // bytes from header to data area (header_size + padding)
+    alignment: Alignment = Alignment.of(u8), // original allocation alignment
     next: ?*Header = null,
     prev: ?*Header = null,
 };
 
 const HEADER_SIZE: usize = @sizeOf(Header);
+const HEADER_ALIGNMENT = Alignment.of(Header);
 
 // ============================================================
 // ScanContext — passed to scan functions during the mark phase
@@ -243,6 +245,7 @@ pub const GC = struct {
         header.* = .{
             .size = actual_size,
             .offset = HEADER_SIZE + padding,
+            .alignment = alignment,
             .generation = self.generation,
             .next = self.blocks,
             .prev = null,
@@ -324,7 +327,8 @@ pub const GC = struct {
         const block_size = header.size;
         const total = header.offset + block_size;
         const block_start = @as([*]u8, @ptrCast(header));
-        self.wrapped.free(block_start[0..total]);
+        // Free with HEADER_ALIGNMENT to match the allocation alignment used in alloc().
+        self.wrapped.rawFree(block_start[0..total], HEADER_ALIGNMENT, @returnAddress());
 
         self.free_count += 1;
         if (block_size > self.current_allocated) {
@@ -605,7 +609,8 @@ pub const GC = struct {
                 const block_start = @as([*]u8, @ptrCast(b));
                 // Mark GC-swept memory with 0xFE so we can recognize it
                 @memset(block_start[sweep_offset .. sweep_offset + sweep_size], 0xFE);
-                self.wrapped.free(block_start[0..total]);
+                // Free with HEADER_ALIGNMENT to match the allocation alignment used in alloc().
+                self.wrapped.rawFree(block_start[0..total], HEADER_ALIGNMENT, @returnAddress());
 
                 swept += 1;
                 swept_bytes += sweep_size;
@@ -659,12 +664,11 @@ pub fn freeAllBlocks(self: *Self) void {
             self.block_count -= 1;
             self.block_mutex.store(0, .release);
 
-            // Free the memory back to the wrapped allocator (slab).
-            self.wrapped.free(block_start[0..total]);
+            // Free with HEADER_ALIGNMENT to match the allocation alignment used in alloc().
+            self.wrapped.rawFree(block_start[0..total], HEADER_ALIGNMENT, @returnAddress());
             self.free_count += 1;
         }
         self.current_allocated = 0;
-        self.log("[GC] FREE ALL: freed all blocks, count={d}\n", .{self.free_count});
     }
 
     /// Enable automatic GC: trigger collection when memory grows by

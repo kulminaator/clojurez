@@ -2810,10 +2810,10 @@ test "bytecode::vm: push and return" {
 // Test helper: compile-and-execute pipeline
 // ============================================================
 
-/// TestGC wraps a GC instance backed by std.testing.allocator.
-/// Use it to get a GC allocator for bytecode tests, and call deinit()
-/// (typically via defer) to aggressively free all GC-tracked memory.
-/// This prevents the "memory leaked" warnings from Zig's test runner.
+/// TestGC wraps a GC instance backed by std.testing.allocator (via slab allocator).
+/// Use it for bytecode tests: all allocations go through the real GC allocator.
+/// deinit() calls freeAllBlocks() to clean up all GC-tracked memory, preventing
+/// "memory leaked" warnings from Zig's DebugAllocator.
 const TestGC = struct {
     gc: gc_mod.GC,
 
@@ -2828,8 +2828,6 @@ const TestGC = struct {
     }
 
     pub fn deinit(self: *TestGC) void {
-        // Aggressively free all GC-tracked blocks before test ends.
-        // This prevents the DebugAllocator from reporting false leaks.
         self.gc.freeAllBlocks();
     }
 };
