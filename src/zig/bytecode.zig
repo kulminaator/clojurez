@@ -2479,62 +2479,6 @@ fn isSimpleBytecodeForm(form: Value) bool {
 
 // Helper functions used by compiler
 
-/// Check if a form (or any nested form) contains loop or recur.
-/// Used to decide whether to skip bytecode compilation.
-pub fn containsLoopRecur(form: Value) bool {
-    return containsLoopRecurHelper(form);
-}
-
-/// Check if a list.List contains loop or recur.
-pub fn containsLoopRecurInList(l: list.List) bool {
-    return containsLoopRecurInItems(l.items);
-}
-
-/// Check if a list contains any function calls (list forms).
-/// Used to decide whether to skip bytecode compilation.
-/// Bytecode has issues with symbol resolution for called functions,
-/// so we skip bytecode for bodies that call other functions.
-pub fn containsFunctionCallsInList(l: list.List) bool {
-    return containsFunctionCallsInItems(l.items);
-}
-
-fn containsFunctionCallsInItems(items: []const Value) bool {
-    for (items) |item| {
-        if (containsFunctionCallsHelper(item)) return true;
-    }
-    return false;
-}
-
-fn containsFunctionCallsHelper(form: Value) bool {
-    switch (form) {
-        .list => {
-            const lst_items = form.list.items.items;
-            // A list is a function call (unless it's empty)
-            if (lst_items.len > 0) return true;
-            return false;
-        },
-        .vector => {
-            for (form.vector.items.items) |item| {
-                if (containsFunctionCallsHelper(item)) return true;
-            }
-            return false;
-        },
-        .map => {
-            for (form.map.entries.items) |entry| {
-                if (containsFunctionCallsHelper(entry.key)) return true;
-                if (containsFunctionCallsHelper(entry.value)) return true;
-            }
-            return false;
-        },
-        .cons => {
-            if (containsFunctionCallsHelper(form.cons.head)) return true;
-            if (containsFunctionCallsHelper(form.cons.tail)) return true;
-            return false;
-        },
-        else => return false,
-    }
-}
-
 /// Check if a symbol is a known arithmetic/comparison operator that the
 /// bytecode compiler can emit as direct opcodes (not function calls).
 /// These are "safe" for bytecode compilation since they don't use call_n.
@@ -2594,7 +2538,6 @@ fn isBytecodeSpecialForm(sym: []const u8) bool {
 /// Check if a list contains any REAL function calls (not arithmetic/comparison).
 /// Arithmetic and comparison operators are safe because they compile to direct
 /// opcodes (add, sub, eq, etc.) instead of call_n, so they don't cause stack growth.
-/// This replaces containsFunctionCallsInList for bytecode compilation guards.
 pub fn containsRealFunctionCallsInList(l: list.List) bool {
     return containsRealFunctionCallsInItems(l.items);
 }
@@ -2653,44 +2596,6 @@ fn containsRealFunctionCallsHelper(form: Value) bool {
         .cons => {
             if (containsRealFunctionCallsHelper(form.cons.head)) return true;
             if (containsRealFunctionCallsHelper(form.cons.tail)) return true;
-            return false;
-        },
-        else => return false,
-    }
-}
-
-fn containsLoopRecurInItems(items: []const Value) bool {
-    if (items.len > 0 and std.meta.activeTag(items[0]) == .symbol) {
-        const sym = items[0].symbol;
-        if (std.mem.eql(u8, sym, "loop") or std.mem.eql(u8, sym, "recur")) {
-            return true;
-        }
-    }
-    for (items) |item| {
-        if (containsLoopRecurHelper(item)) return true;
-    }
-    return false;
-}
-
-fn containsLoopRecurHelper(form: Value) bool {
-    switch (form) {
-        .list => return containsLoopRecurInItems(form.list.items.items),
-        .vector => {
-            for (form.vector.items.items) |item| {
-                if (containsLoopRecurHelper(item)) return true;
-            }
-            return false;
-        },
-        .map => {
-            for (form.map.entries.items) |entry| {
-                if (containsLoopRecurHelper(entry.key)) return true;
-                if (containsLoopRecurHelper(entry.value)) return true;
-            }
-            return false;
-        },
-        .cons => {
-            if (containsLoopRecurHelper(form.cons.head)) return true;
-            if (containsLoopRecurHelper(form.cons.tail)) return true;
             return false;
         },
         else => return false,
@@ -2860,7 +2765,9 @@ test "bytecode::opCodeName: returns string for each opcode" {
 }
 
 test "bytecode::program: init and deinit" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var program = BytecodeProgram.init(allocator);
     defer program.deinit(allocator);
     _ = try program.emit0(allocator, .push_nil);
@@ -2868,7 +2775,9 @@ test "bytecode::program: init and deinit" {
 }
 
 test "bytecode::vm: push and return" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var program = BytecodeProgram.init(allocator);
     defer program.deinit(allocator);
 
@@ -2900,7 +2809,32 @@ test "bytecode::vm: push and return" {
 // ============================================================
 // Test helper: compile-and-execute pipeline
 // ============================================================
-// Helper to create a minimal environment for bytecode testing.
+
+/// TestGC wraps a GC instance backed by std.testing.allocator.
+/// Use it to get a GC allocator for bytecode tests, and call deinit()
+/// (typically via defer) to aggressively free all GC-tracked memory.
+/// This prevents the "memory leaked" warnings from Zig's test runner.
+const TestGC = struct {
+    gc: gc_mod.GC,
+
+    pub fn init() TestGC {
+        return .{
+            .gc = gc_mod.GC.init(std.testing.allocator),
+        };
+    }
+
+    pub fn allocator(self: *TestGC) Allocator {
+        return self.gc.allocator();
+    }
+
+    pub fn deinit(self: *TestGC) void {
+        // Aggressively free all GC-tracked blocks before test ends.
+        // This prevents the DebugAllocator from reporting false leaks.
+        self.gc.freeAllBlocks();
+    }
+};
+
+/// Create a minimal environment for bytecode testing.
 fn createTestEnv(allocator: Allocator) vm.Env {
     return .{
         .allocator = allocator,
@@ -2912,7 +2846,9 @@ fn createTestEnv(allocator: Allocator) vm.Env {
 }
 
 test "bytecode::compile: literal nil" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var program = BytecodeProgram.init(allocator);
     defer program.deinit(allocator);
     _ = try program.emit0(allocator, .push_nil);
@@ -2933,7 +2869,9 @@ test "bytecode::compile: literal nil" {
 }
 
 test "bytecode::compile: literal integer" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var program = BytecodeProgram.init(allocator);
     defer program.deinit(allocator);
     _ = try program.emit(allocator, .push_int, 123);
@@ -2955,7 +2893,9 @@ test "bytecode::compile: literal integer" {
 }
 
 test "bytecode::compile: literal boolean" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var program = BytecodeProgram.init(allocator);
     defer program.deinit(allocator);
     _ = try program.emit0(allocator, .push_true);
@@ -2977,7 +2917,9 @@ test "bytecode::compile: literal boolean" {
 }
 
 test "bytecode::compile: variable reference" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var program = BytecodeProgram.init(allocator);
     defer program.deinit(allocator);
     const sym_idx = try program.addSymbol(allocator, "x");
@@ -3001,7 +2943,9 @@ test "bytecode::compile: variable reference" {
 }
 
 test "bytecode::compile: if true branch" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var program = BytecodeProgram.init(allocator);
     defer program.deinit(allocator);
 
@@ -3035,7 +2979,9 @@ test "bytecode::compile: if true branch" {
 }
 
 test "bytecode::compile: if nil branch" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var program = BytecodeProgram.init(allocator);
     defer program.deinit(allocator);
 
@@ -3070,7 +3016,9 @@ test "bytecode::compile: if nil branch" {
 }
 
 test "bytecode::compile: store and load variable" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var program = BytecodeProgram.init(allocator);
     defer program.deinit(allocator);
 
@@ -3118,7 +3066,9 @@ fn createTestEnvWithArithmetic(allocator: Allocator) vm.Env {
 }
 
 test "bytecode::arithmetic: bigint add" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var program = BytecodeProgram.init(allocator);
     defer program.deinit(allocator);
 
@@ -3153,7 +3103,9 @@ test "bytecode::arithmetic: bigint add" {
 }
 
 test "bytecode::arithmetic: bigint sub" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var program = BytecodeProgram.init(allocator);
     defer program.deinit(allocator);
 
@@ -3187,7 +3139,9 @@ test "bytecode::arithmetic: bigint sub" {
 }
 
 test "bytecode::arithmetic: bigint mul" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var program = BytecodeProgram.init(allocator);
     defer program.deinit(allocator);
 
@@ -3221,7 +3175,9 @@ test "bytecode::arithmetic: bigint mul" {
 }
 
 test "bytecode::arithmetic: mixed int+bigint add" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var program = BytecodeProgram.init(allocator);
     defer program.deinit(allocator);
 
@@ -3254,7 +3210,9 @@ test "bytecode::arithmetic: mixed int+bigint add" {
 }
 
 test "bytecode::arithmetic: int+float add" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var program = BytecodeProgram.init(allocator);
     defer program.deinit(allocator);
 
@@ -3283,7 +3241,9 @@ test "bytecode::arithmetic: int+float add" {
 }
 
 test "bytecode::negate: integer" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var program = BytecodeProgram.init(allocator);
     defer program.deinit(allocator);
 
@@ -3308,7 +3268,9 @@ test "bytecode::negate: integer" {
 }
 
 test "bytecode::negate: float" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var program = BytecodeProgram.init(allocator);
     defer program.deinit(allocator);
 
@@ -3333,7 +3295,9 @@ test "bytecode::negate: float" {
 }
 
 test "bytecode::negate: bigint" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var program = BytecodeProgram.init(allocator);
     defer program.deinit(allocator);
 
@@ -3366,7 +3330,9 @@ test "bytecode::negate: bigint" {
 // ============================================================
 
 test "bytecode::loop_recur: simple counter" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var program = BytecodeProgram.init(allocator);
     defer program.deinit(allocator);
 
@@ -3436,7 +3402,9 @@ test "bytecode::loop_recur: simple counter" {
 }
 
 test "bytecode::loop_recur: accumulator" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var program = BytecodeProgram.init(allocator);
     defer program.deinit(allocator);
 
@@ -3516,7 +3484,9 @@ test "bytecode::loop_recur: accumulator" {
 // ============================================================
 
 test "bytecode::compile: add opcode emission" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     // Compile: (+ 3 4) => push 3, push 4, add, stop
     var body: list.List = .empty;
     errdefer body.deinit(allocator);
@@ -3550,7 +3520,9 @@ test "bytecode::compile: add opcode emission" {
 }
 
 test "bytecode::compile: sub opcode emission" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var body: list.List = .empty;
     errdefer body.deinit(allocator);
     try body.append(allocator, try vm.symValue(allocator, "-"));
@@ -3579,7 +3551,9 @@ test "bytecode::compile: sub opcode emission" {
 }
 
 test "bytecode::compile: mul opcode emission" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var body: list.List = .empty;
     errdefer body.deinit(allocator);
     try body.append(allocator, try vm.symValue(allocator, "*"));
@@ -3608,7 +3582,9 @@ test "bytecode::compile: mul opcode emission" {
 }
 
 test "bytecode::compile: div opcode emission" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var body: list.List = .empty;
     errdefer body.deinit(allocator);
     try body.append(allocator, try vm.symValue(allocator, "/"));
@@ -3637,7 +3613,9 @@ test "bytecode::compile: div opcode emission" {
 }
 
 test "bytecode::compile: rem opcode emission" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var body: list.List = .empty;
     errdefer body.deinit(allocator);
     try body.append(allocator, try vm.symValue(allocator, "rem"));
@@ -3666,7 +3644,9 @@ test "bytecode::compile: rem opcode emission" {
 }
 
 test "bytecode::compile: neg single arg" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var body: list.List = .empty;
     errdefer body.deinit(allocator);
     try body.append(allocator, try vm.symValue(allocator, "-"));
@@ -3696,7 +3676,9 @@ test "bytecode::compile: neg single arg" {
 }
 
 test "bytecode::compile: eq opcode emission" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var body: list.List = .empty;
     errdefer body.deinit(allocator);
     try body.append(allocator, try vm.symValue(allocator, "="));
@@ -3731,7 +3713,9 @@ test "bytecode::compile: eq opcode emission" {
 // The VM still supports these opcodes for direct use.
 
 test "bytecode::compile: not opcode emission" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
@@ -3808,7 +3792,9 @@ test "bytecode::compile: not opcode emission" {
 }
 
 test "bytecode::compile: multi-arg arithmetic" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     // (+ 1 2 3 4) => 10
     var body: list.List = .empty;
     errdefer body.deinit(allocator);
@@ -3844,7 +3830,9 @@ test "bytecode::compile: multi-arg arithmetic" {
 }
 
 test "bytecode::compile: multi-arg sub" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     // (- 10 3 2) => 5
     var body: list.List = .empty;
     errdefer body.deinit(allocator);
@@ -3876,7 +3864,9 @@ test "bytecode::compile: multi-arg sub" {
 }
 
 test "bytecode::compile: 2-arg eq" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     // (= 3 3) => true (2-arg comparison uses eq opcode)
     var body: list.List = .empty;
     errdefer body.deinit(allocator);
@@ -3907,7 +3897,9 @@ test "bytecode::compile: 2-arg eq" {
 }
 
 test "bytecode::compile: ne/not= opcode emission" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
@@ -3963,70 +3955,76 @@ test "bytecode::compile: ne/not= opcode emission" {
 }
 
 test "bytecode::containsRealFunctionCalls: arithmetic is safe" {
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     // (+ a b) should NOT be flagged as a real function call
     var body: list.List = .empty;
-    defer body.deinit(std.testing.allocator);
-    try body.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "+"));
-    try body.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "a"));
-    try body.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "b"));
+    defer body.deinit(allocator);
+    try body.append(allocator, try vm.symValue(allocator, "+"));
+    try body.append(allocator, try vm.symValue(allocator, "a"));
+    try body.append(allocator, try vm.symValue(allocator, "b"));
     try std.testing.expect(!containsRealFunctionCallsInList(body));
 
     // (= a b) should NOT be flagged
     var body2: list.List = .empty;
-    defer body2.deinit(std.testing.allocator);
-    try body2.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "="));
-    try body2.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "a"));
-    try body2.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "b"));
+    defer body2.deinit(allocator);
+    try body2.append(allocator, try vm.symValue(allocator, "="));
+    try body2.append(allocator, try vm.symValue(allocator, "a"));
+    try body2.append(allocator, try vm.symValue(allocator, "b"));
     try std.testing.expect(!containsRealFunctionCallsInList(body2));
 
     // (not x) should NOT be flagged
     var body3: list.List = .empty;
-    defer body3.deinit(std.testing.allocator);
-    try body3.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "not"));
-    try body3.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "x"));
+    defer body3.deinit(allocator);
+    try body3.append(allocator, try vm.symValue(allocator, "not"));
+    try body3.append(allocator, try vm.symValue(allocator, "x"));
     try std.testing.expect(!containsRealFunctionCallsInList(body3));
 
     // (foo a) SHOULD be flagged (regular function call)
     // Create a body list that contains a function call list: [(foo a)]
     var call4: list.List = .empty;
-    defer call4.deinit(std.testing.allocator);
-    try call4.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "foo"));
-    try call4.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "a"));
-    const call4_val = try vm.listValue(std.testing.allocator, call4);
+    defer call4.deinit(allocator);
+    try call4.append(allocator, try vm.symValue(allocator, "foo"));
+    try call4.append(allocator, try vm.symValue(allocator, "a"));
+    const call4_val = try vm.listValue(allocator, call4);
     var body4: list.List = .empty;
-    defer body4.deinit(std.testing.allocator);
-    try body4.append(std.testing.allocator, call4_val);
+    defer body4.deinit(allocator);
+    try body4.append(allocator, call4_val);
     try std.testing.expect(containsRealFunctionCallsInList(body4));
 }
 
 test "bytecode::containsRealFunctionCalls: nested arithmetic is safe" {
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     // (+ (* a b) c) should NOT be flagged
     var inner: list.List = .empty;
-    defer inner.deinit(std.testing.allocator);
-    try inner.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "*"));
-    try inner.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "a"));
-    try inner.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "b"));
-    const inner_val = try vm.listValue(std.testing.allocator, inner);
+    defer inner.deinit(allocator);
+    try inner.append(allocator, try vm.symValue(allocator, "*"));
+    try inner.append(allocator, try vm.symValue(allocator, "a"));
+    try inner.append(allocator, try vm.symValue(allocator, "b"));
+    const inner_val = try vm.listValue(allocator, inner);
 
     var body: list.List = .empty;
-    defer body.deinit(std.testing.allocator);
-    try body.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "+"));
-    try body.append(std.testing.allocator, inner_val);
-    try body.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "c"));
+    defer body.deinit(allocator);
+    try body.append(allocator, try vm.symValue(allocator, "+"));
+    try body.append(allocator, inner_val);
+    try body.append(allocator, try vm.symValue(allocator, "c"));
     try std.testing.expect(!containsRealFunctionCallsInList(body));
 
     // (+ (foo a) b) SHOULD be flagged (foo is a real function call)
     var inner2: list.List = .empty;
-    defer inner2.deinit(std.testing.allocator);
-    try inner2.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "foo"));
-    try inner2.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "a"));
-    const inner2_val = try vm.listValue(std.testing.allocator, inner2);
+    defer inner2.deinit(allocator);
+    try inner2.append(allocator, try vm.symValue(allocator, "foo"));
+    try inner2.append(allocator, try vm.symValue(allocator, "a"));
+    const inner2_val = try vm.listValue(allocator, inner2);
 
     var body2: list.List = .empty;
-    defer body2.deinit(std.testing.allocator);
-    try body2.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "+"));
-    try body2.append(std.testing.allocator, inner2_val);
-    try body2.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "b"));
+    defer body2.deinit(allocator);
+    try body2.append(allocator, try vm.symValue(allocator, "+"));
+    try body2.append(allocator, inner2_val);
+    try body2.append(allocator, try vm.symValue(allocator, "b"));
     try std.testing.expect(containsRealFunctionCallsInList(body2));
 }
 
@@ -4035,7 +4033,9 @@ test "bytecode::containsRealFunctionCalls: nested arithmetic is safe" {
 // ============================================================
 
 test "bytecode::compile: case match first" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     // (case 1 1 "one" 2 "two" :else "default") => "one"
     var body: list.List = .empty;
     errdefer body.deinit(allocator);
@@ -4070,7 +4070,9 @@ test "bytecode::compile: case match first" {
 }
 
 test "bytecode::compile: case match second" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     // (case 2 1 "one" 2 "two" :else "default") => "two"
     var body: list.List = .empty;
     errdefer body.deinit(allocator);
@@ -4105,7 +4107,9 @@ test "bytecode::compile: case match second" {
 }
 
 test "bytecode::compile: case default" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     // (case 3 1 "one" 2 "two" :else "default") => "default"
     var body: list.List = .empty;
     errdefer body.deinit(allocator);
@@ -4140,7 +4144,9 @@ test "bytecode::compile: case default" {
 }
 
 test "bytecode::compile: case no match no default" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     // (case 3 1 "one" 2 "two") => nil
     var body: list.List = .empty;
     errdefer body.deinit(allocator);
@@ -4172,7 +4178,9 @@ test "bytecode::compile: case no match no default" {
 }
 
 test "bytecode::compile: case string match" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     // (case "a" "a" :yes "b" :no :else :default) => :yes
     var body: list.List = .empty;
     errdefer body.deinit(allocator);
@@ -4207,7 +4215,9 @@ test "bytecode::compile: case string match" {
 }
 
 test "bytecode::compile: letfn compiles without crash" {
-    const allocator = std.testing.allocator;
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     // Test that letfn compiles to bytecode without crashing.
     // We test the function definition part (no function calls in body).
     // (letfn [(f [n] n)] 42) => 42
@@ -4263,20 +4273,23 @@ test "bytecode::isBytecodeSpecialForm: case and letfn" {
 }
 
 test "bytecode::containsUnhandledSpecialForm: case and letfn not unhandled" {
+    var test_gc = TestGC.init();
+    defer test_gc.deinit();
+    const allocator = test_gc.allocator();
     // case should NOT be flagged as unhandled
     var case_body: list.List = .empty;
-    defer case_body.deinit(std.testing.allocator);
-    try case_body.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "case"));
-    try case_body.append(std.testing.allocator, vm.intValue(1));
-    try case_body.append(std.testing.allocator, vm.intValue(1));
-    try case_body.append(std.testing.allocator, vm.intValue(42));
+    defer case_body.deinit(allocator);
+    try case_body.append(allocator, try vm.symValue(allocator, "case"));
+    try case_body.append(allocator, vm.intValue(1));
+    try case_body.append(allocator, vm.intValue(1));
+    try case_body.append(allocator, vm.intValue(42));
     try std.testing.expect(!containsUnhandledSpecialFormInList(case_body));
 
     // letfn should NOT be flagged as unhandled
     var letfn_body: list.List = .empty;
-    defer letfn_body.deinit(std.testing.allocator);
-    try letfn_body.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "letfn"));
-    try letfn_body.append(std.testing.allocator, try vm.listValue(std.testing.allocator, list.empty()));
-    try letfn_body.append(std.testing.allocator, try vm.symValue(std.testing.allocator, "f"));
+    defer letfn_body.deinit(allocator);
+    try letfn_body.append(allocator, try vm.symValue(allocator, "letfn"));
+    try letfn_body.append(allocator, try vm.listValue(allocator, list.empty()));
+    try letfn_body.append(allocator, try vm.symValue(allocator, "f"));
     try std.testing.expect(!containsUnhandledSpecialFormInList(letfn_body));
 }

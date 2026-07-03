@@ -634,6 +634,39 @@ pub const GC = struct {
         self.log("[GC] SWEEP {s}\n", .{ if (enabled) "ENABLED" else "DISABLED" });
     }
 
+    /// Aggressively free ALL GC-tracked blocks, regardless of reachability.
+    /// Used by Zig unit tests to clean up GC-allocated memory at test end.
+    /// Unlike normal collect(), this does NOT mark reachable objects — it
+    /// simply walks the block list and frees every single block.
+    /// Safe to call multiple times (idempotent after first call).
+pub fn freeAllBlocks(self: *Self) void {
+        // Walk the entire linked list and free every block.
+        // Each iteration removes the block from the list and frees its memory.
+        while (self.blocks) |header| {
+            const total = header.offset + header.size;
+            const block_start = @as([*]u8, @ptrCast(header));
+
+            // Remove from linked list under mutex.
+            while (self.block_mutex.cmpxchgStrong(0, 1, .acq_rel, .monotonic) != null) {}
+            if (header.prev) |prev| {
+                prev.next = header.next;
+            } else {
+                self.blocks = header.next;
+            }
+            if (header.next) | nxt | {
+                nxt.prev = header.prev;
+            }
+            self.block_count -= 1;
+            self.block_mutex.store(0, .release);
+
+            // Free the memory back to the wrapped allocator (slab).
+            self.wrapped.free(block_start[0..total]);
+            self.free_count += 1;
+        }
+        self.current_allocated = 0;
+        self.log("[GC] FREE ALL: freed all blocks, count={d}\n", .{self.free_count});
+    }
+
     /// Enable automatic GC: trigger collection when memory grows by
     /// max(last_collected_memory * 20%, 1MB) since the last sweep.
     /// The scan_fn is stored so alloc() can invoke collect() without a caller.
