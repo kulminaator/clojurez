@@ -1726,13 +1726,15 @@ fn evalDefn(allocator: Allocator, l: *const list.List, env: *Env, depth: usize, 
     arities = try parseArityForms(allocator, l.items, l.items.len, &idx);
 
     // Compile each arity's body to bytecode.
-    // Skip if body contains loop/recur (not supported in bytecode yet)
-    // or function calls (bytecode has symbol resolution issues for called functions).
+    // Skip if body contains unhandled special forms or function calls.
+    // Arithmetic/comparison operators are safe (compile to direct opcodes, Phase 6).
+    // loop/recur is now supported in bytecode (Phase 5).
     for (arities.items) |*a| {
-        if (!bytecode_mod.containsLoopRecurInList(a.body) and
-            !bytecode_mod.containsFunctionCallsInList(a.body))
+        if (!bytecode_mod.containsUnhandledSpecialFormInList(a.body) and
+            !bytecode_mod.containsDestructuring(a.params) and
+            !bytecode_mod.containsRealFunctionCallsInList(a.body))
         {
-            const bc = try bytecode_mod.compile(allocator, a.body, "<defn>");
+            const bc = try bytecode_mod.compile(allocator, a.body, "<defn>", env);
             a.bytecode = try allocator.create(bytecode_mod.BytecodeProgram);
             a.bytecode.?.* = bc;
             // Register BytecodeProgram with GC so its internal arrays are scanned

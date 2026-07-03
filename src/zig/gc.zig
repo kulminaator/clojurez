@@ -74,11 +74,13 @@ const Header = struct {
     generation: u32 = 0, // generation this block was allocated in
     size: usize = 0,
     offset: usize = 0, // bytes from header to data area (header_size + padding)
+    alignment: Alignment = Alignment.of(u8), // original allocation alignment
     next: ?*Header = null,
     prev: ?*Header = null,
 };
 
 const HEADER_SIZE: usize = @sizeOf(Header);
+const HEADER_ALIGNMENT = Alignment.of(Header);
 
 // ============================================================
 // ScanContext — passed to scan functions during the mark phase
@@ -243,6 +245,7 @@ pub const GC = struct {
         header.* = .{
             .size = actual_size,
             .offset = HEADER_SIZE + padding,
+            .alignment = alignment,
             .generation = self.generation,
             .next = self.blocks,
             .prev = null,
@@ -324,7 +327,8 @@ pub const GC = struct {
         const block_size = header.size;
         const total = header.offset + block_size;
         const block_start = @as([*]u8, @ptrCast(header));
-        self.wrapped.free(block_start[0..total]);
+        // Free with HEADER_ALIGNMENT to match the allocation alignment used in alloc().
+        self.wrapped.rawFree(block_start[0..total], HEADER_ALIGNMENT, @returnAddress());
 
         self.free_count += 1;
         if (block_size > self.current_allocated) {
@@ -605,7 +609,8 @@ pub const GC = struct {
                 const block_start = @as([*]u8, @ptrCast(b));
                 // Mark GC-swept memory with 0xFE so we can recognize it
                 @memset(block_start[sweep_offset .. sweep_offset + sweep_size], 0xFE);
-                self.wrapped.free(block_start[0..total]);
+                // Free with HEADER_ALIGNMENT to match the allocation alignment used in alloc().
+                self.wrapped.rawFree(block_start[0..total], HEADER_ALIGNMENT, @returnAddress());
 
                 swept += 1;
                 swept_bytes += sweep_size;
@@ -632,6 +637,38 @@ pub const GC = struct {
     pub fn setSweepEnabled(self: *Self, enabled: bool) void {
         self.sweep_enabled = enabled;
         self.log("[GC] SWEEP {s}\n", .{ if (enabled) "ENABLED" else "DISABLED" });
+    }
+
+    /// Aggressively free ALL GC-tracked blocks, regardless of reachability.
+    /// Used by Zig unit tests to clean up GC-allocated memory at test end.
+    /// Unlike normal collect(), this does NOT mark reachable objects — it
+    /// simply walks the block list and frees every single block.
+    /// Safe to call multiple times (idempotent after first call).
+pub fn freeAllBlocks(self: *Self) void {
+        // Walk the entire linked list and free every block.
+        // Each iteration removes the block from the list and frees its memory.
+        while (self.blocks) |header| {
+            const total = header.offset + header.size;
+            const block_start = @as([*]u8, @ptrCast(header));
+
+            // Remove from linked list under mutex.
+            while (self.block_mutex.cmpxchgStrong(0, 1, .acq_rel, .monotonic) != null) {}
+            if (header.prev) |prev| {
+                prev.next = header.next;
+            } else {
+                self.blocks = header.next;
+            }
+            if (header.next) | nxt | {
+                nxt.prev = header.prev;
+            }
+            self.block_count -= 1;
+            self.block_mutex.store(0, .release);
+
+            // Free with HEADER_ALIGNMENT to match the allocation alignment used in alloc().
+            self.wrapped.rawFree(block_start[0..total], HEADER_ALIGNMENT, @returnAddress());
+            self.free_count += 1;
+        }
+        self.current_allocated = 0;
     }
 
     /// Enable automatic GC: trigger collection when memory grows by
