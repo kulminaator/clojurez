@@ -614,7 +614,10 @@ pub fn execute(
             },
             .jump_if_not_nil => {
                 const top = stack.pop() orelse return error.BytecodeError;
-                if (std.meta.activeTag(top.*) != .nil) {
+                const tag = std.meta.activeTag(top.*);
+                // Both nil and false are falsy in Clojure; jump only if truthy
+                const is_false = if (tag == .bool) top.*.bool == false else false;
+                if (tag != .nil and !is_false) {
                     pc = inst.operand;
                 }
                 vm.valueDeinit(top, allocator);
@@ -1511,6 +1514,30 @@ const Compiler = struct {
                 return;
             }
 
+            // (and exprs...) — short-circuit logical and
+            if (std.mem.eql(u8, sym, "and")) {
+                try self.compileAnd(l.items);
+                return;
+            }
+
+            // (or exprs...) — short-circuit logical or
+            if (std.mem.eql(u8, sym, "or")) {
+                try self.compileOr(l.items);
+                return;
+            }
+
+            // (cond test1 result1 test2 result2 ... :else default)
+            if (std.mem.eql(u8, sym, "cond")) {
+                try self.compileCond(l.items);
+                return;
+            }
+
+            // (when test body...) — sugar for (if test (do body...) nil)
+            if (std.mem.eql(u8, sym, "when")) {
+                try self.compileWhen(l.items);
+                return;
+            }
+
             // Note: loop/recur are NOT handled here. Functions containing
             // loop/recur should skip bytecode compilation (checked in evalDefn).
             // This ensures loop/recur works through the AST interpreter.
@@ -1818,6 +1845,133 @@ const Compiler = struct {
 
         _ = try self.program.emit(self.allocator, .make_fn, meta_idx);
     }
+
+    /// Compile (and exprs...) — short-circuit logical and.
+    fn compileAnd(self: *Compiler, items: []const Value) anyerror!void {
+        const forms = items[1..];
+        if (forms.len == 0) {
+            _ = try self.program.emit0(self.allocator, .push_true);
+            return;
+        }
+        if (forms.len == 1) {
+            try self.compileForm(forms[0]);
+            return;
+        }
+        const tmp_idx = try self.program.addSymbol(self.allocator, "__and_tmp");
+        for (forms) |form| {
+            try self.compileForm(form);
+            _ = try self.program.emit(self.allocator, .store_var, tmp_idx);
+            _ = try self.program.emit(self.allocator, .load_var, tmp_idx);
+            _ = try self.program.emit(self.allocator, .jump_if_nil, 0);
+        }
+        const end_pc = self.program.instructions.items.len;
+        _ = try self.program.emit(self.allocator, .load_var, tmp_idx);
+        var i: usize = end_pc;
+        while (i > 0) : (i -= 1) {
+            if (self.program.instructions.items[i].opcode == .jump_if_nil) {
+                self.program.instructions.items[i].operand = end_pc;
+            }
+        }
+        if (end_pc > 0 and self.program.instructions.items[0].opcode == .jump_if_nil) {
+            self.program.instructions.items[0].operand = end_pc;
+        }
+    }
+
+    /// Compile (or exprs...) — short-circuit logical or.
+    fn compileOr(self: *Compiler, items: []const Value) anyerror!void {
+        const forms = items[1..];
+        if (forms.len == 0) {
+            _ = try self.program.emit0(self.allocator, .push_nil);
+            return;
+        }
+        if (forms.len == 1) {
+            try self.compileForm(forms[0]);
+            return;
+        }
+        const tmp_idx = try self.program.addSymbol(self.allocator, "__or_tmp");
+        for (forms) |form| {
+            try self.compileForm(form);
+            _ = try self.program.emit(self.allocator, .store_var, tmp_idx);
+            _ = try self.program.emit(self.allocator, .load_var, tmp_idx);
+            _ = try self.program.emit(self.allocator, .jump_if_not_nil, 0);
+        }
+        const end_pc = self.program.instructions.items.len;
+        _ = try self.program.emit(self.allocator, .load_var, tmp_idx);
+        var i: usize = end_pc;
+        while (i > 0) : (i -= 1) {
+            if (self.program.instructions.items[i].opcode == .jump_if_not_nil) {
+                self.program.instructions.items[i].operand = end_pc;
+            }
+        }
+        if (end_pc > 0 and self.program.instructions.items[0].opcode == .jump_if_not_nil) {
+            self.program.instructions.items[0].operand = end_pc;
+        }
+    }
+
+    /// Compile (cond test1 result1 test2 result2 ... :else default).
+    fn compileCond(self: *Compiler, items: []const Value) anyerror!void {
+        const clauses = items[1..];
+        if (clauses.len == 0) {
+            _ = try self.program.emit0(self.allocator, .push_nil);
+            return;
+        }
+        var clause_starts: std.ArrayListUnmanaged(usize) = .empty;
+        defer clause_starts.deinit(self.allocator);
+        var jump_nil_pcs: std.ArrayListUnmanaged(usize) = .empty;
+        defer jump_nil_pcs.deinit(self.allocator);
+        var jump_end_pcs: std.ArrayListUnmanaged(usize) = .empty;
+        defer jump_end_pcs.deinit(self.allocator);
+        var i: usize = 0;
+        while (i < clauses.len) : (i += 2) {
+            const cond_test = clauses[i];
+            const is_else = std.meta.activeTag(cond_test) == .keyword and
+                std.mem.eql(u8, cond_test.keyword, "else");
+            try clause_starts.append(self.allocator, self.program.instructions.items.len);
+            if (is_else) {
+                if (i + 1 < clauses.len) {
+                    try self.compileForm(clauses[i + 1]);
+                }
+            } else {
+                try self.compileForm(cond_test);
+                const jnil_pc = try self.program.emit(self.allocator, .jump_if_nil, 0);
+                try jump_nil_pcs.append(self.allocator, jnil_pc);
+                if (i + 1 < clauses.len) {
+                    try self.compileForm(clauses[i + 1]);
+                }
+                const jump_pc = try self.program.emit(self.allocator, .jump, 0);
+                try jump_end_pcs.append(self.allocator, jump_pc);
+            }
+        }
+        const end_pc = self.program.instructions.items.len;
+        var j: usize = 0;
+        while (j < jump_nil_pcs.items.len) : (j += 1) {
+            const target = clause_starts.items[j + 1];
+            self.program.instructions.items[jump_nil_pcs.items[j]].operand = target;
+        }
+        for (jump_end_pcs.items) |pc| {
+            self.program.instructions.items[pc].operand = end_pc;
+        }
+    }
+
+    /// Compile (when test body...) — sugar for (if test (do body...) nil).
+    fn compileWhen(self: *Compiler, items: []const Value) anyerror!void {
+        if (items.len < 2) {
+            _ = try self.program.emit0(self.allocator, .push_nil);
+            return;
+        }
+        try self.compileForm(items[1]);
+        const jump_to_else_pc = try self.program.emit(self.allocator, .jump_if_nil, 0);
+        const body = items[2..];
+        for (body) |form| {
+            try self.compileForm(form);
+        }
+        const jump_past_else_pc = try self.program.emit(self.allocator, .jump, 0);
+        const else_pc = self.program.instructions.items.len;
+        self.program.instructions.items[jump_to_else_pc].operand = else_pc;
+        _ = try self.program.emit0(self.allocator, .push_nil);
+        const past_else_pc = self.program.instructions.items.len;
+        self.program.instructions.items[jump_past_else_pc].operand = past_else_pc;
+    }
 };
 
 // Helper functions used by compiler
@@ -1950,12 +2104,11 @@ fn containsUnhandledSpecialFormHelper(form: Value) bool {
             // Check if the first element is a symbol matching an unhandled special form
             if (std.meta.activeTag(lst_items[0]) == .symbol) {
                 const sym = lst_items[0].symbol;
-                // List of special forms not yet compiled to bytecode
-                if (std.mem.eql(u8, sym, "cond") or
-                    std.mem.eql(u8, sym, "and") or
-                    std.mem.eql(u8, sym, "or") or
-                    std.mem.eql(u8, sym, "when") or
-                    std.mem.eql(u8, sym, "when-not") or
+                // List of special forms not yet compiled to bytecode.
+                // and, or, cond, when are now compiled (Phase 3).
+                // Macros (when-not, when-let, when-some, when-first, if-let)
+                // are kept here because bytecode macro expansion is not reliable.
+                if (std.mem.eql(u8, sym, "when-not") or
                     std.mem.eql(u8, sym, "when-let") or
                     std.mem.eql(u8, sym, "when-some") or
                     std.mem.eql(u8, sym, "when-first") or

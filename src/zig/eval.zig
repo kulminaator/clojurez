@@ -1731,7 +1731,8 @@ fn evalDefn(allocator: Allocator, l: *const list.List, env: *Env, depth: usize, 
     for (arities.items) |*a| {
         if (!bytecode_mod.containsLoopRecurInList(a.body) and
             !bytecode_mod.containsUnhandledSpecialFormInList(a.body) and
-            !bytecode_mod.containsDestructuring(a.params))
+            !bytecode_mod.containsDestructuring(a.params) and
+            !bytecode_mod.containsFunctionCallsInList(a.body))
         {
             const bc = try bytecode_mod.compile(allocator, a.body, "<defn>", env);
             a.bytecode = try allocator.create(bytecode_mod.BytecodeProgram);
