@@ -363,19 +363,10 @@ pub fn core_write_bytes(self: *const Value, args: *const list.List, env_env: *En
     }
 
     if (os_data.append_mode) {
-        // In append mode, stat the file to get current size for seeking.
-        // If stat fails, fall back to tracked offset (set at open time).
-        const write_offset: u64 = if (os_data.file.stat(io)) |stat| stat.size else |stat_err| blk: {
-            const err_name = @errorName(stat_err);
-            std.log.err("[io_stream] append-mode stat failed: {s}, falling back to tracked offset={}", .{ err_name, os_data.offset });
-            break :blk @as(u64, @intCast(os_data.offset));
-        };
-        var writer = os_data.file.writer(io, os_data.buffer);
-        writer.seekTo(write_offset) catch |seek_err| {
-            std.log.err("[io_stream] append-mode seekTo({}) failed: {s}, writing at current position", .{ write_offset, @errorName(seek_err) });
-        };
-        try writer.interface.writeAll(data_val.string);
-        try writer.flush();
+        // In append mode, use positional write at current file end.
+        // seekTo on buffered writers is unreliable on Windows.
+        const file_size = if (os_data.file.stat(io) catch null) |stat| stat.size else 0;
+        try os_data.file.writePositionalAll(io, data_val.string, file_size);
     } else {
         var writer = os_data.file.writer(io, os_data.buffer);
         writer.seekTo(@as(u64, @intCast(os_data.offset))) catch {};
@@ -548,10 +539,17 @@ pub fn core_write_string(self: *const Value, args: *const list.List, env_env: *E
         else => return error.TypeError,
     }
 
-    var file_writer = os_data.file.writer(io, os_data.buffer);
-    file_writer.seekTo(@as(u64, @intCast(os_data.offset))) catch {};
-    try file_writer.interface.writeAll(text_val.string);
-    try file_writer.flush();
+    if (os_data.append_mode) {
+        // In append mode, use positional write at current file end.
+        // seekTo on buffered writers is unreliable on Windows.
+        const file_size = if (os_data.file.stat(io) catch null) |stat| stat.size else 0;
+        try os_data.file.writePositionalAll(io, text_val.string, file_size);
+    } else {
+        var file_writer = os_data.file.writer(io, os_data.buffer);
+        file_writer.seekTo(@as(u64, @intCast(os_data.offset))) catch {};
+        try file_writer.interface.writeAll(text_val.string);
+        try file_writer.flush();
+    }
     os_data.offset += @as(i64, @intCast(text_val.string.len));
 
     return vm.nilValue();
