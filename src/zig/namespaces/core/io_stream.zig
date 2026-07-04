@@ -363,10 +363,10 @@ pub fn core_write_bytes(self: *const Value, args: *const list.List, env_env: *En
     }
 
     if (os_data.append_mode) {
-        // In append mode, use positional write at current file end.
-        // seekTo on buffered writers is unreliable on Windows.
-        const file_size = if (os_data.file.stat(io) catch null) |stat| stat.size else 0;
-        try os_data.file.writePositionalAll(io, data_val.string, file_size);
+        // In append mode, use positional write at tracked offset.
+        // file.stat() on an open handle fails on Windows, so we rely on
+        // the offset tracked across writes (initialized from file size at open time).
+        try os_data.file.writePositionalAll(io, data_val.string, @as(u64, @intCast(os_data.offset)));
     } else {
         var writer = os_data.file.writer(io, os_data.buffer);
         writer.seekTo(@as(u64, @intCast(os_data.offset))) catch {};
@@ -540,10 +540,10 @@ pub fn core_write_string(self: *const Value, args: *const list.List, env_env: *E
     }
 
     if (os_data.append_mode) {
-        // In append mode, use positional write at current file end.
-        // seekTo on buffered writers is unreliable on Windows.
-        const file_size = if (os_data.file.stat(io) catch null) |stat| stat.size else 0;
-        try os_data.file.writePositionalAll(io, text_val.string, file_size);
+        // In append mode, use positional write at tracked offset.
+        // file.stat() on an open handle fails on Windows, so we rely on
+        // the offset tracked across writes (initialized from file size at open time).
+        try os_data.file.writePositionalAll(io, text_val.string, @as(u64, @intCast(os_data.offset)));
     } else {
         var file_writer = os_data.file.writer(io, os_data.buffer);
         file_writer.seekTo(@as(u64, @intCast(os_data.offset))) catch {};
