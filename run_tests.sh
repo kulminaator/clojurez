@@ -42,12 +42,18 @@ run_clj_suite() {
 
     CLJ_TOTAL=$((CLJ_TOTAL + 1))
 
+    # Some test suites need more time (e.g. test_clojure_string on Windows)
+    local suite_timeout=$TIMEOUT_SECONDS
+    if [ "$suite_name" = "test_clojure_string" ]; then
+        suite_timeout=30
+    fi
+
     local output
     local exit_code=0
-    output=$(tests/timeout.sh "$TIMEOUT_SECONDS" "$VM" "$test_file" 2>&1) || exit_code=$?
+    output=$(tests/timeout.sh "$suite_timeout" "$VM" "$test_file" 2>&1) || exit_code=$?
 
     if [ "$exit_code" -eq 124 ]; then
-        echo "TIMEOUT: $suite_name (${TIMEOUT_SECONDS}s)"
+        echo "TIMEOUT: $suite_name (${suite_timeout}s)"
         CLJ_FAILED=$((CLJ_FAILED + 1))
         return
     elif [ "$exit_code" -ne 0 ]; then
