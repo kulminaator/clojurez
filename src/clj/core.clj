@@ -5,52 +5,80 @@
 
 ;; ---- Basic predicates ----
 
-(defn even? [n]
+(defn even?
+  "Returns true if n is even, else false."
+  [n]
   (= (rem n 2) 0))
 
-(defn odd? [n]
+(defn odd?
+  "Returns true if n is odd, else false."
+  [n]
   (not (even? n)))
 
-(defn zero? [n]
+(defn zero?
+  "Returns true if num is zero, else false."
+  [n]
   (= n 0))
 
-(defn pos? [n]
+(defn pos?
+  "Returns true if num is greater than zero, else false."
+  [n]
   (> n 0))
 
-(defn neg? [n]
+(defn neg?
+  "Returns true if num is less than zero, else false."
+  [n]
   (< n 0))
 
-(defn pos-int? [n]
+(defn pos-int?
+  "Return true if x is a positive fixed precision integer."
+  [n]
   (and (int? n) (pos? n)))
 
-(defn neg-int? [n]
+(defn neg-int?
+  "Return true if x is a negative fixed precision integer."
+  [n]
   (and (int? n) (neg? n)))
 
-(defn nat-int? [n]
+(defn nat-int?
+  "Return true if x is a non-negative fixed precision integer."
+  [n]
   (and (int? n) (not (neg? n))))
 
 ;; ---- Identity ----
 
-(defn identity [x]
+(defn identity
+  "Returns its argument."
+  [x]
   x)
 
 ;; ---- Math helpers ----
 
-(defn inc [n]
+(defn inc
+  "Returns a number one greater than num."
+  [n]
   (+ n 1))
 
-(defn dec [n]
+(defn dec
+  "Returns a number one less than num."
+  [n]
   (- n 1))
 
-(defn abs [n]
+(defn abs
+  "Returns the absolute value of a."
+  [n]
   (if (neg? n)
     (- 0 n)
     n))
 
-(defn max [a b]
+(defn max
+  "Returns the greatest of the nums."
+  [a b]
   (if (> a b) a b))
 
-(defn min [a b]
+(defn min
+  "Returns the least of the nums."
+  [a b]
   (if (< a b) a b))
 
 ;; ---- List helpers ----
@@ -61,10 +89,14 @@
    preserves lazy-seq semantics." [x xs]
   (zig.core/cons x xs))
 
-(defn second [xs]
+(defn second
+  "Same as (first (rest x))."
+  [xs]
   (first (rest xs)))
 
-(defn third [xs]
+(defn third
+  "Same as (first (rest (rest x)))."
+  [xs]
   (first (rest (rest xs))))
 
 ;; ---- Set operations (built on core set type) ----

@@ -530,11 +530,16 @@ fn parseArityForms(allocator: Allocator, items: []const Value, end: usize, idx: 
             // params = [x], body = body1 body2
             params_list = try helpers.listFromVector(allocator, form.vector.items);
 
-            // Collect body forms until next [params] or end
+            // Collect body forms until next [params] or end.
+            // Only vectors are valid param lists in flattened form.
+            // (Lists like (greet) are function calls, not param lists.)
             const body_start = idx.*;
             while (idx.* < end) {
                 const next = items[idx.*];
-                if (looksLikeParamList(next) and idx.* + 1 < end) {
+                if (std.meta.activeTag(next) == .vector and
+                    looksLikeParamList(next) and
+                    idx.* + 1 < end)
+                {
                     break;
                 }
                 idx.* += 1;
@@ -560,11 +565,15 @@ fn parseArityForms(allocator: Allocator, items: []const Value, end: usize, idx: 
                 // Body forms come from the parent list after this form
                 params_list = form.list.items;
 
-                // Collect body forms from the parent list
+                // Collect body forms from the parent list.
+                // Only vectors are valid param list markers.
                 const body_start = idx.*;
                 while (idx.* < end) {
                     const next = items[idx.*];
-                    if (looksLikeParamList(next) and idx.* + 1 < end) {
+                    if (std.meta.activeTag(next) == .vector and
+                        looksLikeParamList(next) and
+                        idx.* + 1 < end)
+                    {
                         break;
                     }
                     idx.* += 1;

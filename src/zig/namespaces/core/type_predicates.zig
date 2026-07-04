@@ -727,6 +727,8 @@ pub fn registerTypePredicateFunctions(env: *Env) anyerror!void {
     try env.put("with-meta", vm.builtinFnValue(core_with_meta));
     // Chunked sequence predicate
     try env.put("chunked-seq?", vm.builtinFnValue(core_chunked_seq_q));
+    try env.put("has-doc?", vm.builtinFnValue(core_has_doc_q));
+    try env.put("get-doc", vm.builtinFnValue(core_get_doc));
 }
 
 // chunked-seq? - check if s is a chunked sequence
@@ -734,6 +736,30 @@ pub fn core_chunked_seq_q(self: *const Value, args: *const list.List, _: *Env) a
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     return vm.boolValue(std.meta.activeTag(args.items[0]) == .chunked_cons);
+}
+
+// has-doc? - check if a function/macro has a docstring (no allocation)
+pub fn core_has_doc_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const val = args.items[0];
+    if (std.meta.activeTag(val) == .function) {
+        return vm.boolValue(val.function.docstring != null);
+    }
+    return vm.boolValue(false);
+}
+
+// get-doc - return the docstring of a function/macro, or nil (minimal allocation)
+pub fn core_get_doc(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const val = args.items[0];
+    if (std.meta.activeTag(val) == .function) {
+        if (val.function.docstring) |doc| {
+            return try vm.stringValue(env_env.allocator, doc);
+        }
+    }
+    return vm.nilValue();
 }
 
 // ===== Unit Tests =====
