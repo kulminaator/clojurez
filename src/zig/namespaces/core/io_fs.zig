@@ -698,6 +698,5 @@ pub fn registerFsFunctions(env: *Env) anyerror!void {
     try env.put("file-parent", vm.builtinFnValue(core_file_parent));
     try env.put("file-name", vm.builtinFnValue(core_file_name));
     try env.put("absolute-path", vm.builtinFnValue(core_absolute_path));
-    try env.put("copy", vm.builtinFnValue(core_copy));
     try env.put("sh-execute", vm.builtinFnValue(core_sh_execute));
 }

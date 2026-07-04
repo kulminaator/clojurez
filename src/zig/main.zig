@@ -194,34 +194,43 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     try regexp_api.registerRegexpFunctions(zr_env);
     try zr_env.markAllOwned();
 
-    // Register zig.io filesystem built-in functions in zig.core.
-    // The Clojure wrappers in io.clj reference zig.core/file-stat etc.
-    try io_fs.registerFsFunctions(zc_env);
-    // Register zig.io stream functions in zig.core.
-    try io_stream.registerStreamFunctions(zc_env);
-    // Register zig.io shell functions in zig.core.
-    try io_shell.registerShellFunctions(zc_env);
-    // Mark all zig.core builtins as owned so ns-interns works correctly.
-    try zc_env.markAllOwned();
-    // Copy fs builtins to clojure.core for direct access
-    try copyBuiltinsToNamespaceSelective(zc_env, clojure_core_env, &.{
-        "file-stat", "file-exists?", "file-size", "is-directory?", "is-file?",
-        "is-symlink?", "list-dir", "walk-dir", "make-dir", "make-parents",
-        "delete-file", "delete-dir", "delete-tree", "rename", "copy-file",
-        "sym-link", "read-link", "file-modified-time", "file-parent",
-        "file-name", "absolute-path", "sh-execute", "copy",
-        "open-input-stream", "open-output-stream", "read-bytes", "write-bytes",
-        "open-reader", "open-writer", "read-line-stream", "write-string",
-        "close-stream", "flush-stream",
-        "sh-execute-stream", "sh-read-output", "sh-read-error",
-        "sh-write-input", "sh-wait", "sh-kill", "sh-close-input",
-    });
-
     // Create zig.io namespace — I/O utilities for ClojureZ.
     // Parent set to clojure.core so io code can use core functions.
     const zio_env = try ns_mgr.createNamespace("zig.io");
     zio_env.parent = clojure_core_env;
     zio_env.ns_manager = ns_mgr;
+
+    // Register zig.io filesystem, stream, and shell built-in functions.
+    // The Clojure wrappers in io.clj reference zig.io/file-stat etc.
+    try io_fs.registerFsFunctions(zio_env);
+    try io_stream.registerStreamFunctions(zio_env);
+    try io_shell.registerShellFunctions(zio_env);
+    try zio_env.markAllOwned();
+
+    // Register colliding builtins in zig.core (copy, sh-wait, sh-kill)
+    // These have Clojure wrappers with the same name in zig.io,
+    // so the wrappers reference zig.core/ to avoid shadowing.
+    try zc_env.put("copy", vm.builtinFnValue(io_fs.core_copy));
+    try zc_env.put("sh-wait", vm.builtinFnValue(io_shell.core_sh_wait));
+    try zc_env.put("sh-kill", vm.builtinFnValue(io_shell.core_sh_kill));
+    // Mark all zig.core builtins as owned so ns-interns works correctly.
+    try zc_env.markAllOwned();
+
+    // Copy I/O builtins to clojure.core for direct access
+    try copyBuiltinsToNamespaceSelective(zio_env, clojure_core_env, &.{
+        "file-stat", "file-exists?", "file-size", "is-directory?", "is-file?",
+        "is-symlink?", "list-dir", "walk-dir", "make-dir", "make-parents",
+        "delete-file", "delete-dir", "delete-tree", "rename", "copy-file",
+        "sym-link", "read-link", "file-modified-time", "file-parent",
+        "file-name", "absolute-path", "sh-execute",
+        "open-input-stream", "open-output-stream", "read-bytes", "write-bytes",
+        "open-reader", "open-writer", "read-line-stream", "write-string",
+        "close-stream", "flush-stream",
+        "sh-execute-stream", "sh-read-output", "sh-read-error",
+        "sh-write-input", "sh-close-input",
+    });
+    // Also copy the colliding builtins from zig.core to clojure.core
+    try copyBuiltinsToNamespaceSelective(zc_env, clojure_core_env, &.{"copy", "sh-wait", "sh-kill"});
 
     // Load embedded Clojure I/O library into zig.io namespace.
     try loadIoLibrary(allocator, zio_env);
