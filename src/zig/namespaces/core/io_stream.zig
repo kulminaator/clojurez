@@ -269,10 +269,12 @@ pub fn core_open_output_stream(self: *const Value, args: *const list.List, env_e
     const buffer = try allocator.alloc(u8, buf_size);
 
     const handle = StreamHandle.createOutputStream(allocator, file, buffer, append);
-    // In append mode, get file size for initial offset (not strictly needed with seekFromEnd)
+    // In append mode, get file size for initial offset.
+    // Use Dir.statFile with the path — file.stat() on an open handle fails on Windows.
     if (append) {
+        const cwd = Dir.cwd();
         const io = std.Options.debug_io;
-        if (file.stat(io) catch null) |stat| {
+        if (Dir.statFile(cwd, io, path.string, .{}) catch null) |stat| {
             handle.data.output_stream.offset = @as(i64, @intCast(stat.size));
         }
     }
@@ -369,7 +371,9 @@ pub fn core_write_bytes(self: *const Value, args: *const list.List, env_env: *En
         try os_data.file.writePositionalAll(io, data_val.string, @as(u64, @intCast(os_data.offset)));
     } else {
         var writer = os_data.file.writer(io, os_data.buffer);
-        writer.seekTo(@as(u64, @intCast(os_data.offset))) catch {};
+        writer.seekTo(@as(u64, @intCast(os_data.offset))) catch |err| {
+            std.log.err("[io_stream] write-bytes seekTo({}) failed: {s}", .{ os_data.offset, @errorName(err) });
+        };
         try writer.interface.writeAll(data_val.string);
         try writer.flush();
     }
@@ -427,10 +431,12 @@ pub fn core_open_writer(self: *const Value, args: *const list.List, env_env: *En
     const buffer = try allocator.alloc(u8, buf_size);
 
     const stream_handle = StreamHandle.createOutputStream(allocator, file, buffer, append);
-    // In append mode, get file size for initial offset (not strictly needed with seekFromEnd)
+    // In append mode, get file size for initial offset.
+    // Use Dir.statFile with the path — file.stat() on an open handle fails on Windows.
     if (append) {
+        const cwd = Dir.cwd();
         const io = std.Options.debug_io;
-        if (file.stat(io) catch null) |stat| {
+        if (Dir.statFile(cwd, io, path.string, .{}) catch null) |stat| {
             stream_handle.data.output_stream.offset = @as(i64, @intCast(stat.size));
         }
     }
@@ -546,7 +552,9 @@ pub fn core_write_string(self: *const Value, args: *const list.List, env_env: *E
         try os_data.file.writePositionalAll(io, text_val.string, @as(u64, @intCast(os_data.offset)));
     } else {
         var file_writer = os_data.file.writer(io, os_data.buffer);
-        file_writer.seekTo(@as(u64, @intCast(os_data.offset))) catch {};
+        file_writer.seekTo(@as(u64, @intCast(os_data.offset))) catch |err| {
+            std.log.err("[io_stream] write-string seekTo({}) failed: {s}", .{ os_data.offset, @errorName(err) });
+        };
         try file_writer.interface.writeAll(text_val.string);
         try file_writer.flush();
     }
