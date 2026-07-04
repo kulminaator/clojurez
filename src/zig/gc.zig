@@ -141,6 +141,11 @@ pub const GC = struct {
     // Main thread tries to lock before collect, skips if already locked.
     gc_lock: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
 
+    // Active thread counter: tracks how many detached threads are still running.
+    // Incremented in threadStart, decremented in threadDone.
+    // Main thread waits for this to reach 0 before shutting down the GC.
+    active_thread_count: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+
     // Auto-GC: trigger collection when memory grows past threshold since last sweep.
     // Threshold = max(last_collected_memory * 20%, 1MB).
     scan_fn: ?ScanFn = null,
@@ -725,6 +730,8 @@ pub fn freeAllBlocks(self: *Self) void {
     /// Lock the GC to prevent collection while a child thread runs.
     /// Spins until the lock is acquired (GC is not running).
     pub fn threadStart(self: *Self) void {
+        // Increment active thread count so main thread knows a thread is running.
+        _ = self.active_thread_count.fetchAdd(1, .monotonic);
         // Wait for GC to finish (lock == 0), then acquire the lock (set to 1).
         while (self.gc_lock.cmpxchgStrong(0, 1, .acq_rel, .monotonic) != null) {
             // Spin-wait: GC is running, wait for it to finish.
@@ -735,6 +742,19 @@ pub fn freeAllBlocks(self: *Self) void {
     /// Unlock the GC, allowing collection to proceed.
     pub fn threadDone(self: *Self) void {
         self.gc_lock.store(0, .release);
+        // Decrement active thread count — main thread waits for this to reach 0.
+        _ = self.active_thread_count.fetchSub(1, .release);
+    }
+
+    /// Wait for all detached threads to finish their cleanup.
+    /// Spins with brief sleeps until active_thread_count reaches 0.
+    /// Used during shutdown to prevent use-after-free of GC structures.
+    pub fn waitForThreads(self: *Self) void {
+        const io = std.Io.Threaded.global_single_threaded.io();
+        while (self.active_thread_count.load(.acquire) > 0) {
+            const sleep_duration = std.Io.Duration.fromMilliseconds(1);
+            std.Io.sleep(io, sleep_duration, std.Io.Clock.awake) catch {};
+        }
     }
 
     /// Statistics snapshot.

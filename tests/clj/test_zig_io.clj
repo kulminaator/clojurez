@@ -249,8 +249,9 @@
   (zig.core/is-symlink? tmp-symlink)
   true)
 (check "read-link returns target"
-  (zig.core/read-link tmp-symlink)
-  tmp-file)
+  (= (clojure.string/replace (zig.core/read-link tmp-symlink) "\\" "/")
+     (clojure.string/replace tmp-file "\\" "/"))
+  true)
 
 ;; ============================================================
 ;; rename

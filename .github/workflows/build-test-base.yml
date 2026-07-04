@@ -27,8 +27,13 @@ jobs:
       - name: Make test script executable (Unix)
         if: runner.os != 'Windows'
         run: chmod +x run_tests.sh
-      - name: Set TMPDIR
+      - name: Set TMPDIR (Unix)
+        if: runner.os != 'Windows'
         run: echo "TMPDIR=$RUNNER_TEMP" >> $GITHUB_ENV
+      - name: Set TEMP (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: echo "TEMP=$RUNNER_TEMP" >> $GITHUB_ENV
       - name: Run zig tests
         run: zig test src/zig/all_tests.zig
       - name: Run full test suite (Bash)

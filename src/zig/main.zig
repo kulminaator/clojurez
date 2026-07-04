@@ -313,11 +313,7 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // Wait for detached threads to finish their cleanup (gc.threadDone, env.deinit, etc.)
     // before we deinitialize the GC and slab allocator. Without this, detached threads
     // may access freed memory during their defer cleanup, causing SIGABRT on macOS.
-    {
-        const io = std.Io.Threaded.global_single_threaded.io();
-        const duration = std.Io.Duration.fromMilliseconds(50);
-        std.Io.sleep(io, duration, std.Io.Clock.awake) catch {};
-    }
+    if (gc_mod.current_gc) |gc| gc.waitForThreads();
     debug.log("startup", "clojurez shutting down", .{});
 }
 

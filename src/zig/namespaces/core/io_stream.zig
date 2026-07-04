@@ -38,6 +38,7 @@ const OutputStreamData = struct {
     file: File,
     buffer: []u8,
     offset: i64 = 0, // current file position for writes
+    append_mode: bool = false, // if true, always seek to end before writing
 };
 
 /// Reader data — wraps an input stream with character decoding.
@@ -75,12 +76,12 @@ const StreamHandle = struct {
     }
 
     /// Create a new StreamHandle for an output stream.
-    pub fn createOutputStream(allocator: Allocator, file: File, buffer: []u8) *StreamHandle {
+    pub fn createOutputStream(allocator: Allocator, file: File, buffer: []u8, append_mode: bool) *StreamHandle {
         const handle = allocator.create(StreamHandle) catch unreachable;
         handle.* = .{
             .kind = .output_stream,
             .allocator = allocator,
-            .data = .{ .output_stream = .{ .file = file, .buffer = buffer } },
+            .data = .{ .output_stream = .{ .file = file, .buffer = buffer, .append_mode = append_mode } },
         };
         return handle;
     }
@@ -267,8 +268,8 @@ pub fn core_open_output_stream(self: *const Value, args: *const list.List, env_e
     const allocator = env_env.allocator;
     const buffer = try allocator.alloc(u8, buf_size);
 
-    const handle = StreamHandle.createOutputStream(allocator, file, buffer);
-    // In append mode, seek to end of file to get correct offset
+    const handle = StreamHandle.createOutputStream(allocator, file, buffer, append);
+    // In append mode, get file size for initial offset (not strictly needed with seekFromEnd)
     if (append) {
         const io = std.Options.debug_io;
         if (file.stat(io) catch null) |stat| {
@@ -362,7 +363,15 @@ pub fn core_write_bytes(self: *const Value, args: *const list.List, env_env: *En
     }
 
     var writer = os_data.file.writer(io, os_data.buffer);
-    writer.seekTo(@as(u64, @intCast(os_data.offset))) catch {};
+    if (os_data.append_mode) {
+        // In append mode, get current file size right before writing.
+        // This avoids issues with offset tracking across platforms.
+        if (os_data.file.stat(io) catch null) |stat| {
+            writer.seekTo(stat.size) catch {};
+        }
+    } else {
+        writer.seekTo(@as(u64, @intCast(os_data.offset))) catch {};
+    }
     try writer.interface.writeAll(data_val.string);
     try writer.flush();
     os_data.offset += @as(i64, @intCast(data_val.string.len));
@@ -418,8 +427,8 @@ pub fn core_open_writer(self: *const Value, args: *const list.List, env_env: *En
     const allocator = env_env.allocator;
     const buffer = try allocator.alloc(u8, buf_size);
 
-    const stream_handle = StreamHandle.createOutputStream(allocator, file, buffer);
-    // In append mode, seek to end of file to get correct offset
+    const stream_handle = StreamHandle.createOutputStream(allocator, file, buffer, append);
+    // In append mode, get file size for initial offset (not strictly needed with seekFromEnd)
     if (append) {
         const io = std.Options.debug_io;
         if (file.stat(io) catch null) |stat| {
