@@ -362,18 +362,17 @@ pub fn core_write_bytes(self: *const Value, args: *const list.List, env_env: *En
         else => return error.TypeError,
     }
 
-    var writer = os_data.file.writer(io, os_data.buffer);
     if (os_data.append_mode) {
-        // In append mode, get current file size right before writing.
-        // This avoids issues with offset tracking across platforms.
-        if (os_data.file.stat(io) catch null) |stat| {
-            writer.seekTo(stat.size) catch {};
-        }
+        // In append mode, use positional write at current file end.
+        // This avoids seek issues with buffered writers on Windows.
+        const file_size = if (os_data.file.stat(io) catch null) |stat| stat.size else 0;
+        try os_data.file.writePositionalAll(io, data_val.string, file_size);
     } else {
+        var writer = os_data.file.writer(io, os_data.buffer);
         writer.seekTo(@as(u64, @intCast(os_data.offset))) catch {};
+        try writer.interface.writeAll(data_val.string);
+        try writer.flush();
     }
-    try writer.interface.writeAll(data_val.string);
-    try writer.flush();
     os_data.offset += @as(i64, @intCast(data_val.string.len));
 
     return vm.nilValue();
