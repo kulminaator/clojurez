@@ -54,11 +54,16 @@ Type `(quit)`, `(exit)`, or press `CTRL+D` to exit the REPL.
 - **Bitwise ops** - `bit-and`, `bit-or`, `bit-xor`, `bit-shift-left`, etc.
 - **Atoms** - `atom`, `swap!`, `reset!`
 - **Multithreading** - `future`, `future-call`, `promise`, `deliver`, `realized?`, `sleep`
+- **Bytecode compilation** - functions with pure arithmetic/comparison bodies are compiled to bytecode for faster repeated execution
+- **Filesystem operations** - `stat`, `list-dir`, `walk-dir`, `make-dir`, `delete`, `rename`, `copy`, `delete-tree` via `zig.core`
+- **Stream I/O** - buffered input/output streams, readers, writers via `zig.core/open-input-stream`, `open-output-stream`, `open-reader`, `open-writer`
+- **Process I/O** - synchronous subprocess execution via `(sh ...)`, async streaming subprocess I/O via `(sh-stream ...)` with `sh-in`, `sh-out`, `sh-err`, `sh-wait`, `sh-kill`
+- **`zig.io` namespace** - protocol-based I/O abstractions (`Closeable`, `IOFactory`, `Readable`, `Writable`), path utilities, `with-open`, `copy`, `line-seq`
 
 ## Known Differences from JVM Clojure
 
 - No Java interop (not applicable for a standalone VM)
-- No JIT compilation
+- No JIT compilation (bytecode compilation is used for eligible function bodies)
 - Strings are UTF-8 (not UTF-16)
 - Simpler collection internals (no chunking)
 - Minimal runtime (< 1MB stripped)

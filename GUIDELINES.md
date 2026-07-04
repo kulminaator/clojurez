@@ -26,12 +26,15 @@ Our design is a **minimal Zig VM** with **Clojure code on top of it**.
 | `+`, `-`, `*`, `/` | Zig | Fundamental arithmetic, used by everything |
 | `print`, `println`, `read-line`, `spit`, `slurp` | Zig | Requires OS I/O |
 | `atom`, `swap!`, `reset!` | Zig | Requires mutable state management |
+| `future`, `promise`, `deliver` | Zig | Requires thread spawning and atomic state |
+| `stat`, `list-dir`, `sh-execute` | Zig | Requires OS filesystem / process APIs |
 | `inc`, `dec` | Clojure | Expressible as `(+ n 1)`, `(- n 1)` |
 | `even?`, `odd?`, `zero?` | Clojure | Expressible with `rem` and `=` |
 | `cons`, `second`, `third` | Clojure | Built on `concat`, `first`, `rest` |
 | `max`, `min`, `abs` | Clojure | Built on comparison and arithmetic |
 | `into`, `keep`, `update` | Clojure | Built on `reduce`, `conj`, `assoc`, `get`, `filter` |
 | `union`, `intersection`, `difference` | Clojure | Built on `conj`, `reduce`, `contains?` |
+| `sh`, `with-open`, `copy`, `line-seq` | Clojure (`zig.io`) | Protocol-based wrappers around Zig builtins |
 
 ### Rules
 
@@ -44,16 +47,48 @@ Our design is a **minimal Zig VM** with **Clojure code on top of it**.
 
 ---
 
+## 0.5 Thread Safety Requirements
+
+**All Zig code that can be reached during evaluation must be thread-safe.**
+
+The VM supports multithreading via `future` and `future-call`, which spawn detached OS threads that execute Clojure code concurrently. This means:
+
+1. **No shared mutable global state** — Do not introduce global variables that are written by one thread and read by another without synchronization. If you must use globals, use `std.atomic.Value` or protect with a mutex.
+2. **GC operations are already thread-safe** — The GC block list uses an atomic spinlock (`block_mutex`). The slab allocator uses per-slab spinlocks. You do not need to add extra locking around GC alloc/free calls.
+3. **Child threads must call `threadDone()` on exit** — This releases the `gc_lock` and decrements `active_thread_count`. See `threading.zig` for the pattern.
+4. **Auto-GC is disabled in child threads** — Short-lived threads set `gc.auto_gc_active = false` to avoid triggering collection while the `gc_lock` is held. The main thread performs GC on behalf of all threads.
+5. **Atomic state for future/promise** — Use `std.atomic.Value(u32)` with `.release`/`.acquire` ordering for state transitions. The `FutureData` and `PromiseData` structs demonstrate the pattern.
+6. **Env cloning for child threads** — Never share an `Env` across threads. Clone it with `env.clone(allocator)` before passing to a child thread's evaluation.
+7. **Wrapped handles are not thread-safe** — Stream handles (`StreamHandle`) and process handles (`ProcessHandle`) stored as `.wrapped` values are not designed for concurrent access from multiple threads. Document this in function docs.
+8. **When adding new built-in functions** — Ask: "Can this function be called from inside a `future`?" If yes, it must be thread-safe.
+
+### Thread Safety Checklist for New Built-in Functions
+
+- [ ] Does the function read or write any global state?
+- [ ] Does the function allocate memory through the GC? (safe — GC is thread-safe)
+- [ ] Does the function spawn threads? (must acquire `gc_lock`, call `threadDone()`)
+- [ ] Does the function store results in shared structures? (use atomics or clone)
+- [ ] Is the function's documentation clear about thread safety?
+
+### Debugging Thread Safety Issues
+
+- **Race conditions**: Run the same code multiple times. Non-deterministic failures often indicate races.
+- **Use `CLJVM_GC_SWEEP=0`** to rule out GC-related issues when debugging crashes in multithreaded code.
+- **Add debug prints with thread IDs**: `std.log.info("thread {d}: ...", .{std.Thread.getCurrentId()})`
+- **Keep it simple**: Prefer atomic operations over mutexes where possible. The `FutureData`/`PromiseData` pattern (atomic state + single-writer result) is the model to follow.
+
+---
+
 ## 1. Code Size Limits
 
-**No Zig source file may exceed 1,000 lines. No single function may exceed 80 lines.**
+**No Zig source file may exceed 2,000 lines. No single function may exceed 80 lines.**
 
 These are hard limits. When a file or function approaches its limit, it must be split before more functionality is added.
 
-### File Size Limit: 1,000 lines
+### File Size Limit: 2,000 lines
 
 - Count all lines including imports, comments, blank lines, and tests.
-- When a file reaches **800 lines**, plan a split. At **1,000 lines**, a split is mandatory.
+- When a file reaches **1,800 lines**, plan a split. At **2,000 lines**, a split is mandatory.
 - Split by **logical domain**: group related functions together.
 - Place domain-specific modules in a subdirectory (e.g., `core/arithmetic.zig`, `core/maps.zig`).
 - The parent file becomes a coordinator that imports sub-modules and delegates registration.
@@ -92,6 +127,12 @@ These are hard limits. When a file or function approaches its limit, it must be 
   tests/timeout.sh 10 ./zig-out/bin/clojurez --repl < input.clj
   ```
 - **Unit tests**: Use Zig's built-in test timeout or wrap long-running tests with explicit guards.
+- **Multithreading tests**: Tests involving `future` or `promise` must include explicit timeouts. Never rely on `deref` without a fallback. Use patterns like:
+  ```clojure
+  (let [f (future (do (sleep 100000) 42))]
+    ;; Use a timeout-aware check instead of bare deref
+    ...)
+  ```
 
 ### Rationale
 
@@ -248,6 +289,9 @@ A sample passes if the diff produces no output.
 - **`@panic("OOM")`**: Propagate errors through `anyerror!` return types instead
 - **Silent truncation**: Never silently truncate data (e.g., fixed-size stack buffers for variable-length input)
 - **Duplicated logic**: Extract shared helpers instead of copy-pasting code
+- **Unsafe global state in built-in functions**: Any global variable read/written by a built-in function must be atomic or protected by a lock
+- **Sharing `Env` across threads**: Always clone the environment before passing to a child thread
+- **Forgetting `threadDone()`**: Child threads must always release the `gc_lock` and decrement `active_thread_count`
 
 ### Do This Instead
 
@@ -257,6 +301,9 @@ A sample passes if the diff produces no output.
 - Keep tests fast (<1s for unit tests, <10s for integration tests)
 - Document flaky tests and fix them promptly
 - Return errors and let callers decide how to handle them
+- Use `std.atomic.Value` for shared counters and flags
+- Clone `Env` with `env.clone(allocator)` for child threads
+- Follow the `FutureData`/`PromiseData` pattern for thread-safe state machines
 
 ---
 
@@ -355,6 +402,13 @@ CLJVM_DEBUG=gc,eval ./zig-out/bin/clojurez -e '(+ 1 2 3)'     # specific
 
 Categories: `gc`, `eval`, or `all`/`1`/`true` for everything.
 
+### Multithreading Debugging
+
+- **Non-deterministic crashes**: Likely a race condition. Add thread ID to debug prints: `std.log.info("thread {d}: ...", .{std.Thread.getCurrentId()})`
+- **Future never completes**: Check that the child thread doesn't crash silently. Wrap the eval call in a `defer` block that sets an error state.
+- **Deadlock on `gc_lock`**: Verify all child threads call `threadDone()`. Use `CLJVM_GC_VERBOSE=1` to see lock state.
+- **Memory corruption with threads**: Run with `CLJVM_GC_SWEEP=0` first. If the issue persists, it's a data race, not a GC issue.
+
 ### General Advice
 
 - **Add debug statements** instead of making blind guesses. Quick debug executions are more helpful than endless thoughts.
@@ -369,6 +423,7 @@ Categories: `gc`, `eval`, or `all`/`1`/`true` for everything.
 | Rule | Requirement |
 |------|-------------|
 | Design | Minimal Zig VM, Clojure code on top |
+| Thread safety | All code reachable during evaluation must be thread-safe |
 | File size | Max 1,000 lines per `.zig` file |
 | Function size | Max 80 lines per function |
 | Task size | Small, verifiable increments |
