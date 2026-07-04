@@ -151,6 +151,17 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args_list: *const list
                 try new_env.put(arity.rest_name.?, try vm.listValue(allocator, .empty));
             }
 
+            // Check for protocol dispatch marker in body
+            if (arity.body.items.len >= 1 and
+                std.meta.activeTag(arity.body.items[0]) == .symbol and
+                std.mem.eql(u8, arity.body.items[0].symbol, "__protocol_dispatch__"))
+            {
+                const protocols_mod = @import("../../namespaces/core/protocols.zig");
+                const result = try protocols_mod.dispatchProtocolMethod(allocator, args_list.*, &new_env, 0);
+                new_env.deinit(allocator);
+                return try allocBuiltinResult(allocator, result);
+            }
+
             // Check for bytecode — if available, use the bytecode VM
             if (arity.bytecode) |bc| {
                 const bytecode_mod = @import("../../bytecode.zig");
@@ -286,10 +297,32 @@ fn evalList(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Va
         if (std.mem.eql(u8, first.symbol, "let")) return evalLet(allocator, form, env);
         if (std.mem.eql(u8, first.symbol, "fn")) return evalFn(allocator, form, env);
         if (std.mem.eql(u8, first.symbol, "lazy-seq")) return evalLazySeq(allocator, form, env);
+        if (std.mem.eql(u8, first.symbol, "__protocol_dispatch__")) return evalProtocolDispatch(allocator, form, env);
     }
 
     // Non-special-form: evaluate as function call
     return evalFunctionCall(allocator, form, env);
+}
+
+/// (__protocol_dispatch__) — dispatch a protocol method call.
+/// The form contains the protocol dispatch metadata in metadata and the
+/// actual arguments as items[1:].
+fn evalProtocolDispatch(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Value {
+    const protocols_mod = @import("../../namespaces/core/protocols.zig");
+    // The form is (__protocol_dispatch__ arg1 arg2 ...) where args are already evaluated
+    const items = form.list.items.items;
+    if (items.len < 2) return error.ArityError;
+
+    // Build args list from items[1..]
+    var args_list: list.List = .empty;
+    defer args_list.deinit(allocator);
+    var i: usize = 1;
+    while (i < items.len) : (i += 1) {
+        try args_list.append(allocator, try vm.clone(&items[i], allocator));
+    }
+
+    const result = try protocols_mod.dispatchProtocolMethod(allocator, args_list, env, 0);
+    return try allocBuiltinResult(allocator, result);
 }
 
 /// (quote form) — return form unevaluated.

@@ -117,6 +117,7 @@ echo "=== Shell Test Suites ==="
 echo ""
 
 source tests/test_io.sh
+source tests/test_zig_io.sh
 echo ""
 
 source tests/test_misc.sh
