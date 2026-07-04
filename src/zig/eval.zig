@@ -232,10 +232,12 @@ pub fn bindInCurrentNamespace(env: *Env, name: []const u8, value: Value) anyerro
     if (findNsManager(env)) |ns_mgr| {
         if (env.ns_manager != null) {
             try env.put(name, value);
+            try env.markOwned(name);
         } else {
             const current_ns = ns_mgr.getCurrentNamespace();
             const ns_env = ns_mgr.getNamespace(current_ns) orelse env;
             try ns_env.put(name, value);
+            try ns_env.markOwned(name);
         }
     } else {
         try env.put(name, value);
@@ -1704,7 +1706,9 @@ fn evalDefn(allocator: Allocator, l: *const list.List, env: *Env, depth: usize, 
     const fname = l.items[1];
     if (std.meta.activeTag(fname) != .symbol) return error.TypeError;
     var idx: usize = 2;
+    var docstring: ?[]const u8 = null;
     if (idx < l.items.len and std.meta.activeTag(l.items[idx]) == .string) {
+        docstring = try allocator.dupe(u8, l.items[idx].string);
         idx += 1;
     }
     if (idx >= l.items.len) return error.ArityError;
@@ -1750,7 +1754,7 @@ fn evalDefn(allocator: Allocator, l: *const list.List, env: *Env, depth: usize, 
         .parent = env,
         .ns_manager = null,
     };
-    var fn_val = try vm.fnValue(allocator, arities, fn_env, false);
+    var fn_val = try vm.fnValueNamedWithDoc(allocator, arities, fn_env, false, null, docstring);
     const persistent_fn = try vm.clone(&fn_val, allocator);
     vm.valueDeinit(&fn_val, allocator);
     try bindInCurrentNamespace(env, fname.symbol, persistent_fn);
@@ -1801,7 +1805,9 @@ fn evalDefmacro(allocator: Allocator, l: *const list.List, env: *Env, depth: usi
     const macro_name = l.items[1];
     if (std.meta.activeTag(macro_name) != .symbol) return error.TypeError;
     var idx: usize = 2;
+    var docstring: ?[]const u8 = null;
     if (idx < l.items.len and std.meta.activeTag(l.items[idx]) == .string) {
+        docstring = try allocator.dupe(u8, l.items[idx].string);
         idx += 1;
     }
     if (idx >= l.items.len) return error.ArityError;
@@ -1824,7 +1830,7 @@ fn evalDefmacro(allocator: Allocator, l: *const list.List, env: *Env, depth: usi
         .parent = env,
         .ns_manager = null,
     };
-    var macro_fn = try vm.fnValue(allocator, arities, fn_env, true);
+    var macro_fn = try vm.fnValueNamedWithDoc(allocator, arities, fn_env, true, null, docstring);
     const persistent_macro = try vm.clone(&macro_fn, allocator);
     vm.valueDeinit(&macro_fn, allocator);
     try bindInCurrentNamespace(env, macro_name.symbol, persistent_macro);

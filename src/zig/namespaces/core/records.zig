@@ -240,7 +240,15 @@ pub fn buildPositionalFactory(
     markListAsValueArray(&body_list);
 
     // Create the function value
-    const env_copy: Env = env.*;
+    // Use explicit struct init to avoid shallow-copying owned_symbols
+    const env_copy: Env = .{
+        .allocator = env.allocator,
+        .entries = env.entries,
+        .parent = env.parent,
+        .ns_manager = env.ns_manager,
+        .referred_names = .empty,
+        .owned_symbols = .empty,
+    };
     const result = try vm.fnValueSingleNamed(
         allocator,
         params_list,
@@ -313,7 +321,15 @@ pub fn buildMapFactory(
     markListAsValueArray(&body_list);
 
     // Create the function value
-    const env_copy: Env = env.*;
+    // Use explicit struct init to avoid shallow-copying owned_symbols
+    const env_copy: Env = .{
+        .allocator = env.allocator,
+        .entries = env.entries,
+        .parent = env.parent,
+        .ns_manager = env.ns_manager,
+        .referred_names = .empty,
+        .owned_symbols = .empty,
+    };
     const result = try vm.fnValueSingleNamed(
         allocator,
         params_list,

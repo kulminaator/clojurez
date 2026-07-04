@@ -190,6 +190,7 @@ pub const FnData = struct {
     env: *Env,
     is_macro: bool = false,
     name: ?[]const u8 = null,
+    docstring: ?[]const u8 = null,
 };
 
 // ============================================================
@@ -525,6 +526,10 @@ pub fn fnValue(allocator: Allocator, arities: std.ArrayListUnmanaged(Arity), env
 }
 
 pub fn fnValueNamed(allocator: Allocator, arities: std.ArrayListUnmanaged(Arity), env: Env, is_macro: bool, name: ?[]const u8) anyerror!Value {
+    return fnValueNamedWithDoc(allocator, arities, env, is_macro, name, null);
+}
+
+pub fn fnValueNamedWithDoc(allocator: Allocator, arities: std.ArrayListUnmanaged(Arity), env: Env, is_macro: bool, name: ?[]const u8, docstring: ?[]const u8) anyerror!Value {
     const env_ptr = try allocator.create(Env);
     errdefer allocator.destroy(env_ptr);
     env_ptr.* = env;
@@ -533,7 +538,7 @@ pub fn fnValueNamed(allocator: Allocator, arities: std.ArrayListUnmanaged(Arity)
     }
     const fn_data = try allocator.create(FnData);
     errdefer allocator.destroy(fn_data);
-    fn_data.* = .{ .arities = arities, .env = env_ptr, .is_macro = is_macro, .name = name };
+    fn_data.* = .{ .arities = arities, .env = env_ptr, .is_macro = is_macro, .name = name, .docstring = docstring };
     if (gc_mod.current_gc) |gc_inst| {
         gc_inst.setObjectType(@as(*anyopaque, @ptrCast(fn_data)), gc_mod.GCObjectType.fn_data);
         if (arities.items.len > 0) {
@@ -650,6 +655,7 @@ pub fn valueDeinit(val: *Value, allocator: Allocator) void {
             fn_data.env.deinit(allocator);
             allocator.destroy(fn_data.env);
             if (fn_data.name) |n| allocator.free(n);
+            if (fn_data.docstring) |ds| allocator.free(ds);
             allocator.destroy(fn_data);
         },
         .builtin_fn => {},
@@ -901,7 +907,13 @@ pub fn clone(val: *const Value, allocator: Allocator) anyerror!Value {
                 tagStringData(@as(*anyopaque, @ptrCast(@constCast(duped.ptr))));
                 cloned_name = duped;
             }
-            return try fnValueNamed(allocator, cloned_arities, try fn_data.env.clone(allocator), fn_data.is_macro, cloned_name);
+            var cloned_doc: ?[]const u8 = null;
+            if (fn_data.docstring) |ds| {
+                const duped = try allocator.dupe(u8, ds);
+                tagStringData(@as(*anyopaque, @ptrCast(@constCast(duped.ptr))));
+                cloned_doc = duped;
+            }
+            return try fnValueNamedWithDoc(allocator, cloned_arities, try fn_data.env.clone(allocator), fn_data.is_macro, cloned_name, cloned_doc);
         },
         .builtin_fn => |fn_ptr| return builtinFnValue(fn_ptr),
         .wrapped => |w| return Value{ .wrapped = w },
@@ -1543,6 +1555,10 @@ pub const Env = struct {
     parent: ?*Env = null,
     ns_manager: ?*NamespaceManager = null,
     referred_names: std.ArrayListUnmanaged([]const u8) = .empty,
+    // Tracks symbols explicitly defined/owned in this namespace (def, defn, defmacro).
+    // Used by ns-interns/ns-publics to distinguish owned vars from copied/referred ones.
+    // Uses ArrayList instead of HashMap to avoid GC tracking issues with internal memory.
+    owned_symbols: std.ArrayListUnmanaged([]const u8) = .empty,
 
     pub fn init(allocator: Allocator) Env {
         return .{
@@ -1551,6 +1567,7 @@ pub const Env = struct {
             .parent = null,
             .ns_manager = null,
             .referred_names = .empty,
+            .owned_symbols = .empty,
         };
     }
 
@@ -1565,9 +1582,14 @@ pub const Env = struct {
         // referred_names to .empty, the original env's buffer could
         // be freed while the GC hasn't swept it yet).
         self.referred_names.items = &.{};
+        // Free owned_symbols strings (they are heap-allocated)
+        for (self.owned_symbols.items) |key| {
+            allocator.free(key);
+        }
+        allocator.free(self.owned_symbols.items);
+        self.owned_symbols = .empty;
         _ = self.parent;
         _ = self.ns_manager;
-        _ = allocator;
     }
 
     pub fn clone(self: *const Env, allocator: Allocator) anyerror!Env {
@@ -1577,7 +1599,38 @@ pub const Env = struct {
             .parent = self.parent,
             .ns_manager = self.ns_manager,
             .referred_names = .empty,
+            .owned_symbols = .empty,
         };
+    }
+
+    /// Mark a symbol as owned by this namespace (called by bindInCurrentNamespace).
+    pub fn markOwned(self: *Env, name: []const u8) anyerror!void {
+        // Skip if already present
+        for (self.owned_symbols.items) |existing| {
+            if (std.mem.eql(u8, existing, name)) return;
+        }
+        const owned = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned);
+        try self.owned_symbols.append(self.allocator, owned);
+    }
+
+    /// Check if a symbol is owned by this namespace.
+    pub fn isOwned(self: *const Env, name: []const u8) bool {
+        for (self.owned_symbols.items) |existing| {
+            if (std.mem.eql(u8, existing, name)) return true;
+        }
+        return false;
+    }
+
+    /// Mark all current entries in this env as owned.
+    /// Used after registering built-in functions that bypass bindInCurrentNamespace.
+    pub fn markAllOwned(self: *Env) anyerror!void {
+        var it = self.entries.entryIterator();
+        while (it.next()) |entry| {
+            if (std.meta.activeTag(entry.key) == .symbol) {
+                try self.markOwned(entry.key.symbol);
+            }
+        }
     }
 
     pub fn put(self: *Env, name: []const u8, value: Value) anyerror!void {

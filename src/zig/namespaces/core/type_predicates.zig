@@ -545,8 +545,92 @@ pub fn core_meta(self: *const Value, args: *const list.List, env_env: *Env) anye
         }
         return vm.nilValue();
     }
+
+    if (std.meta.activeTag(val) == .function) {
+        return buildFnMeta(allocator, val.function);
+    }
+
     // For other types, return nil
     return vm.nilValue();
+}
+
+/// Build metadata map for a function value: {:doc, :arglists, :name, :macro}
+fn buildFnMeta(allocator: Allocator, fn_data: *const vm.FnData) anyerror!Value {
+    var entries: vm.Map = .empty;
+    errdefer {
+        for (entries.items) |*entry| {
+            vm.valueDeinit(&entry.key, allocator);
+            vm.valueDeinit(&entry.value, allocator);
+        }
+        allocator.free(entries.items);
+    }
+
+    // :doc
+    if (fn_data.docstring) |doc| {
+        const doc_key = try vm.keywordValue(allocator, "doc");
+        const doc_val = try vm.stringValue(allocator, doc);
+        try entries.append(allocator, .{ .key = doc_key, .value = doc_val });
+    }
+
+    // :arglists
+    var arglists = try buildArglistsValue(allocator, fn_data);
+    defer vm.valueDeinit(&arglists, allocator);
+    const arglists_key = try vm.keywordValue(allocator, "arglists");
+    const arglists_val = try vm.clone(&arglists, allocator);
+    try entries.append(allocator, .{ .key = arglists_key, .value = arglists_val });
+
+    // :name
+    if (fn_data.name) |name| {
+        const name_key = try vm.keywordValue(allocator, "name");
+        const name_val = try vm.symValue(allocator, name);
+        try entries.append(allocator, .{ .key = name_key, .value = name_val });
+    }
+
+    // :macro
+    const macro_key = try vm.keywordValue(allocator, "macro");
+    const macro_val = vm.boolValue(fn_data.is_macro);
+    try entries.append(allocator, .{ .key = macro_key, .value = macro_val });
+
+    return try vm.mapValue(allocator, entries);
+}
+
+/// Build arglists value from FnData arities: ((a) (a b) (a b & rest))
+fn buildArglistsValue(allocator: Allocator, fn_data: *const vm.FnData) anyerror!Value {
+    var arglists: std.ArrayListUnmanaged(Value) = .empty;
+    errdefer {
+        for (arglists.items) |*v| {
+            vm.valueDeinit(v, allocator);
+        }
+        allocator.free(arglists.items);
+    }
+
+    for (fn_data.arities.items) |arity| {
+        var param_list: std.ArrayListUnmanaged(Value) = .empty;
+        errdefer {
+            for (param_list.items) |*v| {
+                vm.valueDeinit(v, allocator);
+            }
+            allocator.free(param_list.items);
+        }
+
+        for (arity.params.items) |param| {
+            const cloned_param = try vm.clone(&param, allocator);
+            try param_list.append(allocator, cloned_param);
+        }
+
+        // Handle rest param: add '& rest_name'
+        if (arity.rest_name) |rest_name| {
+            const amp = try vm.symValue(allocator, "&");
+            try param_list.append(allocator, amp);
+            const rest_sym = try vm.symValue(allocator, rest_name);
+            try param_list.append(allocator, rest_sym);
+        }
+
+        const arity_list = try vm.listValue(allocator, try list.clone(&param_list, allocator));
+        try arglists.append(allocator, arity_list);
+    }
+
+    return try vm.listValue(allocator, arglists);
 }
 
 /// Returns a copy of x with metadata m attached.

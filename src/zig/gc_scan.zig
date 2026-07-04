@@ -275,6 +275,10 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
             if (fn_data.name) |name| {
                 if (name.len > 0) markPtr(name.ptr, ctx);
             }
+            // Mark the fn's docstring (if GC-allocated)
+            if (fn_data.docstring) |ds| {
+                if (ds.len > 0) markPtr(ds.ptr, ctx);
+            }
             // Mark the arities array buffer itself
             if (fn_data.arities.items.len > 0) {
                 ctx.gc.markRecursive(fn_data.arities.items.ptr, ctx);
@@ -444,6 +448,10 @@ fn scanFnData(fndata_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     if (fndata.name) |name| {
         if (name.len > 0) markPtr(name.ptr, ctx);
     }
+    // Mark the fn's docstring (if GC-allocated)
+    if (fndata.docstring) |ds| {
+        if (ds.len > 0) markPtr(ds.ptr, ctx);
+    }
     // Mark the fn's env struct itself (heap-allocated *Env)
     const fn_env = fndata.env;
     ctx.gc.markRecursive(fn_env, ctx);
@@ -523,7 +531,7 @@ fn scanSubNodesArray(items_ptr: *anyopaque, ctx: *gc.ScanContext, total_size: us
     }
 }
 
-/// Scan an Env struct: entries (PersistentHashMap), parent, ns_manager, referred_names.
+/// Scan an Env struct: entries (PersistentHashMap), parent, ns_manager, referred_names, owned_symbols.
 fn scanEnv(env_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     const env: *vm.Env = @ptrCast(@alignCast(env_ptr));
 
@@ -535,6 +543,13 @@ fn scanEnv(env_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     if (env.referred_names.items.len > 0) {
         markPtr(env.referred_names.items.ptr, ctx);
         for (env.referred_names.items) |name| {
+            if (name.len > 0) markPtr(name.ptr, ctx);
+        }
+    }
+    // Mark owned_symbols list buffer and strings
+    if (env.owned_symbols.items.len > 0) {
+        markPtr(env.owned_symbols.items.ptr, ctx);
+        for (env.owned_symbols.items) |name| {
             if (name.len > 0) markPtr(name.ptr, ctx);
         }
     }

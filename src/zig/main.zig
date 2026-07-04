@@ -192,6 +192,7 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
 
     // Register regexp built-in functions into zig.regexp namespace.
     try regexp_api.registerRegexpFunctions(zr_env);
+    try zr_env.markAllOwned();
 
     // Register zig.io filesystem built-in functions in zig.core.
     // The Clojure wrappers in io.clj reference zig.core/file-stat etc.
@@ -200,6 +201,8 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     try io_stream.registerStreamFunctions(zc_env);
     // Register zig.io shell functions in zig.core.
     try io_shell.registerShellFunctions(zc_env);
+    // Mark all zig.core builtins as owned so ns-interns works correctly.
+    try zc_env.markAllOwned();
     // Copy fs builtins to clojure.core for direct access
     try copyBuiltinsToNamespaceSelective(zc_env, clojure_core_env, &.{
         "file-stat", "file-exists?", "file-size", "is-directory?", "is-file?",

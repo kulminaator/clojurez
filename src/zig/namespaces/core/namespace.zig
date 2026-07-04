@@ -684,6 +684,8 @@ fn buildInternsMap(allocator: Allocator, ns_env: *const Env) anyerror!Value {
         const sym_name = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol else continue;
         // Skip referred names — interns are only owned vars
         if (eval_ns.isReferredName(ns_env.referred_names.items, sym_name)) continue;
+        // Skip symbols not owned by this namespace (e.g. copied from zig.core)
+        if (!ns_env.isOwned(sym_name)) continue;
         try interns_map.append(allocator, .{
             .key = try vm.symValue(allocator, sym_name),
             .value = try vm.clone(&entry.val, allocator),
