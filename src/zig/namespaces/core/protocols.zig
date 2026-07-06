@@ -128,9 +128,10 @@ pub fn dispatchProtocolMethod(
     };
 
     // Call the implementation function with all arguments
+    // Use callWithEnvV to force synchronous evaluation (protocol dispatch must not trampoline)
     const call_env: *Env = @constCast(proto_env);
-    const call_result = try eval.callWithEnv(allocator, &impl_fn, &args, call_env, depth, null);
-    return call_result.value.*;
+    const call_result = try eval.callWithEnvV(allocator, &impl_fn, &args, call_env, depth, null);
+    return call_result.*;
 }
 
 /// Evaluate a (defprotocol ...) form.

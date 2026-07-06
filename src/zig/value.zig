@@ -1572,7 +1572,10 @@ pub const Env = struct {
     }
 
     pub fn deinit(self: *Env, allocator: Allocator) void {
-        self.entries.root = null;
+        // Do NOT null out entries.root — the HAMT is structurally shared
+        // and GC-managed. Nulling it would corrupt other Envs that share
+        // the same HAMT nodes (e.g., closures captured via Env.clone).
+        // The GC will reclaim unreachable HAMT nodes during sweep.
         self.entries.count = 0;
         self.entries.has_null = false;
         // Do NOT free referred_names here — it is GC-managed.

@@ -787,7 +787,10 @@ fn evalFunctionCall(allocator: Allocator, form: *const Value, frame: *vm.Frame, 
         for (l.items[1..]) |arg| {
             try macro_args.append(allocator, try vm.clone(&arg, allocator));
         }
-        // Call the macro with unevaluated args — use null ctx so macros evaluate synchronously
+        // Call the macro with unevaluated args — disable trampolining so macros evaluate synchronously
+        const saved_trampoline = eval_context.trampoline_allowed;
+        eval_context.trampoline_allowed = false;
+        defer eval_context.trampoline_allowed = saved_trampoline;
         const macro_r = try call(allocator, op_ptr, &macro_args, frame, depth, null);
         const expanded_ptr = macro_r.value;
         var expanded = expanded_ptr.*;
@@ -1202,6 +1205,19 @@ pub fn callWithEnv(allocator: Allocator, op: *const Value, args_list: *const lis
     return call(allocator, op, args_list, frame, depth, ctx);
 }
 
+/// Synchronous version of callWithEnv — disables trampolining.
+/// Returns the evaluated *Value directly (never .trampoline).
+pub fn callWithEnvV(allocator: Allocator, op: *const Value, args_list: *const list.List, env: *Env, depth: usize, ctx: ?*TrampolineStack) anyerror!*Value {
+    const saved_trampoline = eval_context.trampoline_allowed;
+    eval_context.trampoline_allowed = false;
+    defer eval_context.trampoline_allowed = saved_trampoline;
+    const result = try callWithEnv(allocator, op, args_list, env, depth, ctx);
+    return switch (result) {
+        .value => |v| v,
+        .trampoline => unreachable,
+    };
+}
+
 pub fn evalRecWithEnv(allocator: Allocator, form: *const Value, env: *Env, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
     const frame = try createRootFrame(allocator, env);
     // Use detachFromParent instead of deinit: child frames on trampoline may reference this
@@ -1238,10 +1254,22 @@ fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, 
     _ = depth;
     const fn_data = op.function;
     const arity = try matchArity(fn_data, args.items.len);
-
-    // Create child Frame with root_env = fn_data.env (closure capture via root_env)
+    // Create child Frame for this function call.
+    // Copy captured closure bindings from fn_data.env into the overlay.
+    // This avoids issues with shared Env HAMTs being corrupted by deinit.
     const child_frame = try parent_frame.createChild(allocator);
+    // Also set root_env for protocol dispatch and other Env-based lookups
     child_frame.root_env = fn_data.env;
+    // Copy closure bindings into overlay (they take precedence over root_env lookups)
+    if (!fn_data.env.entries.isEmpty()) {
+        var env_it = fn_data.env.entries.entryIterator();
+        while (env_it.next()) |entry| {
+            if (std.meta.activeTag(entry.key) == .symbol) {
+                const cloned_val = try vm.clone(&entry.val, allocator);
+                try child_frame.put(entry.key.symbol, cloned_val);
+            }
+        }
+    }
 
     // Bind function name for self-reference (e.g., (fn self [x] (self (dec x))))
     if (fn_data.name) |fn_name| {
