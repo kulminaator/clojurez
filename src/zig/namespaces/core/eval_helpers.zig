@@ -166,10 +166,15 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args_list: *const list
             if (arity.bytecode) |bc| {
                 const bytecode_mod = @import("../../bytecode.zig");
                 const vm_result = try bytecode_mod.execute(allocator, bc, &new_env, null);
-                new_env.deinit(allocator);
                 switch (vm_result) {
-                    .value => |v| return v,
-                    .trampoline => unreachable, // bytecode doesn't use trampolines
+                    .value => |v| {
+                        new_env.deinit(allocator);
+                        return v;
+                    },
+                    .trampoline => {
+                        // A user-defined function was called from within the bytecode.
+                        // Fall back to AST interpreter — do NOT deinit new_env, evalBody needs it.
+                    },
                 }
             }
 

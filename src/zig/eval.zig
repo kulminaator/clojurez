@@ -118,27 +118,24 @@ const SpecialFormFn = *const fn (Allocator, *const list.List, *vm.Frame, usize, 
 /// detached from their parent's children list during trampoline processing.
 pub const EvalContext = struct {
     root_frame: ?*vm.Frame = null,
-    tramp_stack: ?*TrampolineStack = null,
     current_frame: ?*vm.Frame = null,
+    // Phase 9: When false, callFunction evaluates body directly instead of trampolining.
+    // Used by evalRecV to prevent interference with the main eval loop.
+    trampoline_allowed: bool = true,
 };
 
 pub var eval_context: EvalContext = .{};
 
-/// GC root callback for frame lifecycle (Phase 5).
+/// GC root callback for frame lifecycle (Phase 5/9).
 /// Marks all active evaluation frames so they survive GC collection.
+/// Phase 9: Frame chain replaces TrampolineStack.
 /// Called during GC collect() via the root_fn mechanism.
 pub fn markFrameRoots(gc_inst: *gc_mod.GC, ctx: *gc_mod.ScanContext) void {
     // Mark root frame (entry point for the frame chain)
     if (eval_context.root_frame) |frame| {
         gc_inst.markRecursive(frame, ctx);
     }
-    // Mark all frames on the trampoline stack
-    if (eval_context.tramp_stack) |tramp| {
-        for (tramp.frames.items) |tf| {
-            gc_inst.markRecursive(tf.frame, ctx);
-        }
-    }
-    // Mark the current evaluation frame (popped from stack, being evaluated)
+    // Mark the current evaluation frame (set by callFunction for trampoline)
     if (eval_context.current_frame) |frame| {
         gc_inst.markRecursive(frame, ctx);
     }
@@ -296,7 +293,8 @@ fn extractFnName(body: *const Value) []const u8 {
 }
 
 /// Format a user-friendly error message with source location and stack trace.
-fn formatEvalError(allocator: Allocator, err: anyerror, file: []const u8, form: *const Value, tramp: *const TrampolineStack) ![]const u8 {
+/// Phase 9: Uses Frame chain instead of TrampolineStack for stack trace.
+fn formatEvalError(allocator: Allocator, err: anyerror, file: []const u8, form: *const Value) ![]const u8 {
     const err_name = @errorName(err);
     var msg: std.ArrayList(u8) = .empty;
     errdefer msg.deinit(allocator);
@@ -321,31 +319,53 @@ fn formatEvalError(allocator: Allocator, err: anyerror, file: []const u8, form: 
         try msg.appendSlice(allocator, err_name);
     }
 
-    // Add stack trace from trampoline stack
-    if (tramp.frames.items.len > 0) {
-        try msg.appendSlice(allocator, "\n\nStack trace:");
-        // Print frames from bottom (oldest) to top (newest)
-        var i: usize = 0;
-        while (i < tramp.frames.items.len) : (i += 1) {
-            const frame = &tramp.frames.items[i];
-            const fn_name = extractFnName(&frame.body_form);
-            const loc = frame.src_loc;
-            try msg.appendSlice(allocator, "\n  at ");
-            try msg.appendSlice(allocator, fn_name);
-            if (loc.line > 0) {
-                var loc_buf: [20]u8 = undefined;
-                try msg.appendSlice(allocator, " (at ");
-                if (loc.file.len > 0) {
-                    try msg.appendSlice(allocator, loc.file);
-                    try msg.appendSlice(allocator, ":");
+    // Add stack trace from Frame chain (Phase 9)
+    if (eval_context.current_frame) |top_frame| {
+        var frames: std.ArrayListUnmanaged(*vm.Frame) = .empty;
+        errdefer frames.deinit(allocator);
+        var current: ?*vm.Frame = eval_context.root_frame;
+        while (current) |frame| : (current = frame.parent) {
+            if (frame.function_ref != null or frame.body_form != null) {
+                try frames.append(allocator, frame);
+            }
+        }
+        if (frames.items.len > 0) {
+            const last = frames.items[frames.items.len - 1];
+            if (last != top_frame) try frames.append(allocator, top_frame);
+        }
+        if (frames.items.len > 0) {
+            try msg.appendSlice(allocator, "\n\nStack trace:");
+            var i: usize = 0;
+            while (i < frames.items.len) : (i += 1) {
+                const frame = frames.items[i];
+                const fn_name = if (frame.function_ref) |ref| extractFnNameFromValue(&ref) else "<frame>";
+                const loc = frame.src_loc;
+                try msg.appendSlice(allocator, "\n  at ");
+                try msg.appendSlice(allocator, fn_name);
+                if (loc.line > 0) {
+                    var loc_buf: [20]u8 = undefined;
+                    try msg.appendSlice(allocator, " (at ");
+                    if (loc.file.len > 0) {
+                        try msg.appendSlice(allocator, loc.file);
+                        try msg.appendSlice(allocator, ":");
+                    }
+                    try msg.appendSlice(allocator, std.fmt.bufPrint(&loc_buf, "{d}", .{loc.line}) catch "?");
+                    try msg.appendSlice(allocator, ")");
                 }
-                try msg.appendSlice(allocator, std.fmt.bufPrint(&loc_buf, "{d}", .{loc.line}) catch "?");
-                try msg.appendSlice(allocator, ")");
             }
         }
     }
 
     return msg.toOwnedSlice(allocator);
+}
+
+/// Extract function name from a Value for stack traces.
+fn extractFnNameFromValue(val: *const Value) []const u8 {
+    if (std.meta.activeTag(val.*) == .function) {
+        const fn_data = val.*.function;
+        if (fn_data.name) |name| return name;
+    }
+    return "<anonymous>";
 }
 
 /// Main entry point for evaluation.
@@ -357,109 +377,108 @@ pub fn eval(allocator: Allocator, form: Value, env: *Env) anyerror!*Value {
 
 /// Main entry point for evaluation with source file tracking.
 pub fn evalWithFile(allocator: Allocator, form: Value, env: *Env, file: []const u8) anyerror!*Value {
-    var tramp = TrampolineStack.init(allocator);
-    errdefer tramp.deinit();
-
     // Create root Frame from namespace Env
     const root_frame = try createRootFrame(allocator, env);
     defer root_frame.deinit(allocator);
 
-    // Phase 5: Register evaluation context for GC root tracking
+    // Phase 5/9: Register evaluation context for GC root tracking.
+    // Phase 9: No TrampolineStack — Frame chain replaces it.
     eval_context.root_frame = root_frame;
-    eval_context.tramp_stack = &tramp;
     eval_context.current_frame = null;
     defer {
         eval_context.root_frame = null;
-        eval_context.tramp_stack = null;
         eval_context.current_frame = null;
     }
 
     // Evaluate the initial form
-    var result: ?EvalResult = evalRec(allocator, &form, root_frame, 0, &tramp) catch |err| {
+    var result: ?EvalResult = evalRec(allocator, &form, root_frame, 0, null) catch |err| {
         // Don't format internal control errors like ReplExit
         if (err == EvalError.ReplExit) return err;
-        const msg = formatEvalError(allocator, err, file, &form, &tramp) catch {
-            return err; // errdefer will clean up tramp
+        const msg = formatEvalError(allocator, err, file, &form) catch {
+            return err;
         };
         defer allocator.free(msg);
         std.debug.print("{s}\n", .{msg});
-        return err; // errdefer will clean up tramp
+        return err;
     };
 
-    // Trampoline loop: process pending frames
+    // Phase 9: Trampoline loop using Frame chain instead of TrampolineStack.
+    // When callFunction creates a child Frame, it sets eval_context.current_frame.
+    // We read current_frame to get the next frame to evaluate.
     while (true) {
         const current = result orelse {
-            tramp.deinit();
             return try allocValue(allocator, vm.nilValue());
         };
 
         switch (current) {
-            .value => |v| {
-                tramp.deinit();
-                return v;
-            },
-            .trampoline => {},
-        }
-
-        // Pop the next frame and evaluate it
-        var tramp_frame = tramp.pop() orelse {
-            tramp.deinit();
-            return try allocValue(allocator, vm.nilValue());
-        };
-
-        // Phase 5: Track current evaluation frame for GC root marking
-        eval_context.current_frame = tramp_frame.frame;
-        defer eval_context.current_frame = null;
-
-        const body_val = tramp_frame.body_form;
-        result = evalRec(allocator, &body_val, tramp_frame.frame, 0, &tramp) catch |err| {
-            // Don't format internal control errors like ReplExit
-            if (err == EvalError.ReplExit) {
-                tramp_frame.frame.detachFromParent();
-                return err; // errdefer will clean up tramp
-            }
-            const msg = formatEvalError(allocator, err, file, &body_val, &tramp) catch {
-                tramp_frame.frame.detachFromParent();
-                return err; // errdefer will clean up tramp
-            };
-            defer allocator.free(msg);
-            std.debug.print("{s}\n", .{msg});
-            tramp_frame.frame.detachFromParent();
-            return err; // errdefer will clean up tramp
-        };
-
-        // Clean up the frame — detach from parent so GC can reclaim it.
-        // Don't deinit if frame has children still on the trampoline stack.
-        tramp_frame.frame.detachFromParent();
-    }
-}
-
-/// Wrapper: evalRec that extracts .value from EvalResult.
-/// Accepts ctx for trampoline support. Pass null for synchronous evaluation
-/// (e.g., during argument evaluation where trampoline is not desired).
-/// When ctx is provided and evalRec returns .trampoline, this function
-/// processes the trampoline frames internally until a .value is obtained.
-fn evalRecV(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!*Value {
-    var result: EvalResult = try evalRec(allocator, form, frame, depth, ctx);
-
-    // Handle trampoline: process frames until we get a value
-    while (true) {
-        switch (result) {
             .value => |v| return v,
             .trampoline => {},
         }
 
-        // Pop and evaluate the next frame
-        const tramp_frame = ctx.?.pop() orelse return try allocValue(allocator, vm.nilValue());
+        // Get the child Frame set by callFunction
+        const child_frame = eval_context.current_frame orelse {
+            return try allocValue(allocator, vm.nilValue());
+        };
 
-        // Phase 5: Track current evaluation frame for GC root marking
-        eval_context.current_frame = tramp_frame.frame;
-        defer eval_context.current_frame = null;
+        // Evaluate the child's body_form
+        const body_val = child_frame.body_form orelse {
+            child_frame.detachFromParent();
+            eval_context.current_frame = child_frame.parent;
+            return try allocValue(allocator, vm.nilValue());
+        };
 
-        result = try evalRec(allocator, &tramp_frame.body_form, tramp_frame.frame, 0, ctx);
+        result = evalRec(allocator, &body_val, child_frame, 0, null) catch |err| {
+            // Don't format internal control errors like ReplExit
+            if (err == EvalError.ReplExit) {
+                child_frame.detachFromParent();
+                eval_context.current_frame = child_frame.parent;
+                return err;
+            }
+            const msg = formatEvalError(allocator, err, file, &body_val) catch {
+                child_frame.detachFromParent();
+                eval_context.current_frame = child_frame.parent;
+                return err;
+            };
+            defer allocator.free(msg);
+            std.debug.print("{s}\n", .{msg});
+            child_frame.detachFromParent();
+            eval_context.current_frame = child_frame.parent;
+            return err;
+        };
 
-        tramp_frame.frame.detachFromParent();
+        // Clean up the frame based on result type.
+        // If .trampoline: callFunction already set current_frame to the next child.
+        //   Detach this frame but keep current_frame pointing to the child.
+        // If .value: this frame is done. Set current_frame to parent.
+        switch (result.?) {
+            .trampoline => {
+                child_frame.detachFromParent();
+                // current_frame was already set by callFunction to the next child
+            },
+            .value => {
+                const parent = child_frame.parent;
+                child_frame.detachFromParent();
+                eval_context.current_frame = parent;
+            },
+        }
     }
+}
+
+/// Wrapper: evalRec that extracts .value from EvalResult.
+/// Phase 9: Disables trampolining to avoid interfering with the main eval loop.
+/// callFunction evaluates body directly when trampoline_allowed is false.
+fn evalRecV(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: usize, _: ?*TrampolineStack) anyerror!*Value {
+    // Disable trampolining: callFunction will evaluate body directly
+    const saved_trampoline = eval_context.trampoline_allowed;
+    eval_context.trampoline_allowed = false;
+    defer eval_context.trampoline_allowed = saved_trampoline;
+
+    // With trampolining disabled, evalRec always returns .value
+    const result = try evalRec(allocator, form, frame, depth, null);
+    return switch (result) {
+        .value => |v| v,
+        .trampoline => unreachable, // should not happen with trampoline_allowed = false
+    };
 }
 
 /// Internal recursive evaluator with trampoline support.
@@ -1215,7 +1234,7 @@ pub fn callWithSrc(allocator: Allocator, op: *const Value, args_list: *const lis
 /// Call a user-defined function: match arity, bind params, evaluate body.
 /// KEY TRAMPOLINE POINT: Instead of recursing into evalRec for body evaluation,
 /// pushes a frame onto the trampoline stack. The eval() loop processes it.
-fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, parent_frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack, src_line: usize) anyerror!EvalResult {
+fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, parent_frame: *vm.Frame, depth: usize, _: ?*TrampolineStack, src_line: usize) anyerror!EvalResult {
     _ = depth;
     const fn_data = op.function;
     const arity = try matchArity(fn_data, args.items.len);
@@ -1250,7 +1269,7 @@ fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, 
         const bc_env = try allocator.create(Env);
         bc_env.* = try cloneFnEnv(allocator, fn_data.env);
         try bindArityParamsEnv(allocator, arity, args, bc_env);
-        const vm_result = try bytecode_mod.execute(allocator, bc, bc_env, ctx);
+        const vm_result = try bytecode_mod.execute(allocator, bc, bc_env, null);
         switch (vm_result) {
             .value => |v| {
                 bc_env.deinit(allocator);
@@ -1267,8 +1286,8 @@ fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, 
         }
     }
 
-    // TRAMPOLINE: Push body evaluation onto heap stack instead of recursing.
-    // The eval() loop will pop this frame and evaluate it.
+    // TRAMPOLINE: Store body in child Frame instead of pushing onto TrampolineStack.
+    // The eval() loop will read eval_context.current_frame and evaluate its body_form.
     // Deep clone the body so it survives after the caller frees its copy of the function Value.
     var body_clone: list.List = .empty;
     errdefer body_clone.deinit(allocator);
@@ -1277,17 +1296,22 @@ fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, 
     }
     // Set source line on the body form for error reporting
     const body_val = try vm.listValueWithLine(allocator, body_clone, src_line);
-    if (ctx) |tramp| {
-        // Set source location on the trampoline frame for error reporting
-        const src_loc = if (src_line > 0) SourceLoc{ .line = src_line } else SourceLoc{};
-        try tramp.pushWithLoc(body_val, child_frame, src_loc);
-        return .trampoline;
-    }
 
-    // Fallback: no trampoline context — evaluate directly (shouldn't happen in normal use)
-    const result_ptr = try evalRec(allocator, &body_val, child_frame, 0, null);
-    child_frame.deinit(allocator);
-    return result_ptr;
+    // Phase 9: Trampoline or evaluate directly based on trampoline_allowed flag.
+    // When trampoline_allowed is false (e.g., during evalRecV), evaluate directly
+    // to avoid interfering with the main eval loop's current_frame tracking.
+    const src_loc = if (src_line > 0) SourceLoc{ .line = src_line } else SourceLoc{};
+    child_frame.src_loc = src_loc;
+    if (eval_context.trampoline_allowed) {
+        child_frame.body_form = body_val;
+        eval_context.current_frame = child_frame;
+        return .trampoline;
+    } else {
+        // Evaluate body directly (no trampoline)
+        const result = try evalRec(allocator, &body_val, child_frame, 0, null);
+        child_frame.deinit(allocator);
+        return result;
+    }
 }
 
 /// Find the matching arity for a given argument count.

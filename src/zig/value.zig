@@ -1736,6 +1736,10 @@ pub const Frame = struct {
     // True if any child frame is still alive.
     // Used for parent immutability enforcement (Phase 7).
     has_active_children: bool = false,
+    // The function body to evaluate (for trampoline frames).
+    // Only set for frames created by callFunction (Phase 9).
+    // null for scope frames (let, loop, binding).
+    body_form: ?Value = null,
 
     /// Create a new Frame with the given allocator, optional parent,
     /// and root namespace environment.
@@ -1879,11 +1883,22 @@ pub const Frame = struct {
             parent.has_active_children = parent.children.items.len > 0;
         }
         // Clean up this frame's resources
+        if (self.body_form) |bf_val| {
+            var bf = bf_val;
+            valueDeinit(&bf, allocator);
+        }
+        self.body_form = null;
         self.overlay.root = null;
         self.overlay.count = 0;
         self.overlay.has_null = false;
         self.memo_cache.deinit(allocator);
-        self.children.deinit(allocator);
+        // Safe cleanup: free backing array and reset to empty slice.
+        // Do NOT use deinit() which sets items to undefined (breaks GC scanning).
+        if (self.children.items.len > 0) {
+            allocator.free(self.children.items);
+        }
+        self.children.items = &.{};
+        self.children.capacity = 0;
     }
 
     /// Detach this frame from its parent's children list.
@@ -1906,6 +1921,12 @@ pub const Frame = struct {
         // Clear memo cache (not needed after frame is done)
         self.memo_cache.deinit(allocator);
         self.memo_cache = .{};
+        // Clear body_form (body was already evaluated, no longer needed)
+        if (self.body_form) |bf_val| {
+            var bf = bf_val;
+            valueDeinit(&bf, allocator);
+        }
+        self.body_form = null;
         // Do NOT clear overlay — child frames on trampoline may still walk through us.
         // Do NOT null parent — child frames need the parent chain.
     }
@@ -1933,7 +1954,12 @@ pub const Frame = struct {
             }
         }
         // Clear our own children list (they should have been detached already)
-        self.children.deinit(allocator);
+        // Safe cleanup: do NOT use deinit() which sets items to undefined.
+        if (self.children.items.len > 0) {
+            allocator.free(self.children.items);
+        }
+        self.children.items = &.{};
+        self.children.capacity = 0;
         // Do NOT clear overlay, memo_cache, or parent pointer —
         // child frames may still need to walk through us.
     }

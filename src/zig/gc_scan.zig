@@ -791,4 +791,8 @@ fn scanFrame(frame_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     if (frame.function_ref) |*ref| {
         scanValueChildrenDirect(ref, ctx);
     }
+    // Mark body_form if present (Phase 9: trampoline body stored in Frame)
+    if (frame.body_form) |*bf| {
+        scanValueChildrenDirect(bf, ctx);
+    }
 }
