@@ -16,11 +16,21 @@ const Allocator = std.mem.Allocator;
 /// When called from within Clojure evaluation, the mark phase runs immediately
 /// but the sweep (actual freeing) is deferred to the next safe point to avoid
 /// freeing in-flight values referenced only by stack-local pointers.
+/// Thread-safe: skips collection if child threads are active.
 pub fn core_gc_sweep(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 0) return error.ArityError;
 
     if (gc_mod.current_gc) |gc| {
+        // Phase 8: Skip collection if child threads are active (gc_lock counter > 0).
+        // This prevents scanning thread root frames while child threads
+        // are still evaluating (their frames may be in inconsistent state).
+        if (gc.gc_lock.load(.acquire) > 0) {
+            // Child thread(s) active — defer sweep to safe point.
+            gc.manual_sweep_pending = true;
+            return vm.nilValue();
+        }
+
         // Mark phase runs now; sweep is deferred to next safe point
         // to avoid freeing in-flight evaluation state.
         gc.setSweepEnabled(false);

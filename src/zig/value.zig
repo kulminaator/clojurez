@@ -1895,10 +1895,17 @@ pub const Frame = struct {
         // We can't safely access it, so just clean up our own resources.
         // The GC will handle the rest.
         const allocator = self.root_env.allocator;
-        // Clear our own children list
-        self.children.deinit(allocator);
+        // Clear children list safely — do NOT use deinit() which sets items to undefined.
+        // GC may still scan this frame (parent's children list may reference it),
+        // so items must be a valid (empty) slice, not undefined.
+        if (self.children.items.len > 0) {
+            allocator.free(self.children.items);
+        }
+        self.children.items = &.{};
+        self.children.capacity = 0;
         // Clear memo cache (not needed after frame is done)
         self.memo_cache.deinit(allocator);
+        self.memo_cache = .{};
         // Do NOT clear overlay — child frames on trampoline may still walk through us.
         // Do NOT null parent — child frames need the parent chain.
     }

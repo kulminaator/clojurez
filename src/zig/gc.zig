@@ -99,6 +99,14 @@ pub const ScanContext = struct {
     scan_fn: ScanFn,
 };
 
+/// Entry in the thread roots list. Each child thread registers its root frame
+/// here so the GC can mark it during collection even though the frame is not
+/// reachable from the main thread's evaluation context.
+const ThreadRootEntry = struct {
+    frame: *anyopaque,
+    thread_id: u64,
+};
+
 // ============================================================
 // GC — the garbage collector
 // ============================================================
@@ -140,16 +148,23 @@ pub const GC = struct {
     sweep_enabled: bool = true,
     verbose: bool = false,
 
-    // GC lock: prevents concurrent GC collection while child threads are running.
-    // 0 = unlocked (GC can run), 1 = locked (GC must wait).
-    // Child threads lock before starting, unlock after finishing.
-    // Main thread tries to lock before collect, skips if already locked.
-    gc_lock: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
+    // GC lock counter: prevents concurrent GC collection while child threads are running.
+    // Uses a counter instead of binary lock to support nested threads (e.g., nested futures).
+    // Each child thread increments on start, decrements on end.
+    // GC only collects when counter is 0 (no child threads active).
+    gc_lock: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 
     // Active thread counter: tracks how many detached threads are still running.
     // Incremented in threadStart, decremented in threadDone.
     // Main thread waits for this to reach 0 before shutting down the GC.
     active_thread_count: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+
+    // Thread roots: per-thread entry frames registered by child threads.
+    // Protected by thread_roots_mutex (atomic spinlock) for thread safety.
+    // MEMORY_MODEL.md R6: Thread root rule — register entry frame on thread start,
+    // unregister on thread end. GC marks these during collection.
+    thread_roots_mutex: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
+    thread_roots: std.ArrayListUnmanaged(ThreadRootEntry) = .empty,
 
     // Auto-GC: trigger collection when memory grows past threshold since last sweep.
     // Threshold = max(last_collected_memory * 20%, 1MB).
@@ -230,6 +245,12 @@ pub const GC = struct {
             self.wrapped.free(self.temp_roots.items);
         }
         self.temp_roots = .empty;
+
+        // Free thread_roots array
+        if (self.thread_roots.items.len > 0) {
+            self.wrapped.free(self.thread_roots.items);
+        }
+        self.thread_roots = .empty;
     }
 
     /// Return a std.mem.Allocator backed by the GC.
@@ -521,6 +542,39 @@ pub const GC = struct {
         }
     }
 
+    // ============================================================
+    // Thread root registration (Phase 8: Thread Safety Integration)
+    // MEMORY_MODEL.md R6: Thread root rule
+    // ============================================================
+
+    /// Register a thread's entry frame as a GC root.
+    /// Called by child threads before evaluation starts.
+    /// Thread-safe: protected by thread_roots_mutex (atomic spinlock).
+    pub fn registerThreadRoot(self: *Self, frame: *anyopaque) void {
+        while (self.thread_roots_mutex.cmpxchgStrong(0, 1, .acq_rel, .monotonic) != null) {}
+        defer self.thread_roots_mutex.store(0, .release);
+        const id = std.Thread.getCurrentId();
+        self.thread_roots.append(self.wrapped, .{ .frame = frame, .thread_id = id }) catch {};
+        self.log("[GC] REGISTER_THREAD_ROOT thread={any} ptr={*}\n", .{ id, frame });
+    }
+
+    /// Unregister the current thread's entry frame from GC roots.
+    /// Called by child threads after evaluation completes.
+    /// Thread-safe: protected by thread_roots_mutex (atomic spinlock).
+    pub fn unregisterThreadRoot(self: *Self) void {
+        while (self.thread_roots_mutex.cmpxchgStrong(0, 1, .acq_rel, .monotonic) != null) {}
+        defer self.thread_roots_mutex.store(0, .release);
+        const id = std.Thread.getCurrentId();
+        var i: usize = 0;
+        while (i < self.thread_roots.items.len) : (i += 1) {
+            if (self.thread_roots.items[i].thread_id == id) {
+                _ = self.thread_roots.swapRemove(i);
+                self.log("[GC] UNREGISTER_THREAD_ROOT thread={any} roots={d}\n", .{ id, self.thread_roots.items.len });
+                return;
+            }
+        }
+    }
+
     /// Push a temporary root pointer onto the stack.
     /// Used to protect HAMT nodes reachable from stack-allocated Env structs.
     /// Must be paired with popTempRoot (use defer for safety).
@@ -573,6 +627,14 @@ pub const GC = struct {
         for (self.temp_roots.items) |root| {
             self.markRecursive(root, &ctx);
         }
+
+        // Phase 2.7: Mark from thread roots (child thread entry frames)
+        // Thread-safe: spinlock while iterating.
+        while (self.thread_roots_mutex.cmpxchgStrong(0, 1, .acq_rel, .monotonic) != null) {}
+        for (self.thread_roots.items) |entry| {
+            self.markRecursive(entry.frame, &ctx);
+        }
+        self.thread_roots_mutex.store(0, .release);
 
         // Phase 3: Call root callback for dynamic roots (marks via ScanContext)
         if (self.root_fn) |fn_ptr| {
@@ -737,12 +799,9 @@ pub fn freeAllBlocks(self: *Self) void {
     /// where no in-flight allocations exist.
     /// Skips collection if child threads are active to avoid concurrent GC access.
     pub fn tryAutoCollect(self: *Self) void {
-        // Try to acquire the GC lock. If a child thread holds it, skip collection.
-        // cmpxchgStrong(0, 1) atomically checks if lock is 0 and sets to 1.
-        // Returns null on success (was 0), some(prev) on failure (was 1).
-        const prev = self.gc_lock.cmpxchgStrong(0, 1, .acq_rel, .monotonic);
-        if (prev != null) return; // lock held by child thread, skip
-        defer self.gc_lock.store(0, .release); // release lock
+        // Check if any child threads are active (gc_lock counter > 0).
+        // If so, skip collection to avoid concurrent access.
+        if (self.gc_lock.load(.acquire) > 0) return;
 
         const need_collect = self.auto_gc_pending or self.manual_sweep_pending;
         if (need_collect) {
@@ -759,9 +818,7 @@ pub fn freeAllBlocks(self: *Self) void {
     /// execution where auto-GC is unnecessary overhead (OS reclaims
     /// all memory on exit), but manual sweeps still need to run.
     pub fn tryDeferredSweep(self: *Self) void {
-        const prev = self.gc_lock.cmpxchgStrong(0, 1, .acq_rel, .monotonic);
-        if (prev != null) return; // lock held by child thread, skip
-        defer self.gc_lock.store(0, .release);
+        if (self.gc_lock.load(.acquire) > 0) return;
 
         if (self.manual_sweep_pending) {
             if (self.scan_fn) |fn_ptr| {
@@ -772,20 +829,19 @@ pub fn freeAllBlocks(self: *Self) void {
     }
 
     /// Lock the GC to prevent collection while a child thread runs.
-    /// Spins until the lock is acquired (GC is not running).
+    /// Increments the lock counter — supports nested threads (e.g., nested futures).
     pub fn threadStart(self: *Self) void {
         // Increment active thread count so main thread knows a thread is running.
         _ = self.active_thread_count.fetchAdd(1, .monotonic);
-        // Wait for GC to finish (lock == 0), then acquire the lock (set to 1).
-        while (self.gc_lock.cmpxchgStrong(0, 1, .acq_rel, .monotonic) != null) {
-            // Spin-wait: GC is running, wait for it to finish.
-            // The GC will set lock back to 0 when done.
-        }
+        // Increment the GC lock counter. This prevents GC from collecting
+        // while any child thread is active. Supports nesting (multiple threads).
+        _ = self.gc_lock.fetchAdd(1, .acq_rel);
     }
 
-    /// Unlock the GC, allowing collection to proceed.
+    /// Unlock the GC, allowing collection to proceed when all threads are done.
     pub fn threadDone(self: *Self) void {
-        self.gc_lock.store(0, .release);
+        // Decrement the GC lock counter. When it reaches 0, GC can collect.
+        _ = self.gc_lock.fetchSub(1, .release);
         // Decrement active thread count — main thread waits for this to reach 0.
         _ = self.active_thread_count.fetchSub(1, .release);
     }

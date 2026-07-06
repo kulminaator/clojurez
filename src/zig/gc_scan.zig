@@ -767,18 +767,23 @@ fn scanFrame(frame_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     if (frame.parent) |parent| {
         ctx.gc.markRecursive(parent, ctx);
     }
-    // Mark child frame pointers
-    for (frame.children.items) |child| {
-        ctx.gc.markRecursive(child, ctx);
+    // Mark child frame pointers — defensive: check items.len before iterating
+    // (children list may have been safely reset by detachFromParent)
+    if (frame.children.items.len > 0) {
+        for (frame.children.items) |child| {
+            ctx.gc.markRecursive(child, ctx);
+        }
     }
     // Mark overlay HAMT root (triggers recursive scanning of HAMT nodes)
     if (frame.overlay.root) |root| {
         ctx.gc.markRecursive(root, ctx);
     }
-    // Mark memo cache entries (AutoHashMapUnmanaged values are Value objects)
-    var it = frame.memo_cache.iterator();
-    while (it.next()) |entry| {
-        scanValueChildrenDirect(&entry.value_ptr.*, ctx);
+    // Mark memo cache entries (StringHashMapUnmanaged values are Value objects)
+    if (frame.memo_cache.count() > 0) {
+        var it = frame.memo_cache.iterator();
+        while (it.next()) |entry| {
+            scanValueChildrenDirect(&entry.value_ptr.*, ctx);
+        }
     }
     // Mark root_env pointer
     ctx.gc.markRecursive(frame.root_env, ctx);

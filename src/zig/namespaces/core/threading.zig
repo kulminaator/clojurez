@@ -32,16 +32,13 @@ const PromiseState = struct {
 /// The function's captured environment is accessed via fn_val.FnData.env.
 fn futureThreadEntry(fn_val: Value, future_data: *vm.FutureData) void {
     const allocator = future_data.allocator;
+    const gc = gc_mod.current_gc orelse return;
 
-    // The GC lock was acquired BEFORE Thread.spawn in core_future_call.
-    // We release it when the thread finishes via threadDone().
+    // The GC lock counter was incremented BEFORE Thread.spawn in core_future_call.
+    // We decrement it when the thread finishes via threadDone().
     // Disable auto-GC in child threads since they're short-lived.
-    if (gc_mod.current_gc) |gc| {
-        defer gc.threadDone();
-        const prev_auto_gc = gc.auto_gc_active;
-        gc.auto_gc_active = false;
-        defer gc.auto_gc_active = prev_auto_gc;
-    }
+    const prev_auto_gc = gc.auto_gc_active;
+    gc.auto_gc_active = false;
 
     var result: Value = undefined;
 
@@ -57,13 +54,26 @@ fn futureThreadEntry(fn_val: Value, future_data: *vm.FutureData) void {
             future_data.state.store(FutureState.error_state, .release);
             break :errhandler;
         };
-        defer child_env.deinit(allocator);
 
-        // Call the function with no arguments using eval.call
+        // Phase 8: Create a root Frame for this thread and register it as a thread root.
+        // This ensures the frame chain is visible to GC during collection.
+        const root_frame = eval.createRootFrame(allocator, &child_env) catch {
+            child_env.deinit(allocator);
+            future_data.error_msg = allocator.dupe(u8, "failed to create root frame") catch null;
+            future_data.state.store(FutureState.error_state, .release);
+            break :errhandler;
+        };
+        gc.registerThreadRoot(@as(*anyopaque, @ptrCast(root_frame)));
+
+        // Call the function with no arguments using eval.call (Frame-based)
         const empty_args: list.List = .empty;
-        const call_result = eval.callWithEnv(allocator, &fn_val, &empty_args, &child_env, 0, null) catch {
+        const call_result = eval.call(allocator, &fn_val, &empty_args, root_frame, 0, null) catch {
             future_data.error_msg = allocator.dupe(u8, "evaluation error") catch null;
             future_data.state.store(FutureState.error_state, .release);
+            // Cleanup in error path: deinit frame, unregister, deinit env
+            root_frame.deinit(allocator);
+            gc.unregisterThreadRoot();
+            child_env.deinit(allocator);
             break :errhandler;
         };
         result = call_result.value.*;
@@ -71,7 +81,19 @@ fn futureThreadEntry(fn_val: Value, future_data: *vm.FutureData) void {
         // Store result and mark done
         future_data.result = result;
         future_data.state.store(FutureState.done, .release);
+
+        // Cleanup: deinit frame BEFORE unregistering thread root.
+        // This ensures the frame is fully cleaned up while still protected
+        // by gc_lock counter (main thread can't collect while counter > 0).
+        root_frame.deinit(allocator);
+        gc.unregisterThreadRoot();
+        child_env.deinit(allocator);
     }
+
+    // Restore auto-GC setting
+    gc.auto_gc_active = prev_auto_gc;
+    // Decrement GC lock counter — main thread can collect when counter reaches 0.
+    gc.threadDone();
 }
 
 /// Helper: get an Io instance for sleep calls.
