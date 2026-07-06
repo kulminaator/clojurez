@@ -1719,7 +1719,7 @@ pub const Frame = struct {
     // Memoization cache for parent-chain lookups.
     // Stores symbol name → Value for recently accessed parent-level bindings.
     // Prevents O(depth) traversal on every lookup in tight loops.
-    memo_cache: std.AutoHashMapUnmanaged([]const u8, Value) = .empty,
+    memo_cache: std.StringHashMapUnmanaged(Value) = .empty,
     // Root namespace environment (terminates the lookup chain).
     // Frame overlay → parent overlay → ... → root_env
     root_env: *Env,
@@ -1829,6 +1829,24 @@ pub const Frame = struct {
             parent.has_active_children = parent.children.items.len > 0;
         }
         // Clean up this frame's resources
+        self.overlay.root = null;
+        self.overlay.count = 0;
+        self.overlay.has_null = false;
+        self.memo_cache.deinit(allocator);
+        self.children.deinit(allocator);
+    }
+
+    /// Detach this frame from its parent's children list WITHOUT clearing
+    /// overlay or destroying the frame. Used when a special form returns a
+    /// trampoline — child frames on the trampoline stack may still reference
+    /// this frame as parent, so we must keep it alive.
+    /// GC will reclaim the frame once no other frame references it as parent.
+    pub fn detachFromParent(self: *Frame) void {
+        // Parent may have already been deinited (its memory freed).
+        // We can't safely access it, so just clean up our own resources.
+        // The GC will handle the rest.
+        self.parent = null;
+        const allocator = self.root_env.allocator;
         self.overlay.root = null;
         self.overlay.count = 0;
         self.overlay.has_null = false;

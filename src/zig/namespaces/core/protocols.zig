@@ -129,7 +129,7 @@ pub fn dispatchProtocolMethod(
 
     // Call the implementation function with all arguments
     const call_env: *Env = @constCast(proto_env);
-    const call_result = try eval.call(allocator, &impl_fn, &args, call_env, depth, null);
+    const call_result = try eval.callWithEnv(allocator, &impl_fn, &args, call_env, depth, null);
     return call_result.value.*;
 }
 
@@ -739,7 +739,7 @@ pub fn evalExtendType(
 
     while (idx < l.items.len) {
         // Evaluate the protocol
-        const proto_ptr_r = try eval.evalRec(allocator, &l.items[idx], env, depth + 1, ctx);
+        const proto_ptr_r = try eval.evalRecWithEnv(allocator, &l.items[idx], env, depth + 1, ctx);
         const proto_ptr = proto_ptr_r.value;
         try extend_args.append(allocator, proto_ptr.*);
 
@@ -831,7 +831,7 @@ pub fn evalExtendType(
             }
 
             // Evaluate to get a function value
-            const fn_ptr_r = try eval.evalRec(allocator, &try vm.listValue(allocator, fn_form), env, depth + 1, ctx);
+            const fn_ptr_r = try eval.evalRecWithEnv(allocator, &try vm.listValue(allocator, fn_form), env, depth + 1, ctx);
         const fn_ptr = fn_ptr_r.value;
             fn_form = .empty;
             const persistent_fn = try vm.clone(&fn_ptr.*, allocator);
@@ -868,7 +868,7 @@ pub fn evalExtendProtocol(
     if (l.items.len < 3) return error.ArityError;
 
     // Evaluate the protocol (index 1)
-    const proto_ptr_r = try eval.evalRec(allocator, &l.items[1], env, depth + 1, ctx);
+    const proto_ptr_r = try eval.evalRecWithEnv(allocator, &l.items[1], env, depth + 1, ctx);
         const proto_ptr = proto_ptr_r.value;
     defer vm.valueDeinit(proto_ptr, allocator);
 
@@ -962,7 +962,7 @@ pub fn evalExtendProtocol(
                 arity_form = .empty;
             }
 
-            const fn_ptr_r = try eval.evalRec(allocator, &try vm.listValue(allocator, fn_form), env, depth + 1, ctx);
+            const fn_ptr_r = try eval.evalRecWithEnv(allocator, &try vm.listValue(allocator, fn_form), env, depth + 1, ctx);
         const fn_ptr = fn_ptr_r.value;
             fn_form = .empty;
             const persistent_fn = try vm.clone(&fn_ptr.*, allocator);

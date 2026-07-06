@@ -3,17 +3,16 @@ const std = @import("std");
 const vm = @import("value.zig");
 const Value = vm.Value;
 const list = @import("list.zig");
-const Env = vm.Env;
 const eval = @import("eval.zig");
 
 const Allocator = std.mem.Allocator;
 
 // Thread-last macro: (->> x (f 1) (g 2 3)) => (g 2 3 (f 1 x))
 // Inserts value as the LAST argument
-pub fn evalThreadLast(allocator: Allocator, forms: []const Value, env: *Env, depth: usize, ctx: ?*eval.TrampolineStack) anyerror!Value {
+pub fn evalThreadLast(allocator: Allocator, forms: []const Value, frame: *vm.Frame, depth: usize, ctx: ?*eval.TrampolineStack) anyerror!Value {
     if (forms.len == 0) return vm.nilValue();
 
-    const first_ptr_r = try eval.evalRec(allocator, &forms[0], env, depth, ctx);
+    const first_ptr_r = try eval.evalRec(allocator, &forms[0], frame, depth, ctx);
     const first_ptr = first_ptr_r.value;
     var current = first_ptr.*;
 
@@ -28,7 +27,7 @@ pub fn evalThreadLast(allocator: Allocator, forms: []const Value, env: *Env, dep
             try new_call.append(allocator, try vm.clone(form, allocator));
             try new_call.append(allocator, try vm.clone(&current, allocator));
             const call_list = try vm.listValue(allocator, new_call);
-            const next_ptr_r = try eval.evalRec(allocator, &call_list, env, depth, ctx);
+            const next_ptr_r = try eval.evalRec(allocator, &call_list, frame, depth, ctx);
     const next_ptr = next_ptr_r.value;
             vm.valueDeinit(&current, allocator);
             current = next_ptr.*;
@@ -51,7 +50,7 @@ pub fn evalThreadLast(allocator: Allocator, forms: []const Value, env: *Env, dep
         try new_call.append(allocator, try vm.clone(&current, allocator));
 
         const call_list = try vm.listValue(allocator, new_call);
-        const next_ptr_r = try eval.evalRec(allocator, &call_list, env, depth, ctx);
+        const next_ptr_r = try eval.evalRec(allocator, &call_list, frame, depth, ctx);
     const next_ptr = next_ptr_r.value;
         vm.valueDeinit(&current, allocator);
         current = next_ptr.*;
@@ -60,10 +59,10 @@ pub fn evalThreadLast(allocator: Allocator, forms: []const Value, env: *Env, dep
 }
 
 // Thread-first macro: (-> x (f 1) (g 2 3)) => (g (f 1 x) 2 3)
-pub fn evalThreadFirst(allocator: Allocator, forms: []const Value, env: *Env, depth: usize, ctx: ?*eval.TrampolineStack) anyerror!Value {
+pub fn evalThreadFirst(allocator: Allocator, forms: []const Value, frame: *vm.Frame, depth: usize, ctx: ?*eval.TrampolineStack) anyerror!Value {
     if (forms.len == 0) return vm.nilValue();
 
-    const first_ptr_r = try eval.evalRec(allocator, &forms[0], env, depth, ctx);
+    const first_ptr_r = try eval.evalRec(allocator, &forms[0], frame, depth, ctx);
     const first_ptr = first_ptr_r.value;
     var current = first_ptr.*;
 
@@ -78,7 +77,7 @@ pub fn evalThreadFirst(allocator: Allocator, forms: []const Value, env: *Env, de
             try new_call.append(allocator, try vm.clone(form, allocator));
             try new_call.append(allocator, try vm.clone(&current, allocator));
             const call_list = try vm.listValue(allocator, new_call);
-            const next_ptr_r = try eval.evalRec(allocator, &call_list, env, depth, ctx);
+            const next_ptr_r = try eval.evalRec(allocator, &call_list, frame, depth, ctx);
     const next_ptr = next_ptr_r.value;
             vm.valueDeinit(&current, allocator);
             current = next_ptr.*;
@@ -104,7 +103,7 @@ pub fn evalThreadFirst(allocator: Allocator, forms: []const Value, env: *Env, de
         }
 
         const call_list = try vm.listValue(allocator, new_call);
-        const next_ptr_r = try eval.evalRec(allocator, &call_list, env, depth, ctx);
+        const next_ptr_r = try eval.evalRec(allocator, &call_list, frame, depth, ctx);
     const next_ptr = next_ptr_r.value;
         vm.valueDeinit(&current, allocator);
         current = next_ptr.*;
@@ -114,22 +113,22 @@ pub fn evalThreadFirst(allocator: Allocator, forms: []const Value, env: *Env, de
 
 // cond-> - thread-first with conditions
 // (cond-> expr test1 step1 test2 step2 ...)
-pub fn evalCondThreadFirst(allocator: Allocator, forms: []const Value, env: *Env, depth: usize, ctx: ?*eval.TrampolineStack) anyerror!Value {
+pub fn evalCondThreadFirst(allocator: Allocator, forms: []const Value, frame: *vm.Frame, depth: usize, ctx: ?*eval.TrampolineStack) anyerror!Value {
     if (forms.len == 0) return vm.nilValue();
 
-    const first_ptr_r = try eval.evalRec(allocator, &forms[0], env, depth, ctx);
+    const first_ptr_r = try eval.evalRec(allocator, &forms[0], frame, depth, ctx);
     const first_ptr = first_ptr_r.value;
     var current = first_ptr.*;
 
     var i: usize = 1;
     while (i + 1 < forms.len) : (i += 2) {
-        const test_ptr_r = try eval.evalRec(allocator, &forms[i], env, depth, ctx);
+        const test_ptr_r = try eval.evalRec(allocator, &forms[i], frame, depth, ctx);
     const test_ptr = test_ptr_r.value;
         if (vm.isTruthy(test_ptr.*)) {
             const step = &forms[i + 1];
             if (std.meta.activeTag(step.*) == .list and step.*.list.items.items.len > 0) {
                 // Evaluate operator and args, inserting current as second arg
-                const op_ptr_r = try eval.evalRec(allocator, &step.*.list.items.items[0], env, depth, ctx);
+                const op_ptr_r = try eval.evalRec(allocator, &step.*.list.items.items[0], frame, depth, ctx);
     const op_ptr = op_ptr_r.value;
                 defer vm.valueDeinit(&op_ptr.*, allocator);
                 var args: list.List = .empty;
@@ -137,11 +136,11 @@ pub fn evalCondThreadFirst(allocator: Allocator, forms: []const Value, env: *Env
                 try args.append(allocator, try vm.clone(&current, allocator));
                 var j: usize = 1;
                 while (j < step.*.list.items.items.len) : (j += 1) {
-                    const arg_ptr_r = try eval.evalRec(allocator, &step.*.list.items.items[j], env, depth, ctx);
+                    const arg_ptr_r = try eval.evalRec(allocator, &step.*.list.items.items[j], frame, depth, ctx);
     const arg_ptr = arg_ptr_r.value;
                     try args.append(allocator, arg_ptr.*);
                 }
-                const call_result = try eval.call(allocator, op_ptr, &args, env, depth, ctx);
+                const call_result = try eval.call(allocator, op_ptr, &args, frame, depth, ctx);
                 const next_ptr = call_result.value;
                 vm.valueDeinit(&current, allocator);
                 current = next_ptr.*;
@@ -151,7 +150,7 @@ pub fn evalCondThreadFirst(allocator: Allocator, forms: []const Value, env: *Env
                 try new_call.append(allocator, try vm.clone(step, allocator));
                 try new_call.append(allocator, try vm.clone(&current, allocator));
                 const call_list = try vm.listValue(allocator, new_call);
-                const next_ptr_r = try eval.evalRec(allocator, &call_list, env, depth, ctx);
+                const next_ptr_r = try eval.evalRec(allocator, &call_list, frame, depth, ctx);
     const next_ptr = next_ptr_r.value;
                 vm.valueDeinit(&current, allocator);
                 current = next_ptr.*;
@@ -164,34 +163,34 @@ pub fn evalCondThreadFirst(allocator: Allocator, forms: []const Value, env: *Env
 
 // cond->> - thread-last with conditions
 // (cond->> expr test1 step1 test2 step2 ...)
-pub fn evalCondThreadLast(allocator: Allocator, forms: []const Value, env: *Env, depth: usize, ctx: ?*eval.TrampolineStack) anyerror!Value {
+pub fn evalCondThreadLast(allocator: Allocator, forms: []const Value, frame: *vm.Frame, depth: usize, ctx: ?*eval.TrampolineStack) anyerror!Value {
     if (forms.len == 0) return vm.nilValue();
 
-    const first_ptr_r = try eval.evalRec(allocator, &forms[0], env, depth, ctx);
+    const first_ptr_r = try eval.evalRec(allocator, &forms[0], frame, depth, ctx);
     const first_ptr = first_ptr_r.value;
     var current = first_ptr.*;
 
     var i: usize = 1;
     while (i + 1 < forms.len) : (i += 2) {
-        const test_ptr_r = try eval.evalRec(allocator, &forms[i], env, depth, ctx);
+        const test_ptr_r = try eval.evalRec(allocator, &forms[i], frame, depth, ctx);
     const test_ptr = test_ptr_r.value;
         if (vm.isTruthy(test_ptr.*)) {
             const step = &forms[i + 1];
             if (std.meta.activeTag(step.*) == .list and step.*.list.items.items.len > 0) {
                 // Evaluate operator and args, then call with current as last arg
-                const op_ptr_r = try eval.evalRec(allocator, &step.*.list.items.items[0], env, depth, ctx);
+                const op_ptr_r = try eval.evalRec(allocator, &step.*.list.items.items[0], frame, depth, ctx);
     const op_ptr = op_ptr_r.value;
                 defer vm.valueDeinit(&op_ptr.*, allocator);
                 var args: list.List = .empty;
                 errdefer args.deinit(allocator);
                 var j: usize = 1;
                 while (j < step.*.list.items.items.len) : (j += 1) {
-                    const arg_ptr_r = try eval.evalRec(allocator, &step.*.list.items.items[j], env, depth, ctx);
+                    const arg_ptr_r = try eval.evalRec(allocator, &step.*.list.items.items[j], frame, depth, ctx);
     const arg_ptr = arg_ptr_r.value;
                     try args.append(allocator, arg_ptr.*);
                 }
                 try args.append(allocator, try vm.clone(&current, allocator));
-                const call_result = try eval.call(allocator, op_ptr, &args, env, depth, ctx);
+                const call_result = try eval.call(allocator, op_ptr, &args, frame, depth, ctx);
                 const next_ptr = call_result.value;
                 vm.valueDeinit(&current, allocator);
                 current = next_ptr.*;
@@ -201,7 +200,7 @@ pub fn evalCondThreadLast(allocator: Allocator, forms: []const Value, env: *Env,
                 try new_call.append(allocator, try vm.clone(step, allocator));
                 try new_call.append(allocator, try vm.clone(&current, allocator));
                 const call_list = try vm.listValue(allocator, new_call);
-                const next_ptr_r = try eval.evalRec(allocator, &call_list, env, depth, ctx);
+                const next_ptr_r = try eval.evalRec(allocator, &call_list, frame, depth, ctx);
     const next_ptr = next_ptr_r.value;
                 vm.valueDeinit(&current, allocator);
                 current = next_ptr.*;

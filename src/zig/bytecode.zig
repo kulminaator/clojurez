@@ -613,7 +613,7 @@ pub fn execute(
                 }
                 allocator.free(temp_args.items);
 
-                const call_result = try eval_mod.call(allocator, fn_ptr, &args, env, 0, ctx);
+                const call_result = try eval_mod.callWithEnv(allocator, fn_ptr, &args, env, 0, ctx);
 
                 // Clean up fn_ptr
                 vm.valueDeinit(fn_ptr, allocator);
@@ -1073,7 +1073,7 @@ fn delegateArithmetic(op: OpCode, a: Value, b: Value, allocator: Allocator, env:
     try args.append(allocator, try vm.clone(&b, allocator));
 
     // Call the builtin
-    const call_result = try eval_mod.call(allocator, &fn_val, &args, env, 0, null);
+    const call_result = try eval_mod.callWithEnv(allocator, &fn_val, &args, env, 0, null);
 
     switch (call_result) {
         .value => |v| return try vm.clone(v, allocator),
@@ -1876,7 +1876,7 @@ fn isSimpleBytecodeForm(form: Value) bool {
         }
 
         // Call the macro
-        const macro_r = try eval_mod.call(self.allocator, &op_val.?, &macro_args, env, 0, null);
+        const macro_r = try eval_mod.callWithEnv(self.allocator, &op_val.?, &macro_args, env, 0, null);
         defer vm.valueDeinit(macro_r.value, self.allocator);
 
         // The macro returns a form (usually a list). Clone and wrap it in a list for compilation.
