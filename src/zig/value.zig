@@ -1836,22 +1836,49 @@ pub const Frame = struct {
         self.children.deinit(allocator);
     }
 
-    /// Detach this frame from its parent's children list WITHOUT clearing
-    /// overlay or destroying the frame. Used when a special form returns a
-    /// trampoline — child frames on the trampoline stack may still reference
-    /// this frame as parent, so we must keep it alive.
-    /// GC will reclaim the frame once no other frame references it as parent.
+    /// Detach this frame from its parent's children list.
+    /// Does NOT clear the overlay — child frames on the trampoline stack
+    /// may still need to walk the parent chain through this frame.
+    /// GC will reclaim the frame and its overlay when no references remain.
     pub fn detachFromParent(self: *Frame) void {
         // Parent may have already been deinited (its memory freed).
         // We can't safely access it, so just clean up our own resources.
         // The GC will handle the rest.
-        self.parent = null;
         const allocator = self.root_env.allocator;
-        self.overlay.root = null;
-        self.overlay.count = 0;
-        self.overlay.has_null = false;
-        self.memo_cache.deinit(allocator);
+        // Clear our own children list
         self.children.deinit(allocator);
+        // Clear memo cache (not needed after frame is done)
+        self.memo_cache.deinit(allocator);
+        // Do NOT clear overlay — child frames on trampoline may still walk through us.
+        // Do NOT null parent — child frames need the parent chain.
+    }
+
+    /// Release this frame from its parent's children list WITHOUT clearing
+    /// the frame's own data. Used when a special form (let, letfn, binding)
+    /// returns a trampoline — child frames on the trampoline stack may still
+    /// need to walk the parent chain through this frame.
+    /// GC will reclaim the frame once no references remain.
+    pub fn releaseFromParent(self: *Frame, allocator: Allocator) void {
+        // Remove self from parent's children list so parent doesn't hold reference
+        if (self.parent) |parent| {
+            var i: usize = 0;
+            while (i < parent.children.items.len) : (i += 1) {
+                if (parent.children.items[i] == self) {
+                    const last = parent.children.items.len - 1;
+                    parent.children.items[i] = parent.children.items[last];
+                    parent.children.items.len = last;
+                    break;
+                }
+            }
+            // Check if parent still has active children
+            if (parent.children.items.len == 0) {
+                parent.has_active_children = false;
+            }
+        }
+        // Clear our own children list (they should have been detached already)
+        self.children.deinit(allocator);
+        // Do NOT clear overlay, memo_cache, or parent pointer —
+        // child frames may still need to walk through us.
     }
 
     /// Full cleanup (deinit + destroy). Used at thread exit.

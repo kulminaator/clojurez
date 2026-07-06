@@ -334,7 +334,17 @@ fn evalQuote(allocator: Allocator, form: *const Value) anyerror!*Value {
 /// (quasiquote form) — template with unquote.
 fn evalQuasiquote(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Value {
     if (form.list.items.items.len != 2) return error.ArityError;
-    const result = try eval_macro.unquoteProcess(allocator, form.list.items.items[1], env, 0, null);
+    // Create a temporary Frame from the Env so unquoteProcess can resolve bindings
+    const frame_ptr = try allocator.create(vm.Frame);
+    errdefer allocator.destroy(frame_ptr);
+    frame_ptr.* = vm.Frame.init(allocator, null, env);
+    // Register with GC so it doesn't get swept during evaluation
+    if (gc_mod.current_gc) |gc| {
+        gc.addRoot(@as(*anyopaque, @ptrCast(frame_ptr)));
+        defer gc.removeRoot(@as(*anyopaque, @ptrCast(frame_ptr)));
+    }
+    defer frame_ptr.deinit(allocator);
+    const result = try eval_macro.unquoteProcess(allocator, form.list.items.items[1], frame_ptr, 0, null);
     return try allocBuiltinResult(allocator, result);
 }
 

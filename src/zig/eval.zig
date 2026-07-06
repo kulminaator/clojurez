@@ -753,7 +753,9 @@ fn evalLet(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: u
 
     // Create child Frame for let bindings (overlay-only, no parent copy)
     const child_frame = try frame.createChild(allocator);
-    defer child_frame.deinit(allocator);
+    // Use releaseFromParent instead of deinit: child frames on the trampoline stack
+    // may still reference this frame as their parent. GC handles eventual cleanup.
+    defer child_frame.releaseFromParent(allocator);
 
     const items = switch (std.meta.activeTag(bindings.*)) {
         .list => bindings.*.list.items.items,
@@ -768,6 +770,8 @@ fn evalLet(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: u
         const val_ptr = try evalRecV(allocator, &items[i + 1], child_frame, depth, null);
         // Bind using destructuring if sym is a vector pattern
         try bindPatternFrame(allocator, sym.*, val_ptr.*, child_frame);
+        if (std.meta.activeTag(sym.*) == .symbol) {
+        }
     }
 
     // Evaluate body forms, returning the last result.
@@ -813,10 +817,17 @@ fn evalLetFn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
 
     // Create new env first so all functions can reference each other
     // letfn uses Env chain for mutual recursion (functions need to see each other)
+    // Parent is the captured Frame environment (namespace + all overlay bindings)
+    // Must be heap-allocated since function closures reference it through the parent chain
+    const captured_env_ptr = try allocator.create(Env);
+    errdefer allocator.destroy(captured_env_ptr);
+    captured_env_ptr.* = try captureFrameEnv(allocator, frame);
+    defer captured_env_ptr.deinit(allocator);
+    defer allocator.destroy(captured_env_ptr);
     var new_env: Env = .{
         .allocator = allocator,
         .entries = phm.PersistentHashMap.empty(),
-        .parent = frame.root_env,
+        .parent = captured_env_ptr,
         .ns_manager = null,
     };
     defer new_env.deinit(allocator);
@@ -892,7 +903,8 @@ fn evalLetFn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
     // Create a child Frame with new_env as root_env for body evaluation
     const child_frame = try frame.createChild(allocator);
     child_frame.root_env = &new_env;
-    defer child_frame.deinit(allocator);
+    // Use detachFromParent instead of deinit: child frames on trampoline may reference this
+    defer child_frame.releaseFromParent(allocator);
 
     var do_result: Value = vm.nilValue();
     errdefer vm.valueDeinit(&do_result, allocator);
@@ -1116,13 +1128,15 @@ pub fn createRootFrame(allocator: Allocator, root_env: *Env) anyerror!*vm.Frame 
 // These create a temporary Frame wrapping the Env.
 pub fn callWithEnv(allocator: Allocator, op: *const Value, args_list: *const list.List, env: *Env, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
     const frame = try createRootFrame(allocator, env);
-    defer frame.deinit(allocator);
+    // Use detachFromParent instead of deinit: child frames on trampoline may reference this
+    defer frame.releaseFromParent(allocator);
     return call(allocator, op, args_list, frame, depth, ctx);
 }
 
 pub fn evalRecWithEnv(allocator: Allocator, form: *const Value, env: *Env, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
     const frame = try createRootFrame(allocator, env);
-    defer frame.deinit(allocator);
+    // Use detachFromParent instead of deinit: child frames on trampoline may reference this
+    defer frame.releaseFromParent(allocator);
     return evalRec(allocator, form, frame, depth, ctx);
 }
 
@@ -1731,7 +1745,8 @@ fn evalQuit(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
 /// (quasiquote form) — template with unquote
 fn evalQuasiquote(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
     if (l.items.len != 2) return error.ArityError;
-    const result = try eval_macro.unquoteProcess(allocator, l.items[1], frame.root_env, depth + 1, ctx);
+    // Pass the full Frame so unquote can resolve local bindings (e.g. macro parameters)
+    const result = try eval_macro.unquoteProcess(allocator, l.items[1], frame, depth + 1, ctx);
     return .{ .value = try allocValue(allocator, result) };
 }
 
@@ -1911,8 +1926,8 @@ fn evalFn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: us
 
     arities = try parseArityForms(allocator, l.items, l.items.len, &idx);
 
-    // Capture namespace env as closure
-    const fn_env = try frame.root_env.clone(allocator);
+    // Capture full Frame chain environment as closure (namespace + all overlay bindings)
+    const fn_env = try captureFrameEnv(allocator, frame);
 
     var fn_name_str: ?[]const u8 = null;
     if (fn_name) |name_sym| {
@@ -2116,7 +2131,8 @@ fn evalBinding(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dept
     const bindings = l.items[1];
     if (std.meta.activeTag(bindings) != .vector) return error.TypeError;
     const child_frame = try frame.createChild(allocator);
-    defer child_frame.deinit(allocator);
+    // Use detachFromParent instead of deinit: child frames on trampoline may reference this
+    defer child_frame.releaseFromParent(allocator);
 
     var i: usize = 0;
     while (i < bindings.vector.items.items.len) : (i += 2) {
