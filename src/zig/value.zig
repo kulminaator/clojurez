@@ -1636,11 +1636,10 @@ pub const Env = struct {
     pub fn put(self: *Env, name: []const u8, value: Value) anyerror!void {
         const allocator = self.allocator;
         const key = phm.sym(name);
-        const new_entries = try self.entries.mapAssoc(allocator, key, value);
-        self.entries.root = null;
-        self.entries.count = 0;
-        self.entries.has_null = false;
-        self.entries = new_entries;
+        // mapAssoc returns a NEW PersistentHashMap (structural sharing via HAMT).
+        // Assign directly without clearing old fields first — clearing would
+        // corrupt any other Env that shares the same HAMT via shallow clone.
+        self.entries = try self.entries.mapAssoc(allocator, key, value);
         // NOTE: Do NOT call valueDeinit on the stored value.
         // The HashMap stores a shallow copy of the Value union. For GC-managed
         // types (lazy_seq, chunked_cons, function, etc.), valueDeinit would free
