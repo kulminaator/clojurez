@@ -1707,6 +1707,12 @@ pub const SourceLoc = struct {
 // Frame.get() walks: overlay → parent.overlay → ... → root Env
 // Frame.put() writes only to overlay (never to parent)
 
+/// Maximum number of entries in a Frame's memoization cache.
+/// When exceeded, the cache is cleared entirely (simple eviction strategy).
+/// 64 entries covers typical tight loops accessing parent-level bindings.
+/// At 10,000 recursion depth this bounds per-frame overhead to ~3KB.
+pub const MEMO_CACHE_MAX: usize = 64;
+
 pub const Frame = struct {
     parent: ?*Frame = null,
     // Children tracking: parent knows which frames reference it.
@@ -1718,6 +1724,7 @@ pub const Frame = struct {
     // Memoization cache for parent-chain lookups.
     // Stores symbol name → Value for recently accessed parent-level bindings.
     // Prevents O(depth) traversal on every lookup in tight loops.
+    // Bounded by MEMO_CACHE_MAX — cleared entirely when limit is exceeded.
     memo_cache: std.StringHashMapUnmanaged(Value) = .empty,
     // Root namespace environment (terminates the lookup chain).
     // Frame overlay → parent overlay → ... → root_env
@@ -1739,9 +1746,23 @@ pub const Frame = struct {
         };
     }
 
+    /// Put a value into the memo cache, respecting the size limit.
+    /// If the cache exceeds MEMO_CACHE_MAX entries, clear it entirely
+    /// before inserting. This is a simple eviction strategy that
+    /// bounds per-frame memory while keeping hot-path lookups fast.
+    fn _memoCachePut(self: *Frame, name: []const u8, value: Value) void {
+        const allocator = self.root_env.allocator;
+        // Evict if cache is full (check before insert to avoid exceeding limit)
+        if (self.memo_cache.count() >= MEMO_CACHE_MAX) {
+            self.memo_cache.deinit(allocator);
+            self.memo_cache = .{};
+        }
+        self.memo_cache.put(allocator, name, value) catch {};
+    }
+
     /// Look up a binding by name.
     /// Walks: overlay → parent.overlay → ... → root_env.
-    /// Memoizes results from parent chain lookups.
+    /// Memoizes results from parent chain lookups (bounded by MEMO_CACHE_MAX).
     pub fn get(self: *Frame, name: []const u8) ?Value {
         // 1. Check memo cache first (fast path for repeated lookups)
         if (self.memo_cache.get(name)) |cached| {
@@ -1758,8 +1779,8 @@ pub const Frame = struct {
             if (!frame.overlay.isEmpty()) {
                 const found = frame.overlay.find(phm.sym(name));
                 if (found) |val| {
-                    // Memoize for next time
-                    self.memo_cache.put(self.root_env.allocator, name, val) catch {};
+                    // Memoize for next time (respects MEMO_CACHE_MAX)
+                    self._memoCachePut(name, val);
                     return val;
                 }
             }
@@ -1768,8 +1789,8 @@ pub const Frame = struct {
         // 4. Fall back to root namespace environment
         const root_val = self.root_env.get(name);
         if (root_val) |val| {
-            // Memoize for next time
-            self.memo_cache.put(self.root_env.allocator, name, val) catch {};
+            // Memoize for next time (respects MEMO_CACHE_MAX)
+            self._memoCachePut(name, val);
             return val;
         }
         return null;
@@ -1788,12 +1809,13 @@ pub const Frame = struct {
 
     /// Bind a name to a value in this frame's overlay only.
     /// Never writes to parent overlays (immutability invariant).
+    /// Also updates the memo cache (respects MEMO_CACHE_MAX).
     pub fn put(self: *Frame, name: []const u8, value: Value) anyerror!void {
         const allocator = self.root_env.allocator;
         const new_overlay = try self.overlay.mapAssoc(allocator, phm.sym(name), value);
         self.overlay = new_overlay;
-        // Update memo cache
-        self.memo_cache.put(allocator, name, value) catch {};
+        // Update memo cache (respects MEMO_CACHE_MAX)
+        self._memoCachePut(name, value);
     }
 
     /// Create a child frame with this frame as parent.
