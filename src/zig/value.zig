@@ -1807,10 +1807,39 @@ pub const Frame = struct {
         return self.root_env.has(name);
     }
 
+    /// Check if a binding exists in the parent chain only (not in current overlay).
+    /// Used by put() to enforce parent immutability: if this frame has active children
+    /// and the binding exists in a parent, we must not shadow it because child frames
+    /// may be depending on the parent's value.
+    fn _existsInParentChain(self: *Frame, name: []const u8) bool {
+        var current: ?*Frame = self.parent;
+        while (current) |frame| {
+            if (!frame.overlay.isEmpty() and frame.overlay.containsKey(phm.sym(name))) return true;
+            current = frame.parent;
+        }
+        return self.root_env.has(name);
+    }
+
+    /// Check if a binding exists in the current frame's overlay only.
+    /// Used by set! to verify the binding is local to this frame.
+    pub fn hasInOverlay(self: *Frame, name: []const u8) bool {
+        return !self.overlay.isEmpty() and self.overlay.containsKey(phm.sym(name));
+    }
+
     /// Bind a name to a value in this frame's overlay only.
     /// Never writes to parent overlays (immutability invariant).
+    ///
+    /// Parent immutability check (MEMORY_MODEL.md R11):
+    /// If this frame has active children AND the name exists in the parent chain,
+    /// reject the write. Child frames may be depending on the parent's value.
+    /// If the name is only in the current overlay, allow the write (local rebinding).
+    ///
     /// Also updates the memo cache (respects MEMO_CACHE_MAX).
     pub fn put(self: *Frame, name: []const u8, value: Value) anyerror!void {
+        // Parent immutability enforcement (Phase 7)
+        if (self.has_active_children and self._existsInParentChain(name)) {
+            return error.ParentImmutabilityViolation;
+        }
         const allocator = self.root_env.allocator;
         const new_overlay = try self.overlay.mapAssoc(allocator, phm.sym(name), value);
         self.overlay = new_overlay;

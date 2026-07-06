@@ -2034,6 +2034,12 @@ fn evalSetBang(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dept
     if (l.items.len != 3) return error.ArityError;
     const sym = l.items[1];
     if (std.meta.activeTag(sym) != .symbol) return error.TypeError;
+    // Verify the binding exists in the current frame's overlay.
+    // set! can only modify local bindings (var, let, fn params).
+    // Parent-level bindings are immutable from this frame's perspective.
+    if (!frame.hasInOverlay(sym.symbol)) {
+        return error.UndefinedSymbol;
+    }
     // Value evaluated synchronously (we need to bind it)
     const val_ptr = try evalRecV(allocator, &l.items[2], frame, depth + 1, null);
     const persistent_val = try vm.clone(&val_ptr.*, allocator);

@@ -900,3 +900,245 @@ test "value::Env: nested child envs survive GC" {
         try std.testing.expect(found != null);
     }
 }
+
+// ============================================================
+// Frame parent immutability tests (Phase 7)
+// All allocations go through the GC allocator to match production behavior.
+// Block scoping ensures frames are deinited before gc.freeAllBlocks().
+// ============================================================
+
+test "frame::put: allows writing to own overlay" {
+    const page_alloc = std.heap.page_allocator;
+    var gc = gc_mod.GC.init(page_alloc);
+    defer gc.deinit();
+    const prev_gc = gc_mod.current_gc;
+    gc_mod.current_gc = &gc;
+    defer gc_mod.current_gc = prev_gc;
+    const allocator = gc.allocator();
+
+    {
+        const root_env = try allocator.create(vm.Env);
+        defer { root_env.deinit(allocator); allocator.destroy(root_env); }
+        root_env.* = vm.Env.init(allocator);
+        gc.setObjectType(@as(*anyopaque, @ptrCast(root_env)), gc_mod.GCObjectType.env);
+        gc.addRoot(@as(*anyopaque, @ptrCast(root_env)));
+
+        const frame = try allocator.create(vm.Frame);
+        defer frame.deinit(allocator);
+        frame.* = vm.Frame.init(allocator, null, root_env);
+
+        try frame.put("local_y", vm.intValue(42));
+        try std.testing.expectEqual(@as(i64, 42), frame.get("local_y").?.integer);
+    }
+    gc.freeAllBlocks();
+}
+
+test "frame::put: allows rebinding own overlay entry" {
+    const page_alloc = std.heap.page_allocator;
+    var gc = gc_mod.GC.init(page_alloc);
+    defer gc.deinit();
+    const prev_gc = gc_mod.current_gc;
+    gc_mod.current_gc = &gc;
+    defer gc_mod.current_gc = prev_gc;
+    const allocator = gc.allocator();
+
+    {
+        const root_env = try allocator.create(vm.Env);
+        defer { root_env.deinit(allocator); allocator.destroy(root_env); }
+        root_env.* = vm.Env.init(allocator);
+        gc.setObjectType(@as(*anyopaque, @ptrCast(root_env)), gc_mod.GCObjectType.env);
+        gc.addRoot(@as(*anyopaque, @ptrCast(root_env)));
+
+        const frame = try allocator.create(vm.Frame);
+        defer frame.deinit(allocator);
+        frame.* = vm.Frame.init(allocator, null, root_env);
+
+        try frame.put("x", vm.intValue(1));
+        try std.testing.expectEqual(@as(i64, 1), frame.get("x").?.integer);
+        try frame.put("x", vm.intValue(2));
+        try std.testing.expectEqual(@as(i64, 2), frame.get("x").?.integer);
+    }
+    gc.freeAllBlocks();
+}
+
+test "frame::put: rejects writing parent binding when has active children" {
+    const page_alloc = std.heap.page_allocator;
+    var gc = gc_mod.GC.init(page_alloc);
+    defer gc.deinit();
+    const prev_gc = gc_mod.current_gc;
+    gc_mod.current_gc = &gc;
+    defer gc_mod.current_gc = prev_gc;
+    const allocator = gc.allocator();
+
+    {
+        const root_env = try allocator.create(vm.Env);
+        defer { root_env.deinit(allocator); allocator.destroy(root_env); }
+        root_env.* = vm.Env.init(allocator);
+        gc.setObjectType(@as(*anyopaque, @ptrCast(root_env)), gc_mod.GCObjectType.env);
+        gc.addRoot(@as(*anyopaque, @ptrCast(root_env)));
+
+        const parent = try allocator.create(vm.Frame);
+        defer parent.deinit(allocator);
+        parent.* = vm.Frame.init(allocator, null, root_env);
+        try parent.put("x", vm.intValue(10));
+
+        const child = try allocator.create(vm.Frame);
+        defer child.deinit(allocator);
+        child.* = vm.Frame.init(allocator, parent, root_env);
+
+        const grandchild = try allocator.create(vm.Frame);
+        defer grandchild.deinit(allocator);
+        grandchild.* = vm.Frame.init(allocator, child, root_env);
+        try child.children.append(allocator, grandchild);
+        child.has_active_children = true;
+
+        const result = child.put("x", vm.intValue(99));
+        try std.testing.expectError(error.ParentImmutabilityViolation, result);
+    }
+    gc.freeAllBlocks();
+}
+
+test "frame::put: allows writing new name even with active children" {
+    const page_alloc = std.heap.page_allocator;
+    var gc = gc_mod.GC.init(page_alloc);
+    defer gc.deinit();
+    const prev_gc = gc_mod.current_gc;
+    gc_mod.current_gc = &gc;
+    defer gc_mod.current_gc = prev_gc;
+    const allocator = gc.allocator();
+
+    {
+        const root_env = try allocator.create(vm.Env);
+        defer { root_env.deinit(allocator); allocator.destroy(root_env); }
+        root_env.* = vm.Env.init(allocator);
+        gc.setObjectType(@as(*anyopaque, @ptrCast(root_env)), gc_mod.GCObjectType.env);
+        gc.addRoot(@as(*anyopaque, @ptrCast(root_env)));
+
+        const parent = try allocator.create(vm.Frame);
+        defer parent.deinit(allocator);
+        parent.* = vm.Frame.init(allocator, null, root_env);
+        try parent.put("x", vm.intValue(10));
+
+        const child = try allocator.create(vm.Frame);
+        defer child.deinit(allocator);
+        child.* = vm.Frame.init(allocator, parent, root_env);
+
+        const grandchild = try allocator.create(vm.Frame);
+        defer grandchild.deinit(allocator);
+        grandchild.* = vm.Frame.init(allocator, child, root_env);
+        try child.children.append(allocator, grandchild);
+        child.has_active_children = true;
+
+        try child.put("y", vm.intValue(42));
+        try std.testing.expectEqual(@as(i64, 42), child.get("y").?.integer);
+    }
+    gc.freeAllBlocks();
+}
+
+test "frame::put: allows rebinding own overlay even with active children" {
+    const page_alloc = std.heap.page_allocator;
+    var gc = gc_mod.GC.init(page_alloc);
+    defer gc.deinit();
+    const prev_gc = gc_mod.current_gc;
+    gc_mod.current_gc = &gc;
+    defer gc_mod.current_gc = prev_gc;
+    const allocator = gc.allocator();
+
+    {
+        const root_env = try allocator.create(vm.Env);
+        defer { root_env.deinit(allocator); allocator.destroy(root_env); }
+        root_env.* = vm.Env.init(allocator);
+        gc.setObjectType(@as(*anyopaque, @ptrCast(root_env)), gc_mod.GCObjectType.env);
+        gc.addRoot(@as(*anyopaque, @ptrCast(root_env)));
+
+        const parent = try allocator.create(vm.Frame);
+        defer parent.deinit(allocator);
+        parent.* = vm.Frame.init(allocator, null, root_env);
+
+        const child = try allocator.create(vm.Frame);
+        defer child.deinit(allocator);
+        child.* = vm.Frame.init(allocator, parent, root_env);
+        try child.put("x", vm.intValue(1));
+
+        const grandchild = try allocator.create(vm.Frame);
+        defer grandchild.deinit(allocator);
+        grandchild.* = vm.Frame.init(allocator, child, root_env);
+        try child.children.append(allocator, grandchild);
+        child.has_active_children = true;
+
+        try child.put("x", vm.intValue(2));
+        try std.testing.expectEqual(@as(i64, 2), child.get("x").?.integer);
+    }
+    gc.freeAllBlocks();
+}
+
+test "frame::hasInOverlay: returns true for overlay binding" {
+    const page_alloc = std.heap.page_allocator;
+    var gc = gc_mod.GC.init(page_alloc);
+    defer gc.deinit();
+    const prev_gc = gc_mod.current_gc;
+    gc_mod.current_gc = &gc;
+    defer gc_mod.current_gc = prev_gc;
+    const allocator = gc.allocator();
+
+    {
+        const root_env = try allocator.create(vm.Env);
+        defer { root_env.deinit(allocator); allocator.destroy(root_env); }
+        root_env.* = vm.Env.init(allocator);
+        gc.setObjectType(@as(*anyopaque, @ptrCast(root_env)), gc_mod.GCObjectType.env);
+        gc.addRoot(@as(*anyopaque, @ptrCast(root_env)));
+        try root_env.put("global", vm.intValue(100));
+
+        const frame = try allocator.create(vm.Frame);
+        defer frame.deinit(allocator);
+        frame.* = vm.Frame.init(allocator, null, root_env);
+        try frame.put("local", vm.intValue(42));
+
+        try std.testing.expect(frame.hasInOverlay("local"));
+        try std.testing.expect(!frame.hasInOverlay("global"));
+        try std.testing.expect(!frame.hasInOverlay("nonexistent"));
+    }
+    gc.freeAllBlocks();
+}
+
+test "frame::put: allows after child is removed" {
+    const page_alloc = std.heap.page_allocator;
+    var gc = gc_mod.GC.init(page_alloc);
+    defer gc.deinit();
+    const prev_gc = gc_mod.current_gc;
+    gc_mod.current_gc = &gc;
+    defer gc_mod.current_gc = prev_gc;
+    const allocator = gc.allocator();
+
+    {
+        const root_env = try allocator.create(vm.Env);
+        defer { root_env.deinit(allocator); allocator.destroy(root_env); }
+        root_env.* = vm.Env.init(allocator);
+        gc.setObjectType(@as(*anyopaque, @ptrCast(root_env)), gc_mod.GCObjectType.env);
+        gc.addRoot(@as(*anyopaque, @ptrCast(root_env)));
+
+        const parent = try allocator.create(vm.Frame);
+        defer parent.deinit(allocator);
+        parent.* = vm.Frame.init(allocator, null, root_env);
+        try parent.put("x", vm.intValue(10));
+
+        const child = try allocator.create(vm.Frame);
+        defer child.deinit(allocator);
+        child.* = vm.Frame.init(allocator, parent, root_env);
+
+        const grandchild = try allocator.create(vm.Frame);
+        grandchild.* = vm.Frame.init(allocator, child, root_env);
+        try child.children.append(allocator, grandchild);
+        child.has_active_children = true;
+
+        grandchild.releaseFromParent(allocator);
+        grandchild.overlay.root = null;
+        grandchild.overlay.count = 0;
+        grandchild.overlay.has_null = false;
+        allocator.destroy(grandchild);
+
+        try child.put("x", vm.intValue(99));
+        try std.testing.expectEqual(@as(i64, 99), child.get("x").?.integer);
+    }
+    gc.freeAllBlocks();
+}
