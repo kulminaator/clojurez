@@ -249,6 +249,11 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // Also register namespace envs as roots.
     registerGcRoots(&gc_instance, clojure_core_env, ns_mgr);
 
+    // Register all namespace environments and NamespaceManager as permanent roots.
+    // Permanent roots are NEVER swept — they and everything reachable from them
+    // (function definitions, vars, metadata) survive all GC cycles.
+    registerPermanentRoots(&gc_instance, ns_mgr, clojure_core_env, zc_env, cs_env, zr_env, zio_env);
+
     // Count arguments
     const arg_count = countArgs(init.args, allocator);
 
@@ -751,6 +756,34 @@ fn registerGcRoots(gc_inst: *gc_mod.GC, env: *Env, ns_mgr: *vm.NamespaceManager)
     gc_root_env = env;
     gc_root_ns_mgr = ns_mgr;
     gc_inst.root_fn = gcRootCallback;
+}
+
+/// Register all namespace environments and NamespaceManager as permanent roots.
+/// Permanent roots are NEVER swept by the GC — they and everything reachable
+/// from them (function definitions, vars, metadata) survive all collection cycles.
+fn registerPermanentRoots(
+    gc_inst: *gc_mod.GC,
+    ns_mgr: *vm.NamespaceManager,
+    clojure_core: *Env,
+    zig_core: *Env,
+    clojure_string: *Env,
+    zig_regexp: *Env,
+    zig_io: *Env,
+) void {
+    // NamespaceManager — the registry of all namespaces
+    gc_inst.addPermanentRoot(@as(*anyopaque, @ptrCast(ns_mgr)));
+
+    // Core namespace environments — contain all function definitions
+    gc_inst.addPermanentRoot(@as(*anyopaque, @ptrCast(clojure_core)));
+    gc_inst.addPermanentRoot(@as(*anyopaque, @ptrCast(zig_core)));
+    gc_inst.addPermanentRoot(@as(*anyopaque, @ptrCast(clojure_string)));
+    gc_inst.addPermanentRoot(@as(*anyopaque, @ptrCast(zig_regexp)));
+    gc_inst.addPermanentRoot(@as(*anyopaque, @ptrCast(zig_io)));
+
+    // User namespace — default REPL namespace
+    if (ns_mgr.getNamespace("user")) |user_env| {
+        gc_inst.addPermanentRoot(@as(*anyopaque, @ptrCast(user_env)));
+    }
 }
 
 fn printUsage() anyerror!void {

@@ -8,6 +8,7 @@ const Value = vm.Value;
 const list = @import("../../list.zig");
 const Env = vm.Env;
 const eval_ns = @import("../../eval_ns.zig");
+const gc_mod = @import("../../gc.zig");
 const eval_mod = @import("../../eval.zig");
 const parser = @import("../../parser.zig");
 const phm = @import("../../persistent_hash_map.zig");
@@ -160,6 +161,10 @@ pub fn core_create_ns(self: *const Value, args: *const list.List, env_env: *Env)
 
     // Create or get existing namespace
     const ns_env = try ns_mgr.createNamespace(ns_name);
+    // Register as permanent root — namespaces must never be swept by GC.
+    if (gc_mod.current_gc) |gc| {
+        gc.addPermanentRoot(@as(*anyopaque, @ptrCast(ns_env)));
+    }
 
     // Set parent to clojure.core if not already set (matching ns form behavior)
     if (ns_env.parent == null and !std.mem.eql(u8, ns_name, "clojure.core")) {

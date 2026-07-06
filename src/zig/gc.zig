@@ -123,6 +123,9 @@ pub const GC = struct {
 
     // Root pointers (always considered reachable)
     roots: std.ArrayListUnmanaged(*anyopaque) = .empty,
+    // Permanent roots: objects that must NEVER be swept (namespaces, function defs, global constants).
+    // Marked at the start of every collect cycle — always reachable, never collected.
+    permanent_roots: std.ArrayListUnmanaged(*anyopaque) = .empty,
     // Optional callback that registers dynamic roots at collect time.
     // Useful for roots that change address (e.g., HashMap entries after resize).
     root_fn: ?RootFn = null,
@@ -213,6 +216,12 @@ pub const GC = struct {
             self.wrapped.free(self.roots.items);
         }
         self.roots = .empty;
+
+        // Free permanent_roots array
+        if (self.permanent_roots.items.len > 0) {
+            self.wrapped.free(self.permanent_roots.items);
+        }
+        self.permanent_roots = .empty;
 
         // Free temp_roots array if any
         if (self.temp_roots.items.len > 0) {
@@ -483,6 +492,33 @@ pub const GC = struct {
         }
     }
 
+    /// Add a permanent root pointer (never collected under any circumstances).
+    /// Used for namespace environments, function definitions, and global constants.
+    /// Permanent roots are marked at the start of every collect cycle,
+    /// ensuring they and everything reachable from them are never swept.
+    pub fn addPermanentRoot(self: *Self, root: *anyopaque) void {
+        // Avoid duplicates
+        var i: usize = 0;
+        while (i < self.permanent_roots.items.len) : (i += 1) {
+            if (self.permanent_roots.items[i] == root) return;
+        }
+        self.permanent_roots.append(self.wrapped, root) catch {};
+        self.log("[GC] ADD_PERMANENT_ROOT ptr={*} perm_roots={d}\n", .{ root, self.permanent_roots.items.len });
+    }
+
+    /// Remove a permanent root pointer.
+    /// Use sparingly — typically permanent roots are added at startup and never removed.
+    pub fn removePermanentRoot(self: *Self, root: *anyopaque) void {
+        var i: usize = 0;
+        while (i < self.permanent_roots.items.len) : (i += 1) {
+            if (self.permanent_roots.items[i] == root) {
+                _ = self.permanent_roots.swapRemove(i);
+                self.log("[GC] REMOVE_PERMANENT_ROOT ptr={*} perm_roots={d}\n", .{ root, self.permanent_roots.items.len });
+                return;
+            }
+        }
+    }
+
     /// Push a temporary root pointer onto the stack.
     /// Used to protect HAMT nodes reachable from stack-allocated Env structs.
     /// Must be paired with popTempRoot (use defer for safety).
@@ -503,8 +539,8 @@ pub const GC = struct {
         // are protected from sweeping (in-flight evaluation state).
         self.generation += 1;
 
-        self.log("[GC] === COLLECT START blocks={d} roots={d} gen={d} ===\n",
-            .{ self.block_count, self.roots.items.len, self.generation });
+        self.log("[GC] === COLLECT START blocks={d} perm_roots={d} roots={d} gen={d} ===\n",
+            .{ self.block_count, self.permanent_roots.items.len, self.roots.items.len, self.generation });
 
         // Build O(1) header lookup table for this collection cycle.
         self.buildHeaderTable();
@@ -519,8 +555,14 @@ pub const GC = struct {
         }
         self.block_mutex.store(0, .release);
 
-        // Phase 2: Mark from static roots
+        // Phase 2: Mark from permanent roots FIRST (namespaces, function defs, globals).
+        // These are always reachable — they must never be swept.
         var ctx = ScanContext{ .gc = self, .scan_fn = scan_fn };
+        for (self.permanent_roots.items) |root| {
+            self.markRecursive(root, &ctx);
+        }
+
+        // Phase 2.1: Mark from static roots
         for (self.roots.items) |root| {
             self.markRecursive(root, &ctx);
         }
@@ -764,6 +806,7 @@ pub fn freeAllBlocks(self: *Self) void {
         gc_count: usize = 0,
         block_count: usize = 0,
         root_count: usize = 0,
+        permanent_root_count: usize = 0,
         total_allocated: usize = 0,
         current_allocated: usize = 0,
         peak_allocated: usize = 0,
@@ -778,6 +821,7 @@ pub fn freeAllBlocks(self: *Self) void {
             .gc_count = self.gc_count,
             .block_count = self.block_count,
             .root_count = self.roots.items.len,
+            .permanent_root_count = self.permanent_roots.items.len,
             .total_allocated = self.total_allocated,
             .current_allocated = self.current_allocated,
             .peak_allocated = self.peak_allocated,
@@ -1362,4 +1406,168 @@ test "gc::verbose mode produces output" {
     // We can't easily capture stderr in a unit test, but at least we verify
     // that verbose mode doesn't crash.
     try std.testing.expect(gc.stats().block_count == 1);
+}
+
+test "gc::permanent root survives collect (no regular roots)" {
+    var gc = GC.init(std.heap.page_allocator);
+    defer gc.deinit();
+
+    const a = allocNode(&gc, 1);
+    const b = allocNode(&gc, 2);
+    a.next = b;
+
+    // Register A as permanent root (never collected)
+    gc.addPermanentRoot(a);
+
+    // No regular roots registered — only permanent roots
+    gc.collect(testNodeScanFn);
+
+    // A and B survive because A is a permanent root
+    try std.testing.expect(a.id == 1);
+    try std.testing.expect(b.id == 2);
+    try std.testing.expect(gc.stats().block_count == 2);
+    try std.testing.expect(gc.stats().permanent_root_count == 1);
+}
+
+test "gc::permanent root protects deep chain" {
+    var gc = GC.init(std.heap.page_allocator);
+    defer gc.deinit();
+
+    // Chain: A -> B -> C -> D
+    const a = allocNode(&gc, 1);
+    const b = allocNode(&gc, 2);
+    const c = allocNode(&gc, 3);
+    const d = allocNode(&gc, 4);
+    a.next = b;
+    b.next = c;
+    c.next = d;
+
+    gc.addPermanentRoot(a);
+
+    // Multiple collects — permanent root keeps entire chain alive
+    gc.collect(testNodeScanFn);
+    gc.collect(testNodeScanFn);
+    gc.collect(testNodeScanFn);
+
+    try std.testing.expect(a.id == 1);
+    try std.testing.expect(b.id == 2);
+    try std.testing.expect(c.id == 3);
+    try std.testing.expect(d.id == 4);
+    try std.testing.expect(gc.stats().block_count == 4);
+}
+
+test "gc::permanent root + regular root coexist" {
+    var gc = GC.init(std.heap.page_allocator);
+    defer gc.deinit();
+
+    const perm = allocNode(&gc, 10);
+    const reg = allocNode(&gc, 20);
+    _ = allocNode(&gc, 30); // orphan
+
+    gc.addPermanentRoot(perm);
+    gc.addRoot(reg);
+
+    // Three collects for 3-generation protection (orphan gets swept)
+    gc.collect(testNodeScanFn);
+    gc.collect(testNodeScanFn);
+    gc.collect(testNodeScanFn);
+
+    try std.testing.expect(perm.id == 10);
+    try std.testing.expect(reg.id == 20);
+    // Orphan should be swept
+    try std.testing.expect(gc.stats().block_count == 2);
+}
+
+test "gc::remove permanent root allows collection" {
+    var gc = GC.init(std.heap.page_allocator);
+    defer gc.deinit();
+
+    const a = allocNode(&gc, 1);
+    gc.addPermanentRoot(a);
+
+    // First collect — A survives as permanent root
+    gc.collect(testNodeScanFn);
+    try std.testing.expect(gc.stats().block_count == 1);
+
+    // Remove permanent root
+    gc.removePermanentRoot(a);
+    try std.testing.expect(gc.stats().permanent_root_count == 0);
+
+    // Three collects for 3-generation protection
+    gc.collect(testNodeScanFn);
+    gc.collect(testNodeScanFn);
+    gc.collect(testNodeScanFn);
+
+    // A should now be swept (no roots)
+    try std.testing.expect(gc.stats().block_count == 0);
+}
+
+test "gc::permanent root duplicate add is no-op" {
+    var gc = GC.init(std.heap.page_allocator);
+    defer gc.deinit();
+
+    const a = allocNode(&gc, 1);
+    gc.addPermanentRoot(a);
+    gc.addPermanentRoot(a); // duplicate
+    gc.addPermanentRoot(a); // duplicate
+
+    try std.testing.expect(gc.stats().permanent_root_count == 1);
+}
+
+test "gc::permanent root remove non-existent is no-op" {
+    var gc = GC.init(std.heap.page_allocator);
+    defer gc.deinit();
+
+    const a = allocNode(&gc, 1);
+    const b = allocNode(&gc, 2);
+    gc.addPermanentRoot(a);
+
+    // Try to remove B which was never added
+    gc.removePermanentRoot(b);
+    try std.testing.expect(gc.stats().permanent_root_count == 1);
+
+    // Clean up
+    gc.removePermanentRoot(a);
+    try std.testing.expect(gc.stats().permanent_root_count == 0);
+}
+
+test "gc::permanent root with tree structure" {
+    var gc = GC.init(std.heap.page_allocator);
+    defer gc.deinit();
+
+    //       A (permanent)
+    //      / \
+    //     B   C
+    //    / \
+    //   D   E
+    //
+    //   F -> G  (unreachable cycle)
+    //   H        (orphan)
+    const a = allocNode(&gc, 1);
+    const b = allocNode(&gc, 2);
+    const c = allocNode(&gc, 3);
+    const d = allocNode(&gc, 4);
+    const e = allocNode(&gc, 5);
+    const f = allocNode(&gc, 6);
+    const g = allocNode(&gc, 7);
+    _ = allocNode(&gc, 8); // orphan H
+
+    a.next = b;
+    a.child = c;
+    b.next = d;
+    b.child = e;
+    f.next = g;
+    g.next = f; // unreachable cycle
+
+    gc.addPermanentRoot(a);
+
+    // Three collects for 3-generation protection
+    gc.collect(testNodeScanFn);
+    gc.collect(testNodeScanFn);
+    gc.collect(testNodeScanFn);
+
+    // A-E survive (reachable from permanent root A)
+    // F, G, H swept (unreachable)
+    try std.testing.expect(gc.stats().block_count == 5);
+    try std.testing.expect(gc.stats().permanent_root_count == 1);
 }

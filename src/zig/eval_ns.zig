@@ -6,6 +6,7 @@ const list = @import("list.zig");
 const Env = vm.Env;
 const parser = @import("parser.zig");
 const eval = @import("eval.zig");
+const gc_mod = @import("gc.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -33,6 +34,10 @@ pub fn evalNs(allocator: Allocator, l: list.List, env: *Env, depth: usize, ctx: 
 
     // Create or get the namespace
     const ns_env = try ns_mgr.createNamespace(ns_name);
+    // Register as permanent root — namespaces must never be swept by GC.
+    if (gc_mod.current_gc) |gc| {
+        gc.addPermanentRoot(@as(*anyopaque, @ptrCast(ns_env)));
+    }
     // Set parent to clojure.core so core functions are visible.
     // Guard: don't set clojure.core's parent to itself (would create a cycle
     // in env.get() causing infinite loops on undefined symbol lookups).
@@ -366,7 +371,10 @@ pub fn loadNamespaceFile(allocator: Allocator, ns_mgr: *vm.NamespaceManager, ns_
     // Resolve namespace name to file path
     const file_path = try ns_mgr.resolveNamespaceToPath(allocator, ns_name) orelse {
         // File not found on classpath — create namespace without loading
-        _ = try ns_mgr.createNamespace(ns_name);
+        const ns_env = try ns_mgr.createNamespace(ns_name);
+        if (gc_mod.current_gc) |gc| {
+            gc.addPermanentRoot(@as(*anyopaque, @ptrCast(ns_env)));
+        }
         return;
     };
     defer allocator.free(file_path);
@@ -422,6 +430,10 @@ pub fn evalInNs(allocator: Allocator, l: list.List, env: *Env, depth: usize, ctx
 
     // Create or get the namespace
     const ns_env = try ns_mgr.createNamespace(ns_name);
+    // Register as permanent root — namespaces must never be swept by GC.
+    if (gc_mod.current_gc) |gc| {
+        gc.addPermanentRoot(@as(*anyopaque, @ptrCast(ns_env)));
+    }
     // Set parent to clojure.core so core functions are visible.
     // Guard: don't set clojure.core's parent to itself (would create a cycle
     // in env.get() causing infinite loops on undefined symbol lookups).
