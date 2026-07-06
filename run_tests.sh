@@ -91,7 +91,25 @@ if [ $# -gt 0 ]; then
     done
 else
     # Run all Clojure test suites
+    # SMOKE TEST FIRST — runs fast, aborts if core features are broken
+    SMOKE_FILE="$SCRIPT_DIR/tests/clj/test_smoke.clj"
+    if [ -f "$SMOKE_FILE" ]; then
+        echo "--- SMOKE TEST (abort on failure) ---"
+        run_clj_suite "$SMOKE_FILE"
+        echo ""
+        if [ $CLJ_FAILED -gt 0 ]; then
+            echo "ABORT: Smoke test failed. Skipping remaining tests."
+            exit 1
+        fi
+        echo "Smoke test passed. Continuing with full test suite."
+        echo ""
+    fi
+
     for test_file in "$SCRIPT_DIR/tests/clj/test_"*.clj; do
+        # Skip smoke test — already run above
+        if [ "$test_file" = "$SMOKE_FILE" ]; then
+            continue
+        fi
         if [ -f "$test_file" ]; then
             suite_name=$(basename "$test_file" .clj)
             run_clj_suite "$test_file"
