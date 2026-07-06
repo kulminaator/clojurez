@@ -74,6 +74,7 @@ pub fn valueScanFn(obj: *anyopaque, ctx: *gc.ScanContext) void {
         .bytecode_program => scanBytecodeProgram(obj, ctx),
         .chunk_data => scanChunkData(obj, ctx),
         .chunked_cons_data => scanChunkedConsData(obj, ctx),
+        .frame => scanFrame(obj, ctx),
     }
 }
 
@@ -754,5 +755,35 @@ fn scanNamespaceManager(ns_mgr_ptr: *anyopaque, ctx: *gc.ScanContext) void {
         for (ns_mgr.classpath.items) |dir| {
             if (dir.len > 0) markPtr(dir.ptr, ctx);
         }
+    }
+}
+
+/// Scan a Frame struct: { parent, children, overlay, memo_cache, root_env, function_ref, src_loc, has_active_children }.
+/// Marks parent frame, child frames, overlay HAMT, memo cache values, root env, and function_ref.
+fn scanFrame(frame_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const frame: *vm.Frame = @ptrCast(@alignCast(frame_ptr));
+
+    // Mark parent frame pointer
+    if (frame.parent) |parent| {
+        ctx.gc.markRecursive(parent, ctx);
+    }
+    // Mark child frame pointers
+    for (frame.children.items) |child| {
+        ctx.gc.markRecursive(child, ctx);
+    }
+    // Mark overlay HAMT root (triggers recursive scanning of HAMT nodes)
+    if (frame.overlay.root) |root| {
+        ctx.gc.markRecursive(root, ctx);
+    }
+    // Mark memo cache entries (AutoHashMapUnmanaged values are Value objects)
+    var it = frame.memo_cache.iterator();
+    while (it.next()) |entry| {
+        scanValueChildrenDirect(&entry.value_ptr.*, ctx);
+    }
+    // Mark root_env pointer
+    ctx.gc.markRecursive(frame.root_env, ctx);
+    // Mark function_ref if present
+    if (frame.function_ref) |*ref| {
+        scanValueChildrenDirect(ref, ctx);
     }
 }

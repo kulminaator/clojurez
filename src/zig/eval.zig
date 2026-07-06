@@ -32,18 +32,11 @@ pub const TrampolineFrame = struct {
     body_form: Value,       // the function body to evaluate (a list)
     env: *Env,              // the function's environment (heap-allocated)
     env_guard_active: bool = false, // whether pushEnvTempRoot was called
-    src_loc: SourceLoc = .{}, // source location of the call site
+    src_loc: vm.SourceLoc = .{}, // source location of the call site
 };
 
-/// Source location for error reporting.
-pub const SourceLoc = struct {
-    file: []const u8 = "",
-    line: usize = 0, // 1-based line number (0 = unknown)
-
-    pub fn isEmpty(self: SourceLoc) bool {
-        return self.file.len == 0;
-    }
-};
+// Re-export SourceLoc from value.zig for backward compatibility
+pub const SourceLoc = vm.SourceLoc;
 
 /// Heap-based evaluation stack for trampolining.
 pub const TrampolineStack = struct {

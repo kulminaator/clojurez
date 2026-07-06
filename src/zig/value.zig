@@ -1676,6 +1676,174 @@ pub const Env = struct {
 };
 
 // ============================================================
+// Source location for error reporting and stack traces.
+// Defined here so it can be shared between value.zig (Frame) and eval.zig.
+// ============================================================
+
+pub const SourceLoc = struct {
+    file: []const u8 = "",
+    line: usize = 0, // 1-based line number (0 = unknown)
+
+    pub fn isEmpty(self: SourceLoc) bool {
+        return self.file.len == 0;
+    }
+};
+
+// ============================================================
+// Frame — Virtual Stack Frame (Phase 3: Memory Model Overhaul)
+// ============================================================
+//
+// A Frame is a GC-managed heap object representing one level of
+// evaluation scope (function call, let binding, loop, etc.).
+// Frames form a linked chain via parent pointers, replacing
+// deep C-stack recursion with bounded heap allocation.
+//
+// Design (per MEMORY_MODEL.md):
+// - No full copies: child frame stores only new bindings + overrides
+// - Parent pointer: child knows its parent for scope lookup
+// - Child tracking: parent tracks children for lifecycle + immutability
+// - Overlay-only writes: put() writes only to current overlay
+// - Memoization: recently looked-up parent values are cached
+//
+// Frame.get() walks: overlay → parent.overlay → ... → root Env
+// Frame.put() writes only to overlay (never to parent)
+
+pub const Frame = struct {
+    parent: ?*Frame = null,
+    // Children tracking: parent knows which frames reference it.
+    // Used for lifecycle management and parent immutability enforcement.
+    children: std.ArrayListUnmanaged(*Frame) = .empty,
+    // Overlay: only bindings introduced/overridden in this frame.
+    // Uses PersistentHashMap for GC integration (HAMT nodes are scanned).
+    overlay: phm.PersistentHashMap = phm.PersistentHashMap.empty(),
+    // Memoization cache for parent-chain lookups.
+    // Stores symbol name → Value for recently accessed parent-level bindings.
+    // Prevents O(depth) traversal on every lookup in tight loops.
+    memo_cache: std.AutoHashMapUnmanaged([]const u8, Value) = .empty,
+    // Root namespace environment (terminates the lookup chain).
+    // Frame overlay → parent overlay → ... → root_env
+    root_env: *Env,
+    // The function being executed in this frame (for stack traces).
+    function_ref: ?Value = null,
+    // Source location of the call site.
+    src_loc: SourceLoc = .{},
+    // True if any child frame is still alive.
+    // Used for parent immutability enforcement (Phase 7).
+    has_active_children: bool = false,
+
+    /// Create a new Frame with the given allocator, optional parent,
+    /// and root namespace environment.
+    pub fn init(_: Allocator, parent_frame: ?*Frame, root_env_ptr: *Env) Frame {
+        return .{
+            .parent = parent_frame,
+            .root_env = root_env_ptr,
+        };
+    }
+
+    /// Look up a binding by name.
+    /// Walks: overlay → parent.overlay → ... → root_env.
+    /// Memoizes results from parent chain lookups.
+    pub fn get(self: *Frame, name: []const u8) ?Value {
+        // 1. Check memo cache first (fast path for repeated lookups)
+        if (self.memo_cache.get(name)) |cached| {
+            return cached;
+        }
+        // 2. Check own overlay
+        if (!self.overlay.isEmpty()) {
+            const found = self.overlay.find(phm.sym(name));
+            if (found) |val| return val;
+        }
+        // 3. Walk parent chain
+        var current: ?*Frame = self.parent;
+        while (current) |frame| {
+            if (!frame.overlay.isEmpty()) {
+                const found = frame.overlay.find(phm.sym(name));
+                if (found) |val| {
+                    // Memoize for next time
+                    self.memo_cache.put(self.root_env.allocator, name, val) catch {};
+                    return val;
+                }
+            }
+            current = frame.parent;
+        }
+        // 4. Fall back to root namespace environment
+        const root_val = self.root_env.get(name);
+        if (root_val) |val| {
+            // Memoize for next time
+            self.memo_cache.put(self.root_env.allocator, name, val) catch {};
+            return val;
+        }
+        return null;
+    }
+
+    /// Check if a binding exists (anywhere in the chain).
+    pub fn has(self: *Frame, name: []const u8) bool {
+        if (!self.overlay.isEmpty() and self.overlay.containsKey(phm.sym(name))) return true;
+        var current: ?*Frame = self.parent;
+        while (current) |frame| {
+            if (!frame.overlay.isEmpty() and frame.overlay.containsKey(phm.sym(name))) return true;
+            current = frame.parent;
+        }
+        return self.root_env.has(name);
+    }
+
+    /// Bind a name to a value in this frame's overlay only.
+    /// Never writes to parent overlays (immutability invariant).
+    pub fn put(self: *Frame, name: []const u8, value: Value) anyerror!void {
+        const allocator = self.root_env.allocator;
+        const new_overlay = try self.overlay.mapAssoc(allocator, phm.sym(name), value);
+        self.overlay = new_overlay;
+        // Update memo cache
+        self.memo_cache.put(allocator, name, value) catch {};
+    }
+
+    /// Create a child frame with this frame as parent.
+    /// The child inherits the lookup chain but has its own overlay.
+    pub fn createChild(self: *Frame, allocator: Allocator) anyerror!*Frame {
+        const frame_ptr = try allocator.create(Frame);
+        errdefer allocator.destroy(frame_ptr);
+        frame_ptr.* = Frame.init(allocator, self, self.root_env);
+        // Tag for GC scanning
+        if (gc_mod.current_gc) |gc| {
+            gc.setObjectType(@as(*anyopaque, @ptrCast(frame_ptr)), gc_mod.GCObjectType.frame);
+        }
+        // Track child in parent
+        try self.children.append(allocator, frame_ptr);
+        self.has_active_children = true;
+        return frame_ptr;
+    }
+
+    /// Remove this frame from its parent's children list.
+    /// Called when a frame is logically popped (function returns).
+    pub fn pop(self: *Frame, allocator: Allocator) void {
+        if (self.parent) |parent| {
+            // Remove self from parent's children list
+            var i: usize = 0;
+            while (i < parent.children.items.len) : (i += 1) {
+                if (parent.children.items[i] == self) {
+                    _ = parent.children.swapRemove(i);
+                    break;
+                }
+            }
+            // Update parent's has_active_children flag
+            parent.has_active_children = parent.children.items.len > 0;
+        }
+        // Clean up this frame's resources
+        self.overlay.root = null;
+        self.overlay.count = 0;
+        self.overlay.has_null = false;
+        self.memo_cache.deinit(allocator);
+        self.children.deinit(allocator);
+    }
+
+    /// Full cleanup (deinit + destroy). Used at thread exit.
+    pub fn deinit(self: *Frame, allocator: Allocator) void {
+        self.pop(allocator);
+        allocator.destroy(self);
+    }
+};
+
+// ============================================================
 // Namespace Manager
 // ============================================================
 

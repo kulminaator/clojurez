@@ -65,6 +65,7 @@ pub const GCObjectType = enum(u8) {
     bytecode_program = 29, // BytecodeProgram { instructions, constants, symbols, source_markers, fn_pool }
     chunk_data = 30,         // ChunkData { items, off, end }
     chunked_cons_data = 31,  // ChunkedConsData { chunk, tail }
+    frame = 32,              // Frame — virtual stack frame (heap-allocated evaluation frame)
 };
 
 const Header = struct {
