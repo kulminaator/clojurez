@@ -678,42 +678,41 @@ fn runMain(allocator: Allocator, env: *Env, ns_name: []const u8) anyerror!void {
 }
 
 /// GC root callback: scans all env entries and NamespaceManager data.
-fn gcRootCallback(gc_inst: *gc_mod.GC) void {
-    var ctx = gc_mod.ScanContext{ .gc = gc_inst, .scan_fn = gc_scan.valueScanFn };
+fn gcRootCallback(gc_inst: *gc_mod.GC, ctx: *gc_mod.ScanContext) void {
     // This function is called from within gc.collect().
     // We use static pointers set up during registration.
     if (gc_root_env) |env| {
         // Mark the Env struct itself (allocated via GC allocator)
-        gc_inst.markRecursive(env, &ctx);
+        gc_inst.markRecursive(env, ctx);
         scanEnvEntriesDirect(env, gc_inst);
     }
     if (gc_root_ns_mgr) |ns_mgr| {
         // Mark the NamespaceManager struct itself (allocated via GC allocator)
-        gc_inst.markRecursive(ns_mgr, &ctx);
+        gc_inst.markRecursive(ns_mgr, ctx);
         // Register NamespaceManager's own allocations as roots.
         // These are not part of any Value, so the scan function won't find them.
         if (ns_mgr.current_ns.len > 0) {
-            gc_inst.markRecursive(@as(*anyopaque, @ptrCast(@constCast(ns_mgr.current_ns.ptr))), &ctx);
+            gc_inst.markRecursive(@as(*anyopaque, @ptrCast(@constCast(ns_mgr.current_ns.ptr))), ctx);
         }
         // Mark the namespaces PersistentHashMap root node.
         // HAMT nodes are tracked via scanHashMapNode which marks keys, values, and wrapped pointers.
         if (ns_mgr.namespaces.root) |root| {
-            gc_inst.markRecursive(root, &ctx);
+            gc_inst.markRecursive(root, ctx);
         }
         // Classpath entries buffer + individual strings
         if (ns_mgr.classpath.items.len > 0) {
             gc_inst.setObjectType(@as(*anyopaque, @ptrCast(ns_mgr.classpath.items.ptr)), gc_mod.GCObjectType.unknown);
-            gc_inst.markRecursive(@as(*anyopaque, @ptrCast(ns_mgr.classpath.items.ptr)), &ctx);
+            gc_inst.markRecursive(@as(*anyopaque, @ptrCast(ns_mgr.classpath.items.ptr)), ctx);
         }
         for (ns_mgr.classpath.items) |dir| {
             if (dir.len > 0) {
-                gc_inst.markRecursive(@as(*anyopaque, @ptrCast(@constCast(dir.ptr))), &ctx);
+                gc_inst.markRecursive(@as(*anyopaque, @ptrCast(@constCast(dir.ptr))), ctx);
             }
         }
         // Mark the aliases PersistentHashMap root node.
         // HAMT nodes are tracked via scanHashMapNode — keys and Value.string values are scanned automatically.
         if (ns_mgr.aliases.root) |root| {
-            gc_inst.markRecursive(root, &ctx);
+            gc_inst.markRecursive(root, ctx);
         }
     }
     // Mark REPL input history buffer so it survives sweeps.
@@ -725,6 +724,8 @@ fn gcRootCallback(gc_inst: *gc_mod.GC) void {
             @as(*anyopaque, @ptrCast(@constCast(gc_mod.repl_history_buffer.ptr))),
         );
     }
+    // Phase 5: Mark active evaluation frames (trampoline stack + current frame)
+    eval.markFrameRoots(gc_inst, ctx);
 }
 
 /// Scan all Values in an env's entries and mark their child pointers.

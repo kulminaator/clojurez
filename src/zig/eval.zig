@@ -112,6 +112,38 @@ pub fn deallocValue(allocator: Allocator, ptr: *Value) void {
 /// Unified special form handler signature.
 const SpecialFormFn = *const fn (Allocator, *const list.List, *vm.Frame, usize, ?*TrampolineStack) anyerror!EvalResult;
 
+/// Evaluation context for GC root tracking (Phase 5: Frame Lifecycle and Root Graph).
+/// Tracks active frames so the GC's root_fn can mark them during collection.
+/// This prevents active evaluation frames from being swept even when they're
+/// detached from their parent's children list during trampoline processing.
+pub const EvalContext = struct {
+    root_frame: ?*vm.Frame = null,
+    tramp_stack: ?*TrampolineStack = null,
+    current_frame: ?*vm.Frame = null,
+};
+
+pub var eval_context: EvalContext = .{};
+
+/// GC root callback for frame lifecycle (Phase 5).
+/// Marks all active evaluation frames so they survive GC collection.
+/// Called during GC collect() via the root_fn mechanism.
+pub fn markFrameRoots(gc_inst: *gc_mod.GC, ctx: *gc_mod.ScanContext) void {
+    // Mark root frame (entry point for the frame chain)
+    if (eval_context.root_frame) |frame| {
+        gc_inst.markRecursive(frame, ctx);
+    }
+    // Mark all frames on the trampoline stack
+    if (eval_context.tramp_stack) |tramp| {
+        for (tramp.frames.items) |tf| {
+            gc_inst.markRecursive(tf.frame, ctx);
+        }
+    }
+    // Mark the current evaluation frame (popped from stack, being evaluated)
+    if (eval_context.current_frame) |frame| {
+        gc_inst.markRecursive(frame, ctx);
+    }
+}
+
 /// Dispatch table: static array of special form names → handler functions.
 /// Linear search over ~42 entries is trivial and avoids any allocation.
 const special_forms = [_]struct { name: []const u8, fn_ptr: SpecialFormFn }{
@@ -332,6 +364,16 @@ pub fn evalWithFile(allocator: Allocator, form: Value, env: *Env, file: []const 
     const root_frame = try createRootFrame(allocator, env);
     defer root_frame.deinit(allocator);
 
+    // Phase 5: Register evaluation context for GC root tracking
+    eval_context.root_frame = root_frame;
+    eval_context.tramp_stack = &tramp;
+    eval_context.current_frame = null;
+    defer {
+        eval_context.root_frame = null;
+        eval_context.tramp_stack = null;
+        eval_context.current_frame = null;
+    }
+
     // Evaluate the initial form
     var result: ?EvalResult = evalRec(allocator, &form, root_frame, 0, &tramp) catch |err| {
         // Don't format internal control errors like ReplExit
@@ -364,6 +406,10 @@ pub fn evalWithFile(allocator: Allocator, form: Value, env: *Env, file: []const 
             tramp.deinit();
             return try allocValue(allocator, vm.nilValue());
         };
+
+        // Phase 5: Track current evaluation frame for GC root marking
+        eval_context.current_frame = tramp_frame.frame;
+        defer eval_context.current_frame = null;
 
         const body_val = tramp_frame.body_form;
         result = evalRec(allocator, &body_val, tramp_frame.frame, 0, &tramp) catch |err| {
@@ -405,6 +451,10 @@ fn evalRecV(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: u
 
         // Pop and evaluate the next frame
         const tramp_frame = ctx.?.pop() orelse return try allocValue(allocator, vm.nilValue());
+
+        // Phase 5: Track current evaluation frame for GC root marking
+        eval_context.current_frame = tramp_frame.frame;
+        defer eval_context.current_frame = null;
 
         result = try evalRec(allocator, &tramp_frame.body_form, tramp_frame.frame, 0, ctx);
 

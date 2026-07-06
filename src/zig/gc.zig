@@ -91,7 +91,8 @@ pub const ScanFn = *const fn (obj: *anyopaque, ctx: *ScanContext) void;
 
 /// Callback that returns dynamic roots at collect time.
 /// Called during the mark phase to get current root pointers.
-pub const RootFn = *const fn (gc: *GC) void;
+/// Receives the ScanContext so the callback can call markRecursive.
+pub const RootFn = *const fn (gc: *GC, ctx: *ScanContext) void;
 
 pub const ScanContext = struct {
     gc: *GC,
@@ -573,9 +574,9 @@ pub const GC = struct {
             self.markRecursive(root, &ctx);
         }
 
-        // Phase 3: Call root callback for dynamic roots (marks directly)
+        // Phase 3: Call root callback for dynamic roots (marks via ScanContext)
         if (self.root_fn) |fn_ptr| {
-            fn_ptr(self);
+            fn_ptr(self, &ctx);
         }
 
         // Phase 4: Sweep unmarked blocks
