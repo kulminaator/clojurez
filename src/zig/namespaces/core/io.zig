@@ -194,13 +194,34 @@ pub fn core_spit(self: *const Value, args: *const list.List, env_env: *Env) anye
     const filename = args.items[0];
     if (std.meta.activeTag(filename) != .string) return error.TypeError;
 
-    var content_buf: std.ArrayList(u8) = .empty;
-    errdefer content_buf.deinit(env_env.allocator);
-
+    // Check for :append option
+    var append_mode: bool = false;
     var i: usize = 1;
     while (i < args.items.len) : (i += 1) {
         const arg = args.items[i];
-        if (std.meta.activeTag(arg) == .keyword) continue;
+        if (std.meta.activeTag(arg) == .keyword and std.mem.eql(u8, arg.keyword, "append")) {
+            if (i + 1 < args.items.len) {
+                const next_arg = args.items[i + 1];
+                append_mode = vm.isTruthy(next_arg);
+                i += 1; // skip the value
+            }
+            continue;
+        }
+    }
+
+    var content_buf: std.ArrayList(u8) = .empty;
+    errdefer content_buf.deinit(env_env.allocator);
+
+    i = 1;
+    while (i < args.items.len) : (i += 1) {
+        const arg = args.items[i];
+        if (std.meta.activeTag(arg) == .keyword) {
+            // Skip option values (e.g. the true/false after :append)
+            if (std.mem.eql(u8, arg.keyword, "append") and i + 1 < args.items.len) {
+                i += 1;
+            }
+            continue;
+        }
         const s = try vm.fmt(arg, env_env.allocator);
         defer env_env.allocator.free(s);
         if (std.meta.activeTag(arg) == .string and s.len >= 2 and s[0] == '"' and s[s.len - 1] == '"') {
@@ -211,10 +232,20 @@ pub fn core_spit(self: *const Value, args: *const list.List, env_env: *Env) anye
     }
 
     const cwd = std.Io.Dir.cwd();
-    const file = try std.Io.Dir.createFile(cwd, std.Options.debug_io, filename.string, .{});
+    const file = if (append_mode)
+        try std.Io.Dir.createFile(cwd, std.Options.debug_io, filename.string, .{ .truncate = false })
+    else
+        try std.Io.Dir.createFile(cwd, std.Options.debug_io, filename.string, .{});
     defer std.Io.File.close(file, std.Options.debug_io);
 
     var writer = file.writer(std.Options.debug_io, &[_]u8{});
+    // In append mode, seek to end of file before writing
+    if (append_mode) {
+        const stat = std.Io.Dir.statFile(cwd, std.Options.debug_io, filename.string, .{}) catch null;
+        if (stat) |s| {
+            writer.seekTo(@as(u64, @intCast(s.size))) catch {};
+        }
+    }
     try writer.interface.writeAll(content_buf.items);
     writer.flush() catch {};
 

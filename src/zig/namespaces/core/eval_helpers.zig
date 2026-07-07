@@ -12,6 +12,16 @@ const gc_mod = @import("../../gc.zig");
 
 const Allocator = std.mem.Allocator;
 
+/// Loop context for evalLoop/evalRecur coordination.
+/// Stack-based to support nested loops.
+const LoopContext = struct {
+    env: ?*vm.Env = null,
+    bind_names: []const []const u8 = &.{},
+    body: []const Value = &.{},
+};
+
+var loop_stack: std.ArrayListUnmanaged(LoopContext) = .empty;
+
 // Bind a parameter to an argument, supporting destructuring
 fn bindParam(allocator: Allocator, param: *const Value, arg: *const Value, env: *vm.Env) anyerror!void {
     switch (std.meta.activeTag(param.*)) {
@@ -302,6 +312,8 @@ fn evalList(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Va
         if (std.mem.eql(u8, first.symbol, "let")) return evalLet(allocator, form, env);
         if (std.mem.eql(u8, first.symbol, "fn")) return evalFn(allocator, form, env);
         if (std.mem.eql(u8, first.symbol, "lazy-seq")) return evalLazySeq(allocator, form, env);
+        if (std.mem.eql(u8, first.symbol, "loop")) return evalLoop(allocator, form, env);
+        if (std.mem.eql(u8, first.symbol, "recur")) return evalRecur(allocator, form, env);
         if (std.mem.eql(u8, first.symbol, "__protocol_dispatch__")) return evalProtocolDispatch(allocator, form, env);
     }
 
@@ -470,6 +482,85 @@ fn evalLet(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Val
     }
 
     return evalDoSlice(allocator, form.list.items.items[2..], &new_env);
+}
+
+/// (loop [bindings] body...) — loop with recur support.
+fn evalLoop(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Value {
+    if (form.list.items.items.len < 2) return error.ArityError;
+    const bindings = &form.list.items.items[1];
+    const body = form.list.items.items[2..];
+
+    const bind_items = if (std.meta.activeTag(bindings.*) == .list)
+        bindings.list.items.items
+    else
+        bindings.vector.items.items;
+
+    // Extract binding names
+    var bind_names: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (bind_names.items) |name| allocator.free(name);
+        allocator.free(bind_names.items);
+    }
+    var i: usize = 0;
+    while (i < bind_items.len) : (i += 2) {
+        const sym = &bind_items[i];
+        if (std.meta.activeTag(sym.*) != .symbol) return error.TypeError;
+        try bind_names.append(allocator, try allocator.dupe(u8, sym.symbol));
+    }
+
+    // Evaluate initial bindings and create env
+    var loop_env = try env.clone(allocator);
+    defer loop_env.deinit(allocator);
+    i = 0;
+    while (i < bind_items.len) : (i += 2) {
+        const sym = &bind_items[i];
+        const val_ptr = try evalForm(allocator, &bind_items[i + 1], &loop_env);
+        try loop_env.put(sym.symbol, val_ptr.*);
+    }
+
+    // Push loop context for recur (stack-based for nested loops)
+    try loop_stack.append(allocator, LoopContext{
+        .env = &loop_env,
+        .bind_names = bind_names.items,
+        .body = body,
+    });
+    defer _ = loop_stack.pop();
+
+    // Evaluate body, catching recur
+    while (true) {
+        const result = evalDoSlice(allocator, body, &loop_env) catch |err| {
+            if (err == error.RecurLoop) continue;
+            return err;
+        };
+        return result;
+    }
+}
+
+/// (recur args...) — tail-call to nearest enclosing loop/fn.
+fn evalRecur(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Value {
+    // Evaluate args in caller's env (has access to let bindings like idx)
+    const items = form.list.items.items;
+    if (items.len < 2) return error.ArityError;
+    const args = items[1..]; // skip 'recur' symbol
+
+    if (loop_stack.items.len == 0) return error.RecurLoop; // recur outside loop
+    const ctx = &loop_stack.items[loop_stack.items.len - 1];
+    if (ctx.env == null) return error.RecurLoop;
+
+    const loop_env = ctx.env.?;
+    if (args.len != ctx.bind_names.len) {
+        std.debug.print("RECUR ARITY MISMATCH: args={d} bindings={d} stack_depth={d}\n", .{ args.len, ctx.bind_names.len, loop_stack.items.len });
+        return error.ArityError;
+    }
+
+    // Evaluate new values in caller's env, rebind in loop env
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const val_ptr = try evalForm(allocator, &args[i], env);
+        try loop_env.put(ctx.bind_names[i], val_ptr.*);
+    }
+
+    return error.RecurLoop; // signal loop to restart
 }
 
 /// (fn name? ([params] body...)...) — anonymous function.

@@ -1240,9 +1240,10 @@
 ;; ---- I/O ----
 
 (defn spit
-  "Writes the string content to a file, creating it if it doesn't exist."
-  [filename content]
-  (zig.core/spit filename content))
+  "Writes the string content to a file, creating it if it doesn't exist.
+  Optional :append true writes in append mode instead of overwriting."
+  [filename content & options]
+  (apply zig.core/spit filename content options))
 
 (defn slurp
   "Opens and reads the file from the given path, returning its contents as a string."
