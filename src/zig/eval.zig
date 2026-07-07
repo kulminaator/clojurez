@@ -38,9 +38,11 @@ pub fn allocValue(allocator: Allocator, val: Value) anyerror!*Value {
 }
 
 /// Dereference and deinit a *Value, used for intermediate results that won't be returned.
+/// In a GC system, we just null out the Value — the GC handles all cleanup.
 pub fn deallocValue(allocator: Allocator, ptr: *Value) void {
-    ptr.*.deinit(allocator);
-    // Don't destroy - GC manages the memory
+    _ = allocator;
+    ptr.* = vm.nilValue();  // Null out — GC will collect when unreachable
+    // Don't destroy — GC manages the *Value memory too
 }
 
 /// Unified special form handler signature.
@@ -1144,18 +1146,10 @@ fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, 
     // Copy captured closure bindings from fn_data.env into the overlay.
     // This avoids issues with shared Env HAMTs being corrupted by deinit.
     const child_frame = try parent_frame.createChild(allocator);
-    // Also set root_env for protocol dispatch and other Env-based lookups
+    // Set root_env to the function's captured environment.
+    // The Frame lookup chain handles everything:
+    //   child_frame.overlay (params) → parent chain → root_env (closure captures) → root_env.parent (namespace)
     child_frame.root_env = fn_data.env;
-    // Copy closure bindings into overlay (they take precedence over root_env lookups)
-    if (!fn_data.env.entries.isEmpty()) {
-        var env_it = fn_data.env.entries.entryIterator();
-        while (env_it.next()) |entry| {
-            if (std.meta.activeTag(entry.key) == .symbol) {
-                const cloned_val = try vm.clone(&entry.val, allocator);
-                try child_frame.put(entry.key.symbol, cloned_val);
-            }
-        }
-    }
 
     // Bind function name for self-reference (e.g., (fn self [x] (self (dec x))))
     if (fn_data.name) |fn_name| {
@@ -1202,14 +1196,14 @@ fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, 
 
     // TRAMPOLINE: Store body in child Frame.
     // The eval() loop will read eval_context.current_frame and evaluate its body_form.
-    // Deep clone the body so it survives after the caller frees its copy of the function Value.
-    var body_clone: list.List = .empty;
-    errdefer body_clone.deinit(allocator);
-    for (arity.body.items) |item| {
-        try body_clone.append(allocator, try vm.clone(&item, allocator));
-    }
-    // Set source line on the body form for error reporting
-    const body_val = try vm.listValueWithLine(allocator, body_clone, src_line);
+    // Shallow-clone the body list (copy the array, share the Value pointers).
+    // The FnData (and its body Values) is alive as long as the function Value is referenced,
+    // and the function Value is held by the caller during the call.
+    // The body Values are logically immutable — evaluation never mutates them.
+    var body_shallow: list.List = .empty;
+    errdefer body_shallow.deinit(allocator);
+    try body_shallow.appendSlice(allocator, arity.body.items);
+    const body_val = try vm.listValueWithLine(allocator, body_shallow, src_line);
 
     // Phase 9: Trampoline or evaluate directly based on trampoline_allowed flag.
     // When trampoline_allowed is false (e.g., during evalRecV), evaluate directly
@@ -1336,23 +1330,24 @@ fn callSet(allocator: Allocator, op: *const Value, args: *const list.List) anyer
 
 /// Call a keyword as a function: looks up the keyword in a map or record.
 fn callKeyword(allocator: Allocator, op: *const Value, args: *const list.List) anyerror!Value {
+    _ = allocator;
     if (args.items.len != 1) return error.ArityError;
     const coll = args.items[0];
     if (std.meta.activeTag(coll) == .map) {
         for (coll.map.entries.items) |entry| {
             if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, op.keyword)) {
-                return try vm.clone(&entry.value, allocator);
+                return entry.value;  // Share - values in map are immutable
             }
         }
     } else if (std.meta.activeTag(coll) == .record) {
         for (coll.record.fields.items) |entry| {
             if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, op.keyword)) {
-                return try vm.clone(&entry.value, allocator);
+                return entry.value;
             }
         }
         for (coll.record.extmap.items) |entry| {
             if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, op.keyword)) {
-                return try vm.clone(&entry.value, allocator);
+                return entry.value;
             }
         }
     }
@@ -1361,35 +1356,37 @@ fn callKeyword(allocator: Allocator, op: *const Value, args: *const list.List) a
 
 /// Call a map as a function: returns value for key, or not-found if provided.
 fn callMap(allocator: Allocator, op: *const Value, args: *const list.List) anyerror!Value {
+    _ = allocator;
     if (args.items.len < 1 or args.items.len > 2) return error.ArityError;
     const key = args.items[0];
     for (op.map.entries.items) |entry| {
         if (vm.equals(entry.key, key)) {
-            return try vm.clone(&entry.value, allocator);
+            return entry.value;  // Share - values in map are immutable
         }
     }
     if (args.items.len == 2) {
-        return try vm.clone(&args.items[1], allocator);
+        return args.items[1];
     }
     return vm.nilValue();
 }
 
 /// Call a record as a function: returns value for key (fields first, then extmap).
 fn callRecord(allocator: Allocator, op: *const Value, args: *const list.List) anyerror!Value {
+    _ = allocator;
     if (args.items.len < 1 or args.items.len > 2) return error.ArityError;
     const key = args.items[0];
     for (op.record.fields.items) |entry| {
         if (vm.equals(entry.key, key)) {
-            return try vm.clone(&entry.value, allocator);
+            return entry.value;  // Share - values in record are immutable
         }
     }
     for (op.record.extmap.items) |entry| {
         if (vm.equals(entry.key, key)) {
-            return try vm.clone(&entry.value, allocator);
+            return entry.value;
         }
     }
     if (args.items.len == 2) {
-        return try vm.clone(&args.items[1], allocator);
+        return args.items[1];
     }
     return vm.nilValue();
 }
@@ -2168,7 +2165,16 @@ fn evalLazySeq(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dept
 /// Capture the effective environment of a Frame into a flat Env.
 /// Walks the Frame chain from parent to current so that closer bindings override.
 fn captureFrameEnv(allocator: Allocator, frame: *vm.Frame) anyerror!Env {
-    var env = try frame.root_env.clone(allocator);
+    // Do NOT clone the namespace environment.
+    // Instead, create an env with empty HAMT and parent = root_env.
+    // This preserves the lookup chain: overlay → parent chain → root_env.
+    // Only capture overlay bindings from the frame chain (actual closure captures).
+    var env: Env = .{
+        .allocator = allocator,
+        .entries = phm.PersistentHashMap.empty(),
+        .parent = frame.root_env,
+        .ns_manager = null,
+    };
     // Collect frames from current to parent
     var frames: std.ArrayListUnmanaged(*vm.Frame) = .empty;
     errdefer frames.deinit(allocator);

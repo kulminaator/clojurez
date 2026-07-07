@@ -547,7 +547,17 @@ pub fn core_meta(self: *const Value, args: *const list.List, env_env: *Env) anye
     }
 
     if (std.meta.activeTag(val) == .function) {
-        return buildFnMeta(allocator, val.function);
+        const fn_data = val.function;
+        // Check for cached metadata
+        if (fn_data.cached_meta) |cached| {
+            return cached;  // Share — metadata is immutable, GC keeps it alive
+        }
+        // Build and cache the metadata
+        const meta_map = try buildFnMeta(allocator, fn_data);
+        // Store in cache (fn_data is *FnData, mutable)
+        fn_data.cached_meta = meta_map;
+        // Return shared reference — metadata is immutable
+        return meta_map;
     }
 
     // For other types, return nil

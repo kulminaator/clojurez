@@ -310,6 +310,10 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
             if (fn_env.ns_manager) |ns_mgr| {
                 ctx.gc.markRecursive(ns_mgr, ctx);
             }
+            // Mark the cached metadata map (if populated)
+            if (fn_data.cached_meta) |cm| {
+                scanValueChildrenDirect(&cm, ctx);
+            }
         },
 
         .lazy_seq => |thunk| {

@@ -114,6 +114,130 @@ fn buildNsMap(allocator: Allocator, ns_name: []const u8, ns_env: *Env, ns_mgr: *
     return try vm.mapValue(allocator, result_map);
 }
 
+/// Build a Namespace record {:name sym, :interns map, :refers map, :aliases map}
+/// Returns a record with type_name "clojure.core.Namespace" so Object/toString dispatches correctly.
+fn buildNsRecord(allocator: Allocator, ns_name: []const u8, ns_env: *Env, ns_mgr: *vm.NamespaceManager) anyerror!Value {
+    // Build fields map
+    var fields: vm.Map = .empty;
+    errdefer {
+        for (fields.items) |*entry| {
+            vm.valueDeinit(&entry.key, allocator);
+            vm.valueDeinit(&entry.value, allocator);
+        }
+        allocator.free(fields.items);
+    }
+
+    // :name → symbol
+    try fields.append(allocator, .{
+        .key = try vm.keywordValue(allocator, "name"),
+        .value = try vm.symValue(allocator, ns_name),
+    });
+
+    // :interns → map of owned symbols (not referred)
+    var interns_map: vm.Map = .empty;
+    errdefer {
+        for (interns_map.items) |*entry| {
+            vm.valueDeinit(&entry.key, allocator);
+            vm.valueDeinit(&entry.value, allocator);
+        }
+        allocator.free(interns_map.items);
+    }
+    var it = ns_env.entries.entryIterator();
+    while (it.next()) |entry| {
+        const sym_name = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol else continue;
+        if (eval_ns.isReferredName(ns_env.referred_names.items, sym_name)) continue;
+        try interns_map.append(allocator, .{
+            .key = try vm.symValue(allocator, sym_name),
+            .value = try vm.clone(&entry.val, allocator),
+        });
+    }
+    try fields.append(allocator, .{
+        .key = try vm.keywordValue(allocator, "interns"),
+        .value = try vm.mapValue(allocator, interns_map),
+    });
+
+    // :refers → map of referred symbols
+    var refers_map: vm.Map = .empty;
+    errdefer {
+        for (refers_map.items) |*entry| {
+            vm.valueDeinit(&entry.key, allocator);
+            vm.valueDeinit(&entry.value, allocator);
+        }
+        allocator.free(refers_map.items);
+    }
+    var it2 = ns_env.entries.entryIterator();
+    while (it2.next()) |entry| {
+        const sym_name = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol else continue;
+        if (!eval_ns.isReferredName(ns_env.referred_names.items, sym_name)) continue;
+        try refers_map.append(allocator, .{
+            .key = try vm.symValue(allocator, sym_name),
+            .value = try vm.clone(&entry.val, allocator),
+        });
+    }
+    try fields.append(allocator, .{
+        .key = try vm.keywordValue(allocator, "refers"),
+        .value = try vm.mapValue(allocator, refers_map),
+    });
+
+    // :aliases → map of alias symbol → target namespace symbol
+    var aliases_map: vm.Map = .empty;
+    errdefer {
+        for (aliases_map.items) |*entry| {
+            vm.valueDeinit(&entry.key, allocator);
+            vm.valueDeinit(&entry.value, allocator);
+        }
+        allocator.free(aliases_map.items);
+    }
+    var it3 = ns_mgr.aliases.entryIterator();
+    while (it3.next()) |entry| {
+        const composite_key = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol else continue;
+        if (std.mem.indexOfScalar(u8, composite_key, '/')) |slash_idx| {
+            const key_ns_name = composite_key[0..slash_idx];
+            const alias_name = composite_key[slash_idx + 1 ..];
+            if (std.mem.eql(u8, key_ns_name, ns_name)) {
+                const target_ns = if (std.meta.activeTag(entry.val) == .string) entry.val.string else continue;
+                try aliases_map.append(allocator, .{
+                    .key = try vm.symValue(allocator, alias_name),
+                    .value = try vm.symValue(allocator, target_ns),
+                });
+            }
+        }
+    }
+    try fields.append(allocator, .{
+        .key = try vm.keywordValue(allocator, "aliases"),
+        .value = try vm.mapValue(allocator, aliases_map),
+    });
+
+    // Create record with type "clojure.core.Namespace"
+    return try vm.recordValue(allocator, "clojure.core.Namespace", fields, .empty, null);
+}
+
+/// Extract namespace name from a namespace argument (symbol, ns-map, or ns-record).
+fn extractNsNameFromArg(arg: Value) ?[]const u8 {
+    return switch (std.meta.activeTag(arg)) {
+        .symbol => arg.symbol,
+        .map => blk: {
+            for (arg.map.entries.items) |entry| {
+                if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, "name")) {
+                    if (std.meta.activeTag(entry.value) == .symbol) break :blk entry.value.symbol;
+                    break :blk "";
+                }
+            }
+            break :blk "";
+        },
+        .record => blk: {
+            for (arg.record.fields.items) |entry| {
+                if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, "name")) {
+                    if (std.meta.activeTag(entry.value) == .symbol) break :blk entry.value.symbol;
+                    break :blk "";
+                }
+            }
+            break :blk "";
+        },
+        else => null,
+    };
+}
+
 /// find-ns: (find-ns sym-or-ns) → namespace-object or nil
 /// Returns the namespace named by the symbol, or nil if it doesn't exist.
 pub fn core_find_ns(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
@@ -122,27 +246,14 @@ pub fn core_find_ns(self: *const Value, args: *const list.List, env_env: *Env) a
     if (args.items.len != 1) return error.ArityError;
 
     const arg = args.items[0];
-    const ns_name: []const u8 = switch (std.meta.activeTag(arg)) {
-        .symbol => arg.symbol,
-        // If passed a map with :name, extract the namespace name from it
-        .map => blk: {
-            for (arg.map.entries.items) |entry| {
-                if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, "name")) {
-                    if (std.meta.activeTag(entry.value) == .symbol) break :blk entry.value.symbol;
-                    break :blk ""; // won't match any ns
-                }
-            }
-            break :blk ""; // no :name key, won't match
-        },
-        else => return vm.nilValue(),
-    };
-
-    if (ns_name.len == 0) return vm.nilValue();
+    const ns_name: ?[]const u8 = extractNsNameFromArg(arg);
+    const name_str = ns_name orelse return vm.nilValue();
+    if (name_str.len == 0) return vm.nilValue();
 
     const ns_mgr = eval_ns.findNsManager(env_env) orelse return vm.nilValue();
-    const ns_env = ns_mgr.getNamespace(ns_name) orelse return vm.nilValue();
+    const ns_env = ns_mgr.getNamespace(name_str) orelse return vm.nilValue();
 
-    return try buildNsMap(allocator, ns_name, ns_env, ns_mgr);
+    return try buildNsRecord(allocator, name_str, ns_env, ns_mgr);
 }
 
 /// create-ns: (create-ns sym) → namespace-object
@@ -174,7 +285,7 @@ pub fn core_create_ns(self: *const Value, args: *const list.List, env_env: *Env)
         }
     }
 
-    return try buildNsMap(allocator, ns_name, ns_env, ns_mgr);
+    return try buildNsRecord(allocator, ns_name, ns_env, ns_mgr);
 }
 
 /// all-ns: (all-ns) → sequence-of-namespace-objects
@@ -195,8 +306,8 @@ pub fn core_all_ns(self: *const Value, args: *const list.List, env_env: *Env) an
         const ns_env = entry.val;
         if (std.meta.activeTag(ns_env) != .wrapped) continue;
         const env_ptr: *Env = vm.unwrapPtr(*Env, ns_env);
-        const ns_map = try buildNsMap(allocator, ns_name, env_ptr, ns_mgr);
-        try result_list.append(allocator, ns_map);
+        const ns_record = try buildNsRecord(allocator, ns_name, env_ptr, ns_mgr);
+        try result_list.append(allocator, ns_record);
     }
 
     return try vm.listValue(allocator, result_list);
@@ -210,26 +321,14 @@ pub fn core_the_ns(self: *const Value, args: *const list.List, env_env: *Env) an
     if (args.items.len != 1) return error.ArityError;
 
     const arg = args.items[0];
-    const ns_name: []const u8 = switch (std.meta.activeTag(arg)) {
-        .symbol => arg.symbol,
-        .map => blk: {
-            for (arg.map.entries.items) |entry| {
-                if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, "name")) {
-                    if (std.meta.activeTag(entry.value) == .symbol) break :blk entry.value.symbol;
-                    break :blk "";
-                }
-            }
-            break :blk "";
-        },
-        else => return error.TypeError,
-    };
-
-    if (ns_name.len == 0) return error.UndefinedNamespace;
+    const ns_name: ?[]const u8 = extractNsNameFromArg(arg);
+    const name_str = ns_name orelse return error.TypeError;
+    if (name_str.len == 0) return error.UndefinedNamespace;
 
     const ns_mgr = eval_ns.findNsManager(env_env) orelse return error.UndefinedNamespace;
-    const ns_env = ns_mgr.getNamespace(ns_name) orelse return error.UndefinedNamespace;
+    const ns_env = ns_mgr.getNamespace(name_str) orelse return error.UndefinedNamespace;
 
-    return try buildNsMap(allocator, ns_name, ns_env, ns_mgr);
+    return try buildNsRecord(allocator, name_str, ns_env, ns_mgr);
 }
 
 /// Extract namespace name from a namespace argument (symbol or ns-map).
@@ -239,6 +338,14 @@ fn extractNsName(arg: Value) ?[]const u8 {
         .symbol => arg.symbol,
         .map => blk: {
             for (arg.map.entries.items) |entry| {
+                if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, "name")) {
+                    if (std.meta.activeTag(entry.value) == .symbol) break :blk entry.value.symbol;
+                }
+            }
+            break :blk null;
+        },
+        .record => blk: {
+            for (arg.record.fields.items) |entry| {
                 if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, "name")) {
                     if (std.meta.activeTag(entry.value) == .symbol) break :blk entry.value.symbol;
                 }
@@ -691,9 +798,12 @@ fn buildInternsMap(allocator: Allocator, ns_env: *const Env) anyerror!Value {
         if (eval_ns.isReferredName(ns_env.referred_names.items, sym_name)) continue;
         // Skip symbols not owned by this namespace (e.g. copied from zig.core)
         if (!ns_env.isOwned(sym_name)) continue;
+        // Use shallowClone to avoid deep-cloning function bodies.
+        // Functions are immutable and live in permanent namespace roots.
+        const val = try vm.shallowClone(&entry.val, allocator);
         try interns_map.append(allocator, .{
             .key = try vm.symValue(allocator, sym_name),
-            .value = try vm.clone(&entry.val, allocator),
+            .value = val,
         });
     }
     return try vm.mapValue(allocator, interns_map);

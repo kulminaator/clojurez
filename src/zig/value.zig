@@ -191,6 +191,7 @@ pub const FnData = struct {
     is_macro: bool = false,
     name: ?[]const u8 = null,
     docstring: ?[]const u8 = null,
+    cached_meta: ?Value = null, // Cached metadata map (populated by meta)
 };
 
 // ============================================================
@@ -580,172 +581,11 @@ pub fn unwrapPtr(T: type, val: Value) T {
 // ============================================================
 
 pub fn valueDeinit(val: *Value, allocator: Allocator) void {
-    switch (val.*) {
-        .nil, .bool, .integer, .float, .character => {},
-        .bigint => |ptr| {
-            ptr.deinit();
-            allocator.destroy(ptr);
-        },
-        .ratio => |ptr| {
-            ptr.deinit();
-            allocator.destroy(ptr);
-        },
-        .decimal => |ptr| {
-            ptr.deinit();
-            allocator.destroy(ptr);
-        },
-        .string => |s| allocator.free(s),
-        .regex => |s| allocator.free(s),
-        .symbol => |s| allocator.free(s),
-        .keyword => |s| allocator.free(s),
-        .list => |data| {
-            for (data.items.items) |*item| {
-                valueDeinit(item, allocator);
-            }
-            allocator.free(data.items.items);
-            allocator.destroy(data);
-        },
-        .vector => |data| {
-            for (data.items.items) |*item| {
-                valueDeinit(item, allocator);
-            }
-            allocator.free(data.items.items);
-            allocator.destroy(data);
-        },
-        .map => |data| {
-            for (data.entries.items) |*entry| {
-                valueDeinit(&entry.key, allocator);
-                valueDeinit(&entry.value, allocator);
-            }
-            allocator.free(data.entries.items);
-            allocator.destroy(data);
-        },
-        .set => |data| {
-            for (data.items.items) |*item| {
-                valueDeinit(item, allocator);
-            }
-            allocator.free(data.items.items);
-            allocator.destroy(data);
-        },
-        .queue => |data| {
-            for (data.items.items) |*item| {
-                valueDeinit(item, allocator);
-            }
-            allocator.free(data.items.items);
-            allocator.destroy(data);
-        },
-        .lazy_seq => |thunk| {
-            if (thunk) |t| {
-                const thunk_allocator = t.env.allocator;
-                t.params.deinit(thunk_allocator);
-                t.body.deinit(thunk_allocator);
-                t.env.deinit(thunk_allocator);
-                thunk_allocator.destroy(t);
-            }
-        },
-        .function => |fn_data| {
-            for (fn_data.arities.items) |*arity| {
-                arity.params.deinit(allocator);
-                arity.body.deinit(allocator);
-                if (arity.rest_name) |rn| {
-                    allocator.free(rn);
-                }
-            }
-            allocator.free(fn_data.arities.items);
-            fn_data.env.deinit(allocator);
-            allocator.destroy(fn_data.env);
-            if (fn_data.name) |n| allocator.free(n);
-            if (fn_data.docstring) |ds| allocator.free(ds);
-            allocator.destroy(fn_data);
-        },
-        .builtin_fn => {},
-        .cons => |data| {
-            data.ref_count -= 1;
-            if (data.ref_count == 0) {
-                const a = data.allocator;
-                valueDeinit(&data.head, a);
-                valueDeinit(&data.tail, a);
-                a.destroy(data);
-            }
-        },
-        .chunk => |data| {
-            const a = data.allocator;
-            // Deinit all Values in the chunk slice
-            var i: usize = data.off;
-            while (i < data.end) : (i += 1) {
-                valueDeinit(&data.items[i], a);
-            }
-            if (data.owns_array) {
-                a.free(data.items);
-            }
-            a.destroy(data);
-        },
-        .chunked_cons => |data| {
-            data.ref_count -= 1;
-            if (data.ref_count == 0) {
-                const a = data.allocator;
-                // Chunk is shared — don't deinit here, it's a separate Value
-                // when extracted. Only deinit the tail.
-                valueDeinit(&data.tail, a);
-                a.destroy(data);
-            }
-        },
-        .atom => |data| {
-            data.ref_count -= 1;
-            if (data.ref_count == 0) {
-                valueDeinit(&data.value, allocator);
-                allocator.destroy(data);
-            }
-        },
-        .future => |data| {
-            // FutureData is GC-managed. The GC's freeVTable is a no-op,
-            // so allocator.destroy(data) doesn't actually free the memory.
-            // But we should NOT call valueDeinit on child values (result, fn_val)
-            // because they are also GC-managed and will be cleaned up by the GC.
-            // Only clean up the error_msg string (dupe'd with allocator.dupe).
-            if (data.error_msg) |msg| {
-                allocator.free(msg);
-            }
-            // allocator.destroy(data) is a no-op through GC allocator.
-            allocator.destroy(data);
-        },
-        .promise => |data| {
-            data.ref_count -= 1;
-            if (data.ref_count == 0) {
-                if (data.value) |*v| {
-                    valueDeinit(v, allocator);
-                }
-                allocator.destroy(data);
-            }
-        },
-        .reduced => |data| {
-            valueDeinit(data, allocator);
-            allocator.destroy(data);
-        },
-        .wrapped => {},
-        .record => |rd| {
-            const a = rd.allocator;
-            a.free(rd.type_name);
-            for (rd.fields.items) |*entry| {
-                valueDeinit(&entry.key, a);
-                valueDeinit(&entry.value, a);
-            }
-            a.free(rd.fields.items);
-            for (rd.extmap.items) |*entry| {
-                valueDeinit(&entry.key, a);
-                valueDeinit(&entry.value, a);
-            }
-            a.free(rd.extmap.items);
-            if (rd.meta) |m| {
-                for (m.items) |*entry| {
-                    valueDeinit(&entry.key, a);
-                    valueDeinit(&entry.value, a);
-                }
-                a.free(m.items);
-            }
-            allocator.destroy(rd);
-        },
-    }
+    _ = allocator;
+    // In a GC system, we never free data here.
+    // The GC tracks all objects and frees them when unreachable.
+    // We just null out the Value so the GC stops seeing the pointer.
+    val.* = nilValue();
 }
 
 pub fn clone(val: *const Value, allocator: Allocator) anyerror!Value {
@@ -955,9 +795,35 @@ pub fn clone(val: *const Value, allocator: Allocator) anyerror!Value {
 }
 
 /// Clone this Value into a GC-allocated *Value in a single allocation.
+/// Shares the underlying data (FnData, StringData, etc.) instead of deep-cloning.
+/// All underlying data is GC-tracked, so sharing pointers is safe —
+/// the GC will keep everything alive as long as something references it.
 pub fn cloneGC(val: *const Value, allocator: Allocator) anyerror!*Value {
     const ptr = try allocator.create(Value);
-    ptr.* = try clone(val, allocator);
+    ptr.* = val.*;  // Share all data — GC keeps it alive
+    return ptr;
+}
+
+/// Shallow clone: for functions, creates a new Value sharing the same FnData pointer.
+/// For all other types, does a normal deep clone.
+/// Use this when you need a Value that won't be mutated but want to avoid
+/// the cost of deep-cloning function bodies (e.g., ns-interns returning function refs).
+pub fn shallowClone(val: *const Value, allocator: Allocator) anyerror!Value {
+    if (std.meta.activeTag(val.*) == .function) {
+        // Create a new Value pointing to the same FnData.
+        // Safe because FnData is immutable and lives in permanent namespace roots.
+        return val.*;
+    }
+    return clone(val, allocator);
+}
+
+/// Share: allocates a *Value on the heap that shares all data with the original.
+/// No deep cloning at all - just copies the Value tag union and allocates it.
+/// Safe for immutable values (which ALL Clojure values are).
+/// The caller owns the *Value allocation but NOT the underlying data.
+pub fn shareGC(val: *const Value, allocator: Allocator) anyerror!*Value {
+    const ptr = try allocator.create(Value);
+    ptr.* = val.*;  // Copy the tag union (shallow - shares all pointers)
     return ptr;
 }
 

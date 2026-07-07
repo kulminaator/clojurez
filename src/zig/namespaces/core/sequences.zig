@@ -1297,15 +1297,14 @@ pub fn core_concat(self: *const Value, args: *const list.List, env_env: *Env) an
         if (std.meta.activeTag(arg) == .nil) continue;
         var val = try vm.clone(&arg, allocator);
         defer vm.valueDeinit(&val, allocator);
-        // Don't force lazy_seq here — keep it lazy for cons/map recursion
-        // The lazy_seq will be forced when the containing list is realized
-        if (std.meta.activeTag(val) == .lazy_seq) {
-            try result.append(allocator, val);
-            // Transfer ownership: reset val so defer deinit is harmless
-            val = vm.nilValue();
-            continue;
-        }
         switch (std.meta.activeTag(val)) {
+            .lazy_seq => {
+                // Don't force lazy_seq here — keep it lazy for cons/map recursion
+                // The lazy_seq will be forced when the containing list is realized
+                try result.append(allocator, val);
+                // Transfer ownership: reset val so defer deinit is harmless
+                val = vm.nilValue();
+            },
             .list => {
                 for (val.list.items.items) |item| {
                     try result.append(allocator, try vm.clone(&item, allocator));

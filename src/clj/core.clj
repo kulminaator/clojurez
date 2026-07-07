@@ -3,6 +3,140 @@
 
 (ns clojure.core)
 
+;; ---- Object protocol (like Java's Object class) ----
+;; Provides toString, equals, hashCode for all types.
+;; Records and other types can implement this protocol to customize behavior.
+(defprotocol Object
+  "Base protocol for all values, mirroring Java's Object class."
+  (toString [this] "Returns a string representation of this value.")
+  (equals [this other] "Returns true if this value is equal to other.")
+  (hashCode [this] "Returns a hash code for this value."))
+
+;; Default Object impl for nil
+(extend-type nil
+  Object
+  (toString [this] "nil")
+  (equals [this other] (identical? this other))
+  (hashCode [this] 0))
+
+;; Default Object impl for booleans
+(extend-type :boolean
+  Object
+  (toString [this] (if this "true" "false"))
+  (equals [this other] (identical? this other))
+  (hashCode [this] (if this 1231 1237)))
+
+;; Default Object impl for numbers (integer, float, bigint, ratio, decimal)
+(extend-type :integer
+  Object
+  (toString [this] (str this))
+  (equals [this other] (= this other))
+  (hashCode [this] (hash this)))
+
+(extend-type :float
+  Object
+  (toString [this] (str this))
+  (equals [this other] (= this other))
+  (hashCode [this] (hash this)))
+
+;; Default Object impl for strings
+(extend-type :string
+  Object
+  (toString [this] this)
+  (equals [this other] (= this other))
+  (hashCode [this] (hash this)))
+
+;; pr-str — returns the printed representation of x as a string
+(defn pr-str
+  "Returns the printed representation of x as a string."
+  [x]
+  (cond
+    (nil? x) "nil"
+    (boolean? x) (if x "true" "false")
+    (integer? x) (str x)
+    (float? x) (str x)
+    (string? x) (str "\"" x "\"")
+    (symbol? x) (str x)
+    (keyword? x) (str x)
+    (list? x) (str "(" (clojure.string/join " " (map pr-str x)) ")")
+    (vector? x) (str "[" (clojure.string/join " " (map pr-str x)) "]")
+    :else (str x)))
+
+;; Default Object impl for symbols
+(extend-type :symbol
+  Object
+  (toString [this] (pr-str this))
+  (equals [this other] (= this other))
+  (hashCode [this] (hash this)))
+
+;; Default Object impl for keywords
+(extend-type :keyword
+  Object
+  (toString [this] (str this))
+  (equals [this other] (= this other))
+  (hashCode [this] (hash this)))
+
+;; Default Object impl for lists
+(extend-type :list
+  Object
+  (toString [this] (pr-str this))
+  (equals [this other] (= this other))
+  (hashCode [this] (hash this)))
+
+;; Default Object impl for vectors
+(extend-type :vector
+  Object
+  (toString [this] (pr-str this))
+  (equals [this other] (= this other))
+  (hashCode [this] (hash this)))
+
+;; Default Object impl for maps
+(extend-type :map
+  Object
+  (toString [this] (pr-str this))
+  (equals [this other] (= this other))
+  (hashCode [this] (hash this)))
+
+;; Default Object impl for sets
+(extend-type :set
+  Object
+  (toString [this] (pr-str this))
+  (equals [this other] (= this other))
+  (hashCode [this] (hash this)))
+
+;; Default Object impl for functions
+(extend-type :function
+  Object
+  (toString [this] "#function")
+  (equals [this other] (identical? this other))
+  (hashCode [this] (hash this)))
+
+;; Namespace record — used by all-ns, find-ns, the-ns
+;; Implements Object/toString to return just the namespace name (like JVM Namespace)
+(defrecord Namespace [name interns refers aliases]
+  Object
+  (toString [this] (str (:name this))))
+
+;; Extend Object for clojure.core.Namespace record type
+(extend-type :clojure.core.Namespace
+  Object
+  (toString [this] (str (:name this)))
+  (equals [this other] (= this other))
+  (hashCode [this] (hash this)))
+
+;; ---- Symbol utilities ----
+
+(defn name
+  "Returns the name String of a string or symbol.
+   For symbols, returns the local name without namespace prefix."
+  [x]
+  (cond
+    (string? x) x
+    (symbol? x) (let [s (pr-str x)
+                      idx (index-of s "/")]
+                  (if (nil? idx) s (subs s (inc idx))))
+    :else (str x)))
+
 ;; ---- Basic predicates ----
 
 (defn even?
