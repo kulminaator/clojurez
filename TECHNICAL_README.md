@@ -416,6 +416,27 @@ zig test src/zig/all_tests.zig
 zig test src/zig/all_tests.zig && ./run_tests.sh
 ```
 
+### Test Output Formats
+
+Clojure-based test suites (`tests/clj/test_*.clj`) can produce four distinct outcome types when run through `run_tests.sh`:
+
+| Outcome | Meaning |
+|---------|---------|
+| **PASS** | VM exited cleanly, no `FAIL:` lines in output |
+| **FAIL** | VM exited cleanly, but one or more `FAIL:` lines present in output |
+| **TIMEOUT** | VM did not exit within the time limit (15s default) |
+| **CRASH** | VM exited with non-zero exit code (segfault, assertion failure, etc.) |
+
+When debugging test failures, **do not grep only for `FAIL`** — a test suite can fail via TIMEOUT or CRASH without any `FAIL:` lines in its output. Use:
+```bash
+./run_tests.sh 2>&1 | grep -E "CRASH|TIMEOUT|FAIL:"
+```
+
+Individual `FAIL:` lines inside a suite output look like:
+```
+FAIL: test description expected=X got=Y
+```
+
 ## Build
 
 ```bash
@@ -443,6 +464,50 @@ CLJVM_DEBUG=gc,eval ./zig-out/bin/clojurez -e '(+ 1 2 3)'
 ```
 
 Categories: `gc`, `eval`, or `all`/`1`/`true` for everything.
+
+## Documentation Requirements
+
+**Every new function must include a docstring.** The docstring is used to auto-generate API documentation in `doc/`.
+
+### For Clojure functions (`src/clj/core.clj`, `src/clj/string.clj`, `src/clj/io.clj`)
+
+Use the standard Clojure docstring convention — the first string literal after the parameter vector:
+
+```clojure
+(defn my-func
+  "Returns the result of doing something with x and y.
+   Second line provides additional details.
+   "
+  [x y]
+  (+ x y))
+```
+
+### For Zig builtins (`src/zig/namespaces/core/`)
+
+Zig builtins don't have docstrings directly — they are wrapped by Clojure functions in `core.clj`/`string.clj`/`io.clj` that carry the docstring. Always add a Clojure wrapper with a docstring:
+
+```clojure
+;; In src/clj/core.clj:
+(defn my-new-func
+  "Description of what the function does.
+   "
+  [arg1 arg2]
+  (zig.core/my-new-func arg1 arg2))
+```
+
+### Docstring conventions
+
+- **First line**: Brief one-line description of what the function does
+- **Additional lines**: Detailed explanation, parameter descriptions, edge cases
+- **No docstring**: Functions without docstrings are excluded from generated documentation
+- **Private functions**: Names starting with `-` or ending with `-helper` or `*` are excluded from docs
+
+### Regenerating documentation
+
+Documentation is regenerated automatically on every `zig build`. To regenerate manually:
+```bash
+./zig-out/bin/clojurez doc/gen_docs.clj
+```
 
 ## What's Missing
 
