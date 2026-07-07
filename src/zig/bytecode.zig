@@ -495,7 +495,6 @@ pub fn execute(
     allocator: Allocator,
     program: *const BytecodeProgram,
     env: *vm.Env,
-    ctx: ?*eval_mod.TrampolineStack,
 ) anyerror!VMResult {
     var stack = OperandStack.init(allocator);
     errdefer stack.deinit();
@@ -613,7 +612,7 @@ pub fn execute(
                 }
                 allocator.free(temp_args.items);
 
-                const call_result = try eval_mod.callWithEnv(allocator, fn_ptr, &args, env, 0, ctx);
+                const call_result = try eval_mod.callWithEnv(allocator, fn_ptr, &args, env, 0);
 
                 // Clean up fn_ptr
                 vm.valueDeinit(fn_ptr, allocator);
@@ -1073,7 +1072,7 @@ fn delegateArithmetic(op: OpCode, a: Value, b: Value, allocator: Allocator, env:
     try args.append(allocator, try vm.clone(&b, allocator));
 
     // Call the builtin
-    const call_result = try eval_mod.callWithEnv(allocator, &fn_val, &args, env, 0, null);
+    const call_result = try eval_mod.callWithEnv(allocator, &fn_val, &args, env, 0);
 
     switch (call_result) {
         .value => |v| return try vm.clone(v, allocator),
@@ -1876,7 +1875,7 @@ fn isSimpleBytecodeForm(form: Value) bool {
         }
 
         // Call the macro
-        const macro_r = try eval_mod.callWithEnv(self.allocator, &op_val.?, &macro_args, env, 0, null);
+        const macro_r = try eval_mod.callWithEnv(self.allocator, &op_val.?, &macro_args, env, 0);
         defer vm.valueDeinit(macro_r.value, self.allocator);
 
         // The macro returns a form (usually a list). Clone and wrap it in a list for compilation.
@@ -2794,7 +2793,7 @@ test "bytecode::vm: push and return" {
     };
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .integer);
@@ -2855,7 +2854,7 @@ test "bytecode::compile: literal nil" {
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .nil);
@@ -2878,7 +2877,7 @@ test "bytecode::compile: literal integer" {
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .integer);
@@ -2902,7 +2901,7 @@ test "bytecode::compile: literal boolean" {
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .bool);
@@ -2928,7 +2927,7 @@ test "bytecode::compile: variable reference" {
     defer env.deinit(allocator);
     try env.put("x", vm.intValue(99));
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .integer);
@@ -2964,7 +2963,7 @@ test "bytecode::compile: if true branch" {
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .integer);
@@ -3001,7 +3000,7 @@ test "bytecode::compile: if nil branch" {
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .integer);
@@ -3030,7 +3029,7 @@ test "bytecode::compile: store and load variable" {
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .integer);
@@ -3085,7 +3084,7 @@ test "bytecode::arithmetic: bigint add" {
     var env = createTestEnvWithArithmetic(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             // i64.max + i64.max = 18446744073709551614 (exceeds i64, must be bigint)
@@ -3121,7 +3120,7 @@ test "bytecode::arithmetic: bigint sub" {
     var env = createTestEnvWithArithmetic(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             // 10000000000000000000 - 42 = 9999999999999999958 (exceeds i64)
@@ -3157,7 +3156,7 @@ test "bytecode::arithmetic: bigint mul" {
     var env = createTestEnvWithArithmetic(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             // 10^18 * 10^18 = 10^36 (way exceeds i64)
@@ -3192,7 +3191,7 @@ test "bytecode::arithmetic: mixed int+bigint add" {
     var env = createTestEnvWithArithmetic(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             // 42 + 12345678901234567890 = 12345678901234567932
@@ -3226,7 +3225,7 @@ test "bytecode::arithmetic: int+float add" {
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .float);
@@ -3253,7 +3252,7 @@ test "bytecode::negate: integer" {
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .integer);
@@ -3280,7 +3279,7 @@ test "bytecode::negate: float" {
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .float);
@@ -3309,7 +3308,7 @@ test "bytecode::negate: bigint" {
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .bigint);
@@ -3387,7 +3386,7 @@ test "bytecode::loop_recur: simple counter" {
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .integer);
@@ -3465,7 +3464,7 @@ test "bytecode::loop_recur: accumulator" {
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .integer);
@@ -3505,7 +3504,7 @@ test "bytecode::compile: add opcode emission" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .integer);
@@ -3537,7 +3536,7 @@ test "bytecode::compile: sub opcode emission" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(v.*.integer == 7);
@@ -3568,7 +3567,7 @@ test "bytecode::compile: mul opcode emission" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(v.*.integer == 42);
@@ -3599,7 +3598,7 @@ test "bytecode::compile: div opcode emission" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(v.*.integer == 5);
@@ -3630,7 +3629,7 @@ test "bytecode::compile: rem opcode emission" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(v.*.integer == 2);
@@ -3662,7 +3661,7 @@ test "bytecode::compile: neg single arg" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(v.*.integer == -42);
@@ -3693,7 +3692,7 @@ test "bytecode::compile: eq opcode emission" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .bool);
@@ -3730,7 +3729,7 @@ test "bytecode::compile: not opcode emission" {
         var program = try compile(allocator, ast, "<test>", null);
         defer program.deinit(allocator);
         try std.testing.expect(program.instructions.items[1].opcode == .not);
-        const result = try execute(allocator, &program, &env, null);
+        const result = try execute(allocator, &program, &env);
         switch (result) {
             .value => |v| {
                 try std.testing.expect(v.*.bool == false);
@@ -3754,7 +3753,7 @@ test "bytecode::compile: not opcode emission" {
         var program = try compile(allocator, ast, "<test>", null);
         defer program.deinit(allocator);
         try std.testing.expect(program.instructions.items[1].opcode == .not);
-        const result = try execute(allocator, &program, &env, null);
+        const result = try execute(allocator, &program, &env);
         switch (result) {
             .value => |v| {
                 try std.testing.expect(v.*.bool == true);
@@ -3777,7 +3776,7 @@ test "bytecode::compile: not opcode emission" {
         try ast.append(allocator, try vm.listValue(allocator, body));
         var program = try compile(allocator, ast, "<test>", null);
         defer program.deinit(allocator);
-        const result = try execute(allocator, &program, &env, null);
+        const result = try execute(allocator, &program, &env);
         switch (result) {
             .value => |v| {
                 try std.testing.expect(v.*.bool == false);
@@ -3816,7 +3815,7 @@ test "bytecode::compile: multi-arg arithmetic" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(v.*.integer == 10);
@@ -3850,7 +3849,7 @@ test "bytecode::compile: multi-arg sub" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(v.*.integer == 5);
@@ -3883,7 +3882,7 @@ test "bytecode::compile: 2-arg eq" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(v.*.bool == true);
@@ -3915,7 +3914,7 @@ test "bytecode::compile: ne/not= opcode emission" {
         var program = try compile(allocator, ast, "<test>", null);
         defer program.deinit(allocator);
         try std.testing.expect(program.instructions.items[2].opcode == .ne);
-        const result = try execute(allocator, &program, &env, null);
+        const result = try execute(allocator, &program, &env);
         switch (result) {
             .value => |v| {
                 try std.testing.expect(v.*.bool == true);
@@ -3940,7 +3939,7 @@ test "bytecode::compile: ne/not= opcode emission" {
         var program = try compile(allocator, ast, "<test>", null);
         defer program.deinit(allocator);
         try std.testing.expect(program.instructions.items[2].opcode == .ne);
-        const result = try execute(allocator, &program, &env, null);
+        const result = try execute(allocator, &program, &env);
         switch (result) {
             .value => |v| {
                 try std.testing.expect(v.*.bool == false);
@@ -4055,7 +4054,7 @@ test "bytecode::compile: case match first" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .string);
@@ -4092,7 +4091,7 @@ test "bytecode::compile: case match second" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .string);
@@ -4129,7 +4128,7 @@ test "bytecode::compile: case default" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .string);
@@ -4164,7 +4163,7 @@ test "bytecode::compile: case no match no default" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .nil);
@@ -4200,7 +4199,7 @@ test "bytecode::compile: case string match" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .keyword);
@@ -4252,7 +4251,7 @@ test "bytecode::compile: letfn compiles without crash" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .integer);

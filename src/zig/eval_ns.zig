@@ -21,7 +21,7 @@ pub fn findNsManager(env: *const Env) ?*vm.NamespaceManager {
 }
 
 // ns special form: (ns namespace-name (:require [other.ns :as alias] ...))
-pub fn evalNs(allocator: Allocator, l: list.List, env: *Env, depth: usize, ctx: ?*eval.TrampolineStack) anyerror!Value {
+pub fn evalNs(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
     _ = depth;
     if (l.items.len < 2) return error.ArityError;
 
@@ -77,10 +77,10 @@ pub fn evalNs(allocator: Allocator, l: list.List, env: *Env, depth: usize, ctx: 
             while (j < clause.list.items.items.len) : (j += 1) {
                 const req_item = clause.list.items.items[j];
                 if (std.meta.activeTag(req_item) == .vector) {
-                    try processRequireItem(allocator, ns_mgr, ns_env, ns_name, req_item.vector.items.items, false, env, ctx);
+                    try processRequireItem(allocator, ns_mgr, ns_env, ns_name, req_item.vector.items.items, false, env);
                 } else if (std.meta.activeTag(req_item) == .list) {
                     // Prefix list: (clojure [string :as str] zip)
-                    try processPrefixList(allocator, ns_mgr, ns_env, ns_name, req_item.list.items.items, false, env, ctx);
+                    try processPrefixList(allocator, ns_mgr, ns_env, ns_name, req_item.list.items.items, false, env);
                 }
             }
         } else if (std.mem.eql(u8, clause_keyword.keyword, "use")) {
@@ -89,9 +89,9 @@ pub fn evalNs(allocator: Allocator, l: list.List, env: *Env, depth: usize, ctx: 
             while (j < clause.list.items.items.len) : (j += 1) {
                 const use_item = clause.list.items.items[j];
                 if (std.meta.activeTag(use_item) == .vector) {
-                    try processRequireItem(allocator, ns_mgr, ns_env, ns_name, use_item.vector.items.items, true, env, ctx);
+                    try processRequireItem(allocator, ns_mgr, ns_env, ns_name, use_item.vector.items.items, true, env);
                 } else if (std.meta.activeTag(use_item) == .list) {
-                    try processPrefixList(allocator, ns_mgr, ns_env, ns_name, use_item.list.items.items, true, env, ctx);
+                    try processPrefixList(allocator, ns_mgr, ns_env, ns_name, use_item.list.items.items, true, env);
                 }
             }
         }
@@ -112,7 +112,6 @@ fn processRequireItem(
     req_items: []const Value,
     refer_all_default: bool,
     root_env: *Env,
-    ctx: ?*eval.TrampolineStack,
 ) anyerror!void {
     if (req_items.len < 1) return;
     const req_ns_sym = req_items[0];
@@ -167,7 +166,7 @@ fn processRequireItem(
     };
 
     try ns_mgr.addAlias(target_ns_name, effective_alias, req_ns_name);
-    try loadNamespaceFile(allocator, ns_mgr, req_ns_name, root_env, ctx);
+    try loadNamespaceFile(allocator, ns_mgr, req_ns_name, root_env);
 
     const source_env = ns_mgr.getNamespace(req_ns_name) orelse return;
     try referVars(allocator, target_ns, source_env, refer_all, refer_syms, exclude_syms, rename_map);
@@ -182,7 +181,6 @@ fn processPrefixList(
     list_items: []const Value,
     refer_all_default: bool,
     root_env: *Env,
-    ctx: ?*eval.TrampolineStack,
 ) anyerror!void {
     if (list_items.len < 1) return;
     const prefix_sym = list_items[0];
@@ -205,7 +203,7 @@ fn processPrefixList(
             }
             const alias = if (last_dot > 0 and last_dot < full_ns.len) full_ns[last_dot..] else full_ns;
             try ns_mgr.addAlias(target_ns_name, alias, full_ns);
-            try loadNamespaceFile(allocator, ns_mgr, full_ns, root_env, ctx);
+            try loadNamespaceFile(allocator, ns_mgr, full_ns, root_env);
             continue;
         }
 
@@ -263,7 +261,7 @@ fn processPrefixList(
                 };
 
                 try ns_mgr.addAlias(target_ns_name, effective_alias, full_ns);
-                try loadNamespaceFile(allocator, ns_mgr, full_ns, root_env, ctx);
+                try loadNamespaceFile(allocator, ns_mgr, full_ns, root_env);
 
                 const source_env = ns_mgr.getNamespace(full_ns) orelse continue;
                 try referVars(allocator, target_ns, source_env, refer_all, refer_syms, exclude_syms, rename_map);
@@ -361,7 +359,7 @@ pub fn referVars(
 }
 
 // Load a namespace file from the classpath and evaluate it.
-pub fn loadNamespaceFile(allocator: Allocator, ns_mgr: *vm.NamespaceManager, ns_name: []const u8, root_env: *Env, ctx: ?*eval.TrampolineStack) anyerror!void {
+pub fn loadNamespaceFile(allocator: Allocator, ns_mgr: *vm.NamespaceManager, ns_name: []const u8, root_env: *Env) anyerror!void {
     // Built-in virtual namespaces (zig.*) — no file to load
     if (std.mem.startsWith(u8, ns_name, "zig.")) return;
 
@@ -398,7 +396,7 @@ pub fn loadNamespaceFile(allocator: Allocator, ns_mgr: *vm.NamespaceManager, ns_
     for (forms.items) |form| {
         // Use current namespace's env for evaluation (ns form may change it)
         const eval_env = getCurrentNsEnvForLoad(root_env, ns_mgr) orelse root_env;
-        const result_r = try eval.evalRecWithEnv(allocator, &form, eval_env, 0, ctx);
+        const result_r = try eval.evalRecWithEnv(allocator, &form, eval_env, 0);
         const result_ptr = result_r.value;
         vm.valueDeinit(result_ptr, allocator);
     }
@@ -415,10 +413,9 @@ pub fn getCurrentNsEnvForLoad(_root_env: *Env, ns_mgr: *vm.NamespaceManager) ?*E
 // in-ns special form: (in-ns namespace-name)
 // Creates or finds the namespace and sets it as the current namespace.
 // Simpler than ns — no :require, :use, :import clauses.
-pub fn evalInNs(allocator: Allocator, l: list.List, env: *Env, depth: usize, ctx: ?*eval.TrampolineStack) anyerror!Value {
+pub fn evalInNs(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyerror!Value {
     _ = allocator;
     _ = depth;
-    _ = ctx;
     if (l.items.len < 2) return error.ArityError;
 
     const ns_name_sym = l.items[1];

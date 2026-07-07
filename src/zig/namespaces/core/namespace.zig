@@ -450,7 +450,7 @@ pub fn core_require(self: *const Value, args: *const list.List, env_env: *Env) a
         // Handle simple symbol: (require 'my.lib)
         if (std.meta.activeTag(arg) == .symbol) {
             const ns_name = arg.symbol;
-            try eval_ns.loadNamespaceFile(allocator, ns_mgr, ns_name, env_env, null);
+            try eval_ns.loadNamespaceFile(allocator, ns_mgr, ns_name, env_env);
             try ns_mgr.addLoadedLib(ns_name);
             continue;
         }
@@ -458,7 +458,7 @@ pub fn core_require(self: *const Value, args: *const list.List, env_env: *Env) a
         // Handle simple string: (require "my.lib")
         if (std.meta.activeTag(arg) == .string) {
             const ns_name = arg.string;
-            try eval_ns.loadNamespaceFile(allocator, ns_mgr, ns_name, env_env, null);
+            try eval_ns.loadNamespaceFile(allocator, ns_mgr, ns_name, env_env);
             try ns_mgr.addLoadedLib(ns_name);
             continue;
         }
@@ -508,7 +508,7 @@ pub fn core_require(self: *const Value, args: *const list.List, env_env: *Env) a
             }
 
             // Load the namespace
-            try eval_ns.loadNamespaceFile(allocator, ns_mgr, ns_name, env_env, null);
+            try eval_ns.loadNamespaceFile(allocator, ns_mgr, ns_name, env_env);
             try ns_mgr.addLoadedLib(ns_name);
 
             // Register alias
@@ -543,7 +543,7 @@ pub fn core_require(self: *const Value, args: *const list.List, env_env: *Env) a
                 // Simple suffix: (clojure zip) → clojure.zip
                 if (std.meta.activeTag(suffix_item) == .symbol) {
                     const full_ns = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ prefix, suffix_item.symbol });
-                    try eval_ns.loadNamespaceFile(allocator, ns_mgr, full_ns, env_env, null);
+                    try eval_ns.loadNamespaceFile(allocator, ns_mgr, full_ns, env_env);
                     try ns_mgr.addLoadedLib(full_ns);
                     allocator.free(full_ns);
                     continue;
@@ -593,7 +593,7 @@ pub fn core_require(self: *const Value, args: *const list.List, env_env: *Env) a
                         }
                     }
 
-                    try eval_ns.loadNamespaceFile(allocator, ns_mgr, full_ns, env_env, null);
+                    try eval_ns.loadNamespaceFile(allocator, ns_mgr, full_ns, env_env);
                     try ns_mgr.addLoadedLib(full_ns);
 
                     const effective_alias = alias orelse blk: {

@@ -165,7 +165,7 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args_list: *const list
             // Check for bytecode — if available, use the bytecode VM
             if (arity.bytecode) |bc| {
                 const bytecode_mod = @import("../../bytecode.zig");
-                const vm_result = try bytecode_mod.execute(allocator, bc, &new_env, null);
+                const vm_result = try bytecode_mod.execute(allocator, bc, &new_env);
                 switch (vm_result) {
                     .value => |v| {
                         new_env.deinit(allocator);
@@ -349,7 +349,7 @@ fn evalQuasiquote(allocator: Allocator, form: *const Value, env: *vm.Env) anyerr
         defer gc.removeRoot(@as(*anyopaque, @ptrCast(frame_ptr)));
     }
     defer frame_ptr.deinit(allocator);
-    const result = try eval_macro.unquoteProcess(allocator, form.list.items.items[1], frame_ptr, 0, null);
+    const result = try eval_macro.unquoteProcess(allocator, form.list.items.items[1], frame_ptr, 0);
     return try allocBuiltinResult(allocator, result);
 }
 

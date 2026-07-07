@@ -20,74 +20,8 @@ const bytecode_mod = @import("bytecode.zig");
 
 const Allocator = std.mem.Allocator;
 
-// ============================================================
-// Trampoline infrastructure — heap-based evaluation stack
-// Replaces C-stack recursion with heap-allocated frames.
-// Every Clojure function call pushes a frame instead of recursing.
-// ============================================================
-
-/// A single evaluation frame on the heap stack.
-/// Represents one pending function body evaluation.
-pub const TrampolineFrame = struct {
-    body_form: Value,       // the function body to evaluate (a list)
-    frame: *vm.Frame,       // the function's evaluation frame (heap-allocated, GC-managed)
-    src_loc: vm.SourceLoc = .{}, // source location of the call site
-};
-
 // Re-export SourceLoc from value.zig for backward compatibility
 pub const SourceLoc = vm.SourceLoc;
-
-/// Heap-based evaluation stack for trampolining.
-pub const TrampolineStack = struct {
-    allocator: Allocator,
-    frames: std.ArrayListUnmanaged(TrampolineFrame),
-
-    pub fn init(allocator: Allocator) TrampolineStack {
-        return .{
-            .allocator = allocator,
-            .frames = .empty,
-        };
-    }
-
-    pub fn deinit(self: *TrampolineStack) void {
-        // Clean up any remaining frames
-        for (self.frames.items) |*f| {
-            f.frame.detachFromParent();
-            vm.valueDeinit(&f.body_form, self.allocator);
-        }
-        self.frames.deinit(self.allocator);
-    }
-
-    /// Push a frame for function body evaluation.
-    pub fn push(self: *TrampolineStack, body: Value, frame: *vm.Frame) anyerror!void {
-        return self.pushWithLoc(body, frame, .{});
-    }
-
-    /// Push a frame for function body evaluation with source location.
-    pub fn pushWithLoc(self: *TrampolineStack, body: Value, frame: *vm.Frame, src_loc: SourceLoc) anyerror!void {
-        try self.frames.append(self.allocator, .{
-            .body_form = body,
-            .frame = frame,
-            .src_loc = src_loc,
-        });
-    }
-
-    /// Pop the top frame.
-    pub fn pop(self: *TrampolineStack) ?TrampolineFrame {
-        if (self.frames.items.len == 0) return null;
-        const item = self.frames.items[self.frames.items.len - 1];
-        self.frames.items.len -= 1;
-        return item;
-    }
-
-    pub fn isEmpty(self: *const TrampolineStack) bool {
-        return self.frames.items.len == 0;
-    }
-
-    pub fn len(self: *const TrampolineStack) usize {
-        return self.frames.items.len;
-    }
-};
 
 /// Result of evalRec: either a normal *Value or a Trampoline marker.
 pub const EvalResult = union(enum) {
@@ -110,7 +44,7 @@ pub fn deallocValue(allocator: Allocator, ptr: *Value) void {
 }
 
 /// Unified special form handler signature.
-const SpecialFormFn = *const fn (Allocator, *const list.List, *vm.Frame, usize, ?*TrampolineStack) anyerror!EvalResult;
+const SpecialFormFn = *const fn (Allocator, *const list.List, *vm.Frame, usize) anyerror!EvalResult;
 
 /// Evaluation context for GC root tracking (Phase 5: Frame Lifecycle and Root Graph).
 /// Tracks active frames so the GC's root_fn can mark them during collection.
@@ -128,7 +62,7 @@ pub var eval_context: EvalContext = .{};
 
 /// GC root callback for frame lifecycle (Phase 5/9).
 /// Marks all active evaluation frames so they survive GC collection.
-/// Phase 9: Frame chain replaces TrampolineStack.
+///
 /// Called during GC collect() via the root_fn mechanism.
 pub fn markFrameRoots(gc_inst: *gc_mod.GC, ctx: *gc_mod.ScanContext) void {
     // Mark root frame (entry point for the frame chain)
@@ -195,49 +129,6 @@ fn findSpecialForm(name: []const u8) ?SpecialFormFn {
     return null;
 }
 
-/// Push the HAMT root from an Env as a temporary GC root.
-/// Returns a Guard struct that pops the root on deinit (use `defer guard.deinit()`).
-/// This protects HAMT nodes reachable from stack-allocated Env structs.
-const TempRootGuard = struct {
-    gc: ?*gc_mod.GC,
-    has_hamt_root: bool = false,
-
-    pub fn deinit(self: TempRootGuard) void {
-        if (self.gc) |gc_inst| {
-            if (self.has_hamt_root) {
-                gc_inst.popTempRoot(); // pop HAMT root (last pushed)
-            }
-            gc_inst.popTempRoot(); // pop env (first pushed)
-        }
-    }
-};
-
-pub fn pushEnvTempRoot(env: *const Env) TempRootGuard {
-    if (gc_mod.current_gc) |gc_inst| {
-        // Push the Env struct itself as a temp root so the GC doesn't sweep
-        // the Env while it's in use by the evaluation stack.
-        gc_inst.pushTempRoot(@as(*anyopaque, @ptrCast(@constCast(env))));
-        // Also push the HAMT root for thorough coverage.
-        const has_hamt = env.entries.root != null;
-        if (env.entries.root) |root| {
-            gc_inst.pushTempRoot(root);
-        }
-        return TempRootGuard{ .gc = gc_inst, .has_hamt_root = has_hamt };
-    }
-    return TempRootGuard{ .gc = null, .has_hamt_root = false };
-}
-
-/// Pop the temp roots pushed by pushEnvTempRoot.
-/// Used when the guard's deinit cannot be used (e.g., in the eval loop).
-pub fn popEnvTempRoot(env: *const Env) void {
-    if (gc_mod.current_gc) |gc_inst| {
-        if (env.entries.root) |_| {
-            gc_inst.popTempRoot(); // pop HAMT root (last pushed)
-        }
-        gc_inst.popTempRoot(); // pop env (first pushed)
-    }
-}
-
 // Re-export findNsManager for use by main.zig and other modules
 pub const findNsManager = eval_ns.findNsManager;
 
@@ -293,7 +184,7 @@ fn extractFnName(body: *const Value) []const u8 {
 }
 
 /// Format a user-friendly error message with source location and stack trace.
-/// Phase 9: Uses Frame chain instead of TrampolineStack for stack trace.
+///
 fn formatEvalError(allocator: Allocator, err: anyerror, file: []const u8, form: *const Value) ![]const u8 {
     const err_name = @errorName(err);
     var msg: std.ArrayList(u8) = .empty;
@@ -382,7 +273,7 @@ pub fn evalWithFile(allocator: Allocator, form: Value, env: *Env, file: []const 
     defer root_frame.deinit(allocator);
 
     // Phase 5/9: Register evaluation context for GC root tracking.
-    // Phase 9: No TrampolineStack — Frame chain replaces it.
+    //
     eval_context.root_frame = root_frame;
     eval_context.current_frame = null;
     defer {
@@ -391,7 +282,7 @@ pub fn evalWithFile(allocator: Allocator, form: Value, env: *Env, file: []const 
     }
 
     // Evaluate the initial form
-    var result: ?EvalResult = evalRec(allocator, &form, root_frame, 0, null) catch |err| {
+    var result: ?EvalResult = evalRec(allocator, &form, root_frame, 0) catch |err| {
         // Don't format internal control errors like ReplExit
         if (err == EvalError.ReplExit) return err;
         const msg = formatEvalError(allocator, err, file, &form) catch {
@@ -402,7 +293,7 @@ pub fn evalWithFile(allocator: Allocator, form: Value, env: *Env, file: []const 
         return err;
     };
 
-    // Phase 9: Trampoline loop using Frame chain instead of TrampolineStack.
+    // Trampoline loop using Frame chain.
     // When callFunction creates a child Frame, it sets eval_context.current_frame.
     // We read current_frame to get the next frame to evaluate.
     while (true) {
@@ -427,7 +318,7 @@ pub fn evalWithFile(allocator: Allocator, form: Value, env: *Env, file: []const 
             return try allocValue(allocator, vm.nilValue());
         };
 
-        result = evalRec(allocator, &body_val, child_frame, 0, null) catch |err| {
+        result = evalRec(allocator, &body_val, child_frame, 0) catch |err| {
             // Don't format internal control errors like ReplExit
             if (err == EvalError.ReplExit) {
                 child_frame.detachFromParent();
@@ -467,14 +358,14 @@ pub fn evalWithFile(allocator: Allocator, form: Value, env: *Env, file: []const 
 /// Wrapper: evalRec that extracts .value from EvalResult.
 /// Phase 9: Disables trampolining to avoid interfering with the main eval loop.
 /// callFunction evaluates body directly when trampoline_allowed is false.
-fn evalRecV(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: usize, _: ?*TrampolineStack) anyerror!*Value {
+fn evalRecV(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: usize) anyerror!*Value {
     // Disable trampolining: callFunction will evaluate body directly
     const saved_trampoline = eval_context.trampoline_allowed;
     eval_context.trampoline_allowed = false;
     defer eval_context.trampoline_allowed = saved_trampoline;
 
     // With trampolining disabled, evalRec always returns .value
-    const result = try evalRec(allocator, form, frame, depth, null);
+    const result = try evalRec(allocator, form, frame, depth);
     return switch (result) {
         .value => |v| v,
         .trampoline => unreachable, // should not happen with trampoline_allowed = false
@@ -482,9 +373,8 @@ fn evalRecV(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: u
 }
 
 /// Internal recursive evaluator with trampoline support.
-/// When ctx is provided and a function body needs evaluation,
-/// pushes a frame onto ctx and returns .trampoline instead of recursing.
-pub fn evalRec(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+/// When a function body needs evaluation, returns .trampoline instead of recursing.
+pub fn evalRec(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     switch (form.*) {
         .nil, .bool, .integer, .float, .bigint, .ratio, .decimal, .string, .regex, .character, .keyword, .set, .queue, .chunk, .chunked_cons, .atom, .future, .promise, .reduced, .wrapped, .record => {
             return .{ .value = try vm.cloneGC(form, allocator) };
@@ -530,18 +420,18 @@ pub fn evalRec(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth
             return error.UndefinedSymbol;
         },
         .list => {
-            return try evalList(allocator, form, frame, depth, ctx);
+            return try evalList(allocator, form, frame, depth);
         },
         .vector => {
-            return try evalVector(allocator, form, frame, depth, ctx);
+            return try evalVector(allocator, form, frame, depth);
         },
         .map => {
-            return try evalMap(allocator, form, frame, depth, ctx);
+            return try evalMap(allocator, form, frame, depth);
         },
         .function, .builtin_fn => return .{ .value = try vm.cloneGC(form, allocator) },
         .lazy_seq => return .{ .value = try vm.cloneGC(form, allocator) },
         .cons => {
-            return try evalCons(allocator, form, frame, depth, ctx);
+            return try evalCons(allocator, form, frame, depth);
         },
     }
     unreachable;
@@ -695,7 +585,7 @@ fn parseParams(allocator: Allocator, params: list.List) anyerror!ParsedParams {
     };
 }
 
-fn evalList(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+fn evalList(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     const l = &form.*.list.items;
     if (l.items.len == 0) return .{ .value = try allocValue(allocator, try vm.listValue(allocator, list.empty())) };
 
@@ -704,22 +594,21 @@ fn evalList(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: u
     // Self-evaluating symbols (special forms) — dispatch via lookup table
     if (std.meta.activeTag(first) == .symbol) {
         if (findSpecialForm(first.symbol)) |fn_ptr| {
-            return try fn_ptr(allocator, l, frame, depth, ctx);
+            return try fn_ptr(allocator, l, frame, depth);
         }
     }
 
     // Non-special-form: evaluate as function call
-    return try evalFunctionCall(allocator, form, frame, depth + 1, ctx);
+    return try evalFunctionCall(allocator, form, frame, depth + 1);
 }
 
 /// Evaluate a vector element-wise.
 /// Extracted from evalRec to isolate its stack frame.
-fn evalVector(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    _ = ctx; // element evaluation is synchronous
+fn evalVector(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     var new_vec: vec.Vector = .empty;
     errdefer new_vec.deinit(allocator);
     for (form.*.vector.items.items) |item| {
-        const ptr = try evalRecV(allocator, &item, frame, depth + 1, null);
+        const ptr = try evalRecV(allocator, &item, frame, depth + 1);
         try new_vec.append(allocator, ptr.*);
     }
     return .{ .value = try allocValue(allocator, try vm.vectorValue(allocator, new_vec)) };
@@ -727,8 +616,7 @@ fn evalVector(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth:
 
 /// Evaluate a map key-value pairs element-wise.
 /// Extracted from evalRec to isolate its stack frame.
-fn evalMap(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    _ = ctx; // element evaluation is synchronous
+fn evalMap(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     var new_map: vm.Map = .empty;
     errdefer {
         for (new_map.items) |*entry| {
@@ -738,8 +626,8 @@ fn evalMap(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: us
         allocator.free(new_map.items);
     }
     for (form.*.map.entries.items) |entry| {
-        const key_ptr = try evalRecV(allocator, &entry.key, frame, depth + 1, null);
-        const val_ptr = try evalRecV(allocator, &entry.value, frame, depth + 1, null);
+        const key_ptr = try evalRecV(allocator, &entry.key, frame, depth + 1);
+        const val_ptr = try evalRecV(allocator, &entry.value, frame, depth + 1);
         try new_map.append(allocator, .{
             .key = key_ptr.*,
             .value = val_ptr.*,
@@ -750,7 +638,7 @@ fn evalMap(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: us
 
 /// Evaluate a cons cell as a form: convert cons chain to list, then evaluate.
 /// Extracted from evalRec to isolate its stack frame (cons evaluation needs a Value copy).
-fn evalCons(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+fn evalCons(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     var new_list: list.List = .empty;
     errdefer new_list.deinit(allocator);
     var current_val = form.*;
@@ -769,13 +657,13 @@ fn evalCons(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: u
         try new_list.append(allocator, try vm.clone(&current_val, allocator));
     }
     const list_val = try vm.listValue(allocator, new_list);
-    return try evalList(allocator, &list_val, frame, depth, ctx);
+    return try evalList(allocator, &list_val, frame, depth);
 }
 
-fn evalFunctionCall(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+fn evalFunctionCall(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     const l = &form.*.list.items;
     // Evaluate the operator (synchronously — operator is typically a symbol lookup)
-    const op_ptr = try evalRecV(allocator, &l.items[0], frame, depth, null);
+    const op_ptr = try evalRecV(allocator, &l.items[0], frame, depth);
     defer allocator.destroy(op_ptr);
     defer vm.valueDeinit(&op_ptr.*, allocator);
 
@@ -791,33 +679,33 @@ fn evalFunctionCall(allocator: Allocator, form: *const Value, frame: *vm.Frame, 
         const saved_trampoline = eval_context.trampoline_allowed;
         eval_context.trampoline_allowed = false;
         defer eval_context.trampoline_allowed = saved_trampoline;
-        const macro_r = try call(allocator, op_ptr, &macro_args, frame, depth, null);
+        const macro_r = try call(allocator, op_ptr, &macro_args, frame, depth);
         const expanded_ptr = macro_r.value;
         var expanded = expanded_ptr.*;
         defer vm.valueDeinit(&expanded, allocator);
         defer allocator.destroy(expanded_ptr);
         // Evaluate the expanded form
-        return try evalRec(allocator, &expanded, frame, depth, ctx);
+        return try evalRec(allocator, &expanded, frame, depth);
     }
 
     // Evaluate all arguments (synchronously via evalRecV to avoid trampoline complexity)
     var args: list.List = .empty;
     defer args.deinit(allocator);
     for (l.items[1..]) |arg| {
-        const arg_ptr = try evalRecV(allocator, &arg, frame, depth + 1, null);
+        const arg_ptr = try evalRecV(allocator, &arg, frame, depth + 1);
         try args.append(allocator, arg_ptr.*);
     }
 
     // Call the function — may return trampoline for user-defined functions
     // Pass source line from the original form list for error reporting
     const src_line = form.*.list.src_line;
-    const result = try callWithSrc(allocator, op_ptr, &args, frame, depth, ctx, src_line);
+    const result = try callWithSrc(allocator, op_ptr, &args, frame, depth, src_line);
     if (std.meta.activeTag(result) == .trampoline) return result;
     // For builtins, result.value is already a *Value — return it directly
     return result;
 }
 
-fn evalLet(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+fn evalLet(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     if (l.items.len < 2) return error.ArityError;
     const bindings = &l.items[1];
     if (std.meta.activeTag(bindings.*) != .list and std.meta.activeTag(bindings.*) != .vector) return error.TypeError;
@@ -839,7 +727,7 @@ fn evalLet(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: u
     while (i < items.len) : (i += 2) {
         const sym = &items[i];
         // Evaluate binding value synchronously (no trampoline — we need the value)
-        const val_ptr = try evalRecV(allocator, &items[i + 1], child_frame, depth, null);
+        const val_ptr = try evalRecV(allocator, &items[i + 1], child_frame, depth);
         // Bind using destructuring if sym is a vector pattern
         try bindPatternFrame(allocator, sym.*, val_ptr.*, child_frame);
         if (std.meta.activeTag(sym.*) == .symbol) {
@@ -865,10 +753,10 @@ fn evalLet(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: u
             vm.valueDeinit(&p.*, allocator);
             allocator.destroy(p);
         }
-        last_ptr = try evalRecV(allocator, &form, child_frame, depth, null);
+        last_ptr = try evalRecV(allocator, &form, child_frame, depth);
     }
     // Last form in tail position — use evalRec for trampoline support
-    const tail_result = try evalRec(allocator, &body_items[body_items.len - 1], child_frame, depth, ctx);
+    const tail_result = try evalRec(allocator, &body_items[body_items.len - 1], child_frame, depth);
     if (last_ptr) |p| {
         vm.valueDeinit(&p.*, allocator);
         allocator.destroy(p);
@@ -876,7 +764,7 @@ fn evalLet(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: u
     return tail_result;
 }
 
-fn evalLetFn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+fn evalLetFn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     if (l.items.len < 2) return error.ArityError;
     const bindings = l.items[1];
     if (std.meta.activeTag(bindings) != .list and std.meta.activeTag(bindings) != .vector) return error.TypeError;
@@ -903,7 +791,6 @@ fn evalLetFn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
         .ns_manager = null,
     };
     defer new_env.deinit(allocator);
-    defer pushEnvTempRoot(&new_env).deinit();
 
     // Parse each function definition: (name [params] body...)
     for (bind_items) |binding| {
@@ -986,12 +873,12 @@ fn evalLetFn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
     }
     // Non-tail forms evaluated synchronously
     for (bf[0 .. bf.len - 1]) |form| {
-        const result_ptr = try evalRecV(allocator, &form, child_frame, depth, null);
+        const result_ptr = try evalRecV(allocator, &form, child_frame, depth);
         vm.valueDeinit(&do_result, allocator);
         do_result = result_ptr.*;
     }
     // Last form in tail position
-    const tail_result = try evalRec(allocator, &bf[bf.len - 1], child_frame, depth, ctx);
+    const tail_result = try evalRec(allocator, &bf[bf.len - 1], child_frame, depth);
     return tail_result;
 }
 
@@ -1079,7 +966,7 @@ fn bindPatternFrame(allocator: Allocator, pattern: Value, val: Value, frame: *vm
     }
 }
 
-fn evalCond(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+fn evalCond(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     if (l.items.len < 2) return error.ArityError;
     const clauses = l.items[1..];
     var i: usize = 0;
@@ -1088,24 +975,23 @@ fn evalCond(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
         // Handle :else clause — tail position
         if (std.meta.activeTag(cond) == .keyword and std.mem.eql(u8, cond.keyword, "else")) {
             if (i + 1 >= clauses.len) return error.ArityError;
-            return try evalRec(allocator, &clauses[i + 1], frame, depth, ctx);
+            return try evalRec(allocator, &clauses[i + 1], frame, depth);
         }
 
         // Condition evaluated synchronously (we need to inspect the value)
-        const result_ptr = try evalRecV(allocator, &cond, frame, depth, null);
+        const result_ptr = try evalRecV(allocator, &cond, frame, depth);
         if (vm.isTruthy(result_ptr.*)) {
             if (i + 1 >= clauses.len) return error.ArityError;
             vm.valueDeinit(result_ptr, allocator);
             // Body in tail position
-            return try evalRec(allocator, &clauses[i + 1], frame, depth, ctx);
+            return try evalRec(allocator, &clauses[i + 1], frame, depth);
         }
         vm.valueDeinit(result_ptr, allocator);
     }
     return .{ .value = try allocValue(allocator, vm.nilValue()) };
 }
 
-fn evalLoop(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    _ = ctx; // loop/recur handles its own iteration, no trampoline needed
+fn evalLoop(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     if (l.items.len < 2) return error.ArityError;
     const bindings = l.items[1];
     if (std.meta.activeTag(bindings) != .list and std.meta.activeTag(bindings) != .vector) return error.TypeError;
@@ -1138,7 +1024,7 @@ fn evalLoop(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
     while (i < bind_items.len) : (i += 2) {
         const sym = bind_items[i];
         // Binding values evaluated synchronously (we need the value)
-        const val_ptr = try evalRecV(allocator, &bind_items[i + 1], child_frame, depth, null);
+        const val_ptr = try evalRecV(allocator, &bind_items[i + 1], child_frame, depth);
         try child_frame.put(sym.symbol, val_ptr.*);
     }
 
@@ -1151,7 +1037,7 @@ fn evalLoop(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
         var result: Value = vm.nilValue();
         errdefer vm.valueDeinit(&result, allocator);
         for (body) |form| {
-            const result_ptr = try evalRecV(allocator, &form, child_frame, loop_depth, null);
+            const result_ptr = try evalRecV(allocator, &form, child_frame, loop_depth);
             vm.valueDeinit(&result, allocator);
             result = result_ptr.*;
         }
@@ -1181,8 +1067,8 @@ fn evalLoop(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
     }
 }
 
-pub fn call(allocator: Allocator, op: *const Value, args_list: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    return callWithSrc(allocator, op, args_list, frame, depth, ctx, 0);
+pub fn call(allocator: Allocator, op: *const Value, args_list: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
+    return callWithSrc(allocator, op, args_list, frame, depth, 0);
 }
 
 /// Create a root Frame from a namespace Env for use by external modules.
@@ -1198,48 +1084,48 @@ pub fn createRootFrame(allocator: Allocator, root_env: *Env) anyerror!*vm.Frame 
 
 // Wrapper functions for external modules that still use *Env signatures.
 // These create a temporary Frame wrapping the Env.
-pub fn callWithEnv(allocator: Allocator, op: *const Value, args_list: *const list.List, env: *Env, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+pub fn callWithEnv(allocator: Allocator, op: *const Value, args_list: *const list.List, env: *Env, depth: usize) anyerror!EvalResult {
     const frame = try createRootFrame(allocator, env);
     // Use detachFromParent instead of deinit: child frames on trampoline may reference this
     defer frame.releaseFromParent(allocator);
-    return call(allocator, op, args_list, frame, depth, ctx);
+    return call(allocator, op, args_list, frame, depth);
 }
 
 /// Synchronous version of callWithEnv — disables trampolining.
 /// Returns the evaluated *Value directly (never .trampoline).
-pub fn callWithEnvV(allocator: Allocator, op: *const Value, args_list: *const list.List, env: *Env, depth: usize, ctx: ?*TrampolineStack) anyerror!*Value {
+pub fn callWithEnvV(allocator: Allocator, op: *const Value, args_list: *const list.List, env: *Env, depth: usize) anyerror!*Value {
     const saved_trampoline = eval_context.trampoline_allowed;
     eval_context.trampoline_allowed = false;
     defer eval_context.trampoline_allowed = saved_trampoline;
-    const result = try callWithEnv(allocator, op, args_list, env, depth, ctx);
+    const result = try callWithEnv(allocator, op, args_list, env, depth);
     return switch (result) {
         .value => |v| v,
         .trampoline => unreachable,
     };
 }
 
-pub fn evalRecWithEnv(allocator: Allocator, form: *const Value, env: *Env, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+pub fn evalRecWithEnv(allocator: Allocator, form: *const Value, env: *Env, depth: usize) anyerror!EvalResult {
     const frame = try createRootFrame(allocator, env);
     // Use detachFromParent instead of deinit: child frames on trampoline may reference this
     defer frame.releaseFromParent(allocator);
-    return evalRec(allocator, form, frame, depth, ctx);
+    return evalRec(allocator, form, frame, depth);
 }
 
-pub fn evalRecVWithEnv(allocator: Allocator, form: *const Value, env: *Env, depth: usize, ctx: ?*TrampolineStack) anyerror!*Value {
+pub fn evalRecVWithEnv(allocator: Allocator, form: *const Value, env: *Env, depth: usize) anyerror!*Value {
     const frame = try createRootFrame(allocator, env);
     defer frame.deinit(allocator);
-    return evalRecV(allocator, form, frame, depth, ctx);
+    return evalRecV(allocator, form, frame, depth);
 }
 
-pub fn callWithSrc(allocator: Allocator, op: *const Value, args_list: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack, src_line: usize) anyerror!EvalResult {
+pub fn callWithSrc(allocator: Allocator, op: *const Value, args_list: *const list.List, frame: *vm.Frame, depth: usize, src_line: usize) anyerror!EvalResult {
     switch (std.meta.activeTag(op.*)) {
-        .function => return callFunction(allocator, op, args_list, frame, depth, ctx, src_line),
+        .function => return callFunction(allocator, op, args_list, frame, depth, src_line),
         .builtin_fn => return .{ .value = try allocValue(allocator, try callBuiltinFn(allocator, op, args_list, frame.root_env)) },
         .set => return .{ .value = try allocValue(allocator, try callSet(allocator, op, args_list)) },
         .keyword => return .{ .value = try allocValue(allocator, try callKeyword(allocator, op, args_list)) },
         .map => return .{ .value = try allocValue(allocator, try callMap(allocator, op, args_list)) },
         .record => return .{ .value = try allocValue(allocator, try callRecord(allocator, op, args_list)) },
-        .lazy_seq => return callLazySeq(allocator, op, frame, depth, ctx),
+        .lazy_seq => return callLazySeq(allocator, op, frame, depth),
         else => {
             std.debug.print("NotCallable: tried to call value of type {s}\n", .{@tagName(std.meta.activeTag(op.*))});
             return error.NotCallable;
@@ -1250,7 +1136,7 @@ pub fn callWithSrc(allocator: Allocator, op: *const Value, args_list: *const lis
 /// Call a user-defined function: match arity, bind params, evaluate body.
 /// KEY TRAMPOLINE POINT: Instead of recursing into evalRec for body evaluation,
 /// pushes a frame onto the trampoline stack. The eval() loop processes it.
-fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, parent_frame: *vm.Frame, depth: usize, _: ?*TrampolineStack, src_line: usize) anyerror!EvalResult {
+fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, parent_frame: *vm.Frame, depth: usize, src_line: usize) anyerror!EvalResult {
     _ = depth;
     const fn_data = op.function;
     const arity = try matchArity(fn_data, args.items.len);
@@ -1297,7 +1183,7 @@ fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, 
         const bc_env = try allocator.create(Env);
         bc_env.* = try cloneFnEnv(allocator, fn_data.env);
         try bindArityParamsEnv(allocator, arity, args, bc_env);
-        const vm_result = try bytecode_mod.execute(allocator, bc, bc_env, null);
+        const vm_result = try bytecode_mod.execute(allocator, bc, bc_env);
         switch (vm_result) {
             .value => |v| {
                 bc_env.deinit(allocator);
@@ -1314,7 +1200,7 @@ fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, 
         }
     }
 
-    // TRAMPOLINE: Store body in child Frame instead of pushing onto TrampolineStack.
+    // TRAMPOLINE: Store body in child Frame.
     // The eval() loop will read eval_context.current_frame and evaluate its body_form.
     // Deep clone the body so it survives after the caller frees its copy of the function Value.
     var body_clone: list.List = .empty;
@@ -1336,7 +1222,7 @@ fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, 
         return .trampoline;
     } else {
         // Evaluate body directly (no trampoline)
-        const result = try evalRec(allocator, &body_val, child_frame, 0, null);
+        const result = try evalRec(allocator, &body_val, child_frame, 0);
         child_frame.deinit(allocator);
         return result;
     }
@@ -1509,8 +1395,7 @@ fn callRecord(allocator: Allocator, op: *const Value, args: *const list.List) an
 }
 
 /// Call a lazy-seq as a function: forces its evaluation (no args allowed).
-fn callLazySeq(allocator: Allocator, op: *const Value, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    _ = ctx;
+fn callLazySeq(allocator: Allocator, op: *const Value, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     const result_ptr = try forceLazySeq(allocator, op.*, frame, depth);
     // result_ptr is already a *Value — return it directly
     return .{ .value = result_ptr };
@@ -1607,7 +1492,7 @@ fn forceLazySeq(allocator: Allocator, lazy: Value, frame: *vm.Frame, depth: usiz
         const thunk_frame = try createRootFrame(allocator, &thunk_env);
         defer thunk_frame.deinit(allocator);
         const body_val = try vm.listValue(allocator, cloned_body);
-        const result_ptr = try evalRecV(allocator, &body_val, thunk_frame, depth, null);
+        const result_ptr = try evalRecV(allocator, &body_val, thunk_frame, depth);
 
         // The result should be a list/vector (the sequence)
         // Convert to list if needed
@@ -1788,11 +1673,11 @@ fn looksLikeParamList(form: Value) bool {
 
 // case - multi-way constant dispatch
 // (case expr test1 result1 test2 result2 ... :else default)
-fn evalCase(allocator: Allocator, forms: []const Value, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+fn evalCase(allocator: Allocator, forms: []const Value, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     if (forms.len < 1) return error.ArityError;
 
     // Expression evaluated synchronously (we need to compare against test values)
-    const expr_val_ptr = try evalRecV(allocator, &forms[0], frame, depth, null);
+    const expr_val_ptr = try evalRecV(allocator, &forms[0], frame, depth);
     defer vm.valueDeinit(expr_val_ptr, allocator);
 
     var i: usize = 1;
@@ -1801,17 +1686,17 @@ fn evalCase(allocator: Allocator, forms: []const Value, frame: *vm.Frame, depth:
         if (std.meta.activeTag(test_form) == .keyword and std.mem.eql(u8, test_form.keyword, "else")) {
             if (i + 1 >= forms.len) return error.ArityError;
             // Body in tail position
-            return try evalRec(allocator, &forms[i + 1], frame, depth, ctx);
+            return try evalRec(allocator, &forms[i + 1], frame, depth);
         }
 
         // Test form evaluated synchronously
-        const test_val_ptr = try evalRecV(allocator, &test_form, frame, depth, null);
+        const test_val_ptr = try evalRecV(allocator, &test_form, frame, depth);
         defer vm.valueDeinit(test_val_ptr, allocator);
 
         if (vm.equals(expr_val_ptr.*, test_val_ptr.*)) {
             if (i + 1 >= forms.len) return error.ArityError;
             // Body in tail position
-            return try evalRec(allocator, &forms[i + 1], frame, depth, ctx);
+            return try evalRec(allocator, &forms[i + 1], frame, depth);
         }
     }
 
@@ -1826,69 +1711,66 @@ fn evalCase(allocator: Allocator, forms: []const Value, frame: *vm.Frame, depth:
 // ============================================================================
 
 /// (quote form) — return form unevaluated
-fn evalQuote(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+fn evalQuote(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     _ = frame;
     _ = depth;
-    _ = ctx;
     if (l.items.len != 2) return error.ArityError;
     return .{ .value = try vm.cloneGC(&l.items[1], allocator) };
 }
 
 /// (quit) / (exit) — signal REPL to exit
-fn evalQuit(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+fn evalQuit(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     _ = allocator;
     _ = l;
     _ = frame;
     _ = depth;
-    _ = ctx;
     return error.ReplExit;
 }
 
 /// (quasiquote form) — template with unquote
-fn evalQuasiquote(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+fn evalQuasiquote(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     if (l.items.len != 2) return error.ArityError;
     // Pass the full Frame so unquote can resolve local bindings (e.g. macro parameters)
-    const result = try eval_macro.unquoteProcess(allocator, l.items[1], frame, depth + 1, ctx);
+    const result = try eval_macro.unquoteProcess(allocator, l.items[1], frame, depth + 1);
     return .{ .value = try allocValue(allocator, result) };
 }
 
 /// (def name value?) — define in current namespace
-fn evalDef(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    _ = ctx;
+fn evalDef(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     if (l.items.len < 2 or l.items.len > 3) return error.ArityError;
     const sym = l.items[1];
     if (std.meta.activeTag(sym) != .symbol) return error.TypeError;
     const eval_idx: usize = if (l.items.len >= 3) 2 else 1;
     // Value evaluated synchronously (we need to bind it)
-    const val_ptr = try evalRecV(allocator, &l.items[eval_idx], frame, depth + 1, null);
+    const val_ptr = try evalRecV(allocator, &l.items[eval_idx], frame, depth + 1);
     const persistent_val = try vm.clone(&val_ptr.*, allocator);
     try bindInCurrentNamespace(frame.root_env, sym.symbol, persistent_val);
     return .{ .value = try vm.cloneGC(&sym, allocator) };
 }
 
 /// (if test then else?) — conditional
-fn evalIf(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+fn evalIf(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     if (l.items.len < 2 or l.items.len > 4) return error.ArityError;
     // Condition evaluated synchronously (we need to inspect truthiness)
-    const cond_ptr = try evalRecV(allocator, &l.items[1], frame, depth + 1, null);
+    const cond_ptr = try evalRecV(allocator, &l.items[1], frame, depth + 1);
     const truthy = vm.isTruthy(cond_ptr.*);
     vm.valueDeinit(cond_ptr, allocator);
     if (truthy) {
         // Then-branch in tail position — use evalRec for trampoline
-        if (l.items.len >= 3) return try evalRec(allocator, &l.items[2], frame, depth + 1, ctx);
+        if (l.items.len >= 3) return try evalRec(allocator, &l.items[2], frame, depth + 1);
         return .{ .value = try allocValue(allocator, vm.nilValue()) };
     } else {
         // Else-branch in tail position — use evalRec for trampoline
-        if (l.items.len >= 4) return try evalRec(allocator, &l.items[3], frame, depth + 1, ctx);
+        if (l.items.len >= 4) return try evalRec(allocator, &l.items[3], frame, depth + 1);
         return .{ .value = try allocValue(allocator, vm.nilValue()) };
     }
 }
 
 /// (when test body...) — if with implicit do
-fn evalWhen(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+fn evalWhen(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     if (l.items.len < 2) return error.ArityError;
     // Condition evaluated synchronously
-    const cond_ptr = try evalRecV(allocator, &l.items[1], frame, depth + 1, null);
+    const cond_ptr = try evalRecV(allocator, &l.items[1], frame, depth + 1);
     const truthy = vm.isTruthy(cond_ptr.*);
     vm.valueDeinit(cond_ptr, allocator);
     if (truthy) {
@@ -1900,18 +1782,18 @@ fn evalWhen(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
         var do_result: Value = vm.nilValue();
         errdefer vm.valueDeinit(&do_result, allocator);
         for (body[0 .. body.len - 1]) |form| {
-            const result_ptr = try evalRecV(allocator, &form, frame, depth + 1, null);
+            const result_ptr = try evalRecV(allocator, &form, frame, depth + 1);
             vm.valueDeinit(&do_result, allocator);
             do_result = result_ptr.*;
         }
         // Last form in tail position
-        return try evalRec(allocator, &body[body.len - 1], frame, depth + 1, ctx);
+        return try evalRec(allocator, &body[body.len - 1], frame, depth + 1);
     }
     return .{ .value = try allocValue(allocator, vm.nilValue()) };
 }
 
 /// (do body...) — evaluate a sequence of forms
-fn evalDo(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+fn evalDo(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     const body = l.items[1..];
     if (body.len == 0) {
         return .{ .value = try allocValue(allocator, vm.nilValue()) };
@@ -1929,10 +1811,10 @@ fn evalDo(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: us
             vm.valueDeinit(p, allocator);
             allocator.destroy(p);
         }
-        last_ptr = try evalRecV(allocator, &form, frame, depth + 1, null);
+        last_ptr = try evalRecV(allocator, &form, frame, depth + 1);
     }
     // Last form in tail position — use evalRec for trampoline
-    const tail_result = try evalRec(allocator, &body[body.len - 1], frame, depth + 1, ctx);
+    const tail_result = try evalRec(allocator, &body[body.len - 1], frame, depth + 1);
     if (last_ptr) |p| {
         vm.valueDeinit(p, allocator);
         allocator.destroy(p);
@@ -1941,8 +1823,7 @@ fn evalDo(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: us
 }
 
 /// (defn name docstring? ([params] body...)+) — define named function
-fn evalDefn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    _ = ctx;
+fn evalDefn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     _ = depth;
     if (l.items.len < 3) return error.ArityError;
     const fname = l.items[1];
@@ -2004,8 +1885,7 @@ fn evalDefn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
 }
 
 /// (fn name? ([params] body...)+) — anonymous function
-fn evalFn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    _ = ctx;
+fn evalFn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     _ = depth;
     if (l.items.len < 2) return error.ArityError;
     var idx: usize = 1;
@@ -2041,8 +1921,7 @@ fn evalFn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: us
 }
 
 /// (defmacro name docstring? ([params] body...)+) — define a macro
-fn evalDefmacro(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    _ = ctx;
+fn evalDefmacro(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     _ = depth;
     if (l.items.len < 3) return error.ArityError;
     const macro_name = l.items[1];
@@ -2081,8 +1960,7 @@ fn evalDefmacro(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dep
 }
 
 /// (set! name value) — modify a variable
-fn evalSetBang(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    _ = ctx;
+fn evalSetBang(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     if (l.items.len != 3) return error.ArityError;
     const sym = l.items[1];
     if (std.meta.activeTag(sym) != .symbol) return error.TypeError;
@@ -2093,7 +1971,7 @@ fn evalSetBang(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dept
         return error.UndefinedSymbol;
     }
     // Value evaluated synchronously (we need to bind it)
-    const val_ptr = try evalRecV(allocator, &l.items[2], frame, depth + 1, null);
+    const val_ptr = try evalRecV(allocator, &l.items[2], frame, depth + 1);
     const persistent_val = try vm.clone(&val_ptr.*, allocator);
     // Write to current frame's overlay (not root namespace env)
     try frame.put(sym.symbol, persistent_val);
@@ -2101,29 +1979,27 @@ fn evalSetBang(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dept
 }
 
 /// (recur new-arg*) — tail recursion signal
-fn evalRecur(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    _ = ctx;
+fn evalRecur(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     if (l.items.len < 2) return error.ArityError;
     var results: list.List = .empty;
     errdefer results.deinit(allocator);
     try results.append(allocator, try vm.symValue(allocator, "__recur__"));
     for (l.items[1..]) |arg| {
         // Args evaluated synchronously
-        const ptr = try evalRecV(allocator, &arg, frame, depth + 1, null);
+        const ptr = try evalRecV(allocator, &arg, frame, depth + 1);
         try results.append(allocator, ptr.*);
     }
     return .{ .value = try allocValue(allocator, try vm.listValue(allocator, results)) };
 }
 
 /// (var name value?) — create a mutable var
-fn evalVar(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    _ = ctx;
+fn evalVar(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     if (l.items.len < 2 or l.items.len > 3) return error.ArityError;
     const sym = l.items[1];
     if (std.meta.activeTag(sym) != .symbol) return error.TypeError;
     const val_ptr = if (l.items.len >= 3)
         // Value evaluated synchronously
-        try evalRecV(allocator, &l.items[2], frame, depth + 1, null)
+        try evalRecV(allocator, &l.items[2], frame, depth + 1)
     else
         try allocValue(allocator, vm.nilValue());
     const persistent_val = try vm.clone(&val_ptr.*, allocator);
@@ -2133,11 +2009,10 @@ fn evalVar(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: u
 }
 
 /// (deref form) / (@ form) — get value from atom/var/reduced/future
-fn evalDeref(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    _ = ctx;
+fn evalDeref(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     if (l.items.len != 2) return error.ArityError;
     // Arg evaluated synchronously (we need to inspect the type)
-    const arg_ptr = try evalRecV(allocator, &l.items[1], frame, depth + 1, null);
+    const arg_ptr = try evalRecV(allocator, &l.items[1], frame, depth + 1);
     if (std.meta.activeTag(arg_ptr.*) == .atom) {
         const data = arg_ptr.*.atom;
         const val = try vm.clone(&data.value, allocator);
@@ -2180,7 +2055,7 @@ fn testSelf() *const vm.Value {
 }
 
 /// (or form*) — short-circuit or
-fn evalOr(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+fn evalOr(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     const forms = l.items[1..];
     if (forms.len == 0) {
         return .{ .value = try allocValue(allocator, vm.nilValue()) };
@@ -2194,7 +2069,7 @@ fn evalOr(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: us
         }
     }
     for (forms[0 .. forms.len - 1]) |form_item| {
-        const val_ptr = try evalRecV(allocator, &form_item, frame, depth + 1, null);
+        const val_ptr = try evalRecV(allocator, &form_item, frame, depth + 1);
         if (vm.isTruthy(val_ptr.*)) {
             if (last_ptr) |p| {
                 vm.valueDeinit(p, allocator);
@@ -2209,7 +2084,7 @@ fn evalOr(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: us
         last_ptr = val_ptr;
     }
     // Last form in tail position
-    const tail_result = try evalRec(allocator, &forms[forms.len - 1], frame, depth + 1, ctx);
+    const tail_result = try evalRec(allocator, &forms[forms.len - 1], frame, depth + 1);
     if (last_ptr) |p| {
         vm.valueDeinit(p, allocator);
         allocator.destroy(p);
@@ -2218,23 +2093,23 @@ fn evalOr(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: us
 }
 
 /// (and form*) — short-circuit and
-fn evalAnd(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+fn evalAnd(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     const forms = l.items[1..];
     if (forms.len == 0) {
         return .{ .value = try allocValue(allocator, vm.boolValue(true)) };
     }
     // Non-tail forms evaluated synchronously
     for (forms[0 .. forms.len - 1]) |form_item| {
-        const val_ptr = try evalRecV(allocator, &form_item, frame, depth + 1, null);
+        const val_ptr = try evalRecV(allocator, &form_item, frame, depth + 1);
         if (!vm.isTruthy(val_ptr.*)) return .{ .value = val_ptr };
         vm.valueDeinit(val_ptr, allocator);
     }
     // Last form in tail position
-    return try evalRec(allocator, &forms[forms.len - 1], frame, depth + 1, ctx);
+    return try evalRec(allocator, &forms[forms.len - 1], frame, depth + 1);
 }
 
 /// (binding [var1 val1 ...] body...) — dynamic variable binding
-fn evalBinding(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+fn evalBinding(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     if (l.items.len < 3) return error.ArityError;
     const bindings = l.items[1];
     if (std.meta.activeTag(bindings) != .vector) return error.TypeError;
@@ -2247,7 +2122,7 @@ fn evalBinding(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dept
         const sym = bindings.vector.items.items[i];
         if (std.meta.activeTag(sym) != .symbol) return error.TypeError;
         // Binding values evaluated synchronously
-        const val_ptr = try evalRecV(allocator, &bindings.vector.items.items[i + 1], child_frame, depth + 1, null);
+        const val_ptr = try evalRecV(allocator, &bindings.vector.items.items[i + 1], child_frame, depth + 1);
         try child_frame.put(sym.symbol, val_ptr.*);
     }
     const body = l.items[2..];
@@ -2258,17 +2133,16 @@ fn evalBinding(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dept
     var do_result: Value = vm.nilValue();
     errdefer vm.valueDeinit(&do_result, allocator);
     for (body[0 .. body.len - 1]) |form| {
-        const result_ptr = try evalRecV(allocator, &form, child_frame, depth + 1, null);
+        const result_ptr = try evalRecV(allocator, &form, child_frame, depth + 1);
         vm.valueDeinit(&do_result, allocator);
         do_result = result_ptr.*;
     }
     // Last form in tail position
-    return try evalRec(allocator, &body[body.len - 1], child_frame, depth + 1, ctx);
+    return try evalRec(allocator, &body[body.len - 1], child_frame, depth + 1);
 }
 
 /// (lazy-seq body...) — create a lazy sequence
-fn evalLazySeq(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    _ = ctx;
+fn evalLazySeq(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     _ = depth;
     if (l.items.len < 2) return error.ArityError;
     var body: list.List = .empty;
@@ -2317,14 +2191,13 @@ fn captureFrameEnv(allocator: Allocator, frame: *vm.Frame) anyerror!Env {
 }
 
 /// (dorun n? coll) — realize sequence for side effects, return nil
-fn evalDorun(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    _ = ctx;
+fn evalDorun(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     if (l.items.len < 2 or l.items.len > 3) return error.ArityError;
     const dorun_args = l.items[1..];
     var n: ?usize = null;
     var coll_form: Value = undefined;
     if (dorun_args.len == 2) {
-        const n_val_ptr = try evalRecV(allocator, &dorun_args[0], frame, depth + 1, null);
+        const n_val_ptr = try evalRecV(allocator, &dorun_args[0], frame, depth + 1);
         defer vm.valueDeinit(&n_val_ptr.*, allocator);
         const n_int: i64 = switch (std.meta.activeTag(n_val_ptr.*)) {
             .integer => n_val_ptr.*.integer,
@@ -2336,7 +2209,7 @@ fn evalDorun(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
     } else {
         coll_form = dorun_args[0];
     }
-    const coll_ptr = try evalRecV(allocator, &coll_form, frame, depth + 1, null);
+    const coll_ptr = try evalRecV(allocator, &coll_form, frame, depth + 1);
     defer vm.valueDeinit(&coll_ptr.*, allocator);
 
     var coll = coll_ptr.*;
@@ -2369,10 +2242,9 @@ fn evalDorun(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
 }
 
 /// (doall coll) — realize lazy sequences and return result
-fn evalDoall(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    _ = ctx;
+fn evalDoall(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     if (l.items.len != 2) return error.ArityError;
-    const coll_ptr = try evalRecV(allocator, &l.items[1], frame, depth + 1, null);
+    const coll_ptr = try evalRecV(allocator, &l.items[1], frame, depth + 1);
     if (std.meta.activeTag(coll_ptr.*) == .lazy_seq) {
         const forced = try sequences.forceLazySeqHelper(allocator, coll_ptr.*);
         vm.valueDeinit(&coll_ptr.*, allocator);
@@ -2386,17 +2258,17 @@ fn evalDoall(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
 }
 
 /// (extend atype protocol mmap & more...) — add protocol implementations
-fn evalExtend(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
+fn evalExtend(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     if (l.items.len < 4) return error.ArityError;
     var ext_args: list.List = .empty;
     errdefer ext_args.deinit(allocator);
     try ext_args.append(allocator, try vm.clone(&l.items[1], allocator));
     var ei: usize = 2;
     while (ei < l.items.len) : (ei += 1) {
-        const ptr = try evalRecV(allocator, &l.items[ei], frame, depth + 1, null);
+        const ptr = try evalRecV(allocator, &l.items[ei], frame, depth + 1);
         try ext_args.append(allocator, ptr.*);
     }
-    const result = try protocols.evalExtend(allocator, ext_args, frame.root_env, depth + 1, ctx);
+    const result = try protocols.evalExtend(allocator, ext_args, frame.root_env, depth + 1);
     return .{ .value = try allocValue(allocator, result) };
 }
 
@@ -2405,56 +2277,56 @@ fn evalExtend(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth
 // These adapt the unified SpecialFormFn signature to external module APIs.
 // ============================================================================
 
-fn evalNsForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    const result = try eval_ns.evalNs(allocator, l.*, frame.root_env, depth, ctx);
+fn evalNsForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
+    const result = try eval_ns.evalNs(allocator, l.*, frame.root_env, depth);
     return .{ .value = try allocValue(allocator, result) };
 }
 
-fn evalInNsForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    const result = try eval_ns.evalInNs(allocator, l.*, frame.root_env, depth, ctx);
+fn evalInNsForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
+    const result = try eval_ns.evalInNs(allocator, l.*, frame.root_env, depth);
     return .{ .value = try allocValue(allocator, result) };
 }
 
-fn evalDefprotocolForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    const result = try protocols.evalDefProtocol(allocator, l.*, frame.root_env, depth + 1, ctx);
+fn evalDefprotocolForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
+    const result = try protocols.evalDefProtocol(allocator, l.*, frame.root_env, depth + 1);
     return .{ .value = try allocValue(allocator, result) };
 }
 
-fn evalExtendTypeForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    const result = try protocols.evalExtendType(allocator, l.*, frame.root_env, depth + 1, ctx);
+fn evalExtendTypeForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
+    const result = try protocols.evalExtendType(allocator, l.*, frame.root_env, depth + 1);
     return .{ .value = try allocValue(allocator, result) };
 }
 
-fn evalExtendProtocolForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    const result = try protocols.evalExtendProtocol(allocator, l.*, frame.root_env, depth + 1, ctx);
+fn evalExtendProtocolForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
+    const result = try protocols.evalExtendProtocol(allocator, l.*, frame.root_env, depth + 1);
     return .{ .value = try allocValue(allocator, result) };
 }
 
-fn evalDefrecordForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    const result = try records.evalDefRecord(allocator, l.*, frame.root_env, depth + 1, ctx);
+fn evalDefrecordForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
+    const result = try records.evalDefRecord(allocator, l.*, frame.root_env, depth + 1);
     return .{ .value = try allocValue(allocator, result) };
 }
 
-fn evalThreadLastForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    const result = try eval_thread.evalThreadLast(allocator, l.items[1..], frame, depth + 1, ctx);
+fn evalThreadLastForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
+    const result = try eval_thread.evalThreadLast(allocator, l.items[1..], frame, depth + 1);
     return .{ .value = try allocValue(allocator, result) };
 }
 
-fn evalThreadFirstForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    const result = try eval_thread.evalThreadFirst(allocator, l.items[1..], frame, depth + 1, ctx);
+fn evalThreadFirstForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
+    const result = try eval_thread.evalThreadFirst(allocator, l.items[1..], frame, depth + 1);
     return .{ .value = try allocValue(allocator, result) };
 }
 
-fn evalCondThreadFirstForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    const result = try eval_thread.evalCondThreadFirst(allocator, l.items[1..], frame, depth + 1, ctx);
+fn evalCondThreadFirstForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
+    const result = try eval_thread.evalCondThreadFirst(allocator, l.items[1..], frame, depth + 1);
     return .{ .value = try allocValue(allocator, result) };
 }
 
-fn evalCondThreadLastForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    const result = try eval_thread.evalCondThreadLast(allocator, l.items[1..], frame, depth + 1, ctx);
+fn evalCondThreadLastForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
+    const result = try eval_thread.evalCondThreadLast(allocator, l.items[1..], frame, depth + 1);
     return .{ .value = try allocValue(allocator, result) };
 }
 
-fn evalCaseForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize, ctx: ?*TrampolineStack) anyerror!EvalResult {
-    return try evalCase(allocator, l.items[1..], frame, depth + 1, ctx);
+fn evalCaseForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
+    return try evalCase(allocator, l.items[1..], frame, depth + 1);
 }
