@@ -51,6 +51,8 @@ pub fn build(b: *std.Build) void {
         .{ .name = "clojurez-mini", .opt = .ReleaseSmall, .strip = true },
     };
 
+    var debug_exe: ?*std.Build.Step.Compile = null;
+    var last_install: ?*std.Build.Step.InstallArtifact = null;
     for (variants) |v| {
         const module = b.createModule(.{
             .root_source_file = src_path,
@@ -77,8 +79,25 @@ pub fn build(b: *std.Build) void {
         exe.step.dependOn(&copy_string.step);
         exe.step.dependOn(&copy_io.step);
 
-
         const install = b.addInstallArtifact(exe, .{});
         b.getInstallStep().dependOn(&install.step);
+        last_install = install;
+        // Keep reference to the debug executable for doc generation
+        if (v.name[0] == 'c' and std.mem.eql(u8, v.name, "clojurez")) {
+            debug_exe = exe;
+        }
+    }
+
+    // Auto-generate API documentation after building the binary.
+    // Uses addRunArtifact so the binary is properly tracked as a dependency.
+    if (debug_exe) |exe| {
+        const gen_docs = b.addRunArtifact(exe);
+        gen_docs.addArg("doc/gen_docs.clj");
+        gen_docs.has_side_effects = true;
+        // Depend on all binaries being installed first
+        if (last_install) |inst| {
+            gen_docs.step.dependOn(&inst.step);
+        }
+        b.getInstallStep().dependOn(&gen_docs.step);
     }
 }
