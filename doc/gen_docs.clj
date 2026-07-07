@@ -46,21 +46,34 @@
 (defn doc-entry [k doc-str]
   (str "\n---\n\n## " k "\n\n" doc-str "\n"))
 
+(defn anchor-link [sym]
+  "Create a markdown anchor for a symbol heading." (str "#" (str sym)))
+
+(defn toc-entry [sym]
+  (str "- [" sym "](" (anchor-link sym) ")"))
+
 (defn write-ns-doc [ns-name ns-obj]
   (when ns-obj
     (let [file-path (str output-dir "/" (replace-dots ns-name) ".md")
           interns (ns-interns ns-obj)
-          ks (vec (keys interns))]
-      (println (str "Processing " ns-name " (" (zig.core/count ks) " entries)..."))
-      ;; Write header
-      (spit file-path (str "# " ns-name "\n\n"))
+          ;; Get public symbols with docs, sorted alphabetically
+          ks (vec (keys interns))
+          public-with-docs (sort (filter (fn [k]
+                                            (and (not (is-private? k))
+                                                 (has-doc? (zig.core/get interns k))))
+                                          ks))]
+      (println (str "Processing " ns-name " (" (zig.core/count public-with-docs) " public entries)..."))
+      ;; Write header + table of contents
+      (let [toc-lines (map toc-entry public-with-docs)
+            toc (str "\n## Table of Contents\n\n"
+                     (clojure.string/join "\n" (vec toc-lines)) "\n")]
+        (spit file-path (str "# " ns-name "\n\n" toc)))
       ;; Write each doc entry incrementally using builtins to avoid closure clone explosion
       (loop [i 0]
-        (when (< i (zig.core/count ks))
-          (let [k (zig.core/nth ks i)
+        (when (< i (zig.core/count public-with-docs))
+          (let [k (zig.core/nth public-with-docs i)
                 v (zig.core/get interns k)]
-            (when (and (not (is-private? k)) (has-doc? v))
-              (spit file-path (doc-entry k (get-doc v)) :append true))
+            (spit file-path (doc-entry k (get-doc v)) :append true)
             (recur (zig.core/plus i 1)))))
       (println (str "Wrote " file-path)))))
 

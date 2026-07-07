@@ -981,8 +981,11 @@ pub fn compare(val: Value, other: Value) i64 {
 
     if (std.meta.activeTag(val) == std.meta.activeTag(other)) {
         if (equals(val, other)) return 0;
-        if (std.meta.activeTag(val) == .string) {
-            return compareStrings(val.string, other.string);
+        switch (std.meta.activeTag(val)) {
+            .string => return compareStrings(val.string, other.string),
+            .symbol => return compareStrings(val.symbol, other.symbol),
+            .keyword => return compareStrings(val.keyword, other.keyword),
+            else => {},
         }
         return 1;
     }
