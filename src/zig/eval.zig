@@ -55,12 +55,14 @@ const SpecialFormFn = *const fn (Allocator, *const list.List, *vm.Frame, usize) 
 pub const EvalContext = struct {
     root_frame: ?*vm.Frame = null,
     current_frame: ?*vm.Frame = null,
-    // Phase 9: When false, callFunction evaluates body directly instead of trampolining.
-    // Used by evalRecV to prevent interference with the main eval loop.
-    trampoline_allowed: bool = true,
 };
 
 pub var eval_context: EvalContext = .{};
+
+// Phase 9: When false, callFunction evaluates body directly instead of trampolining.
+// Used by evalRecV to prevent interference with the main eval loop.
+// Thread-local to avoid race conditions when multiple futures evaluate concurrently.
+pub threadlocal var trampoline_allowed: bool = true;
 
 /// GC root callback for frame lifecycle (Phase 5/9).
 /// Marks all active evaluation frames so they survive GC collection.
@@ -362,9 +364,9 @@ pub fn evalWithFile(allocator: Allocator, form: Value, env: *Env, file: []const 
 /// callFunction evaluates body directly when trampoline_allowed is false.
 fn evalRecV(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: usize) anyerror!*Value {
     // Disable trampolining: callFunction will evaluate body directly
-    const saved_trampoline = eval_context.trampoline_allowed;
-    eval_context.trampoline_allowed = false;
-    defer eval_context.trampoline_allowed = saved_trampoline;
+    const saved_trampoline = trampoline_allowed;
+    trampoline_allowed = false;
+    defer trampoline_allowed = saved_trampoline;
 
     // With trampolining disabled, evalRec always returns .value
     const result = try evalRec(allocator, form, frame, depth);
@@ -677,9 +679,9 @@ fn evalFunctionCall(allocator: Allocator, form: *const Value, frame: *vm.Frame, 
             try macro_args.append(allocator, try vm.shallowClone(&arg, allocator));
         }
         // Call the macro with unevaluated args — disable trampolining so macros evaluate synchronously
-        const saved_trampoline = eval_context.trampoline_allowed;
-        eval_context.trampoline_allowed = false;
-        defer eval_context.trampoline_allowed = saved_trampoline;
+        const saved_trampoline = trampoline_allowed;
+        trampoline_allowed = false;
+        defer trampoline_allowed = saved_trampoline;
         const macro_r = try call(allocator, op_ptr, &macro_args, frame, depth);
         const expanded_ptr = macro_r.value;
         var expanded = expanded_ptr.*;
@@ -1095,9 +1097,9 @@ pub fn callWithEnv(allocator: Allocator, op: *const Value, args_list: *const lis
 /// Synchronous version of callWithEnv — disables trampolining.
 /// Returns the evaluated *Value directly (never .trampoline).
 pub fn callWithEnvV(allocator: Allocator, op: *const Value, args_list: *const list.List, env: *Env, depth: usize) anyerror!*Value {
-    const saved_trampoline = eval_context.trampoline_allowed;
-    eval_context.trampoline_allowed = false;
-    defer eval_context.trampoline_allowed = saved_trampoline;
+    const saved_trampoline = trampoline_allowed;
+    trampoline_allowed = false;
+    defer trampoline_allowed = saved_trampoline;
     const result = try callWithEnv(allocator, op, args_list, env, depth);
     return switch (result) {
         .value => |v| v,
@@ -1211,7 +1213,7 @@ fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, 
     // to avoid interfering with the main eval loop's current_frame tracking.
     const src_loc = if (src_line > 0) SourceLoc{ .line = src_line } else SourceLoc{};
     child_frame.src_loc = src_loc;
-    if (eval_context.trampoline_allowed) {
+    if (trampoline_allowed) {
         child_frame.body_form = body_val;
         eval_context.current_frame = child_frame;
         return .trampoline;

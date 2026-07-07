@@ -143,7 +143,8 @@ pub fn core_vector_q(self: *const Value, args: *const list.List, _: *Env) anyerr
 pub fn core_map_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
-    return vm.boolValue(std.meta.activeTag(args.items[0]) == .map);
+    // In Clojure, map? returns true for both maps and records
+    return vm.boolValue(std.meta.activeTag(args.items[0]) == .map or std.meta.activeTag(args.items[0]) == .record);
 }
 
 pub fn core_record_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {

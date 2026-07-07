@@ -216,6 +216,6 @@
 
 ;; --- coll? and map? on records ---
 (check "coll? on record" (coll? (->Person "Alice" 30)) true)
-(check "map? on record" (map? (->Person "Alice" 30)) false)
+(check "map? on record" (map? (->Person "Alice" 30)) true)
 
 (print-summary)

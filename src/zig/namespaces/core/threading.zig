@@ -66,6 +66,11 @@ fn futureThreadEntry(fn_val: Value, future_data: *vm.FutureData) void {
         gc.registerThreadRoot(@as(*anyopaque, @ptrCast(root_frame)));
 
         // Call the function with no arguments using eval.call (Frame-based)
+        // Disable trampolining so callFunction evaluates body directly.
+        // trampoline_allowed is thread-local so this doesn't affect other threads.
+        const saved_trampoline = eval.trampoline_allowed;
+        eval.trampoline_allowed = false;
+        defer eval.trampoline_allowed = saved_trampoline;
         const empty_args: list.List = .empty;
         const call_result = eval.call(allocator, &fn_val, &empty_args, root_frame, 0) catch {
             future_data.error_msg = allocator.dupe(u8, "evaluation error") catch null;
