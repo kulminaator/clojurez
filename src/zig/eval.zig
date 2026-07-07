@@ -524,7 +524,7 @@ fn parseArityForms(allocator: Allocator, items: []const Value, end: usize, idx: 
         errdefer body_list.deinit(allocator);
         try body_list.append(allocator, try vm.symValue(allocator, "do"));
         for (body_forms) |form_item| {
-            try body_list.append(allocator, try vm.clone(&form_item, allocator));
+            try body_list.append(allocator, try vm.shallowClone(&form_item, allocator));
         }
 
         // Parse params for variadic support (& rest)
@@ -577,7 +577,7 @@ fn parseParams(allocator: Allocator, params: list.List) anyerror!ParsedParams {
             // No more params expected after rest
             break;
         } else {
-            try regular_params.append(allocator, try vm.clone(&item, allocator));
+            try regular_params.append(allocator, try vm.shallowClone(&item, allocator));
         }
     }
 
@@ -646,17 +646,17 @@ fn evalCons(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: u
     var current_val = form.*;
     while (std.meta.activeTag(current_val) == .cons) {
         const cdata = current_val.cons;
-        try new_list.append(allocator, try vm.clone(&cdata.head, allocator));
+        try new_list.append(allocator, try vm.shallowClone(&cdata.head, allocator));
         current_val = cdata.tail;
     }
     // If tail is a list, splice in its elements
     if (std.meta.activeTag(current_val) == .list) {
         for (current_val.list.items.items) |item| {
-            try new_list.append(allocator, try vm.clone(&item, allocator));
+            try new_list.append(allocator, try vm.shallowClone(&item, allocator));
         }
     } else if (std.meta.activeTag(current_val) != .nil) {
         // Improper list - append the tail as a final element
-        try new_list.append(allocator, try vm.clone(&current_val, allocator));
+        try new_list.append(allocator, try vm.shallowClone(&current_val, allocator));
     }
     const list_val = try vm.listValue(allocator, new_list);
     return try evalList(allocator, &list_val, frame, depth);
@@ -675,7 +675,7 @@ fn evalFunctionCall(allocator: Allocator, form: *const Value, frame: *vm.Frame, 
         var macro_args: list.List = .empty;
         defer macro_args.deinit(allocator);
         for (l.items[1..]) |arg| {
-            try macro_args.append(allocator, try vm.clone(&arg, allocator));
+            try macro_args.append(allocator, try vm.shallowClone(&arg, allocator));
         }
         // Call the macro with unevaluated args — disable trampolining so macros evaluate synchronously
         const saved_trampoline = eval_context.trampoline_allowed;
@@ -816,7 +816,7 @@ fn evalLetFn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
         errdefer body_list.deinit(allocator);
         try body_list.append(allocator, try vm.symValue(allocator, "do"));
         for (b.items.items[2..]) |form_item| {
-            try body_list.append(allocator, try vm.clone(&form_item, allocator));
+            try body_list.append(allocator, try vm.shallowClone(&form_item, allocator));
         }
 
         // Parse params for variadic support
@@ -854,7 +854,7 @@ fn evalLetFn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
             .ns_manager = null,
         };
         var fn_val = try vm.fnValue(allocator, arities, fn_env, false);
-        const persistent_fn = try vm.clone(&fn_val, allocator);
+        const persistent_fn = try vm.shallowClone(&fn_val, allocator);
         vm.valueDeinit(&fn_val, allocator);
 
         // Bind in new_env
@@ -888,7 +888,7 @@ fn evalLetFn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
 fn bindPattern(allocator: Allocator, pattern: Value, val: Value, env: *vm.Env) anyerror!void {
     switch (std.meta.activeTag(pattern)) {
         .symbol => {
-            try env.put(pattern.symbol, try vm.clone(&val, allocator));
+            try env.put(pattern.symbol, try vm.shallowClone(&val, allocator));
         },
         .vector => {
             // Vector destructuring: [a b & rest] matches elements of val
@@ -909,7 +909,7 @@ fn bindPattern(allocator: Allocator, pattern: Value, val: Value, env: *vm.Env) a
                         errdefer rest_list.deinit(allocator);
                         var k: usize = j;
                         while (k < vitems.len) : (k += 1) {
-                            try rest_list.append(allocator, try vm.clone(&vitems[k], allocator));
+                            try rest_list.append(allocator, try vm.shallowClone(&vitems[k], allocator));
                         }
                         if (std.meta.activeTag(rest_sym) == .symbol) {
                             try env.put(rest_sym.symbol, try vm.listValue(allocator, rest_list));
@@ -930,7 +930,7 @@ fn bindPattern(allocator: Allocator, pattern: Value, val: Value, env: *vm.Env) a
 fn bindPatternFrame(allocator: Allocator, pattern: Value, val: Value, frame: *vm.Frame) anyerror!void {
     switch (std.meta.activeTag(pattern)) {
         .symbol => {
-            try frame.put(pattern.symbol, try vm.clone(&val, allocator));
+            try frame.put(pattern.symbol, try vm.shallowClone(&val, allocator));
         },
         .vector => {
             // Vector destructuring: [a b & rest] matches elements of val
@@ -951,7 +951,7 @@ fn bindPatternFrame(allocator: Allocator, pattern: Value, val: Value, frame: *vm
                         errdefer rest_list.deinit(allocator);
                         var k: usize = j;
                         while (k < vitems.len) : (k += 1) {
-                            try rest_list.append(allocator, try vm.clone(&vitems[k], allocator));
+                            try rest_list.append(allocator, try vm.shallowClone(&vitems[k], allocator));
                         }
                         if (std.meta.activeTag(rest_sym) == .symbol) {
                             try frame.put(rest_sym.symbol, try vm.listValue(allocator, rest_list));
@@ -1057,7 +1057,7 @@ fn evalLoop(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
             // Rebind loop variables with new values
             var j: usize = 0;
             while (j < recur_vals.len) : (j += 1) {
-                const new_val = try vm.clone(&recur_vals[j], allocator);
+                const new_val = try vm.shallowClone(&recur_vals[j], allocator);
                 try child_frame.put(bind_names.items[j], new_val);
             }
             vm.valueDeinit(&result, allocator);
@@ -1153,7 +1153,7 @@ fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, 
 
     // Bind function name for self-reference (e.g., (fn self [x] (self (dec x))))
     if (fn_data.name) |fn_name| {
-        const fn_clone = try vm.clone(op, allocator);
+        const fn_clone = try vm.shallowClone(op, allocator);
         try child_frame.put(fn_name, fn_clone);
     }
 
@@ -1270,7 +1270,7 @@ fn bindArityParamsFrame(allocator: Allocator, arity: *const vm.Arity, args: *con
             errdefer rest_list.deinit(allocator);
             var k: usize = min_args;
             while (k < args.items.len) : (k += 1) {
-                try rest_list.append(allocator, try vm.clone(&args.items[k], allocator));
+                try rest_list.append(allocator, try vm.shallowClone(&args.items[k], allocator));
             }
             try frame.put(arity.rest_name.?, try vm.listValue(allocator, rest_list));
         } else {
@@ -1300,7 +1300,7 @@ fn bindArityParamsEnv(allocator: Allocator, arity: *const vm.Arity, args: *const
             errdefer rest_list.deinit(allocator);
             var k: usize = min_args;
             while (k < args.items.len) : (k += 1) {
-                try rest_list.append(allocator, try vm.clone(&args.items[k], allocator));
+                try rest_list.append(allocator, try vm.shallowClone(&args.items[k], allocator));
             }
             try new_env.put(arity.rest_name.?, try vm.listValue(allocator, rest_list));
         } else {
@@ -1322,7 +1322,7 @@ fn callSet(allocator: Allocator, op: *const Value, args: *const list.List) anyer
     if (args.items.len != 1) return error.ArityError;
     for (op.set.items.items) |item| {
         if (vm.equals(item, args.items[0])) {
-            return try vm.clone(&item, allocator);
+            return try vm.shallowClone(&item, allocator);
         }
     }
     return vm.nilValue();
@@ -1411,20 +1411,20 @@ fn flattenConsForDoall(allocator: Allocator, val: Value, frame: *vm.Frame, depth
                 const cdata = current.cons;
                 const head = cdata.head;
                 if (std.meta.activeTag(head) == .lazy_seq) {
-                    const head_forced_ptr = try forceLazySeq(allocator, try vm.clone(&head, allocator), frame, depth + 1);
+                    const head_forced_ptr = try forceLazySeq(allocator, try vm.shallowClone(&head, allocator), frame, depth + 1);
                     if (std.meta.activeTag(head_forced_ptr.*) == .list) {
                         for (head_forced_ptr.list.items.items) |fi| {
-                            try target.append(allocator, try vm.clone(&fi, allocator));
+                            try target.append(allocator, try vm.shallowClone(&fi, allocator));
                         }
                     } else {
                         try target.append(allocator, head_forced_ptr.*);
                     }
                     vm.valueDeinit(&head_forced_ptr.*, allocator);
                 } else {
-                    try target.append(allocator, try vm.clone(&head, allocator));
+                    try target.append(allocator, try vm.shallowClone(&head, allocator));
                 }
                 // Move to tail
-                const tail = try vm.clone(&cdata.tail, allocator);
+                const tail = try vm.shallowClone(&cdata.tail, allocator);
                 vm.valueDeinit(&current, cdata.allocator);
                 current = tail;
             },
@@ -1434,12 +1434,12 @@ fn flattenConsForDoall(allocator: Allocator, val: Value, frame: *vm.Frame, depth
                         const forced_ptr = try forceLazySeq(allocator, item, frame, depth + 1);
                         if (std.meta.activeTag(forced_ptr.*) == .list) {
                             for (forced_ptr.list.items.items) |fi| {
-                                try target.append(allocator, try vm.clone(&fi, allocator));
+                                try target.append(allocator, try vm.shallowClone(&fi, allocator));
                             }
                         }
                         vm.valueDeinit(&forced_ptr.*, allocator);
                     } else {
-                        try target.append(allocator, try vm.clone(&item, allocator));
+                        try target.append(allocator, try vm.shallowClone(&item, allocator));
                     }
                 }
                 break;
@@ -1450,7 +1450,7 @@ fn flattenConsForDoall(allocator: Allocator, val: Value, frame: *vm.Frame, depth
                 const forced_ptr = try forceLazySeq(allocator, current, frame, depth + 1);
                 if (std.meta.activeTag(forced_ptr.*) == .list) {
                     for (forced_ptr.list.items.items) |fi| {
-                        try target.append(allocator, try vm.clone(&fi, allocator));
+                        try target.append(allocator, try vm.shallowClone(&fi, allocator));
                     }
                 }
                 vm.valueDeinit(&forced_ptr.*, allocator);
@@ -1506,12 +1506,12 @@ fn forceLazySeq(allocator: Allocator, lazy: Value, frame: *vm.Frame, depth: usiz
                         try final_list.append(allocator, head_forced_ptr.*);
                         vm.valueDeinit(&head_forced_ptr.*, allocator);
                     } else {
-                        try final_list.append(allocator, try vm.clone(&head_item, allocator));
+                        try final_list.append(allocator, try vm.shallowClone(&head_item, allocator));
                     }
                     const tail_forced_ptr = try forceLazySeq(allocator, result_ptr.*.list.items.items[1], frame, depth + 1);
                     if (std.meta.activeTag(tail_forced_ptr.*) == .list) {
                         for (tail_forced_ptr.*.list.items.items) |fi| {
-                            try final_list.append(allocator, try vm.clone(&fi, allocator));
+                            try final_list.append(allocator, try vm.shallowClone(&fi, allocator));
                         }
                     }
                     vm.valueDeinit(&tail_forced_ptr.*, allocator);
@@ -1522,12 +1522,12 @@ fn forceLazySeq(allocator: Allocator, lazy: Value, frame: *vm.Frame, depth: usiz
                             const forced_ptr = try forceLazySeq(allocator, item, frame, depth + 1);
                             if (std.meta.activeTag(forced_ptr.*) == .list) {
                                 for (forced_ptr.*.list.items.items) |fi| {
-                                    try final_list.append(allocator, try vm.clone(&fi, allocator));
+                                    try final_list.append(allocator, try vm.shallowClone(&fi, allocator));
                                 }
                             }
                             vm.valueDeinit(&forced_ptr.*, allocator);
                         } else {
-                            try final_list.append(allocator, try vm.clone(&item, allocator));
+                            try final_list.append(allocator, try vm.shallowClone(&item, allocator));
                         }
                     }
                 }
@@ -1538,12 +1538,12 @@ fn forceLazySeq(allocator: Allocator, lazy: Value, frame: *vm.Frame, depth: usiz
                         const forced_ptr = try forceLazySeq(allocator, item, frame, depth + 1);
                         if (std.meta.activeTag(forced_ptr.*) == .list) {
                             for (forced_ptr.*.list.items.items) |fi| {
-                                try final_list.append(allocator, try vm.clone(&fi, allocator));
+                                try final_list.append(allocator, try vm.shallowClone(&fi, allocator));
                             }
                         }
                         vm.valueDeinit(&forced_ptr.*, allocator);
                     } else {
-                        try final_list.append(allocator, try vm.clone(&item, allocator));
+                        try final_list.append(allocator, try vm.shallowClone(&item, allocator));
                     }
                 }
             },
@@ -1553,7 +1553,7 @@ fn forceLazySeq(allocator: Allocator, lazy: Value, frame: *vm.Frame, depth: usiz
                 const forced_ptr = try forceLazySeq(allocator, result_ptr.*, frame, depth + 1);
                 if (std.meta.activeTag(forced_ptr.*) == .list) {
                     for (forced_ptr.list.items.items) |fi| {
-                        try final_list.append(allocator, try vm.clone(&fi, allocator));
+                        try final_list.append(allocator, try vm.shallowClone(&fi, allocator));
                     }
                 }
                 vm.valueDeinit(&forced_ptr.*, allocator);
@@ -1579,7 +1579,9 @@ fn forceLazySeq(allocator: Allocator, lazy: Value, frame: *vm.Frame, depth: usiz
 fn bindParam(allocator: Allocator, param: Value, arg: Value, env: *Env) anyerror!void {
     switch (std.meta.activeTag(param)) {
         .symbol => {
-            try env.put(param.symbol, try vm.clone(&arg, allocator));
+            // Use shallowClone - all Clojure values are immutable.
+            // Sharing is safe; GC handles lifetime.
+            try env.put(param.symbol, try vm.shallowClone(&arg, allocator));
         },
         .vector => {
             // Destructure: param is [x y z], arg should be a collection
@@ -1615,7 +1617,9 @@ fn bindParam(allocator: Allocator, param: Value, arg: Value, env: *Env) anyerror
 fn bindParamFrame(allocator: Allocator, param: Value, arg: Value, frame: *vm.Frame) anyerror!void {
     switch (std.meta.activeTag(param)) {
         .symbol => {
-            try frame.put(param.symbol, try vm.clone(&arg, allocator));
+            // Use shallowClone - all Clojure values are immutable.
+            // Sharing is safe; GC handles lifetime.
+            try frame.put(param.symbol, try vm.shallowClone(&arg, allocator));
         },
         .vector => {
             // Destructure: param is [x y z], arg should be a collection
@@ -1740,7 +1744,7 @@ fn evalDef(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: u
     const eval_idx: usize = if (l.items.len >= 3) 2 else 1;
     // Value evaluated synchronously (we need to bind it)
     const val_ptr = try evalRecV(allocator, &l.items[eval_idx], frame, depth + 1);
-    const persistent_val = try vm.clone(&val_ptr.*, allocator);
+    const persistent_val = try vm.shallowClone(&val_ptr.*, allocator);
     try bindInCurrentNamespace(frame.root_env, sym.symbol, persistent_val);
     return .{ .value = try vm.cloneGC(&sym, allocator) };
 }
@@ -1875,7 +1879,7 @@ fn evalDefn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
         .ns_manager = null,
     };
     var fn_val = try vm.fnValueNamedWithDoc(allocator, arities, fn_env, false, null, docstring);
-    const persistent_fn = try vm.clone(&fn_val, allocator);
+    const persistent_fn = try vm.shallowClone(&fn_val, allocator);
     vm.valueDeinit(&fn_val, allocator);
     try bindInCurrentNamespace(frame.root_env, fname.symbol, persistent_fn);
     return .{ .value = try vm.cloneGC(&fname, allocator) };
@@ -1950,7 +1954,7 @@ fn evalDefmacro(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dep
         .ns_manager = null,
     };
     var macro_fn = try vm.fnValueNamedWithDoc(allocator, arities, fn_env, true, null, docstring);
-    const persistent_macro = try vm.clone(&macro_fn, allocator);
+    const persistent_macro = try vm.shallowClone(&macro_fn, allocator);
     vm.valueDeinit(&macro_fn, allocator);
     try bindInCurrentNamespace(frame.root_env, macro_name.symbol, persistent_macro);
     return .{ .value = try vm.cloneGC(&macro_name, allocator) };
@@ -1969,7 +1973,7 @@ fn evalSetBang(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dept
     }
     // Value evaluated synchronously (we need to bind it)
     const val_ptr = try evalRecV(allocator, &l.items[2], frame, depth + 1);
-    const persistent_val = try vm.clone(&val_ptr.*, allocator);
+    const persistent_val = try vm.shallowClone(&val_ptr.*, allocator);
     // Write to current frame's overlay (not root namespace env)
     try frame.put(sym.symbol, persistent_val);
     return .{ .value = val_ptr };
@@ -1999,7 +2003,7 @@ fn evalVar(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: u
         try evalRecV(allocator, &l.items[2], frame, depth + 1)
     else
         try allocValue(allocator, vm.nilValue());
-    const persistent_val = try vm.clone(&val_ptr.*, allocator);
+    const persistent_val = try vm.shallowClone(&val_ptr.*, allocator);
     // Write to current frame's overlay (local var)
     try frame.put(sym.symbol, persistent_val);
     return .{ .value = try vm.cloneGC(&sym, allocator) };
@@ -2012,13 +2016,13 @@ fn evalDeref(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
     const arg_ptr = try evalRecV(allocator, &l.items[1], frame, depth + 1);
     if (std.meta.activeTag(arg_ptr.*) == .atom) {
         const data = arg_ptr.*.atom;
-        const val = try vm.clone(&data.value, allocator);
+        const val = try vm.shallowClone(&data.value, allocator);
         vm.valueDeinit(&arg_ptr.*, allocator);
         return .{ .value = try allocValue(allocator, val) };
     }
     if (std.meta.activeTag(arg_ptr.*) == .reduced) {
         const data = arg_ptr.*.reduced;
-        const val = try vm.clone(&data.*, allocator);
+        const val = try vm.shallowClone(&data.*, allocator);
         vm.valueDeinit(&arg_ptr.*, allocator);
         return .{ .value = try allocValue(allocator, val) };
     }
@@ -2146,7 +2150,7 @@ fn evalLazySeq(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dept
     errdefer body.deinit(allocator);
     try body.append(allocator, try vm.symValue(allocator, "do"));
     for (l.items[1..]) |form| {
-        try body.append(allocator, try vm.clone(&form, allocator));
+        try body.append(allocator, try vm.shallowClone(&form, allocator));
     }
     // Capture the effective environment: namespace env + all frame overlay bindings
     const thunk_env = try captureFrameEnv(allocator, frame);
@@ -2189,7 +2193,7 @@ fn captureFrameEnv(allocator: Allocator, frame: *vm.Frame) anyerror!Env {
         var it = frames.items[i].overlay.entryIterator();
         while (it.next()) |entry| {
             if (std.meta.activeTag(entry.key) == .symbol) {
-                try env.put(entry.key.symbol, try vm.clone(&entry.val, allocator));
+                try env.put(entry.key.symbol, try vm.shallowClone(&entry.val, allocator));
             }
         }
     }
@@ -2268,7 +2272,7 @@ fn evalExtend(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth
     if (l.items.len < 4) return error.ArityError;
     var ext_args: list.List = .empty;
     errdefer ext_args.deinit(allocator);
-    try ext_args.append(allocator, try vm.clone(&l.items[1], allocator));
+    try ext_args.append(allocator, try vm.shallowClone(&l.items[1], allocator));
     var ei: usize = 2;
     while (ei < l.items.len) : (ei += 1) {
         const ptr = try evalRecV(allocator, &l.items[ei], frame, depth + 1);

@@ -20,7 +20,7 @@ pub fn core_re_pattern(self: *const Value, args: *const list.List, env: *Env) an
     if (args.items.len != 1) return error.ArityError;
     const arg = args.items[0];
     // If already a regex, return it as-is
-    if (std.meta.activeTag(arg) == .regex) return try vm.clone(&arg, env.allocator);
+    if (std.meta.activeTag(arg) == .regex) return try vm.shallowClone(&arg, env.allocator);
     if (std.meta.activeTag(arg) != .string) return error.TypeError;
 
     const allocator = env.allocator;

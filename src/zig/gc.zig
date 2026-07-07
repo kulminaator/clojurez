@@ -118,6 +118,122 @@ pub var current_gc: ?*GC = null;
 /// REPL input history buffer — registered as a root so it survives sweeps.
 pub var repl_history_buffer: []const u8 = "";
 
+// ============================================================
+// Debug allocation tracker — tracks allocations per return address
+// ============================================================
+const DebugAllocEntry = struct {
+    addr: usize,
+    count: usize,
+    total_bytes: usize,
+    source_file: []const u8,
+    source_line: usize,
+};
+var debug_alloc_entries: [256]DebugAllocEntry = undefined;
+var debug_alloc_count: usize = 0;
+var debug_alloc_enabled: bool = false;
+var debug_alloc_total: usize = 0;
+
+// Stack trace capture state - prints to stderr
+var stack_trace_capture_active: bool = false;
+var stack_trace_capture_count: usize = 0;
+var stack_trace_capture_limit: usize = 0;
+
+/// Start capturing stack traces (prints to stderr).
+pub fn debugAllocStartCapture(limit: usize) void {
+    stack_trace_capture_active = true;
+    stack_trace_capture_count = 0;
+    stack_trace_capture_limit = limit;
+}
+
+/// Stop capturing stack traces.
+pub fn debugAllocStopCapture() void {
+    stack_trace_capture_active = false;
+}
+
+/// Write a stack trace for the current allocation to stderr.
+fn debugAllocWriteStackTrace(size: usize) void {
+    if (!stack_trace_capture_active) return;
+    if (stack_trace_capture_count >= stack_trace_capture_limit) {
+        stack_trace_capture_active = false;
+        return;
+    }
+
+    var buf: [256]u8 = undefined;
+    const header = std.fmt.bufPrint(&buf, "\n--- Alloc #{d} size={d} ---\n", .{ stack_trace_capture_count + 1, size }) catch "";
+    std.debug.print("{s}", .{header});
+
+    // Capture stack trace (raw addresses)
+    var addr_buf: [64]usize = undefined;
+    const trace = std.debug.captureCurrentStackTrace(.{}, &addr_buf);
+    var i: usize = 0;
+    while (i < trace.return_addresses.len) : (i += 1) {
+        const ret_addr = trace.return_addresses[i];
+        std.debug.print("  0x{x}\n", .{ret_addr});
+    }
+    stack_trace_capture_count += 1;
+}
+
+/// Enable debug allocation tracking. Call before the code you want to measure.
+pub fn debugAllocEnable() void {
+    debug_alloc_enabled = true;
+    debug_alloc_count = 0;
+    debug_alloc_total = 0;
+}
+
+/// Disable debug allocation tracking.
+pub fn debugAllocDisable() void {
+    debug_alloc_enabled = false;
+}
+
+/// Record an allocation from a specific return address.
+fn debugAllocRecord(addr: usize, size: usize, src: std.builtin.SourceLocation) void {
+    if (!debug_alloc_enabled) return;
+    // Look for existing entry
+    var i: usize = 0;
+    while (i < debug_alloc_count) : (i += 1) {
+        if (debug_alloc_entries[i].addr == addr) {
+            debug_alloc_entries[i].count += 1;
+            debug_alloc_entries[i].total_bytes += size;
+            return;
+        }
+    }
+    // Add new entry
+    if (debug_alloc_count < 256) {
+        debug_alloc_entries[debug_alloc_count] = .{
+            .addr = addr,
+            .count = 1,
+            .total_bytes = size,
+            .source_file = src.file,
+            .source_line = src.line,
+        };
+        debug_alloc_count += 1;
+    }
+}
+
+/// Print the top 20 allocation sources by total bytes.
+pub fn debugAllocPrintTop() void {
+    if (!debug_alloc_enabled and debug_alloc_count == 0) return;
+    std.log.err("\n=== TOP ALLOCATION SOURCES (by bytes) ===\n", .{});
+    // Sort by total_bytes descending (simple insertion sort)
+    var i: usize = 1;
+    while (i < debug_alloc_count) : (i += 1) {
+        var j = i;
+        while (j > 0 and debug_alloc_entries[j - 1].total_bytes < debug_alloc_entries[j].total_bytes) : (j -= 1) {
+            const tmp = debug_alloc_entries[j - 1];
+            debug_alloc_entries[j - 1] = debug_alloc_entries[j];
+            debug_alloc_entries[j] = tmp;
+        }
+    }
+    const limit = if (debug_alloc_count < 20) debug_alloc_count else 20;
+    var k: usize = 0;
+    while (k < limit) : (k += 1) {
+        const e = debug_alloc_entries[k];
+        std.log.err("  #{d}: addr=0x{x} {s}:{d} count={d} bytes={d} ({d}KB)\n",
+            .{ k + 1, e.addr, e.source_file, e.source_line, e.count, e.total_bytes, e.total_bytes / 1024 });
+    }
+    std.log.err("=== END TOP ALLOCATION SOURCES ===\n", .{});
+}
+
 pub const GC = struct {
     const Self = @This();
 
@@ -264,6 +380,14 @@ pub const GC = struct {
     /// Allocate a GC-tracked object of the given size and alignment.
     pub fn alloc(self: *Self, size: usize, alignment: Alignment) ?*anyopaque {
         const actual_size: usize = if (size == 0) 1 else size;
+
+        // Debug: track allocation source
+        debugAllocRecord(@returnAddress(), actual_size, @src());
+        if (debug_alloc_enabled) {
+            debug_alloc_total += 1;
+        }
+        // Stack trace capture (writes to file)
+        debugAllocWriteStackTrace(actual_size);
 
         // Convert log2 alignment to actual alignment value
         const data_align: usize = @as(usize, 1) << @intFromEnum(alignment);

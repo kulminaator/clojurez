@@ -11,7 +11,7 @@ pub fn listFromVector(allocator: Allocator, v: vec.Vector) anyerror!list.List {
     var result: list.List = .empty;
     errdefer result.deinit(allocator);
     for (v.items) |item| {
-        try result.append(allocator, try vm.clone(&item, allocator));
+        try result.append(allocator, try vm.shallowClone(&item, allocator));
     }
     return result;
 }
@@ -20,7 +20,7 @@ pub fn listFromSlice(allocator: Allocator, items: []const Value) anyerror!list.L
     var result: list.List = .empty;
     errdefer result.deinit(allocator);
     for (items) |item| {
-        try result.append(allocator, try vm.clone(&item, allocator));
+        try result.append(allocator, try vm.shallowClone(&item, allocator));
     }
     return result;
 }

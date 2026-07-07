@@ -46,7 +46,7 @@ pub fn core_temp_dir(self: *const Value, args: *const list.List, env_env: *Env) 
 
 /// Fully realize a lazy-seq into a concrete list for printing.
 fn fullyRealizeLazySeq(allocator: std.mem.Allocator, val: Value) anyerror!Value {
-    if (std.meta.activeTag(val) != .lazy_seq) return try vm.clone(&val, allocator);
+    if (std.meta.activeTag(val) != .lazy_seq) return try vm.shallowClone(&val, allocator);
 
     var result: list.List = .empty;
     errdefer result.deinit(allocator);
@@ -69,13 +69,13 @@ fn fullyRealizeLazySeq(allocator: std.mem.Allocator, val: Value) anyerror!Value 
                 const realized = try fullyRealizeLazySeq(allocator, item);
                 if (std.meta.activeTag(realized) == .list) {
                     for (realized.list.items.items) |ri| {
-                        try result.append(allocator, try vm.clone(&ri, allocator));
+                        try result.append(allocator, try vm.shallowClone(&ri, allocator));
                     }
                 } else {
                     try result.append(allocator, realized);
                 }
             } else {
-                try result.append(allocator, try vm.clone(&item, allocator));
+                try result.append(allocator, try vm.shallowClone(&item, allocator));
             }
         }
         vm.valueDeinit(&forced, allocator);

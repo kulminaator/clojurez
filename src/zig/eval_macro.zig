@@ -42,7 +42,7 @@ pub fn unquoteProcess(allocator: Allocator, form: Value, frame: *vm.Frame, depth
                         const splice_ptr = splice_r.value;
                         if (std.meta.activeTag(splice_ptr.*) == .list) {
                             for (splice_ptr.*.list.items.items) |elem| {
-                                try result.append(allocator, try vm.clone(&elem, allocator));
+                                try result.append(allocator, try vm.shallowClone(&elem, allocator));
                             }
                         }
                         vm.valueDeinit(&splice_ptr.*, allocator);
@@ -62,6 +62,6 @@ pub fn unquoteProcess(allocator: Allocator, form: Value, frame: *vm.Frame, depth
             }
             return try vm.vectorValue(allocator, result);
         },
-        else => return try vm.clone(&form, allocator),
+        else => return try vm.shallowClone(&form, allocator),
     }
 }

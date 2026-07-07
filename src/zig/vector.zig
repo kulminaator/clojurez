@@ -21,7 +21,7 @@ pub fn clone(self: *const Vector, allocator: Allocator) anyerror!Vector {
     }
     try result.ensureTotalCapacity(allocator, self.items.len);
     for (self.items) |item| {
-        try result.append(allocator, try vm.clone(&item, allocator));
+        try result.append(allocator, try vm.shallowClone(&item, allocator));
     }
     return result;
 }

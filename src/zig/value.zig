@@ -809,12 +809,17 @@ pub fn cloneGC(val: *const Value, allocator: Allocator) anyerror!*Value {
 /// Use this when you need a Value that won't be mutated but want to avoid
 /// the cost of deep-cloning function bodies (e.g., ns-interns returning function refs).
 pub fn shallowClone(val: *const Value, allocator: Allocator) anyerror!Value {
-    if (std.meta.activeTag(val.*) == .function) {
-        // Create a new Value pointing to the same FnData.
-        // Safe because FnData is immutable and lives in permanent namespace roots.
-        return val.*;
+    // For types that own heap data (strings, symbols, keywords),
+    // we need to duplicate the string so the caller owns an independent copy.
+    // For all other types (functions, maps, lists, integers, etc.),
+    // we share the Value tag union - the GC handles lifetime.
+    switch (val.*) {
+        .string => |s| return stringValue(allocator, s),
+        .symbol => |s| return symValue(allocator, s),
+        .keyword => |s| return keywordValue(allocator, s),
+        // All other types: share the Value (GC-managed or immediate)
+        else => return val.*,
     }
-    return clone(val, allocator);
 }
 
 /// Share: allocates a *Value on the heap that shares all data with the original.

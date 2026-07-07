@@ -48,7 +48,7 @@ fn buildNsMap(allocator: Allocator, ns_name: []const u8, ns_env: *Env, ns_mgr: *
         if (eval_ns.isReferredName(ns_env.referred_names.items, sym_name)) continue;
         try interns_map.append(allocator, .{
             .key = try vm.symValue(allocator, sym_name),
-            .value = try vm.clone(&entry.val, allocator),
+            .value = try vm.shallowClone(&entry.val, allocator),
         });
     }
     try result_map.append(allocator, .{
@@ -72,7 +72,7 @@ fn buildNsMap(allocator: Allocator, ns_name: []const u8, ns_env: *Env, ns_mgr: *
         if (!eval_ns.isReferredName(ns_env.referred_names.items, sym_name)) continue;
         try refers_map.append(allocator, .{
             .key = try vm.symValue(allocator, sym_name),
-            .value = try vm.clone(&entry.val, allocator),
+            .value = try vm.shallowClone(&entry.val, allocator),
         });
     }
     try result_map.append(allocator, .{
@@ -148,7 +148,7 @@ fn buildNsRecord(allocator: Allocator, ns_name: []const u8, ns_env: *Env, ns_mgr
         if (eval_ns.isReferredName(ns_env.referred_names.items, sym_name)) continue;
         try interns_map.append(allocator, .{
             .key = try vm.symValue(allocator, sym_name),
-            .value = try vm.clone(&entry.val, allocator),
+            .value = try vm.shallowClone(&entry.val, allocator),
         });
     }
     try fields.append(allocator, .{
@@ -171,7 +171,7 @@ fn buildNsRecord(allocator: Allocator, ns_name: []const u8, ns_env: *Env, ns_mgr
         if (!eval_ns.isReferredName(ns_env.referred_names.items, sym_name)) continue;
         try refers_map.append(allocator, .{
             .key = try vm.symValue(allocator, sym_name),
-            .value = try vm.clone(&entry.val, allocator),
+            .value = try vm.shallowClone(&entry.val, allocator),
         });
     }
     try fields.append(allocator, .{
@@ -415,13 +415,13 @@ pub fn core_ns_resolve(self: *const Value, args: *const list.List, env_env: *Env
         const target_ns_name = ns_mgr.resolveAlias(ns_name, prefix) orelse prefix;
         const target_env = ns_mgr.getNamespace(target_ns_name) orelse return vm.nilValue();
         const val = target_env.get(name);
-        if (val) |v| return try vm.clone(&v, allocator);
+        if (val) |v| return try vm.shallowClone(&v, allocator);
         return vm.nilValue();
     }
 
     // Unqualified symbol: look up in namespace's env chain
     const val = ns_env.get(sym_str);
-    if (val) |v| return try vm.clone(&v, allocator);
+    if (val) |v| return try vm.shallowClone(&v, allocator);
     return vm.nilValue();
 }
 
@@ -771,13 +771,13 @@ pub fn core_resolve(self: *const Value, args: *const list.List, env_env: *Env) a
         const target_ns_name = ns_mgr.resolveAlias(current_ns, prefix) orelse prefix;
         const target_env = ns_mgr.getNamespace(target_ns_name) orelse return vm.nilValue();
         const val = target_env.get(name);
-        if (val) |v| return try vm.clone(&v, allocator);
+        if (val) |v| return try vm.shallowClone(&v, allocator);
         return vm.nilValue();
     }
 
     // Unqualified symbol: look up in current namespace's env chain
     const val = ns_env.get(sym_str);
-    if (val) |v| return try vm.clone(&v, allocator);
+    if (val) |v| return try vm.shallowClone(&v, allocator);
     return vm.nilValue();
 }
 
@@ -826,7 +826,7 @@ fn buildRefersMap(allocator: Allocator, ns_env: *const Env) anyerror!Value {
         if (!eval_ns.isReferredName(ns_env.referred_names.items, sym_name)) continue;
         try refers_map.append(allocator, .{
             .key = try vm.symValue(allocator, sym_name),
-            .value = try vm.clone(&entry.val, allocator),
+            .value = try vm.shallowClone(&entry.val, allocator),
         });
     }
     return try vm.mapValue(allocator, refers_map);
@@ -909,7 +909,7 @@ pub fn core_ns_map(self: *const Value, args: *const list.List, env_env: *Env) an
         const sym_name = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol else continue;
         try result_map.append(allocator, .{
             .key = try vm.symValue(allocator, sym_name),
-            .value = try vm.clone(&entry.val, allocator),
+            .value = try vm.shallowClone(&entry.val, allocator),
         });
     }
 
@@ -987,7 +987,7 @@ pub fn core_intern(self: *const Value, args: *const list.List, env_env: *Env) an
 
     // If value provided, set it
     if (args.items.len == 3) {
-        const val = try vm.clone(&args.items[2], allocator);
+        const val = try vm.shallowClone(&args.items[2], allocator);
         try ns_env.put(sym_arg.symbol, val);
     }
 

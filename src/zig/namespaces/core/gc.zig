@@ -86,8 +86,60 @@ pub fn core_gc_stats(self: *const Value, args: *const list.List, env: *Env) anye
     return try vm.mapValue(allocator, entries);
 }
 
+/// zig.core/debug-alloc-enable — enable debug allocation tracking.
+/// Takes no arguments. Returns nil.
+pub fn core_debug_alloc_enable(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 0) return error.ArityError;
+    gc_mod.debugAllocEnable();
+    return vm.nilValue();
+}
+
+/// zig.core/debug-alloc-disable — disable debug allocation tracking.
+/// Takes no arguments. Returns nil.
+pub fn core_debug_alloc_disable(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 0) return error.ArityError;
+    gc_mod.debugAllocDisable();
+    return vm.nilValue();
+}
+
+/// zig.core/debug-alloc-top — print top allocation sources to stderr.
+/// Takes no arguments. Returns nil.
+pub fn core_debug_alloc_top(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 0) return error.ArityError;
+    gc_mod.debugAllocPrintTop();
+    return vm.nilValue();
+}
+
+/// zig.core/debug-alloc-capture — start capturing stack traces to /tmp/alloc_traces.log.
+/// Takes one argument: max number of traces to capture.
+pub fn core_debug_alloc_capture(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const limit_val = args.items[0];
+    if (std.meta.activeTag(limit_val) != .integer) return error.TypeError;
+    const limit: usize = @intCast(limit_val.integer);
+    gc_mod.debugAllocStartCapture(limit);
+    return vm.nilValue();
+}
+
+/// zig.core/debug-alloc-stop-capture — stop capturing stack traces.
+pub fn core_debug_alloc_stop_capture(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 0) return error.ArityError;
+    gc_mod.debugAllocStopCapture();
+    return vm.nilValue();
+}
+
 /// Register GC functions in the zig.core namespace.
 pub fn registerGCFunctions(env: *Env) anyerror!void {
     try env.put("gc-sweep", vm.builtinFnValue(core_gc_sweep));
     try env.put("gc-stats", vm.builtinFnValue(core_gc_stats));
+    try env.put("debug-alloc-enable", vm.builtinFnValue(core_debug_alloc_enable));
+    try env.put("debug-alloc-disable", vm.builtinFnValue(core_debug_alloc_disable));
+    try env.put("debug-alloc-top", vm.builtinFnValue(core_debug_alloc_top));
+    try env.put("debug-alloc-capture", vm.builtinFnValue(core_debug_alloc_capture));
+    try env.put("debug-alloc-stop-capture", vm.builtinFnValue(core_debug_alloc_stop_capture));
 }

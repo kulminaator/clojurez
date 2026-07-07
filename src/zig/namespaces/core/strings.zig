@@ -39,7 +39,7 @@ fn tryToString(allocator: Allocator, val: *const Value, env: *Env) anyerror!?[]c
     // Build args: (toString this)
     var args: list.List = .empty;
     defer args.deinit(allocator);
-    try args.append(allocator, try vm.clone(val, allocator));
+    try args.append(allocator, try vm.shallowClone(val, allocator));
 
     // Call the implementation directly
     const eval_mod = @import("../../eval.zig");

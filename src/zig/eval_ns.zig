@@ -345,7 +345,7 @@ pub fn referVars(
         };
 
         // Clone the value into the target namespace
-        const cloned = try vm.clone(&sym_val, allocator);
+        const cloned = try vm.shallowClone(&sym_val, allocator);
         try target_ns.put(local_name, cloned);
         // NOTE: Do NOT deinit sym_val here. The iterator returns a shallow
         // copy of the Value from the HAMT. The HAMT owns the underlying

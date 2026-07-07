@@ -29,7 +29,7 @@ const Allocator = std.mem.Allocator;
 
 /// Fully realize a lazy-seq into a concrete list for printing.
 fn fullyRealizeLazySeq(allocator: Allocator, val: Value) anyerror!Value {
-    if (std.meta.activeTag(val) != .lazy_seq) return try vm.clone(&val, allocator);
+    if (std.meta.activeTag(val) != .lazy_seq) return try vm.shallowClone(&val, allocator);
 
     var result: list.List = .empty;
     errdefer result.deinit(allocator);
@@ -52,13 +52,13 @@ fn fullyRealizeLazySeq(allocator: Allocator, val: Value) anyerror!Value {
                 const realized = try fullyRealizeLazySeq(allocator, item);
                 if (std.meta.activeTag(realized) == .list) {
                     for (realized.list.items.items) |ri| {
-                        try result.append(allocator, try vm.clone(&ri, allocator));
+                        try result.append(allocator, try vm.shallowClone(&ri, allocator));
                     }
                 } else {
                     try result.append(allocator, realized);
                 }
             } else {
-                try result.append(allocator, try vm.clone(&item, allocator));
+                try result.append(allocator, try vm.shallowClone(&item, allocator));
             }
         }
         vm.valueDeinit(&forced, allocator);
@@ -671,7 +671,7 @@ fn runMain(allocator: Allocator, env: *Env, ns_name: []const u8) anyerror!void {
     // Call (-main) with no arguments
     var call_list: list.List = .empty;
     defer call_list.deinit(allocator);
-    try call_list.append(allocator, try vm.clone(&main_fn, allocator));
+    try call_list.append(allocator, try vm.shallowClone(&main_fn, allocator));
     const call_result_ptr = try eval.evalWithFile(allocator, try vm.listValue(allocator, call_list), ns_env, file_path);
     vm.valueDeinit(&call_result_ptr.*, allocator);
 

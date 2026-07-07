@@ -119,7 +119,7 @@ pub fn core_future_call(self: *const Value, args: *const list.List, env_env: *En
     // Clone the function value for the child thread.
     // This deep-clones the FnData and its captured Env, so the child thread
     // gets an independent copy of the closure environment.
-    const cloned_fn = try vm.clone(&fn_val, allocator);
+    const cloned_fn = try vm.shallowClone(&fn_val, allocator);
 
     // Create the FutureData and store the cloned function in it.
     // Storing fn_val in FutureData is critical: the GC scans FutureData.fn_val
@@ -205,7 +205,7 @@ pub fn core_deref_future(self: *const Value, args: *const list.List, env_env: *E
     // Poll until done or timeout
     while (data.state.load(.acquire) == FutureState.running) {
         if (has_timeout and elapsed_ms >= timeout_ms) {
-            if (timeout_val) |tv| return try vm.clone(tv, allocator);
+            if (timeout_val) |tv| return try vm.shallowClone(tv, allocator);
             return vm.nilValue();
         }
         // Sleep 1ms between polls
@@ -217,7 +217,7 @@ pub fn core_deref_future(self: *const Value, args: *const list.List, env_env: *E
     const state = data.state.load(.monotonic);
     return switch (state) {
         FutureState.done => {
-            if (data.result) |*r| return try vm.clone(r, allocator);
+            if (data.result) |*r| return try vm.shallowClone(r, allocator);
             return vm.nilValue();
         },
         FutureState.error_state => {
@@ -298,7 +298,7 @@ pub fn core_deliver(self: *const Value, args: *const list.List, env_env: *Env) a
     const allocator = env_env.allocator;
 
     // Clone the value first.
-    const cloned = try vm.clone(&args.items[1], allocator);
+    const cloned = try vm.shallowClone(&args.items[1], allocator);
 
     // Atomically transition state from pending to delivered.
     // Only the first deliver succeeds; subsequent delivers are no-ops.
@@ -348,7 +348,7 @@ pub fn core_deref_promise(self: *const Value, args: *const list.List, env_env: *
     // Poll until delivered or timeout
     while (data.state.load(.acquire) == PromiseState.pending) {
         if (has_timeout and elapsed_ms >= timeout_ms) {
-            if (timeout_val) |tv| return try vm.clone(tv, allocator);
+            if (timeout_val) |tv| return try vm.shallowClone(tv, allocator);
             return vm.nilValue();
         }
         const sleep_duration = std.Io.Duration.fromMilliseconds(1);
@@ -357,7 +357,7 @@ pub fn core_deref_promise(self: *const Value, args: *const list.List, env_env: *
     }
 
     // Delivered — return the value
-    if (data.value) |*v| return try vm.clone(v, allocator);
+    if (data.value) |*v| return try vm.shallowClone(v, allocator);
     return vm.nilValue();
 }
 
