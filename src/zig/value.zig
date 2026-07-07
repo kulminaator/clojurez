@@ -1544,7 +1544,14 @@ pub const Env = struct {
     }
 
     pub fn getPtr(self: *Env, name: []const u8) ?*const Value {
-        return self.entries.findPtr(phm.sym(name));
+        var current: ?*Env = self;
+        while (current) |env| {
+            if (!env.entries.isEmpty()) {
+                if (env.entries.findPtr(phm.sym(name))) |ptr| return ptr;
+            }
+            current = env.parent;
+        }
+        return null;
     }
 };
 
@@ -1614,6 +1621,11 @@ pub const Frame = struct {
     // Only set for frames created by callFunction (Phase 9).
     // null for scope frames (let, loop, binding).
     body_form: ?Value = null,
+    // True for frames created by callFunction (function call frames).
+    // When true, symbol lookup skips the parent chain and goes directly
+    // to root_env (the function's captured closure environment).
+    // This prevents caller's bindings from shadowing closure captures.
+    is_function_frame: bool = false,
 
     /// Create a new Frame with the given allocator, optional parent,
     /// and root namespace environment.
@@ -1651,18 +1663,22 @@ pub const Frame = struct {
             const found = self.overlay.find(phm.sym(name));
             if (found) |val| return val;
         }
-        // 3. Walk parent chain
-        var current: ?*Frame = self.parent;
-        while (current) |frame| {
-            if (!frame.overlay.isEmpty()) {
-                const found = frame.overlay.find(phm.sym(name));
-                if (found) |val| {
-                    // Memoize for next time (respects MEMO_CACHE_MAX)
-                    self._memoCachePut(name, val);
-                    return val;
+        // 3. Walk parent chain (only for scope frames, not function call frames)
+        // Function call frames have captured environment in root_env - parent chain
+        // would incorrectly expose caller's bindings which shadow closure captures.
+        if (!self.is_function_frame) {
+            var current: ?*Frame = self.parent;
+            while (current) |frame| {
+                if (!frame.overlay.isEmpty()) {
+                    const found = frame.overlay.find(phm.sym(name));
+                    if (found) |val| {
+                        // Memoize for next time (respects MEMO_CACHE_MAX)
+                        self._memoCachePut(name, val);
+                        return val;
+                    }
                 }
+                current = frame.parent;
             }
-            current = frame.parent;
         }
         // 4. Fall back to root namespace environment
         const root_val = self.root_env.get(name);
@@ -1674,13 +1690,38 @@ pub const Frame = struct {
         return null;
     }
 
+    /// Like get() but returns a pointer to the stored Value instead of a copy.
+    /// Used by the evaluator to avoid unnecessary cloneGC allocations.
+    /// The returned pointer is valid as long as the binding is not modified.
+    pub fn getPtr(self: *Frame, name: []const u8) ?*const Value {
+        // 1. Check own overlay
+        if (!self.overlay.isEmpty()) {
+            if (self.overlay.findPtr(phm.sym(name))) |ptr| return ptr;
+        }
+        // 2. Walk parent chain (only for scope frames, not function call frames)
+        if (!self.is_function_frame) {
+            var current: ?*Frame = self.parent;
+            while (current) |frame| {
+                if (!frame.overlay.isEmpty()) {
+                    if (frame.overlay.findPtr(phm.sym(name))) |ptr| return ptr;
+                }
+                current = frame.parent;
+            }
+        }
+        // 3. Fall back to root namespace environment
+        return self.root_env.getPtr(name);
+    }
+
     /// Check if a binding exists (anywhere in the chain).
     pub fn has(self: *Frame, name: []const u8) bool {
         if (!self.overlay.isEmpty() and self.overlay.containsKey(phm.sym(name))) return true;
-        var current: ?*Frame = self.parent;
-        while (current) |frame| {
-            if (!frame.overlay.isEmpty() and frame.overlay.containsKey(phm.sym(name))) return true;
-            current = frame.parent;
+        // Function call frames skip parent chain (same as get)
+        if (!self.is_function_frame) {
+            var current: ?*Frame = self.parent;
+            while (current) |frame| {
+                if (!frame.overlay.isEmpty() and frame.overlay.containsKey(phm.sym(name))) return true;
+                current = frame.parent;
+            }
         }
         return self.root_env.has(name);
     }
@@ -1689,11 +1730,15 @@ pub const Frame = struct {
     /// Used by put() to enforce parent immutability: if this frame has active children
     /// and the binding exists in a parent, we must not shadow it because child frames
     /// may be depending on the parent's value.
+    /// For function call frames, skips frame parent chain (caller's bindings not visible).
     fn _existsInParentChain(self: *Frame, name: []const u8) bool {
-        var current: ?*Frame = self.parent;
-        while (current) |frame| {
-            if (!frame.overlay.isEmpty() and frame.overlay.containsKey(phm.sym(name))) return true;
-            current = frame.parent;
+        // Function call frames skip frame parent chain
+        if (!self.is_function_frame) {
+            var current: ?*Frame = self.parent;
+            while (current) |frame| {
+                if (!frame.overlay.isEmpty() and frame.overlay.containsKey(phm.sym(name))) return true;
+                current = frame.parent;
+            }
         }
         return self.root_env.has(name);
     }

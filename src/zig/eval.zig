@@ -378,8 +378,10 @@ fn evalRecV(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: u
 /// When a function body needs evaluation, returns .trampoline instead of recursing.
 pub fn evalRec(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     switch (form.*) {
+        // Literals: allocate a new *Value wrapper. Cannot return AST pointer directly
+        // because valueDeinit would overwrite the shared AST Value with nil.
         .nil, .bool, .integer, .float, .bigint, .ratio, .decimal, .string, .regex, .character, .keyword, .set, .queue, .chunk, .chunked_cons, .atom, .future, .promise, .reduced, .wrapped, .record => {
-            return .{ .value = try vm.cloneGC(form, allocator) };
+            return .{ .value = try allocValue(allocator, form.*) };
         },
         .symbol => {
             if (std.mem.eql(u8, form.*.symbol, "quote") or
@@ -387,37 +389,33 @@ pub fn evalRec(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth
                 std.mem.eql(u8, form.*.symbol, "unquote") or
                 std.mem.eql(u8, form.*.symbol, "unquote-splicing"))
             {
-                return .{ .value = try vm.cloneGC(form, allocator) };
+                return .{ .value = try allocValue(allocator, form.*) };
             }
             // Handle qualified symbols: alias/name or namespace/name
             if (std.mem.indexOfScalar(u8, form.*.symbol, '/')) |slash_idx| {
                 const alias = form.*.symbol[0..slash_idx];
                 const name = form.*.symbol[slash_idx + 1 ..];
-                // Resolve through namespace manager
                 const ns_mgr = findNsManager(frame.root_env) orelse {
                     const val2 = frame.get(form.*.symbol);
-                    if (val2) |v| return .{ .value = try vm.cloneGC(&v, allocator) };
+                    if (val2) |v| return .{ .value = try allocValue(allocator, v) };
                     std.debug.print("Undefined symbol: '{s}'\n", .{form.*.symbol});
                     return error.UndefinedSymbol;
                 };
-                // Look up alias in current namespace, or use the part before '/' as a direct namespace name
                 const current_ns = ns_mgr.getCurrentNamespace();
                 const target_ns = ns_mgr.resolveAlias(current_ns, alias) orelse alias;
-                // Get target namespace's env and look up the name
                 const target_env = ns_mgr.getNamespace(target_ns) orelse {
-                    // Target namespace doesn't exist, try direct lookup
                     const val3 = frame.get(form.*.symbol);
-                    if (val3) |v| return .{ .value = try vm.cloneGC(&v, allocator) };
+                    if (val3) |v| return .{ .value = try allocValue(allocator, v) };
                     std.debug.print("Undefined symbol: '{s}'\n", .{form.*.symbol});
                     return error.UndefinedSymbol;
                 };
                 const val4 = target_env.get(name);
-                if (val4) |v| return .{ .value = try vm.cloneGC(&v, allocator) };
+                if (val4) |v| return .{ .value = try allocValue(allocator, v) };
                 std.debug.print("Undefined symbol: '{s}'\n", .{form.*.symbol});
                 return error.UndefinedSymbol;
             }
             const val = frame.get(form.*.symbol);
-            if (val) |v| return .{ .value = try vm.cloneGC(&v, allocator) };
+            if (val) |v| return .{ .value = try allocValue(allocator, v) };
             std.debug.print("Undefined symbol: '{s}'\n", .{form.*.symbol});
             return error.UndefinedSymbol;
         },
@@ -430,8 +428,9 @@ pub fn evalRec(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth
         .map => {
             return try evalMap(allocator, form, frame, depth);
         },
-        .function, .builtin_fn => return .{ .value = try vm.cloneGC(form, allocator) },
-        .lazy_seq => return .{ .value = try vm.cloneGC(form, allocator) },
+        // Functions, builtins, lazy-seqs: allocate new wrapper to avoid valueDeinit corruption.
+        .function, .builtin_fn => return .{ .value = try allocValue(allocator, form.*) },
+        .lazy_seq => return .{ .value = try allocValue(allocator, form.*) },
         .cons => {
             return try evalCons(allocator, form, frame, depth);
         },
@@ -1147,9 +1146,11 @@ fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, 
     // This avoids issues with shared Env HAMTs being corrupted by deinit.
     const child_frame = try parent_frame.createChild(allocator);
     // Set root_env to the function's captured environment.
-    // The Frame lookup chain handles everything:
-    //   child_frame.overlay (params) → parent chain → root_env (closure captures) → root_env.parent (namespace)
+    // Mark as function frame so lookup skips parent chain:
+    //   child_frame.overlay (params) → root_env (closure captures) → root_env.parent (namespace)
+    // The parent chain is kept for trampoline/lifecycle but NOT for symbol lookup.
     child_frame.root_env = fn_data.env;
+    child_frame.is_function_frame = true;
 
     // Bind function name for self-reference (e.g., (fn self [x] (self (dec x))))
     if (fn_data.name) |fn_name| {
@@ -1872,10 +1873,17 @@ fn evalDefn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
         }
     }
 
+    // Get the actual namespace env where bindings live.
+    // fn_env.parent must point to the same env chain that bindInCurrentNamespace uses,
+    // otherwise recursive self-references won't find the function in the namespace.
+    const ns_env_for_closure: *Env = if (findNsManager(frame.root_env)) |ns_mgr| blk: {
+        const current_ns = ns_mgr.getCurrentNamespace();
+        break :blk ns_mgr.getNamespace(current_ns) orelse frame.root_env;
+    } else frame.root_env;
     const fn_env: Env = .{
         .allocator = allocator,
         .entries = phm.PersistentHashMap.empty(),
-        .parent = frame.root_env,
+        .parent = ns_env_for_closure,
         .ns_manager = null,
     };
     var fn_val = try vm.fnValueNamedWithDoc(allocator, arities, fn_env, false, null, docstring);
@@ -1947,10 +1955,15 @@ fn evalDefmacro(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dep
 
     arities = try parseArityForms(allocator, l.items, l.items.len, &idx);
 
+    // Same as defn: use the actual namespace env for the closure parent
+    const ns_env_for_closure2: *Env = if (findNsManager(frame.root_env)) |ns_mgr| blk: {
+        const current_ns = ns_mgr.getCurrentNamespace();
+        break :blk ns_mgr.getNamespace(current_ns) orelse frame.root_env;
+    } else frame.root_env;
     const fn_env: Env = .{
         .allocator = allocator,
         .entries = phm.PersistentHashMap.empty(),
-        .parent = frame.root_env,
+        .parent = ns_env_for_closure2,
         .ns_manager = null,
     };
     var macro_fn = try vm.fnValueNamedWithDoc(allocator, arities, fn_env, true, null, docstring);
@@ -2264,7 +2277,8 @@ fn evalDoall(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
         vm.valueDeinit(&coll_ptr.*, allocator);
         return .{ .value = try allocValue(allocator, try vm.listValue(allocator, list.empty())) };
     }
-    return .{ .value = try vm.cloneGC(&coll_ptr.*, allocator) };
+    // coll_ptr is already a *Value, return it directly without cloning
+    return .{ .value = coll_ptr };
 }
 
 /// (extend atype protocol mmap & more...) — add protocol implementations
