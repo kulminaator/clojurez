@@ -13,7 +13,7 @@
 (def tmp-symlink (str tmp-base "link.txt"))
 
 ;; Clean up from previous runs
-(zig.core/delete-tree tmp-base)
+(zig.io/delete-tree tmp-base)
 
 ;; ============================================================
 ;; File Path Utilities
@@ -60,112 +60,112 @@
 ;; ============================================================
 
 ;; make-dir
-(zig.core/make-parents tmp-dir2)
+(zig.io/make-parents tmp-dir2)
 (check "is-directory? after make-parents"
-  (zig.core/is-directory? tmp-dir2)
+  (zig.io/is-directory? tmp-dir2)
   true)
 (check "file-exists? after make-parents"
-  (zig.core/file-exists? tmp-dir2)
+  (zig.io/file-exists? tmp-dir2)
   true)
 
 ;; is-file?
 (spit tmp-file "hello")
 (check "is-file? on file"
-  (zig.core/is-file? tmp-file)
+  (zig.io/is-file? tmp-file)
   true)
 (check "is-file? on dir"
-  (zig.core/is-file? tmp-dir)
+  (zig.io/is-file? tmp-dir)
   false)
 (check "is-file? on nonexistent"
-  (zig.core/is-file? "/tmp/zzz_nonexistent_xyz.txt")
+  (zig.io/is-file? "/tmp/zzz_nonexistent_xyz.txt")
   false)
 
 ;; file-stat
 (check "file-stat returns map"
-  (map? (zig.core/file-stat tmp-file))
+  (map? (zig.io/file-stat tmp-file))
   true)
 (check "file-stat has :size"
-  (number? (:size (zig.core/file-stat tmp-file)))
+  (number? (:size (zig.io/file-stat tmp-file)))
   true)
 (check "file-stat :kind is :file"
-  (:kind (zig.core/file-stat tmp-file))
+  (:kind (zig.io/file-stat tmp-file))
   :file)
 (check "file-stat :kind dir is :directory"
-  (:kind (zig.core/file-stat tmp-dir))
+  (:kind (zig.io/file-stat tmp-dir))
   :directory)
 (check "file-stat nonexistent returns nil"
-  (zig.core/file-stat "/tmp/zzz_nonexistent_xyz.txt")
+  (zig.io/file-stat "/tmp/zzz_nonexistent_xyz.txt")
   nil)
 
 ;; file-size
 (check "file-size"
-  (zig.core/file-size tmp-file)
+  (zig.io/file-size tmp-file)
   5)
 (check "file-size nonexistent returns nil"
-  (zig.core/file-size "/tmp/zzz_nonexistent_xyz.txt")
+  (zig.io/file-size "/tmp/zzz_nonexistent_xyz.txt")
   nil)
 
 ;; list-dir (use temp-dir for cross-platform compatibility)
 (def tmp-list-dir (zig.core/temp-dir))
 (check "list-dir returns vector"
-  (vector? (zig.core/list-dir tmp-list-dir))
+  (vector? (zig.io/list-dir tmp-list-dir))
   true)
 (check "list-dir entries are maps"
-  (every? map? (zig.core/list-dir tmp-list-dir))
+  (every? map? (zig.io/list-dir tmp-list-dir))
   true)
 (check "list-dir entries have :name"
-  (every? #(string? (:name %)) (zig.core/list-dir tmp-list-dir))
+  (every? #(string? (:name %)) (zig.io/list-dir tmp-list-dir))
   true)
 (check "list-dir entries have :kind"
-  (every? #(keyword? (:kind %)) (zig.core/list-dir tmp-list-dir))
+  (every? #(keyword? (:kind %)) (zig.io/list-dir tmp-list-dir))
   true)
 
 ;; walk-dir
 (check "walk-dir returns vector"
-  (vector? (zig.core/walk-dir tmp-dir))
+  (vector? (zig.io/walk-dir tmp-dir))
   true)
 (check "walk-dir entries have :path"
-  (every? #(string? (:path %)) (zig.core/walk-dir tmp-dir))
+  (every? #(string? (:path %)) (zig.io/walk-dir tmp-dir))
   true)
 
 ;; file-parent
 (check "file-parent absolute"
-  (zig.core/file-parent "/tmp/foo.txt")
+  (zig.io/file-parent "/tmp/foo.txt")
   "/tmp")
 (check "file-parent root"
-  (zig.core/file-parent "/")
+  (zig.io/file-parent "/")
   "/")
 (check "file-parent relative"
-  (zig.core/file-parent "foo/bar.txt")
+  (zig.io/file-parent "foo/bar.txt")
   "foo")
 (check "file-parent no slash"
-  (zig.core/file-parent "foo.txt")
+  (zig.io/file-parent "foo.txt")
   ".")
 
 ;; file-name
 (check "file-name absolute"
-  (zig.core/file-name "/tmp/foo.txt")
+  (zig.io/file-name "/tmp/foo.txt")
   "foo.txt")
 (check "file-name relative"
-  (zig.core/file-name "foo/bar.txt")
+  (zig.io/file-name "foo/bar.txt")
   "bar.txt")
 (check "file-name no slash"
-  (zig.core/file-name "foo.txt")
+  (zig.io/file-name "foo.txt")
   "foo.txt")
 (check "file-name root"
-  (zig.core/file-name "/")
+  (zig.io/file-name "/")
   nil)
 
 ;; absolute-path
 (check "absolute-path absolute stays same"
-  (= (zig.core/absolute-path "/tmp/foo") "/tmp/foo")
+  (= (zig.io/absolute-path "/tmp/foo") "/tmp/foo")
   true)
 
 ;; ============================================================
 ;; File Modification Time
 ;; ============================================================
 (check "file-modified-time returns number"
-  (number? (zig.core/file-modified-time tmp-file))
+  (number? (zig.io/file-modified-time tmp-file))
   true)
 
 ;; ============================================================
@@ -197,14 +197,14 @@
 
 ;; input-stream + output-stream (byte streams)
 (let [os (io/output-stream tmp-file2)]
-  (zig.core/write-bytes os "binary test")
+  (zig.io/write-bytes os "binary test")
   (io/-close os))
 (check "output-stream writes bytes"
   (slurp tmp-file2)
   "binary test")
 
 (let [is (io/input-stream tmp-file2)
-      data (zig.core/read-bytes is 100)]
+      data (zig.io/read-bytes is 100)]
   (io/-close is)
   (check "input-stream reads bytes" data "binary test"))
 
@@ -244,12 +244,12 @@
 ;; Symlink operations
 ;; ============================================================
 (spit tmp-file "symlink target")
-(zig.core/sym-link tmp-file tmp-symlink)
+(zig.io/sym-link tmp-file tmp-symlink)
 (check "is-symlink? on symlink"
-  (zig.core/is-symlink? tmp-symlink)
+  (zig.io/is-symlink? tmp-symlink)
   true)
 (check "read-link returns target"
-  (= (clojure.string/replace (zig.core/read-link tmp-symlink) "\\" "/")
+  (= (clojure.string/replace (zig.io/read-link tmp-symlink) "\\" "/")
      (clojure.string/replace tmp-file "\\" "/"))
   true)
 
@@ -257,28 +257,28 @@
 ;; rename
 ;; ============================================================
 (spit tmp-file "rename test")
-(zig.core/rename tmp-file (str tmp-file ".renamed"))
+(zig.io/rename tmp-file (str tmp-file ".renamed"))
 (check "rename file-exists? new name"
-  (zig.core/file-exists? (str tmp-file ".renamed"))
+  (zig.io/file-exists? (str tmp-file ".renamed"))
   true)
 (check "rename file-exists? old name gone"
-  (zig.core/file-exists? tmp-file)
+  (zig.io/file-exists? tmp-file)
   false)
 
 ;; ============================================================
 ;; delete operations
 ;; ============================================================
 (spit tmp-file "delete me")
-(zig.core/delete-file tmp-file)
+(zig.io/delete-file tmp-file)
 (check "delete-file removes file"
-  (zig.core/file-exists? tmp-file)
+  (zig.io/file-exists? tmp-file)
   false)
 
 ;; delete-dir (empty)
-(zig.core/make-parents (str tmp-base "emptydir/"))
-(zig.core/delete-dir (str tmp-base "emptydir/"))
+(zig.io/make-parents (str tmp-base "emptydir/"))
+(zig.io/delete-dir (str tmp-base "emptydir/"))
 (check "delete-dir removes empty dir"
-  (zig.core/file-exists? (str tmp-base "emptydir/"))
+  (zig.io/file-exists? (str tmp-base "emptydir/"))
   false)
 
 ;; ============================================================
@@ -323,6 +323,6 @@
 ;; ============================================================
 ;; Cleanup
 ;; ============================================================
-(zig.core/delete-tree tmp-base)
+(zig.io/delete-tree tmp-base)
 
 (print-summary)

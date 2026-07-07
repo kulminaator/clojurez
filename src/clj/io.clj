@@ -92,13 +92,13 @@
 (extend-protocol IOFactory
   :string
   (make-reader [path opts]
-    (zig.core/open-reader path opts))
+    (zig.io/open-reader path opts))
   (make-writer [path opts]
-    (zig.core/open-writer path opts))
+    (zig.io/open-writer path opts))
   (make-input-stream [path opts]
-    (zig.core/open-input-stream path opts))
+    (zig.io/open-input-stream path opts))
   (make-output-stream [path opts]
-    (zig.core/open-output-stream path opts)))
+    (zig.io/open-output-stream path opts)))
 
 ;; ============================================================
 ;; Readable/Writable extensions for wrapped handles
@@ -107,14 +107,14 @@
 (extend-protocol Readable
   :wrapped
   (read-chunk [reader _opts]
-    (zig.core/read-line-stream reader)))
+    (zig.io/read-line-stream reader)))
 
 (extend-protocol Writable
   :wrapped
   (write-chunk [writer chunk]
-    (zig.core/write-string writer chunk))
+    (zig.io/write-string writer chunk))
   (flush [writer]
-    (zig.core/flush-stream writer)))
+    (zig.io/flush-stream writer)))
 
 ;; ============================================================
 ;; Closeable extension for wrapped handles
@@ -123,7 +123,7 @@
 (extend-protocol Closeable
   :wrapped
   (-close [handle]
-    (zig.core/close-stream handle)))
+    (zig.io/close-stream handle)))
 
 ;; ============================================================
 ;; File path utilities
@@ -322,7 +322,7 @@
      :err  => stderr (String)"
   [& args]
   (let [[cmd opts] (parse-sh-args args)]
-    (zig.core/sh-execute cmd opts)))
+    (zig.io/sh-execute cmd opts)))
 
 ;; ============================================================
 ;; Async subprocess execution (streaming I/O)
@@ -340,7 +340,7 @@
 
    Returns a wrapped process handle."  [& args]
   (let [[cmd opts] (parse-sh-args args)]
-    (zig.core/sh-execute-stream cmd opts)))
+    (zig.io/sh-execute-stream cmd opts)))
 
 (defn sh-out
   "Read available output from a process handle's stdout.
@@ -349,9 +349,9 @@
    the pipe is closed and empty.
 
    max-bytes (optional) limits the amount read, default 4096."  ([handle]
-     (zig.core/sh-read-output handle))
+     (zig.io/sh-read-output handle))
     ([handle max-bytes]
-     (zig.core/sh-read-output handle max-bytes)))
+     (zig.io/sh-read-output handle max-bytes)))
 
 (defn sh-err
   "Read available output from a process handle's stderr.
@@ -360,22 +360,22 @@
    the pipe is closed and empty.
 
    max-bytes (optional) limits the amount read, default 4096."  ([handle]
-     (zig.core/sh-read-error handle))
+     (zig.io/sh-read-error handle))
     ([handle max-bytes]
-     (zig.core/sh-read-error handle max-bytes)))
+     (zig.io/sh-read-error handle max-bytes)))
 
 (defn sh-in
   "Write data to a process handle's stdin.
 
    Returns nil."  [handle data]
-  (zig.core/sh-write-input handle data))
+  (zig.io/sh-write-input handle data))
 
 (defn sh-close-in
   "Close the stdin pipe of a process handle, signaling EOF to
    the subprocess.
 
    Returns nil."  [handle]
-  (zig.core/sh-close-input handle))
+  (zig.io/sh-close-input handle))
 
 (defn sh-wait
   "Wait for a subprocess to finish and return its exit code.

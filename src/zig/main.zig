@@ -29,7 +29,7 @@ const Allocator = std.mem.Allocator;
 
 /// Fully realize a lazy-seq into a concrete list for printing.
 fn fullyRealizeLazySeq(allocator: Allocator, val: Value) anyerror!Value {
-    if (std.meta.activeTag(val) != .lazy_seq) return try vm.clone(&val, allocator);
+    if (std.meta.activeTag(val) != .lazy_seq) return try vm.shallowClone(&val, allocator);
 
     var result: list.List = .empty;
     errdefer result.deinit(allocator);
@@ -52,13 +52,13 @@ fn fullyRealizeLazySeq(allocator: Allocator, val: Value) anyerror!Value {
                 const realized = try fullyRealizeLazySeq(allocator, item);
                 if (std.meta.activeTag(realized) == .list) {
                     for (realized.list.items.items) |ri| {
-                        try result.append(allocator, try vm.clone(&ri, allocator));
+                        try result.append(allocator, try vm.shallowClone(&ri, allocator));
                     }
                 } else {
                     try result.append(allocator, realized);
                 }
             } else {
-                try result.append(allocator, try vm.clone(&item, allocator));
+                try result.append(allocator, try vm.shallowClone(&item, allocator));
             }
         }
         vm.valueDeinit(&forced, allocator);
@@ -192,33 +192,45 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
 
     // Register regexp built-in functions into zig.regexp namespace.
     try regexp_api.registerRegexpFunctions(zr_env);
-
-    // Register zig.io filesystem built-in functions in zig.core.
-    // The Clojure wrappers in io.clj reference zig.core/file-stat etc.
-    try io_fs.registerFsFunctions(zc_env);
-    // Register zig.io stream functions in zig.core.
-    try io_stream.registerStreamFunctions(zc_env);
-    // Register zig.io shell functions in zig.core.
-    try io_shell.registerShellFunctions(zc_env);
-    // Copy fs builtins to clojure.core for direct access
-    try copyBuiltinsToNamespaceSelective(zc_env, clojure_core_env, &.{
-        "file-stat", "file-exists?", "file-size", "is-directory?", "is-file?",
-        "is-symlink?", "list-dir", "walk-dir", "make-dir", "make-parents",
-        "delete-file", "delete-dir", "delete-tree", "rename", "copy-file",
-        "sym-link", "read-link", "file-modified-time", "file-parent",
-        "file-name", "absolute-path", "sh-execute", "copy",
-        "open-input-stream", "open-output-stream", "read-bytes", "write-bytes",
-        "open-reader", "open-writer", "read-line-stream", "write-string",
-        "close-stream", "flush-stream",
-        "sh-execute-stream", "sh-read-output", "sh-read-error",
-        "sh-write-input", "sh-wait", "sh-kill", "sh-close-input",
-    });
+    try zr_env.markAllOwned();
 
     // Create zig.io namespace — I/O utilities for ClojureZ.
     // Parent set to clojure.core so io code can use core functions.
     const zio_env = try ns_mgr.createNamespace("zig.io");
     zio_env.parent = clojure_core_env;
     zio_env.ns_manager = ns_mgr;
+
+    // Register zig.io filesystem, stream, and shell built-in functions.
+    // The Clojure wrappers in io.clj reference zig.io/file-stat etc.
+    try io_fs.registerFsFunctions(zio_env);
+    try io_stream.registerStreamFunctions(zio_env);
+    try io_shell.registerShellFunctions(zio_env);
+    try zio_env.markAllOwned();
+
+    // Register colliding builtins in zig.core (copy, sh-wait, sh-kill)
+    // These have Clojure wrappers with the same name in zig.io,
+    // so the wrappers reference zig.core/ to avoid shadowing.
+    try zc_env.put("copy", vm.builtinFnValue(io_fs.core_copy));
+    try zc_env.put("sh-wait", vm.builtinFnValue(io_shell.core_sh_wait));
+    try zc_env.put("sh-kill", vm.builtinFnValue(io_shell.core_sh_kill));
+    // Mark all zig.core builtins as owned so ns-interns works correctly.
+    try zc_env.markAllOwned();
+
+    // Copy I/O builtins to clojure.core for direct access
+    try copyBuiltinsToNamespaceSelective(zio_env, clojure_core_env, &.{
+        "file-stat", "file-exists?", "file-size", "is-directory?", "is-file?",
+        "is-symlink?", "list-dir", "walk-dir", "make-dir", "make-parents",
+        "delete-file", "delete-dir", "delete-tree", "rename", "copy-file",
+        "sym-link", "read-link", "file-modified-time", "file-parent",
+        "file-name", "absolute-path", "sh-execute",
+        "open-input-stream", "open-output-stream", "read-bytes", "write-bytes",
+        "open-reader", "open-writer", "read-line-stream", "write-string",
+        "close-stream", "flush-stream",
+        "sh-execute-stream", "sh-read-output", "sh-read-error",
+        "sh-write-input", "sh-close-input",
+    });
+    // Also copy the colliding builtins from zig.core to clojure.core
+    try copyBuiltinsToNamespaceSelective(zc_env, clojure_core_env, &.{"copy", "sh-wait", "sh-kill"});
 
     // Load embedded Clojure I/O library into zig.io namespace.
     try loadIoLibrary(allocator, zio_env);
@@ -236,6 +248,11 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // Register GC roots: clojure.core env contains all persistent values (builtins + core.clj defs).
     // Also register namespace envs as roots.
     registerGcRoots(&gc_instance, clojure_core_env, ns_mgr);
+
+    // Register all namespace environments and NamespaceManager as permanent roots.
+    // Permanent roots are NEVER swept — they and everything reachable from them
+    // (function definitions, vars, metadata) survive all GC cycles.
+    registerPermanentRoots(&gc_instance, ns_mgr, clojure_core_env, zc_env, cs_env, zr_env, zio_env);
 
     // Count arguments
     const arg_count = countArgs(init.args, allocator);
@@ -654,49 +671,48 @@ fn runMain(allocator: Allocator, env: *Env, ns_name: []const u8) anyerror!void {
     // Call (-main) with no arguments
     var call_list: list.List = .empty;
     defer call_list.deinit(allocator);
-    try call_list.append(allocator, try vm.clone(&main_fn, allocator));
+    try call_list.append(allocator, try vm.shallowClone(&main_fn, allocator));
     const call_result_ptr = try eval.evalWithFile(allocator, try vm.listValue(allocator, call_list), ns_env, file_path);
     vm.valueDeinit(&call_result_ptr.*, allocator);
 
 }
 
 /// GC root callback: scans all env entries and NamespaceManager data.
-fn gcRootCallback(gc_inst: *gc_mod.GC) void {
-    var ctx = gc_mod.ScanContext{ .gc = gc_inst, .scan_fn = gc_scan.valueScanFn };
+fn gcRootCallback(gc_inst: *gc_mod.GC, ctx: *gc_mod.ScanContext) void {
     // This function is called from within gc.collect().
     // We use static pointers set up during registration.
     if (gc_root_env) |env| {
         // Mark the Env struct itself (allocated via GC allocator)
-        gc_inst.markRecursive(env, &ctx);
+        gc_inst.markRecursive(env, ctx);
         scanEnvEntriesDirect(env, gc_inst);
     }
     if (gc_root_ns_mgr) |ns_mgr| {
         // Mark the NamespaceManager struct itself (allocated via GC allocator)
-        gc_inst.markRecursive(ns_mgr, &ctx);
+        gc_inst.markRecursive(ns_mgr, ctx);
         // Register NamespaceManager's own allocations as roots.
         // These are not part of any Value, so the scan function won't find them.
         if (ns_mgr.current_ns.len > 0) {
-            gc_inst.markRecursive(@as(*anyopaque, @ptrCast(@constCast(ns_mgr.current_ns.ptr))), &ctx);
+            gc_inst.markRecursive(@as(*anyopaque, @ptrCast(@constCast(ns_mgr.current_ns.ptr))), ctx);
         }
         // Mark the namespaces PersistentHashMap root node.
         // HAMT nodes are tracked via scanHashMapNode which marks keys, values, and wrapped pointers.
         if (ns_mgr.namespaces.root) |root| {
-            gc_inst.markRecursive(root, &ctx);
+            gc_inst.markRecursive(root, ctx);
         }
         // Classpath entries buffer + individual strings
         if (ns_mgr.classpath.items.len > 0) {
             gc_inst.setObjectType(@as(*anyopaque, @ptrCast(ns_mgr.classpath.items.ptr)), gc_mod.GCObjectType.unknown);
-            gc_inst.markRecursive(@as(*anyopaque, @ptrCast(ns_mgr.classpath.items.ptr)), &ctx);
+            gc_inst.markRecursive(@as(*anyopaque, @ptrCast(ns_mgr.classpath.items.ptr)), ctx);
         }
         for (ns_mgr.classpath.items) |dir| {
             if (dir.len > 0) {
-                gc_inst.markRecursive(@as(*anyopaque, @ptrCast(@constCast(dir.ptr))), &ctx);
+                gc_inst.markRecursive(@as(*anyopaque, @ptrCast(@constCast(dir.ptr))), ctx);
             }
         }
         // Mark the aliases PersistentHashMap root node.
         // HAMT nodes are tracked via scanHashMapNode — keys and Value.string values are scanned automatically.
         if (ns_mgr.aliases.root) |root| {
-            gc_inst.markRecursive(root, &ctx);
+            gc_inst.markRecursive(root, ctx);
         }
     }
     // Mark REPL input history buffer so it survives sweeps.
@@ -708,6 +724,8 @@ fn gcRootCallback(gc_inst: *gc_mod.GC) void {
             @as(*anyopaque, @ptrCast(@constCast(gc_mod.repl_history_buffer.ptr))),
         );
     }
+    // Phase 5: Mark active evaluation frames (trampoline stack + current frame)
+    eval.markFrameRoots(gc_inst, ctx);
 }
 
 /// Scan all Values in an env's entries and mark their child pointers.
@@ -739,6 +757,34 @@ fn registerGcRoots(gc_inst: *gc_mod.GC, env: *Env, ns_mgr: *vm.NamespaceManager)
     gc_root_env = env;
     gc_root_ns_mgr = ns_mgr;
     gc_inst.root_fn = gcRootCallback;
+}
+
+/// Register all namespace environments and NamespaceManager as permanent roots.
+/// Permanent roots are NEVER swept by the GC — they and everything reachable
+/// from them (function definitions, vars, metadata) survive all collection cycles.
+fn registerPermanentRoots(
+    gc_inst: *gc_mod.GC,
+    ns_mgr: *vm.NamespaceManager,
+    clojure_core: *Env,
+    zig_core: *Env,
+    clojure_string: *Env,
+    zig_regexp: *Env,
+    zig_io: *Env,
+) void {
+    // NamespaceManager — the registry of all namespaces
+    gc_inst.addPermanentRoot(@as(*anyopaque, @ptrCast(ns_mgr)));
+
+    // Core namespace environments — contain all function definitions
+    gc_inst.addPermanentRoot(@as(*anyopaque, @ptrCast(clojure_core)));
+    gc_inst.addPermanentRoot(@as(*anyopaque, @ptrCast(zig_core)));
+    gc_inst.addPermanentRoot(@as(*anyopaque, @ptrCast(clojure_string)));
+    gc_inst.addPermanentRoot(@as(*anyopaque, @ptrCast(zig_regexp)));
+    gc_inst.addPermanentRoot(@as(*anyopaque, @ptrCast(zig_io)));
+
+    // User namespace — default REPL namespace
+    if (ns_mgr.getNamespace("user")) |user_env| {
+        gc_inst.addPermanentRoot(@as(*anyopaque, @ptrCast(user_env)));
+    }
 }
 
 fn printUsage() anyerror!void {

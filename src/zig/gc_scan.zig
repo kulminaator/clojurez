@@ -74,6 +74,7 @@ pub fn valueScanFn(obj: *anyopaque, ctx: *gc.ScanContext) void {
         .bytecode_program => scanBytecodeProgram(obj, ctx),
         .chunk_data => scanChunkData(obj, ctx),
         .chunked_cons_data => scanChunkedConsData(obj, ctx),
+        .frame => scanFrame(obj, ctx),
     }
 }
 
@@ -275,6 +276,10 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
             if (fn_data.name) |name| {
                 if (name.len > 0) markPtr(name.ptr, ctx);
             }
+            // Mark the fn's docstring (if GC-allocated)
+            if (fn_data.docstring) |ds| {
+                if (ds.len > 0) markPtr(ds.ptr, ctx);
+            }
             // Mark the arities array buffer itself
             if (fn_data.arities.items.len > 0) {
                 ctx.gc.markRecursive(fn_data.arities.items.ptr, ctx);
@@ -304,6 +309,10 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
             }
             if (fn_env.ns_manager) |ns_mgr| {
                 ctx.gc.markRecursive(ns_mgr, ctx);
+            }
+            // Mark the cached metadata map (if populated)
+            if (fn_data.cached_meta) |cm| {
+                scanValueChildrenDirect(&cm, ctx);
             }
         },
 
@@ -444,6 +453,10 @@ fn scanFnData(fndata_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     if (fndata.name) |name| {
         if (name.len > 0) markPtr(name.ptr, ctx);
     }
+    // Mark the fn's docstring (if GC-allocated)
+    if (fndata.docstring) |ds| {
+        if (ds.len > 0) markPtr(ds.ptr, ctx);
+    }
     // Mark the fn's env struct itself (heap-allocated *Env)
     const fn_env = fndata.env;
     ctx.gc.markRecursive(fn_env, ctx);
@@ -523,7 +536,7 @@ fn scanSubNodesArray(items_ptr: *anyopaque, ctx: *gc.ScanContext, total_size: us
     }
 }
 
-/// Scan an Env struct: entries (PersistentHashMap), parent, ns_manager, referred_names.
+/// Scan an Env struct: entries (PersistentHashMap), parent, ns_manager, referred_names, owned_symbols.
 fn scanEnv(env_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     const env: *vm.Env = @ptrCast(@alignCast(env_ptr));
 
@@ -535,6 +548,13 @@ fn scanEnv(env_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     if (env.referred_names.items.len > 0) {
         markPtr(env.referred_names.items.ptr, ctx);
         for (env.referred_names.items) |name| {
+            if (name.len > 0) markPtr(name.ptr, ctx);
+        }
+    }
+    // Mark owned_symbols list buffer and strings
+    if (env.owned_symbols.items.len > 0) {
+        markPtr(env.owned_symbols.items.ptr, ctx);
+        for (env.owned_symbols.items) |name| {
             if (name.len > 0) markPtr(name.ptr, ctx);
         }
     }
@@ -739,5 +759,44 @@ fn scanNamespaceManager(ns_mgr_ptr: *anyopaque, ctx: *gc.ScanContext) void {
         for (ns_mgr.classpath.items) |dir| {
             if (dir.len > 0) markPtr(dir.ptr, ctx);
         }
+    }
+}
+
+/// Scan a Frame struct: { parent, children, overlay, memo_cache, root_env, function_ref, src_loc, has_active_children }.
+/// Marks parent frame, child frames, overlay HAMT, memo cache values, root env, and function_ref.
+fn scanFrame(frame_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const frame: *vm.Frame = @ptrCast(@alignCast(frame_ptr));
+
+    // Mark parent frame pointer
+    if (frame.parent) |parent| {
+        ctx.gc.markRecursive(parent, ctx);
+    }
+    // Mark child frame pointers — defensive: check items.len before iterating
+    // (children list may have been safely reset by detachFromParent)
+    if (frame.children.items.len > 0) {
+        for (frame.children.items) |child| {
+            ctx.gc.markRecursive(child, ctx);
+        }
+    }
+    // Mark overlay HAMT root (triggers recursive scanning of HAMT nodes)
+    if (frame.overlay.root) |root| {
+        ctx.gc.markRecursive(root, ctx);
+    }
+    // Mark memo cache entries (StringHashMapUnmanaged values are Value objects)
+    if (frame.memo_cache.count() > 0) {
+        var it = frame.memo_cache.iterator();
+        while (it.next()) |entry| {
+            scanValueChildrenDirect(&entry.value_ptr.*, ctx);
+        }
+    }
+    // Mark root_env pointer
+    ctx.gc.markRecursive(frame.root_env, ctx);
+    // Mark function_ref if present
+    if (frame.function_ref) |*ref| {
+        scanValueChildrenDirect(ref, ctx);
+    }
+    // Mark body_form if present (Phase 9: trampoline body stored in Frame)
+    if (frame.body_form) |*bf| {
+        scanValueChildrenDirect(bf, ctx);
     }
 }

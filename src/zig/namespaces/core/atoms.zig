@@ -14,10 +14,10 @@ pub fn core_deref(self: *const Value, args: *const list.List, env_env: *Env) any
     // Extract value from atom
     if (std.meta.activeTag(arg) == .atom) {
         const data = arg.atom;
-        return try vm.clone(&data.value, env_env.allocator);
+        return try vm.shallowClone(&data.value, env_env.allocator);
     }
     // For non-atoms, return as-is
-    return try vm.clone(&arg, env_env.allocator);
+    return try vm.shallowClone(&arg, env_env.allocator);
 }
 
 pub fn core_atom(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
@@ -36,10 +36,10 @@ pub fn core_swap_bang(self: *const Value, args: *const list.List, env_env: *Env)
 
     var call_args: list.List = .empty;
     errdefer call_args.deinit(env_env.allocator);
-    try call_args.append(env_env.allocator, try vm.clone(&data.value, env_env.allocator));
+    try call_args.append(env_env.allocator, try vm.shallowClone(&data.value, env_env.allocator));
     var i: usize = 2;
     while (i < args.items.len) : (i += 1) {
-        try call_args.append(env_env.allocator, try vm.clone(&args.items[i], env_env.allocator));
+        try call_args.append(env_env.allocator, try vm.shallowClone(&args.items[i], env_env.allocator));
     }
 
     const new_val_ptr = try eval_helpers.callBuiltin(env_env.allocator, &f, &call_args, env_env);
@@ -49,7 +49,7 @@ pub fn core_swap_bang(self: *const Value, args: *const list.List, env_env: *Env)
     vm.valueDeinit(&data.value, env_env.allocator);
     data.value = new_val;
 
-    return try vm.clone(&new_val, env_env.allocator);
+    return try vm.shallowClone(&new_val, env_env.allocator);
 }
 
 pub fn core_reset_bang(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
@@ -58,11 +58,11 @@ pub fn core_reset_bang(self: *const Value, args: *const list.List, env_env: *Env
     const atom = args.items[0];
     if (std.meta.activeTag(atom) != .atom) return error.TypeError;
     const data = atom.atom;
-    const new_val = try vm.clone(&args.items[1], env_env.allocator);
+    const new_val = try vm.shallowClone(&args.items[1], env_env.allocator);
     vm.valueDeinit(&data.value, env_env.allocator);
     data.value = new_val;
 
-    return try vm.clone(&new_val, env_env.allocator);
+    return try vm.shallowClone(&new_val, env_env.allocator);
 }
 
 pub fn registerAtomFunctions(env: *Env) anyerror!void {

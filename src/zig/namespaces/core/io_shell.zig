@@ -361,7 +361,5 @@ pub fn registerShellFunctions(env: *Env) anyerror!void {
     try env.put("sh-read-output", vm.builtinFnValue(core_sh_read_output));
     try env.put("sh-read-error", vm.builtinFnValue(core_sh_read_error));
     try env.put("sh-write-input", vm.builtinFnValue(core_sh_write_input));
-    try env.put("sh-wait", vm.builtinFnValue(core_sh_wait));
-    try env.put("sh-kill", vm.builtinFnValue(core_sh_kill));
     try env.put("sh-close-input", vm.builtinFnValue(core_sh_close_input));
 }

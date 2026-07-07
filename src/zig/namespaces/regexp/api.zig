@@ -20,12 +20,12 @@ pub fn core_re_pattern(self: *const Value, args: *const list.List, env: *Env) an
     if (args.items.len != 1) return error.ArityError;
     const arg = args.items[0];
     // If already a regex, return it as-is
-    if (std.meta.activeTag(arg) == .regex) return try vm.clone(&arg, env.allocator);
+    if (std.meta.activeTag(arg) == .regex) return try vm.shallowClone(&arg, env.allocator);
     // If already a map with :pattern, return it as-is
     if (std.meta.activeTag(arg) == .map) {
         for (arg.map.entries.items) |entry| {
             if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, "pattern")) {
-                return try vm.clone(&arg, env.allocator);
+                return try vm.shallowClone(&arg, env.allocator);
             }
         }
     }
@@ -335,7 +335,7 @@ fn getReplacementString(allocator: Allocator, v: Value) anyerror![]const u8 {
 // ============================================================
 
 fn callBuiltin(allocator: Allocator, op: Value, args: list.List, env: *Env) anyerror!Value {
-    const call_result = try eval_mod.call(allocator, &op, &args, env, 0, null);
+    const call_result = try eval_mod.callWithEnv(allocator, &op, &args, env, 0);
     return call_result.value.*;
 }
 

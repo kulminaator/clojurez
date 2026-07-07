@@ -3,54 +3,216 @@
 
 (ns clojure.core)
 
+;; ---- Object protocol (like Java's Object class) ----
+;; Provides toString, equals, hashCode for all types.
+;; Records and other types can implement this protocol to customize behavior.
+(defprotocol Object
+  "Base protocol for all values, mirroring Java's Object class."
+  (toString [this] "Returns a string representation of this value.")
+  (equals [this other] "Returns true if this value is equal to other.")
+  (hashCode [this] "Returns a hash code for this value."))
+
+;; Default Object impl for nil
+(extend-type nil
+  Object
+  (toString [this] "nil")
+  (equals [this other] (identical? this other))
+  (hashCode [this] 0))
+
+;; Default Object impl for booleans
+(extend-type :boolean
+  Object
+  (toString [this] (if this "true" "false"))
+  (equals [this other] (identical? this other))
+  (hashCode [this] (if this 1231 1237)))
+
+;; Default Object impl for numbers (integer, float, bigint, ratio, decimal)
+(extend-type :integer
+  Object
+  (toString [this] (str this))
+  (equals [this other] (= this other))
+  (hashCode [this] (hash this)))
+
+(extend-type :float
+  Object
+  (toString [this] (str this))
+  (equals [this other] (= this other))
+  (hashCode [this] (hash this)))
+
+;; Default Object impl for strings
+(extend-type :string
+  Object
+  (toString [this] this)
+  (equals [this other] (= this other))
+  (hashCode [this] (hash this)))
+
+;; pr-str — returns the printed representation of x as a string
+(defn pr-str
+  "Returns the printed representation of x as a string."
+  [x]
+  (cond
+    (nil? x) "nil"
+    (boolean? x) (if x "true" "false")
+    (integer? x) (str x)
+    (float? x) (str x)
+    (string? x) (str "\"" x "\"")
+    (symbol? x) (str x)
+    (keyword? x) (str x)
+    (list? x) (str "(" (clojure.string/join " " (map pr-str x)) ")")
+    (vector? x) (str "[" (clojure.string/join " " (map pr-str x)) "]")
+    :else (str x)))
+
+;; Default Object impl for symbols
+(extend-type :symbol
+  Object
+  (toString [this] (pr-str this))
+  (equals [this other] (= this other))
+  (hashCode [this] (hash this)))
+
+;; Default Object impl for keywords
+(extend-type :keyword
+  Object
+  (toString [this] (str this))
+  (equals [this other] (= this other))
+  (hashCode [this] (hash this)))
+
+;; Default Object impl for lists
+(extend-type :list
+  Object
+  (toString [this] (pr-str this))
+  (equals [this other] (= this other))
+  (hashCode [this] (hash this)))
+
+;; Default Object impl for vectors
+(extend-type :vector
+  Object
+  (toString [this] (pr-str this))
+  (equals [this other] (= this other))
+  (hashCode [this] (hash this)))
+
+;; Default Object impl for maps
+(extend-type :map
+  Object
+  (toString [this] (pr-str this))
+  (equals [this other] (= this other))
+  (hashCode [this] (hash this)))
+
+;; Default Object impl for sets
+(extend-type :set
+  Object
+  (toString [this] (pr-str this))
+  (equals [this other] (= this other))
+  (hashCode [this] (hash this)))
+
+;; Default Object impl for functions
+(extend-type :function
+  Object
+  (toString [this] "#function")
+  (equals [this other] (identical? this other))
+  (hashCode [this] (hash this)))
+
+;; Namespace record — used by all-ns, find-ns, the-ns
+;; Implements Object/toString to return just the namespace name (like JVM Namespace)
+(defrecord Namespace [name interns refers aliases]
+  Object
+  (toString [this] (str (:name this))))
+
+;; Extend Object for clojure.core.Namespace record type
+(extend-type :clojure.core.Namespace
+  Object
+  (toString [this] (str (:name this)))
+  (equals [this other] (= this other))
+  (hashCode [this] (hash this)))
+
+;; ---- Symbol utilities ----
+
+(defn name
+  "Returns the name String of a string or symbol.
+   For symbols, returns the local name without namespace prefix."
+  [x]
+  (cond
+    (string? x) x
+    (symbol? x) (let [s (pr-str x)
+                      idx (index-of s "/")]
+                  (if (nil? idx) s (subs s (inc idx))))
+    :else (str x)))
+
 ;; ---- Basic predicates ----
 
-(defn even? [n]
+(defn even?
+  "Returns true if n is even, else false."
+  [n]
   (= (rem n 2) 0))
 
-(defn odd? [n]
+(defn odd?
+  "Returns true if n is odd, else false."
+  [n]
   (not (even? n)))
 
-(defn zero? [n]
+(defn zero?
+  "Returns true if num is zero, else false."
+  [n]
   (= n 0))
 
-(defn pos? [n]
+(defn pos?
+  "Returns true if num is greater than zero, else false."
+  [n]
   (> n 0))
 
-(defn neg? [n]
+(defn neg?
+  "Returns true if num is less than zero, else false."
+  [n]
   (< n 0))
 
-(defn pos-int? [n]
+(defn pos-int?
+  "Return true if x is a positive fixed precision integer."
+  [n]
   (and (int? n) (pos? n)))
 
-(defn neg-int? [n]
+(defn neg-int?
+  "Return true if x is a negative fixed precision integer."
+  [n]
   (and (int? n) (neg? n)))
 
-(defn nat-int? [n]
+(defn nat-int?
+  "Return true if x is a non-negative fixed precision integer."
+  [n]
   (and (int? n) (not (neg? n))))
 
 ;; ---- Identity ----
 
-(defn identity [x]
+(defn identity
+  "Returns its argument."
+  [x]
   x)
 
 ;; ---- Math helpers ----
 
-(defn inc [n]
+(defn inc
+  "Returns a number one greater than num."
+  [n]
   (+ n 1))
 
-(defn dec [n]
+(defn dec
+  "Returns a number one less than num."
+  [n]
   (- n 1))
 
-(defn abs [n]
+(defn abs
+  "Returns the absolute value of a."
+  [n]
   (if (neg? n)
     (- 0 n)
     n))
 
-(defn max [a b]
+(defn max
+  "Returns the greatest of the nums."
+  [a b]
   (if (> a b) a b))
 
-(defn min [a b]
+(defn min
+  "Returns the least of the nums."
+  [a b]
   (if (< a b) a b))
 
 ;; ---- List helpers ----
@@ -61,10 +223,14 @@
    preserves lazy-seq semantics." [x xs]
   (zig.core/cons x xs))
 
-(defn second [xs]
+(defn second
+  "Same as (first (rest x))."
+  [xs]
   (first (rest xs)))
 
-(defn third [xs]
+(defn third
+  "Same as (first (rest (rest x)))."
+  [xs]
   (first (rest (rest xs))))
 
 ;; ---- Set operations (built on core set type) ----
@@ -1208,9 +1374,10 @@
 ;; ---- I/O ----
 
 (defn spit
-  "Writes the string content to a file, creating it if it doesn't exist."
-  [filename content]
-  (zig.core/spit filename content))
+  "Writes the string content to a file, creating it if it doesn't exist.
+  Optional :append true writes in append mode instead of overwriting."
+  [filename content & options]
+  (apply zig.core/spit filename content options))
 
 (defn slurp
   "Opens and reads the file from the given path, returning its contents as a string."

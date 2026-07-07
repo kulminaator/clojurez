@@ -1114,7 +1114,7 @@ pub fn core_plus(self: *const Value, args: *const list.List, env_env: *Env) anye
     const allocator = env_env.allocator;
     if (args.items.len == 0) return vm.intValue(0);
 
-    var result = try vm.clone(&args.items[0], allocator);
+    var result = try vm.shallowClone(&args.items[0], allocator);
     var i: usize = 1;
     while (i < args.items.len) : (i += 1) {
         const new_result = try addValues(allocator, result, args.items[i]);
@@ -1133,7 +1133,7 @@ pub fn core_minus(self: *const Value, args: *const list.List, env_env: *Env) any
         return subValues(allocator, vm.intValue(0), args.items[0]);
     }
 
-    var result = try vm.clone(&args.items[0], allocator);
+    var result = try vm.shallowClone(&args.items[0], allocator);
     var i: usize = 1;
     while (i < args.items.len) : (i += 1) {
         const new_result = try subValues(allocator, result, args.items[i]);
@@ -1148,7 +1148,7 @@ pub fn core_mult(self: *const Value, args: *const list.List, env_env: *Env) anye
     const allocator = env_env.allocator;
     if (args.items.len == 0) return vm.intValue(1);
 
-    var result = try vm.clone(&args.items[0], allocator);
+    var result = try vm.shallowClone(&args.items[0], allocator);
     var i: usize = 1;
     while (i < args.items.len) : (i += 1) {
         const new_result = try mulValues(allocator, result, args.items[i]);
@@ -1167,7 +1167,7 @@ pub fn core_div(self: *const Value, args: *const list.List, env_env: *Env) anyer
         return divValues(allocator, vm.intValue(1), args.items[0]);
     }
 
-    var result = try vm.clone(&args.items[0], allocator);
+    var result = try vm.shallowClone(&args.items[0], allocator);
     var i: usize = 1;
     while (i < args.items.len) : (i += 1) {
         const new_result = try divValues(allocator, result, args.items[i]);
@@ -1208,9 +1208,9 @@ pub fn core_rationalize(self: *const Value, args: *const list.List, env_env: *En
     const v = args.items[0];
 
     return switch (std.meta.activeTag(v)) {
-        .integer => try vm.clone(&v, allocator),
-        .bigint => try vm.clone(&v, allocator),
-        .ratio => try vm.clone(&v, allocator),
+        .integer => try vm.shallowClone(&v, allocator),
+        .bigint => try vm.shallowClone(&v, allocator),
+        .ratio => try vm.shallowClone(&v, allocator),
         .float => {
             // Convert float to BigDecimal string, then to ratio
             const s = try std.fmt.allocPrint(allocator, "{d}", .{v.float});
@@ -1267,8 +1267,8 @@ pub fn core_numerator(self: *const Value, args: *const list.List, env_env: *Env)
     const v = args.items[0];
 
     return switch (std.meta.activeTag(v)) {
-        .integer => try vm.clone(&v, allocator),
-        .bigint => try vm.clone(&v, allocator),
+        .integer => try vm.shallowClone(&v, allocator),
+        .bigint => try vm.shallowClone(&v, allocator),
         .ratio => {
             const rp = v.ratio;
             return try bigIntValueOwned(allocator, &rp.num);

@@ -405,8 +405,8 @@ const BitmapIndexedNode = struct {
         var i: usize = 0;
         while (i < self.array.len) : (i += 1) {
             new_kvs[i] = .{
-                .key = vm.clone(&self.array[i].key, allocator) catch @panic("OOM"),
-                .val = vm.clone(&self.array[i].val, allocator) catch @panic("OOM"),
+                .key = vm.shallowClone(&self.array[i].key, allocator) catch @panic("OOM"),
+                .val = vm.shallowClone(&self.array[i].val, allocator) catch @panic("OOM"),
             };
         }
         const new_subs = newSubNodesArray(allocator, self.sub_nodes);
@@ -615,8 +615,8 @@ const HashCollisionNode = struct {
         var i: usize = 0;
         while (i < self.kvs.len) : (i += 1) {
             new_kvs[i] = .{
-                .key = vm.clone(&self.kvs[i].key, allocator) catch @panic("OOM"),
-                .val = vm.clone(&self.kvs[i].val, allocator) catch @panic("OOM"),
+                .key = vm.shallowClone(&self.kvs[i].key, allocator) catch @panic("OOM"),
+                .val = vm.shallowClone(&self.kvs[i].val, allocator) catch @panic("OOM"),
             };
         }
         return newNode(allocator, Node{
@@ -1037,8 +1037,8 @@ fn createBitmapLeaf(allocator: Allocator, shift: u6, hash: i32, key: Value, val:
     const bit = bitpos(hash, shift);
     addedLeaf.set(true);
 
-    const cloned_key = try vm.clone(&key, allocator);
-    const cloned_val = try vm.clone(&val, allocator);
+    const cloned_key = try vm.shallowClone(&key, allocator);
+    const cloned_val = try vm.shallowClone(&val, allocator);
     var kvs: [1]Kvp = .{ .{ .key = cloned_key, .val = cloned_val } };
     var subs: [1]?*Node = .{null};
 
@@ -1057,8 +1057,8 @@ fn createSubNode(allocator: Allocator, shift: u6, key1: Value, val1: Value, hash
     if (hash1 == hash2) {
         addedLeaf.set(true);
         var kvs: [2]Kvp = .{
-            .{ .key = try vm.clone(&key1, allocator), .val = try vm.clone(&val1, allocator) },
-            .{ .key = try vm.clone(&key2, allocator), .val = try vm.clone(&val2, allocator) },
+            .{ .key = try vm.shallowClone(&key1, allocator), .val = try vm.shallowClone(&val1, allocator) },
+            .{ .key = try vm.shallowClone(&key2, allocator), .val = try vm.shallowClone(&val2, allocator) },
         };
         return newNode(allocator, Node{
             .hash_collision = HashCollisionNode{
@@ -1083,8 +1083,8 @@ fn createSubNode(allocator: Allocator, shift: u6, key1: Value, val1: Value, hash
         if (shift >= MAX_SHIFT) {
             // Can't go deeper — treat as hash collision
             var kvs: [2]Kvp = .{
-                .{ .key = try vm.clone(&key1, allocator), .val = try vm.clone(&val1, allocator) },
-                .{ .key = try vm.clone(&key2, allocator), .val = try vm.clone(&val2, allocator) },
+                .{ .key = try vm.shallowClone(&key1, allocator), .val = try vm.shallowClone(&val1, allocator) },
+                .{ .key = try vm.shallowClone(&key2, allocator), .val = try vm.shallowClone(&val2, allocator) },
             };
             return newNode(allocator, Node{
                 .hash_collision = HashCollisionNode{
@@ -1114,11 +1114,11 @@ fn createSubNode(allocator: Allocator, shift: u6, key1: Value, val1: Value, hash
     var subs: [2]?*Node = .{ null, null };
 
     if (idx1 < idx2) {
-        kvs[0] = .{ .key = try vm.clone(&key1, allocator), .val = try vm.clone(&val1, allocator) };
-        kvs[1] = .{ .key = try vm.clone(&key2, allocator), .val = try vm.clone(&val2, allocator) };
+        kvs[0] = .{ .key = try vm.shallowClone(&key1, allocator), .val = try vm.shallowClone(&val1, allocator) };
+        kvs[1] = .{ .key = try vm.shallowClone(&key2, allocator), .val = try vm.shallowClone(&val2, allocator) };
     } else {
-        kvs[0] = .{ .key = try vm.clone(&key2, allocator), .val = try vm.clone(&val2, allocator) };
-        kvs[1] = .{ .key = try vm.clone(&key1, allocator), .val = try vm.clone(&val1, allocator) };
+        kvs[0] = .{ .key = try vm.shallowClone(&key2, allocator), .val = try vm.shallowClone(&val2, allocator) };
+        kvs[1] = .{ .key = try vm.shallowClone(&key1, allocator), .val = try vm.shallowClone(&val1, allocator) };
     }
 
     return newNode(allocator, Node{
@@ -1142,13 +1142,13 @@ fn createBitmapWithValue(allocator: Allocator, src: *const BitmapIndexedNode, id
     while (i < new_len) : (i += 1) {
         if (i == idx) {
             new_kvs[i] = .{
-                .key = try vm.clone(&src.array[i].key, allocator),
-                .val = try vm.clone(&new_val, allocator),
+                .key = try vm.shallowClone(&src.array[i].key, allocator),
+                .val = try vm.shallowClone(&new_val, allocator),
             };
         } else {
             new_kvs[i] = .{
-                .key = try vm.clone(&src.array[i].key, allocator),
-                .val = try vm.clone(&src.array[i].val, allocator),
+                .key = try vm.shallowClone(&src.array[i].key, allocator),
+                .val = try vm.shallowClone(&src.array[i].val, allocator),
             };
         }
     }
@@ -1183,8 +1183,8 @@ fn createBitmapWithSub(allocator: Allocator, src: *const BitmapIndexedNode, idx:
         } else {
             // Deep clone the Kvp
             new_kvs[i] = .{
-                .key = try vm.clone(&src.array[i].key, allocator),
-                .val = try vm.clone(&src.array[i].val, allocator),
+                .key = try vm.shallowClone(&src.array[i].key, allocator),
+                .val = try vm.shallowClone(&src.array[i].val, allocator),
             };
             new_subs[i] = src.sub_nodes[i];
         }
@@ -1210,18 +1210,18 @@ fn createBitmapWithLeaf(allocator: Allocator, src: *const BitmapIndexedNode, ins
     var i: usize = 0;
     while (i < insert_idx) : (i += 1) {
         new_kvs[i] = .{
-            .key = try vm.clone(&src.array[i].key, allocator),
-            .val = try vm.clone(&src.array[i].val, allocator),
+            .key = try vm.shallowClone(&src.array[i].key, allocator),
+            .val = try vm.shallowClone(&src.array[i].val, allocator),
         };
         new_subs[i] = src.sub_nodes[i];
     }
-    new_kvs[insert_idx] = .{ .key = try vm.clone(&key, allocator), .val = try vm.clone(&val, allocator) };
+    new_kvs[insert_idx] = .{ .key = try vm.shallowClone(&key, allocator), .val = try vm.shallowClone(&val, allocator) };
     new_subs[insert_idx] = null;
     var j: usize = insert_idx + 1;
     while (i < src.array.len) : ({ i += 1; j += 1; }) {
         new_kvs[j] = .{
-            .key = try vm.clone(&src.array[i].key, allocator),
-            .val = try vm.clone(&src.array[i].val, allocator),
+            .key = try vm.shallowClone(&src.array[i].key, allocator),
+            .val = try vm.shallowClone(&src.array[i].val, allocator),
         };
         new_subs[j] = src.sub_nodes[i];
     }
@@ -1253,8 +1253,8 @@ fn createBitmapWithout(allocator: Allocator, src: *const BitmapIndexedNode, remo
         }
         // Deep clone Kvp to avoid sharing Value pointers with src.
         new_kvs[j] = .{
-            .key = try vm.clone(&src.array[i].key, allocator),
-            .val = try vm.clone(&src.array[i].val, allocator),
+            .key = try vm.shallowClone(&src.array[i].key, allocator),
+            .val = try vm.shallowClone(&src.array[i].val, allocator),
         };
         // Sub-node pointers are shared (both old and new trees reference the same immutable sub-nodes).
         new_subs[j] = src.sub_nodes[i];
@@ -1480,13 +1480,13 @@ fn createCollisionNodeWithValue(allocator: Allocator, src: *const HashCollisionN
     while (i < new_len) : (i += 1) {
         if (i == idx) {
             new_kvs[i] = .{
-                .key = try vm.clone(&src.kvs[i].key, allocator),
-                .val = try vm.clone(&new_val, allocator),
+                .key = try vm.shallowClone(&src.kvs[i].key, allocator),
+                .val = try vm.shallowClone(&new_val, allocator),
             };
         } else {
             new_kvs[i] = .{
-                .key = try vm.clone(&src.kvs[i].key, allocator),
-                .val = try vm.clone(&src.kvs[i].val, allocator),
+                .key = try vm.shallowClone(&src.kvs[i].key, allocator),
+                .val = try vm.shallowClone(&src.kvs[i].val, allocator),
             };
         }
     }
@@ -1508,11 +1508,11 @@ fn createCollisionNodeAppend(allocator: Allocator, src: *const HashCollisionNode
     var i: usize = 0;
     while (i < src.kvs.len) : (i += 1) {
         new_kvs[i] = .{
-            .key = try vm.clone(&src.kvs[i].key, allocator),
-            .val = try vm.clone(&src.kvs[i].val, allocator),
+            .key = try vm.shallowClone(&src.kvs[i].key, allocator),
+            .val = try vm.shallowClone(&src.kvs[i].val, allocator),
         };
     }
-    new_kvs[new_len - 1] = .{ .key = try vm.clone(&key, allocator), .val = try vm.clone(&val, allocator) };
+    new_kvs[new_len - 1] = .{ .key = try vm.shallowClone(&key, allocator), .val = try vm.shallowClone(&val, allocator) };
 
     return newNode(allocator, Node{
         .hash_collision = HashCollisionNode{
@@ -1538,8 +1538,8 @@ fn createCollisionNodeWithout(allocator: Allocator, src: *const HashCollisionNod
         }
         // Deep clone to avoid sharing Value pointers with src.
         new_kvs[j] = .{
-            .key = try vm.clone(&src.kvs[i].key, allocator),
-            .val = try vm.clone(&src.kvs[i].val, allocator),
+            .key = try vm.shallowClone(&src.kvs[i].key, allocator),
+            .val = try vm.shallowClone(&src.kvs[i].val, allocator),
         };
         j += 1;
     }

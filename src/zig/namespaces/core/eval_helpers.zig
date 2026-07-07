@@ -12,11 +12,21 @@ const gc_mod = @import("../../gc.zig");
 
 const Allocator = std.mem.Allocator;
 
+/// Loop context for evalLoop/evalRecur coordination.
+/// Stack-based to support nested loops.
+const LoopContext = struct {
+    env: ?*vm.Env = null,
+    bind_names: []const []const u8 = &.{},
+    body: []const Value = &.{},
+};
+
+var loop_stack: std.ArrayListUnmanaged(LoopContext) = .empty;
+
 // Bind a parameter to an argument, supporting destructuring
 fn bindParam(allocator: Allocator, param: *const Value, arg: *const Value, env: *vm.Env) anyerror!void {
     switch (std.meta.activeTag(param.*)) {
         .symbol => {
-            try env.put(param.symbol, try vm.clone(arg, allocator));
+            try env.put(param.symbol, try vm.shallowClone(arg, allocator));
         },
         .vector => {
             var arg_items: []const Value = undefined;
@@ -100,8 +110,8 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args_list: *const list
                             defer vm.valueDeinit(&resolved_op_ptr.*, allocator);
                             var call_args: list.List = .empty;
                             errdefer call_args.deinit(allocator);
-                            try call_args.append(allocator, try vm.clone(&args_list.items[0], allocator));
-                            try call_args.append(allocator, try vm.clone(&args_list.items[1], allocator));
+                            try call_args.append(allocator, try vm.shallowClone(&args_list.items[0], allocator));
+                            try call_args.append(allocator, try vm.shallowClone(&args_list.items[1], allocator));
                             return try callBuiltin(allocator, resolved_op_ptr, &call_args, env);
                         }
                     }
@@ -126,7 +136,7 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args_list: *const list
 
             // Bind function name for self-reference (e.g., (fn self [x] (self (dec x))))
             if (fn_data.name) |fn_name| {
-                const fn_clone = try vm.clone(f, allocator);
+                const fn_clone = try vm.shallowClone(f, allocator);
                 try new_env.put(fn_name, fn_clone);
             }
 
@@ -144,7 +154,7 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args_list: *const list
                 errdefer rest_list.deinit(allocator);
                 var j: usize = min_args;
                 while (j < args_list.items.len) : (j += 1) {
-                    try rest_list.append(allocator, try vm.clone(&args_list.items[j], allocator));
+                    try rest_list.append(allocator, try vm.shallowClone(&args_list.items[j], allocator));
                 }
                 try new_env.put(arity.rest_name.?, try vm.listValue(allocator, rest_list));
             } else if (has_rest) {
@@ -165,11 +175,16 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args_list: *const list
             // Check for bytecode — if available, use the bytecode VM
             if (arity.bytecode) |bc| {
                 const bytecode_mod = @import("../../bytecode.zig");
-                const vm_result = try bytecode_mod.execute(allocator, bc, &new_env, null);
-                new_env.deinit(allocator);
+                const vm_result = try bytecode_mod.execute(allocator, bc, &new_env);
                 switch (vm_result) {
-                    .value => |v| return v,
-                    .trampoline => unreachable, // bytecode doesn't use trampolines
+                    .value => |v| {
+                        new_env.deinit(allocator);
+                        return v;
+                    },
+                    .trampoline => {
+                        // A user-defined function was called from within the bytecode.
+                        // Fall back to AST interpreter — do NOT deinit new_env, evalBody needs it.
+                    },
                 }
             }
 
@@ -181,13 +196,25 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args_list: *const list
             return try allocBuiltinResult(allocator, result);
         },
         .keyword => {
-            // Keyword as function: looks up the keyword in a map
+            // Keyword as function: looks up the keyword in a map or record
             if (args_list.items.len != 1) return error.ArityError;
             const coll = &args_list.items[0];
-            if (std.meta.activeTag(coll.*) != .map) return try allocBuiltinResult(allocator, vm.nilValue());
-            for (coll.map.entries.items) |entry| {
-                if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, f.keyword)) {
-                    return try allocBuiltinResult(allocator, try vm.clone(&entry.value, allocator));
+            if (std.meta.activeTag(coll.*) == .map) {
+                for (coll.map.entries.items) |entry| {
+                    if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, f.keyword)) {
+                        return try allocBuiltinResult(allocator, try vm.shallowClone(&entry.value, allocator));
+                    }
+                }
+            } else if (std.meta.activeTag(coll.*) == .record) {
+                for (coll.record.fields.items) |entry| {
+                    if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, f.keyword)) {
+                        return try allocBuiltinResult(allocator, try vm.shallowClone(&entry.value, allocator));
+                    }
+                }
+                for (coll.record.extmap.items) |entry| {
+                    if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, f.keyword)) {
+                        return try allocBuiltinResult(allocator, try vm.shallowClone(&entry.value, allocator));
+                    }
                 }
             }
             return try allocBuiltinResult(allocator, vm.nilValue());
@@ -211,7 +238,7 @@ pub fn evalBody(allocator: Allocator, body: *const list.List, env: *vm.Env) anye
     errdefer cloned_body.deinit(allocator);
     try cloned_body.ensureTotalCapacity(allocator, body.items.len);
     for (body.items) |item| {
-        try cloned_body.append(allocator, try vm.clone(&item, allocator));
+        try cloned_body.append(allocator, try vm.shallowClone(&item, allocator));
     }
     return try evalForm(allocator, &(try vm.listValue(allocator, cloned_body)), env);
 }
@@ -224,7 +251,7 @@ pub fn evalForm(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror
         .list => return evalList(allocator, form, env),
         .vector => return evalVector(allocator, form, env),
         .cons => return evalCons(allocator, form, env),
-        else => return try allocBuiltinResult(allocator, try vm.clone(form, allocator)),
+        else => return try allocBuiltinResult(allocator, try vm.shallowClone(form, allocator)),
     }
 }
 
@@ -236,7 +263,7 @@ pub fn evalForm(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror
 
 /// Self-evaluating types return a clone of themselves.
 fn evalSelfEvaluating(allocator: Allocator, form: *const Value) anyerror!*Value {
-    return try allocBuiltinResult(allocator, try vm.clone(form, allocator));
+    return try allocBuiltinResult(allocator, try vm.shallowClone(form, allocator));
 }
 
 /// Evaluate a symbol: resolve it in the environment.
@@ -261,12 +288,12 @@ fn evalQualifiedSymbol(allocator: Allocator, sym: []const u8, slash_idx: usize, 
         return fallbackSymbolLookup(allocator, sym, env);
     };
     const val = target_env.get(name);
-    if (val) |v| return try allocBuiltinResult(allocator, try vm.clone(&v, allocator));
+    if (val) |v| return try allocBuiltinResult(allocator, try vm.shallowClone(&v, allocator));
     return fallbackSymbolLookup(allocator, sym, env);
 }
 
 fn evalUnqualifiedSymbol(allocator: Allocator, sym: []const u8, env: *vm.Env) anyerror!*Value {
-    if (env.get(sym)) |v| return try allocBuiltinResult(allocator, try vm.clone(&v, allocator));
+    if (env.get(sym)) |v| return try allocBuiltinResult(allocator, try vm.shallowClone(&v, allocator));
     std.debug.print("Undefined symbol: '{s}'\n", .{sym});
     return error.UndefinedSymbol;
 }
@@ -274,7 +301,7 @@ fn evalUnqualifiedSymbol(allocator: Allocator, sym: []const u8, env: *vm.Env) an
 /// Fallback: try direct env lookup, then report undefined.
 fn fallbackSymbolLookup(allocator: Allocator, sym: []const u8, env: *vm.Env) anyerror!*Value {
     const val = env.get(sym);
-    if (val) |v| return try allocBuiltinResult(allocator, try vm.clone(&v, allocator));
+    if (val) |v| return try allocBuiltinResult(allocator, try vm.shallowClone(&v, allocator));
     std.debug.print("Undefined symbol: '{s}'\n", .{sym});
     return error.UndefinedSymbol;
 }
@@ -297,6 +324,8 @@ fn evalList(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Va
         if (std.mem.eql(u8, first.symbol, "let")) return evalLet(allocator, form, env);
         if (std.mem.eql(u8, first.symbol, "fn")) return evalFn(allocator, form, env);
         if (std.mem.eql(u8, first.symbol, "lazy-seq")) return evalLazySeq(allocator, form, env);
+        if (std.mem.eql(u8, first.symbol, "loop")) return evalLoop(allocator, form, env);
+        if (std.mem.eql(u8, first.symbol, "recur")) return evalRecur(allocator, form, env);
         if (std.mem.eql(u8, first.symbol, "__protocol_dispatch__")) return evalProtocolDispatch(allocator, form, env);
     }
 
@@ -318,7 +347,7 @@ fn evalProtocolDispatch(allocator: Allocator, form: *const Value, env: *vm.Env) 
     defer args_list.deinit(allocator);
     var i: usize = 1;
     while (i < items.len) : (i += 1) {
-        try args_list.append(allocator, try vm.clone(&items[i], allocator));
+        try args_list.append(allocator, try vm.shallowClone(&items[i], allocator));
     }
 
     const result = try protocols_mod.dispatchProtocolMethod(allocator, args_list, env, 0);
@@ -328,13 +357,23 @@ fn evalProtocolDispatch(allocator: Allocator, form: *const Value, env: *vm.Env) 
 /// (quote form) — return form unevaluated.
 fn evalQuote(allocator: Allocator, form: *const Value) anyerror!*Value {
     if (form.list.items.items.len != 2) return error.ArityError;
-    return try allocBuiltinResult(allocator, try vm.clone(&form.list.items.items[1], allocator));
+    return try allocBuiltinResult(allocator, try vm.shallowClone(&form.list.items.items[1], allocator));
 }
 
 /// (quasiquote form) — template with unquote.
 fn evalQuasiquote(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Value {
     if (form.list.items.items.len != 2) return error.ArityError;
-    const result = try eval_macro.unquoteProcess(allocator, form.list.items.items[1], env, 0, null);
+    // Create a temporary Frame from the Env so unquoteProcess can resolve bindings
+    const frame_ptr = try allocator.create(vm.Frame);
+    errdefer allocator.destroy(frame_ptr);
+    frame_ptr.* = vm.Frame.init(allocator, null, env);
+    // Register with GC so it doesn't get swept during evaluation
+    if (gc_mod.current_gc) |gc| {
+        gc.addRoot(@as(*anyopaque, @ptrCast(frame_ptr)));
+        defer gc.removeRoot(@as(*anyopaque, @ptrCast(frame_ptr)));
+    }
+    defer frame_ptr.deinit(allocator);
+    const result = try eval_macro.unquoteProcess(allocator, form.list.items.items[1], frame_ptr, 0);
     return try allocBuiltinResult(allocator, result);
 }
 
@@ -457,6 +496,85 @@ fn evalLet(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Val
     return evalDoSlice(allocator, form.list.items.items[2..], &new_env);
 }
 
+/// (loop [bindings] body...) — loop with recur support.
+fn evalLoop(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Value {
+    if (form.list.items.items.len < 2) return error.ArityError;
+    const bindings = &form.list.items.items[1];
+    const body = form.list.items.items[2..];
+
+    const bind_items = if (std.meta.activeTag(bindings.*) == .list)
+        bindings.list.items.items
+    else
+        bindings.vector.items.items;
+
+    // Extract binding names
+    var bind_names: std.ArrayList([]const u8) = .empty;
+    defer {
+        for (bind_names.items) |name| allocator.free(name);
+        allocator.free(bind_names.items);
+    }
+    var i: usize = 0;
+    while (i < bind_items.len) : (i += 2) {
+        const sym = &bind_items[i];
+        if (std.meta.activeTag(sym.*) != .symbol) return error.TypeError;
+        try bind_names.append(allocator, try allocator.dupe(u8, sym.symbol));
+    }
+
+    // Evaluate initial bindings and create env
+    var loop_env = try env.clone(allocator);
+    defer loop_env.deinit(allocator);
+    i = 0;
+    while (i < bind_items.len) : (i += 2) {
+        const sym = &bind_items[i];
+        const val_ptr = try evalForm(allocator, &bind_items[i + 1], &loop_env);
+        try loop_env.put(sym.symbol, val_ptr.*);
+    }
+
+    // Push loop context for recur (stack-based for nested loops)
+    try loop_stack.append(allocator, LoopContext{
+        .env = &loop_env,
+        .bind_names = bind_names.items,
+        .body = body,
+    });
+    defer _ = loop_stack.pop();
+
+    // Evaluate body, catching recur
+    while (true) {
+        const result = evalDoSlice(allocator, body, &loop_env) catch |err| {
+            if (err == error.RecurLoop) continue;
+            return err;
+        };
+        return result;
+    }
+}
+
+/// (recur args...) — tail-call to nearest enclosing loop/fn.
+fn evalRecur(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Value {
+    // Evaluate args in caller's env (has access to let bindings like idx)
+    const items = form.list.items.items;
+    if (items.len < 2) return error.ArityError;
+    const args = items[1..]; // skip 'recur' symbol
+
+    if (loop_stack.items.len == 0) return error.RecurLoop; // recur outside loop
+    const ctx = &loop_stack.items[loop_stack.items.len - 1];
+    if (ctx.env == null) return error.RecurLoop;
+
+    const loop_env = ctx.env.?;
+    if (args.len != ctx.bind_names.len) {
+        std.debug.print("RECUR ARITY MISMATCH: args={d} bindings={d} stack_depth={d}\n", .{ args.len, ctx.bind_names.len, loop_stack.items.len });
+        return error.ArityError;
+    }
+
+    // Evaluate new values in caller's env, rebind in loop env
+    var i: usize = 0;
+    while (i < args.len) : (i += 1) {
+        const val_ptr = try evalForm(allocator, &args[i], env);
+        try loop_env.put(ctx.bind_names[i], val_ptr.*);
+    }
+
+    return error.RecurLoop; // signal loop to restart
+}
+
 /// (fn name? ([params] body...)...) — anonymous function.
 fn evalFn(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Value {
     if (form.list.items.items.len < 2) return error.ArityError;
@@ -477,7 +595,7 @@ fn evalFn(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Valu
     errdefer body_list.deinit(allocator);
     try body_list.append(allocator, try vm.symValue(allocator, "do"));
     for (body) |form_item| {
-        try body_list.append(allocator, try vm.clone(&form_item, allocator));
+        try body_list.append(allocator, try vm.shallowClone(&form_item, allocator));
     }
     const cloned_params = try params_list.clone(allocator);
     const cloned_body = try body_list.clone(allocator);
@@ -492,7 +610,7 @@ fn evalLazySeq(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!
     errdefer body.deinit(allocator);
     try body.append(allocator, try vm.symValue(allocator, "do"));
     for (form.list.items.items[1..]) |f_item| {
-        try body.append(allocator, try vm.clone(&f_item, allocator));
+        try body.append(allocator, try vm.shallowClone(&f_item, allocator));
     }
     const thunk = try allocator.create(vm.LazySeqThunk);
     thunk.* = .{
@@ -519,7 +637,7 @@ fn evalFunctionCall(allocator: Allocator, form: *const Value, env: *vm.Env) anye
         var macro_args: list.List = .empty;
         errdefer macro_args.deinit(allocator);
         for (form.list.items.items[1..]) |arg| {
-            try macro_args.append(allocator, try vm.clone(&arg, allocator));
+            try macro_args.append(allocator, try vm.shallowClone(&arg, allocator));
         }
         const expanded_ptr = try callBuiltin(allocator, op_ptr, &macro_args, env);
         const result = try evalForm(allocator, expanded_ptr, env);
@@ -557,12 +675,12 @@ fn evalCons(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Va
     var c = form.*;
     while (std.meta.activeTag(c) == .cons) {
         const cdata = c.cons;
-        try cons_list.append(allocator, try vm.clone(&cdata.head, allocator));
-        c = try vm.clone(&cdata.tail, allocator);
+        try cons_list.append(allocator, try vm.shallowClone(&cdata.head, allocator));
+        c = try vm.shallowClone(&cdata.tail, allocator);
     }
     if (std.meta.activeTag(c) == .list) {
         for (c.list.items.items) |item| {
-            try cons_list.append(allocator, try vm.clone(&item, allocator));
+            try cons_list.append(allocator, try vm.shallowClone(&item, allocator));
         }
     } else if (std.meta.activeTag(c) != .nil) {
         try cons_list.append(allocator, c);
@@ -606,7 +724,7 @@ pub fn core_macroexpand_1(self: *const Value, args: *const list.List, env_env: *
 
     // Only lists can be macro calls
     if (std.meta.activeTag(form.*) != .list or form.*.list.items.items.len == 0) {
-        return try vm.clone(form, env_env.allocator);
+        return try vm.shallowClone(form, env_env.allocator);
     }
 
     const allocator = env_env.allocator;
@@ -616,14 +734,14 @@ pub fn core_macroexpand_1(self: *const Value, args: *const list.List, env_env: *
     var op: Value = undefined;
     if (std.meta.activeTag(first.*) == .symbol) {
         if (env_env.get(first.*.symbol)) |v| {
-            op = try vm.clone(&v, allocator);
+            op = try vm.shallowClone(&v, allocator);
         } else {
             // Symbol not found - return form unchanged
-            return try vm.clone(form, allocator);
+            return try vm.shallowClone(form, allocator);
         }
     } else {
         // Not a symbol - return form unchanged
-        return try vm.clone(form, allocator);
+        return try vm.shallowClone(form, allocator);
     }
     defer vm.valueDeinit(&op, allocator);
 
@@ -633,7 +751,7 @@ pub fn core_macroexpand_1(self: *const Value, args: *const list.List, env_env: *
         var macro_args: list.List = .empty;
         defer macro_args.deinit(allocator);
         for (form.list.items.items[1..]) |arg| {
-            try macro_args.append(allocator, try vm.clone(&arg, allocator));
+            try macro_args.append(allocator, try vm.shallowClone(&arg, allocator));
         }
         // Call the macro with unevaluated args and return the result WITHOUT evaluating
         const result_ptr = try callBuiltin(allocator, &op, &macro_args, env_env);
@@ -643,7 +761,7 @@ pub fn core_macroexpand_1(self: *const Value, args: *const list.List, env_env: *
     }
 
     // Not a macro - return form unchanged
-    return try vm.clone(form, allocator);
+    return try vm.shallowClone(form, allocator);
 }
 
 /// macroexpand: repeatedly expand macros until no more expansion.
@@ -651,13 +769,13 @@ pub fn core_macroexpand_1(self: *const Value, args: *const list.List, env_env: *
 pub fn core_macroexpand(self: *const Value, args: *const list.List, env_env: *vm.Env) anyerror!Value {
     if (args.items.len != 1) return error.ArityError;
 
-    var current = try vm.clone(&args.items[0], env_env.allocator);
+    var current = try vm.shallowClone(&args.items[0], env_env.allocator);
     errdefer vm.valueDeinit(&current, env_env.allocator);
 
     while (true) {
         var call_args: list.List = .empty;
         errdefer call_args.deinit(env_env.allocator);
-        try call_args.append(env_env.allocator, try vm.clone(&current, env_env.allocator));
+        try call_args.append(env_env.allocator, try vm.shallowClone(&current, env_env.allocator));
         const expanded = try core_macroexpand_1(self, &call_args, env_env);
         vm.valueDeinit(&current, env_env.allocator);
 

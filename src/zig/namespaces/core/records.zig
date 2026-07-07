@@ -141,8 +141,8 @@ pub fn core_record_ctor(self: *const Value, args: *const list.List, env: *Env) a
     }
     for (fields_map_val.map.entries.items) |entry| {
         try fields.append(allocator, .{
-            .key = try vm.clone(&entry.key, allocator),
-            .value = try vm.clone(&entry.value, allocator),
+            .key = try vm.shallowClone(&entry.key, allocator),
+            .value = try vm.shallowClone(&entry.value, allocator),
         });
     }
 
@@ -158,8 +158,8 @@ pub fn core_record_ctor(self: *const Value, args: *const list.List, env: *Env) a
     if (std.meta.activeTag(extmap_val) == .map) {
         for (extmap_val.map.entries.items) |entry| {
             try extmap.append(allocator, .{
-                .key = try vm.clone(&entry.key, allocator),
-                .value = try vm.clone(&entry.value, allocator),
+                .key = try vm.shallowClone(&entry.key, allocator),
+                .value = try vm.shallowClone(&entry.value, allocator),
             });
         }
     }
@@ -177,8 +177,8 @@ pub fn core_record_ctor(self: *const Value, args: *const list.List, env: *Env) a
         }
         for (meta_val.map.entries.items) |entry| {
             try m.append(allocator, .{
-                .key = try vm.clone(&entry.key, allocator),
-                .value = try vm.clone(&entry.value, allocator),
+                .key = try vm.shallowClone(&entry.key, allocator),
+                .value = try vm.shallowClone(&entry.value, allocator),
             });
         }
         meta = m;
@@ -240,7 +240,15 @@ pub fn buildPositionalFactory(
     markListAsValueArray(&body_list);
 
     // Create the function value
-    const env_copy: Env = env.*;
+    // Use explicit struct init to avoid shallow-copying owned_symbols
+    const env_copy: Env = .{
+        .allocator = env.allocator,
+        .entries = env.entries,
+        .parent = env.parent,
+        .ns_manager = env.ns_manager,
+        .referred_names = .empty,
+        .owned_symbols = .empty,
+    };
     const result = try vm.fnValueSingleNamed(
         allocator,
         params_list,
@@ -313,7 +321,15 @@ pub fn buildMapFactory(
     markListAsValueArray(&body_list);
 
     // Create the function value
-    const env_copy: Env = env.*;
+    // Use explicit struct init to avoid shallow-copying owned_symbols
+    const env_copy: Env = .{
+        .allocator = env.allocator,
+        .entries = env.entries,
+        .parent = env.parent,
+        .ns_manager = env.ns_manager,
+        .referred_names = .empty,
+        .owned_symbols = .empty,
+    };
     const result = try vm.fnValueSingleNamed(
         allocator,
         params_list,
@@ -340,11 +356,10 @@ fn processRecordProtocolSpec(
     method_indices: []const usize,
     full_type_name: []const u8,
     field_names: []const []const u8,
-    ctx: ?*eval.TrampolineStack,
 ) anyerror!Value {
 
     // Evaluate the protocol symbol to get the protocol value
-    const proto_ptr_r = try eval.evalRec(allocator, &proto_sym, env, depth + 1, ctx);
+    const proto_ptr_r = try eval.evalRecWithEnv(allocator, &proto_sym, env, depth + 1);
         const proto_ptr = proto_ptr_r.value;
     defer vm.valueDeinit(&proto_ptr.*, allocator);
 
@@ -415,7 +430,7 @@ fn processRecordProtocolSpec(
             defer arity_form.deinit(allocator);
             const def_items = mdef.list.items.items[1..];
             // params vector is def_items[0], body is def_items[1..]
-            try arity_form.append(allocator, try vm.clone(&def_items[0], allocator));
+            try arity_form.append(allocator, try vm.shallowClone(&def_items[0], allocator));
 
             // Wrap body in let that binds field names to (get this :field_name)
             if (field_names.len > 0) {
@@ -443,14 +458,14 @@ fn processRecordProtocolSpec(
 
                 // Append body forms
                 for (def_items[1..]) |item| {
-                    try let_form.append(allocator, try vm.clone(&item, allocator));
+                    try let_form.append(allocator, try vm.shallowClone(&item, allocator));
                 }
                 try arity_form.append(allocator, try vm.listValue(allocator, let_form));
                 let_form = .empty;
             } else {
                 // No fields, just append body as-is
                 for (def_items[1..]) |item| {
-                    try arity_form.append(allocator, try vm.clone(&item, allocator));
+                    try arity_form.append(allocator, try vm.shallowClone(&item, allocator));
                 }
             }
             try fn_form.append(allocator, try vm.listValue(allocator, arity_form));
@@ -458,10 +473,10 @@ fn processRecordProtocolSpec(
         }
 
         // Evaluate to get a function value
-        const fn_ptr_r = try eval.evalRec(allocator, &(try vm.listValue(allocator, fn_form)), env, depth + 1, ctx);
+        const fn_ptr_r = try eval.evalRecWithEnv(allocator, &(try vm.listValue(allocator, fn_form)), env, depth + 1);
         const fn_ptr = fn_ptr_r.value;
         fn_form = .empty;
-        const persistent_fn = try vm.clone(&fn_ptr.*, allocator);
+        const persistent_fn = try vm.shallowClone(&fn_ptr.*, allocator);
         vm.valueDeinit(&fn_ptr.*, allocator);
 
         try mmap.append(allocator, .{
@@ -483,7 +498,7 @@ fn processRecordProtocolSpec(
     mmap = .empty;
 
     // Call evalExtend
-    return protocols.evalExtend(allocator, extend_args, env, depth, ctx);
+    return protocols.evalExtend(allocator, extend_args, env, depth);
 }
 
 /// Look up a key in a map, returning the value or null.
@@ -503,7 +518,6 @@ pub fn evalDefRecord(
     l: list.List,
     env: *Env,
     depth: usize,
-    ctx: ?*eval.TrampolineStack,
 ) anyerror!Value {
     // (defrecord name [fields*] options* specs*)
     if (l.items.len < 3) {
@@ -581,14 +595,14 @@ pub fn evalDefRecord(
     // Build and bind factory functions
     // ->RecordName (positional factory)
     var pos_factory = try buildPositionalFactory(allocator, desc_ptr, env);
-    const persistent_pos = try vm.clone(&pos_factory, allocator);
+    const persistent_pos = try vm.shallowClone(&pos_factory, allocator);
     vm.valueDeinit(&pos_factory, allocator);
     const pos_fn_name = try std.fmt.allocPrint(allocator, "->{s}", .{record_name});
     try eval.bindInCurrentNamespace(env, pos_fn_name, persistent_pos);
 
     // map->RecordName (map factory)
     var map_factory = try buildMapFactory(allocator, desc_ptr, env);
-    const persistent_map = try vm.clone(&map_factory, allocator);
+    const persistent_map = try vm.shallowClone(&map_factory, allocator);
     vm.valueDeinit(&map_factory, allocator);
     const map_fn_name = try std.fmt.allocPrint(allocator, "map->{s}", .{record_name});
     try eval.bindInCurrentNamespace(env, map_fn_name, persistent_map);
@@ -624,7 +638,6 @@ pub fn evalDefRecord(
                     method_indices.items,
                     full_name,
                     field_names.items,
-                    ctx,
                 ) catch {};
             }
         } else {

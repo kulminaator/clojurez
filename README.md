@@ -60,6 +60,22 @@ Type `(quit)`, `(exit)`, or press `CTRL+D` to exit the REPL.
 - **Process I/O** - synchronous subprocess execution via `(sh ...)`, async streaming subprocess I/O via `(sh-stream ...)` with `sh-in`, `sh-out`, `sh-err`, `sh-wait`, `sh-kill`
 - **`zig.io` namespace** - protocol-based I/O abstractions (`Closeable`, `IOFactory`, `Readable`, `Writable`), path utilities, `with-open`, `copy`, `line-seq`
 
+## Documentation
+
+Auto-generated API reference is available in the `doc/` directory:
+
+- [API Reference Index](doc/index.md) — overview of all namespaces
+- [clojure.core](doc/clojure-core.md) — core library functions and macros
+- [clojure.string](doc/clojure-string.md) — string manipulation functions
+- [zig.core](doc/zig-core.md) — internal Zig builtins
+- [zig.io](doc/zig-io.md) — I/O abstractions and protocols
+- [Special Forms](doc/special-forms.md) — language special forms
+
+Documentation is regenerated automatically on every build. To regenerate manually:
+```bash
+./zig-out/bin/clojurez doc/gen_docs.clj
+```
+
 ## Known Differences from JVM Clojure
 
 - No Java interop (not applicable for a standalone VM)

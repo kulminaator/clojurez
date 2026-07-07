@@ -135,10 +135,21 @@ pub fn core_compare(self: *const Value, args: *const list.List, _: *Env) anyerro
     // For same types, use value equality check
     if (std.meta.activeTag(a) == std.meta.activeTag(b)) {
         if (vm.equals(a, b)) return vm.intValue(0);
-        // For strings, do lexicographic comparison
-        if (std.meta.activeTag(a) == .string) {
-            const cmp = compareStrings(a.string, b.string);
-            return vm.intValue(cmp);
+        // For strings, symbols, and keywords: do lexicographic comparison
+        switch (std.meta.activeTag(a)) {
+            .string => {
+                const cmp = compareStrings(a.string, b.string);
+                return vm.intValue(cmp);
+            },
+            .symbol => {
+                const cmp = compareStrings(a.symbol, b.symbol);
+                return vm.intValue(cmp);
+            },
+            .keyword => {
+                const cmp = compareStrings(a.keyword, b.keyword);
+                return vm.intValue(cmp);
+            },
+            else => {},
         }
         // Fallback: use equals and return 1 if not equal
         return vm.intValue(1);

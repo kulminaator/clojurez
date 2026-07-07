@@ -190,6 +190,8 @@ pub const FnData = struct {
     env: *Env,
     is_macro: bool = false,
     name: ?[]const u8 = null,
+    docstring: ?[]const u8 = null,
+    cached_meta: ?Value = null, // Cached metadata map (populated by meta)
 };
 
 // ============================================================
@@ -525,6 +527,10 @@ pub fn fnValue(allocator: Allocator, arities: std.ArrayListUnmanaged(Arity), env
 }
 
 pub fn fnValueNamed(allocator: Allocator, arities: std.ArrayListUnmanaged(Arity), env: Env, is_macro: bool, name: ?[]const u8) anyerror!Value {
+    return fnValueNamedWithDoc(allocator, arities, env, is_macro, name, null);
+}
+
+pub fn fnValueNamedWithDoc(allocator: Allocator, arities: std.ArrayListUnmanaged(Arity), env: Env, is_macro: bool, name: ?[]const u8, docstring: ?[]const u8) anyerror!Value {
     const env_ptr = try allocator.create(Env);
     errdefer allocator.destroy(env_ptr);
     env_ptr.* = env;
@@ -533,7 +539,7 @@ pub fn fnValueNamed(allocator: Allocator, arities: std.ArrayListUnmanaged(Arity)
     }
     const fn_data = try allocator.create(FnData);
     errdefer allocator.destroy(fn_data);
-    fn_data.* = .{ .arities = arities, .env = env_ptr, .is_macro = is_macro, .name = name };
+    fn_data.* = .{ .arities = arities, .env = env_ptr, .is_macro = is_macro, .name = name, .docstring = docstring };
     if (gc_mod.current_gc) |gc_inst| {
         gc_inst.setObjectType(@as(*anyopaque, @ptrCast(fn_data)), gc_mod.GCObjectType.fn_data);
         if (arities.items.len > 0) {
@@ -575,171 +581,11 @@ pub fn unwrapPtr(T: type, val: Value) T {
 // ============================================================
 
 pub fn valueDeinit(val: *Value, allocator: Allocator) void {
-    switch (val.*) {
-        .nil, .bool, .integer, .float, .character => {},
-        .bigint => |ptr| {
-            ptr.deinit();
-            allocator.destroy(ptr);
-        },
-        .ratio => |ptr| {
-            ptr.deinit();
-            allocator.destroy(ptr);
-        },
-        .decimal => |ptr| {
-            ptr.deinit();
-            allocator.destroy(ptr);
-        },
-        .string => |s| allocator.free(s),
-        .regex => |s| allocator.free(s),
-        .symbol => |s| allocator.free(s),
-        .keyword => |s| allocator.free(s),
-        .list => |data| {
-            for (data.items.items) |*item| {
-                valueDeinit(item, allocator);
-            }
-            allocator.free(data.items.items);
-            allocator.destroy(data);
-        },
-        .vector => |data| {
-            for (data.items.items) |*item| {
-                valueDeinit(item, allocator);
-            }
-            allocator.free(data.items.items);
-            allocator.destroy(data);
-        },
-        .map => |data| {
-            for (data.entries.items) |*entry| {
-                valueDeinit(&entry.key, allocator);
-                valueDeinit(&entry.value, allocator);
-            }
-            allocator.free(data.entries.items);
-            allocator.destroy(data);
-        },
-        .set => |data| {
-            for (data.items.items) |*item| {
-                valueDeinit(item, allocator);
-            }
-            allocator.free(data.items.items);
-            allocator.destroy(data);
-        },
-        .queue => |data| {
-            for (data.items.items) |*item| {
-                valueDeinit(item, allocator);
-            }
-            allocator.free(data.items.items);
-            allocator.destroy(data);
-        },
-        .lazy_seq => |thunk| {
-            if (thunk) |t| {
-                const thunk_allocator = t.env.allocator;
-                t.params.deinit(thunk_allocator);
-                t.body.deinit(thunk_allocator);
-                t.env.deinit(thunk_allocator);
-                thunk_allocator.destroy(t);
-            }
-        },
-        .function => |fn_data| {
-            for (fn_data.arities.items) |*arity| {
-                arity.params.deinit(allocator);
-                arity.body.deinit(allocator);
-                if (arity.rest_name) |rn| {
-                    allocator.free(rn);
-                }
-            }
-            allocator.free(fn_data.arities.items);
-            fn_data.env.deinit(allocator);
-            allocator.destroy(fn_data.env);
-            if (fn_data.name) |n| allocator.free(n);
-            allocator.destroy(fn_data);
-        },
-        .builtin_fn => {},
-        .cons => |data| {
-            data.ref_count -= 1;
-            if (data.ref_count == 0) {
-                const a = data.allocator;
-                valueDeinit(&data.head, a);
-                valueDeinit(&data.tail, a);
-                a.destroy(data);
-            }
-        },
-        .chunk => |data| {
-            const a = data.allocator;
-            // Deinit all Values in the chunk slice
-            var i: usize = data.off;
-            while (i < data.end) : (i += 1) {
-                valueDeinit(&data.items[i], a);
-            }
-            if (data.owns_array) {
-                a.free(data.items);
-            }
-            a.destroy(data);
-        },
-        .chunked_cons => |data| {
-            data.ref_count -= 1;
-            if (data.ref_count == 0) {
-                const a = data.allocator;
-                // Chunk is shared — don't deinit here, it's a separate Value
-                // when extracted. Only deinit the tail.
-                valueDeinit(&data.tail, a);
-                a.destroy(data);
-            }
-        },
-        .atom => |data| {
-            data.ref_count -= 1;
-            if (data.ref_count == 0) {
-                valueDeinit(&data.value, allocator);
-                allocator.destroy(data);
-            }
-        },
-        .future => |data| {
-            // FutureData is GC-managed. The GC's freeVTable is a no-op,
-            // so allocator.destroy(data) doesn't actually free the memory.
-            // But we should NOT call valueDeinit on child values (result, fn_val)
-            // because they are also GC-managed and will be cleaned up by the GC.
-            // Only clean up the error_msg string (dupe'd with allocator.dupe).
-            if (data.error_msg) |msg| {
-                allocator.free(msg);
-            }
-            // allocator.destroy(data) is a no-op through GC allocator.
-            allocator.destroy(data);
-        },
-        .promise => |data| {
-            data.ref_count -= 1;
-            if (data.ref_count == 0) {
-                if (data.value) |*v| {
-                    valueDeinit(v, allocator);
-                }
-                allocator.destroy(data);
-            }
-        },
-        .reduced => |data| {
-            valueDeinit(data, allocator);
-            allocator.destroy(data);
-        },
-        .wrapped => {},
-        .record => |rd| {
-            const a = rd.allocator;
-            a.free(rd.type_name);
-            for (rd.fields.items) |*entry| {
-                valueDeinit(&entry.key, a);
-                valueDeinit(&entry.value, a);
-            }
-            a.free(rd.fields.items);
-            for (rd.extmap.items) |*entry| {
-                valueDeinit(&entry.key, a);
-                valueDeinit(&entry.value, a);
-            }
-            a.free(rd.extmap.items);
-            if (rd.meta) |m| {
-                for (m.items) |*entry| {
-                    valueDeinit(&entry.key, a);
-                    valueDeinit(&entry.value, a);
-                }
-                a.free(m.items);
-            }
-            allocator.destroy(rd);
-        },
-    }
+    _ = allocator;
+    // In a GC system, we never free data here.
+    // The GC tracks all objects and frees them when unreachable.
+    // We just null out the Value so the GC stops seeing the pointer.
+    val.* = nilValue();
 }
 
 pub fn clone(val: *const Value, allocator: Allocator) anyerror!Value {
@@ -901,7 +747,13 @@ pub fn clone(val: *const Value, allocator: Allocator) anyerror!Value {
                 tagStringData(@as(*anyopaque, @ptrCast(@constCast(duped.ptr))));
                 cloned_name = duped;
             }
-            return try fnValueNamed(allocator, cloned_arities, try fn_data.env.clone(allocator), fn_data.is_macro, cloned_name);
+            var cloned_doc: ?[]const u8 = null;
+            if (fn_data.docstring) |ds| {
+                const duped = try allocator.dupe(u8, ds);
+                tagStringData(@as(*anyopaque, @ptrCast(@constCast(duped.ptr))));
+                cloned_doc = duped;
+            }
+            return try fnValueNamedWithDoc(allocator, cloned_arities, try fn_data.env.clone(allocator), fn_data.is_macro, cloned_name, cloned_doc);
         },
         .builtin_fn => |fn_ptr| return builtinFnValue(fn_ptr),
         .wrapped => |w| return Value{ .wrapped = w },
@@ -943,9 +795,40 @@ pub fn clone(val: *const Value, allocator: Allocator) anyerror!Value {
 }
 
 /// Clone this Value into a GC-allocated *Value in a single allocation.
+/// Shares the underlying data (FnData, StringData, etc.) instead of deep-cloning.
+/// All underlying data is GC-tracked, so sharing pointers is safe —
+/// the GC will keep everything alive as long as something references it.
 pub fn cloneGC(val: *const Value, allocator: Allocator) anyerror!*Value {
     const ptr = try allocator.create(Value);
-    ptr.* = try clone(val, allocator);
+    ptr.* = val.*;  // Share all data — GC keeps it alive
+    return ptr;
+}
+
+/// Shallow clone: for functions, creates a new Value sharing the same FnData pointer.
+/// For all other types, does a normal deep clone.
+/// Use this when you need a Value that won't be mutated but want to avoid
+/// the cost of deep-cloning function bodies (e.g., ns-interns returning function refs).
+pub fn shallowClone(val: *const Value, allocator: Allocator) anyerror!Value {
+    // For types that own heap data (strings, symbols, keywords),
+    // we need to duplicate the string so the caller owns an independent copy.
+    // For all other types (functions, maps, lists, integers, etc.),
+    // we share the Value tag union - the GC handles lifetime.
+    switch (val.*) {
+        .string => |s| return stringValue(allocator, s),
+        .symbol => |s| return symValue(allocator, s),
+        .keyword => |s| return keywordValue(allocator, s),
+        // All other types: share the Value (GC-managed or immediate)
+        else => return val.*,
+    }
+}
+
+/// Share: allocates a *Value on the heap that shares all data with the original.
+/// No deep cloning at all - just copies the Value tag union and allocates it.
+/// Safe for immutable values (which ALL Clojure values are).
+/// The caller owns the *Value allocation but NOT the underlying data.
+pub fn shareGC(val: *const Value, allocator: Allocator) anyerror!*Value {
+    const ptr = try allocator.create(Value);
+    ptr.* = val.*;  // Copy the tag union (shallow - shares all pointers)
     return ptr;
 }
 
@@ -1098,8 +981,11 @@ pub fn compare(val: Value, other: Value) i64 {
 
     if (std.meta.activeTag(val) == std.meta.activeTag(other)) {
         if (equals(val, other)) return 0;
-        if (std.meta.activeTag(val) == .string) {
-            return compareStrings(val.string, other.string);
+        switch (std.meta.activeTag(val)) {
+            .string => return compareStrings(val.string, other.string),
+            .symbol => return compareStrings(val.symbol, other.symbol),
+            .keyword => return compareStrings(val.keyword, other.keyword),
+            else => {},
         }
         return 1;
     }
@@ -1543,6 +1429,10 @@ pub const Env = struct {
     parent: ?*Env = null,
     ns_manager: ?*NamespaceManager = null,
     referred_names: std.ArrayListUnmanaged([]const u8) = .empty,
+    // Tracks symbols explicitly defined/owned in this namespace (def, defn, defmacro).
+    // Used by ns-interns/ns-publics to distinguish owned vars from copied/referred ones.
+    // Uses ArrayList instead of HashMap to avoid GC tracking issues with internal memory.
+    owned_symbols: std.ArrayListUnmanaged([]const u8) = .empty,
 
     pub fn init(allocator: Allocator) Env {
         return .{
@@ -1551,11 +1441,15 @@ pub const Env = struct {
             .parent = null,
             .ns_manager = null,
             .referred_names = .empty,
+            .owned_symbols = .empty,
         };
     }
 
     pub fn deinit(self: *Env, allocator: Allocator) void {
-        self.entries.root = null;
+        // Do NOT null out entries.root — the HAMT is structurally shared
+        // and GC-managed. Nulling it would corrupt other Envs that share
+        // the same HAMT nodes (e.g., closures captured via Env.clone).
+        // The GC will reclaim unreachable HAMT nodes during sweep.
         self.entries.count = 0;
         self.entries.has_null = false;
         // Do NOT free referred_names here — it is GC-managed.
@@ -1565,9 +1459,14 @@ pub const Env = struct {
         // referred_names to .empty, the original env's buffer could
         // be freed while the GC hasn't swept it yet).
         self.referred_names.items = &.{};
+        // Free owned_symbols strings (they are heap-allocated)
+        for (self.owned_symbols.items) |key| {
+            allocator.free(key);
+        }
+        allocator.free(self.owned_symbols.items);
+        self.owned_symbols = .empty;
         _ = self.parent;
         _ = self.ns_manager;
-        _ = allocator;
     }
 
     pub fn clone(self: *const Env, allocator: Allocator) anyerror!Env {
@@ -1577,17 +1476,47 @@ pub const Env = struct {
             .parent = self.parent,
             .ns_manager = self.ns_manager,
             .referred_names = .empty,
+            .owned_symbols = .empty,
         };
+    }
+
+    /// Mark a symbol as owned by this namespace (called by bindInCurrentNamespace).
+    pub fn markOwned(self: *Env, name: []const u8) anyerror!void {
+        // Skip if already present
+        for (self.owned_symbols.items) |existing| {
+            if (std.mem.eql(u8, existing, name)) return;
+        }
+        const owned = try self.allocator.dupe(u8, name);
+        errdefer self.allocator.free(owned);
+        try self.owned_symbols.append(self.allocator, owned);
+    }
+
+    /// Check if a symbol is owned by this namespace.
+    pub fn isOwned(self: *const Env, name: []const u8) bool {
+        for (self.owned_symbols.items) |existing| {
+            if (std.mem.eql(u8, existing, name)) return true;
+        }
+        return false;
+    }
+
+    /// Mark all current entries in this env as owned.
+    /// Used after registering built-in functions that bypass bindInCurrentNamespace.
+    pub fn markAllOwned(self: *Env) anyerror!void {
+        var it = self.entries.entryIterator();
+        while (it.next()) |entry| {
+            if (std.meta.activeTag(entry.key) == .symbol) {
+                try self.markOwned(entry.key.symbol);
+            }
+        }
     }
 
     pub fn put(self: *Env, name: []const u8, value: Value) anyerror!void {
         const allocator = self.allocator;
         const key = phm.sym(name);
-        const new_entries = try self.entries.mapAssoc(allocator, key, value);
-        self.entries.root = null;
-        self.entries.count = 0;
-        self.entries.has_null = false;
-        self.entries = new_entries;
+        // mapAssoc returns a NEW PersistentHashMap (structural sharing via HAMT).
+        // Assign directly without clearing old fields first — clearing would
+        // corrupt any other Env that shares the same HAMT via shallow clone.
+        self.entries = try self.entries.mapAssoc(allocator, key, value);
         // NOTE: Do NOT call valueDeinit on the stored value.
         // The HashMap stores a shallow copy of the Value union. For GC-managed
         // types (lazy_seq, chunked_cons, function, etc.), valueDeinit would free
@@ -1618,7 +1547,349 @@ pub const Env = struct {
     }
 
     pub fn getPtr(self: *Env, name: []const u8) ?*const Value {
-        return self.entries.findPtr(phm.sym(name));
+        var current: ?*Env = self;
+        while (current) |env| {
+            if (!env.entries.isEmpty()) {
+                if (env.entries.findPtr(phm.sym(name))) |ptr| return ptr;
+            }
+            current = env.parent;
+        }
+        return null;
+    }
+};
+
+// ============================================================
+// Source location for error reporting and stack traces.
+// Defined here so it can be shared between value.zig (Frame) and eval.zig.
+// ============================================================
+
+pub const SourceLoc = struct {
+    file: []const u8 = "",
+    line: usize = 0, // 1-based line number (0 = unknown)
+
+    pub fn isEmpty(self: SourceLoc) bool {
+        return self.file.len == 0;
+    }
+};
+
+// ============================================================
+// Frame — Virtual Stack Frame (Phase 3: Memory Model Overhaul)
+// ============================================================
+//
+// A Frame is a GC-managed heap object representing one level of
+// evaluation scope (function call, let binding, loop, etc.).
+// Frames form a linked chain via parent pointers, replacing
+// deep C-stack recursion with bounded heap allocation.
+//
+// Design (per MEMORY_MODEL.md):
+// - No full copies: child frame stores only new bindings + overrides
+// - Parent pointer: child knows its parent for scope lookup
+// - Child tracking: parent tracks children for lifecycle + immutability
+// - Overlay-only writes: put() writes only to current overlay
+// - Memoization: recently looked-up parent values are cached
+//
+// Frame.get() walks: overlay → parent.overlay → ... → root Env
+// Frame.put() writes only to overlay (never to parent)
+
+/// Maximum number of entries in a Frame's memoization cache.
+/// When exceeded, the cache is cleared entirely (simple eviction strategy).
+/// 64 entries covers typical tight loops accessing parent-level bindings.
+/// At 10,000 recursion depth this bounds per-frame overhead to ~3KB.
+pub const MEMO_CACHE_MAX: usize = 64;
+
+pub const Frame = struct {
+    parent: ?*Frame = null,
+    // Children tracking: parent knows which frames reference it.
+    // Used for lifecycle management and parent immutability enforcement.
+    children: std.ArrayListUnmanaged(*Frame) = .empty,
+    // Overlay: only bindings introduced/overridden in this frame.
+    // Uses PersistentHashMap for GC integration (HAMT nodes are scanned).
+    overlay: phm.PersistentHashMap = phm.PersistentHashMap.empty(),
+    // Memoization cache for parent-chain lookups.
+    // Stores symbol name → Value for recently accessed parent-level bindings.
+    // Prevents O(depth) traversal on every lookup in tight loops.
+    // Bounded by MEMO_CACHE_MAX — cleared entirely when limit is exceeded.
+    memo_cache: std.StringHashMapUnmanaged(Value) = .empty,
+    // Root namespace environment (terminates the lookup chain).
+    // Frame overlay → parent overlay → ... → root_env
+    root_env: *Env,
+    // The function being executed in this frame (for stack traces).
+    function_ref: ?Value = null,
+    // Source location of the call site.
+    src_loc: SourceLoc = .{},
+    // True if any child frame is still alive.
+    // Used for parent immutability enforcement (Phase 7).
+    has_active_children: bool = false,
+    // The function body to evaluate (for trampoline frames).
+    // Only set for frames created by callFunction (Phase 9).
+    // null for scope frames (let, loop, binding).
+    body_form: ?Value = null,
+    // True for frames created by callFunction (function call frames).
+    // When true, symbol lookup skips the parent chain and goes directly
+    // to root_env (the function's captured closure environment).
+    // This prevents caller's bindings from shadowing closure captures.
+    is_function_frame: bool = false,
+
+    /// Create a new Frame with the given allocator, optional parent,
+    /// and root namespace environment.
+    pub fn init(_: Allocator, parent_frame: ?*Frame, root_env_ptr: *Env) Frame {
+        return .{
+            .parent = parent_frame,
+            .root_env = root_env_ptr,
+        };
+    }
+
+    /// Put a value into the memo cache, respecting the size limit.
+    /// If the cache exceeds MEMO_CACHE_MAX entries, clear it entirely
+    /// before inserting. This is a simple eviction strategy that
+    /// bounds per-frame memory while keeping hot-path lookups fast.
+    fn _memoCachePut(self: *Frame, name: []const u8, value: Value) void {
+        const allocator = self.root_env.allocator;
+        // Evict if cache is full (check before insert to avoid exceeding limit)
+        if (self.memo_cache.count() >= MEMO_CACHE_MAX) {
+            self.memo_cache.deinit(allocator);
+            self.memo_cache = .{};
+        }
+        self.memo_cache.put(allocator, name, value) catch {};
+    }
+
+    /// Look up a binding by name.
+    /// Walks: overlay → parent.overlay → ... → root_env.
+    /// Memoizes results from parent chain lookups (bounded by MEMO_CACHE_MAX).
+    pub fn get(self: *Frame, name: []const u8) ?Value {
+        // 1. Check memo cache first (fast path for repeated lookups)
+        if (self.memo_cache.get(name)) |cached| {
+            return cached;
+        }
+        // 2. Check own overlay
+        if (!self.overlay.isEmpty()) {
+            const found = self.overlay.find(phm.sym(name));
+            if (found) |val| return val;
+        }
+        // 3. Walk parent chain (only for scope frames, not function call frames)
+        // Function call frames have captured environment in root_env - parent chain
+        // would incorrectly expose caller's bindings which shadow closure captures.
+        if (!self.is_function_frame) {
+            var current: ?*Frame = self.parent;
+            while (current) |frame| {
+                if (!frame.overlay.isEmpty()) {
+                    const found = frame.overlay.find(phm.sym(name));
+                    if (found) |val| {
+                        // Memoize for next time (respects MEMO_CACHE_MAX)
+                        self._memoCachePut(name, val);
+                        return val;
+                    }
+                }
+                current = frame.parent;
+            }
+        }
+        // 4. Fall back to root namespace environment
+        const root_val = self.root_env.get(name);
+        if (root_val) |val| {
+            // Memoize for next time (respects MEMO_CACHE_MAX)
+            self._memoCachePut(name, val);
+            return val;
+        }
+        return null;
+    }
+
+    /// Like get() but returns a pointer to the stored Value instead of a copy.
+    /// Used by the evaluator to avoid unnecessary cloneGC allocations.
+    /// The returned pointer is valid as long as the binding is not modified.
+    pub fn getPtr(self: *Frame, name: []const u8) ?*const Value {
+        // 1. Check own overlay
+        if (!self.overlay.isEmpty()) {
+            if (self.overlay.findPtr(phm.sym(name))) |ptr| return ptr;
+        }
+        // 2. Walk parent chain (only for scope frames, not function call frames)
+        if (!self.is_function_frame) {
+            var current: ?*Frame = self.parent;
+            while (current) |frame| {
+                if (!frame.overlay.isEmpty()) {
+                    if (frame.overlay.findPtr(phm.sym(name))) |ptr| return ptr;
+                }
+                current = frame.parent;
+            }
+        }
+        // 3. Fall back to root namespace environment
+        return self.root_env.getPtr(name);
+    }
+
+    /// Check if a binding exists (anywhere in the chain).
+    pub fn has(self: *Frame, name: []const u8) bool {
+        if (!self.overlay.isEmpty() and self.overlay.containsKey(phm.sym(name))) return true;
+        // Function call frames skip parent chain (same as get)
+        if (!self.is_function_frame) {
+            var current: ?*Frame = self.parent;
+            while (current) |frame| {
+                if (!frame.overlay.isEmpty() and frame.overlay.containsKey(phm.sym(name))) return true;
+                current = frame.parent;
+            }
+        }
+        return self.root_env.has(name);
+    }
+
+    /// Check if a binding exists in the parent chain only (not in current overlay).
+    /// Used by put() to enforce parent immutability: if this frame has active children
+    /// and the binding exists in a parent, we must not shadow it because child frames
+    /// may be depending on the parent's value.
+    /// For function call frames, skips frame parent chain (caller's bindings not visible).
+    fn _existsInParentChain(self: *Frame, name: []const u8) bool {
+        // Function call frames skip frame parent chain
+        if (!self.is_function_frame) {
+            var current: ?*Frame = self.parent;
+            while (current) |frame| {
+                if (!frame.overlay.isEmpty() and frame.overlay.containsKey(phm.sym(name))) return true;
+                current = frame.parent;
+            }
+        }
+        return self.root_env.has(name);
+    }
+
+    /// Check if a binding exists in the current frame's overlay only.
+    /// Used by set! to verify the binding is local to this frame.
+    pub fn hasInOverlay(self: *Frame, name: []const u8) bool {
+        return !self.overlay.isEmpty() and self.overlay.containsKey(phm.sym(name));
+    }
+
+    /// Bind a name to a value in this frame's overlay only.
+    /// Never writes to parent overlays (immutability invariant).
+    ///
+    /// Parent immutability check (MEMORY_MODEL.md R11):
+    /// If this frame has active children AND the name exists in the parent chain,
+    /// reject the write. Child frames may be depending on the parent's value.
+    /// If the name is only in the current overlay, allow the write (local rebinding).
+    ///
+    /// Also updates the memo cache (respects MEMO_CACHE_MAX).
+    pub fn put(self: *Frame, name: []const u8, value: Value) anyerror!void {
+        // Parent immutability enforcement (Phase 7)
+        if (self.has_active_children and self._existsInParentChain(name)) {
+            return error.ParentImmutabilityViolation;
+        }
+        const allocator = self.root_env.allocator;
+        const new_overlay = try self.overlay.mapAssoc(allocator, phm.sym(name), value);
+        self.overlay = new_overlay;
+        // Update memo cache (respects MEMO_CACHE_MAX)
+        self._memoCachePut(name, value);
+    }
+
+    /// Create a child frame with this frame as parent.
+    /// The child inherits the lookup chain but has its own overlay.
+    pub fn createChild(self: *Frame, allocator: Allocator) anyerror!*Frame {
+        const frame_ptr = try allocator.create(Frame);
+        errdefer allocator.destroy(frame_ptr);
+        frame_ptr.* = Frame.init(allocator, self, self.root_env);
+        // Tag for GC scanning
+        if (gc_mod.current_gc) |gc| {
+            gc.setObjectType(@as(*anyopaque, @ptrCast(frame_ptr)), gc_mod.GCObjectType.frame);
+        }
+        // Track child in parent
+        try self.children.append(allocator, frame_ptr);
+        self.has_active_children = true;
+        return frame_ptr;
+    }
+
+    /// Remove this frame from its parent's children list.
+    /// Called when a frame is logically popped (function returns).
+    pub fn pop(self: *Frame, allocator: Allocator) void {
+        if (self.parent) |parent| {
+            // Remove self from parent's children list
+            var i: usize = 0;
+            while (i < parent.children.items.len) : (i += 1) {
+                if (parent.children.items[i] == self) {
+                    _ = parent.children.swapRemove(i);
+                    break;
+                }
+            }
+            // Update parent's has_active_children flag
+            parent.has_active_children = parent.children.items.len > 0;
+        }
+        // Clean up this frame's resources
+        if (self.body_form) |bf_val| {
+            var bf = bf_val;
+            valueDeinit(&bf, allocator);
+        }
+        self.body_form = null;
+        self.overlay.root = null;
+        self.overlay.count = 0;
+        self.overlay.has_null = false;
+        self.memo_cache.deinit(allocator);
+        // Safe cleanup: free backing array and reset to empty slice.
+        // Do NOT use deinit() which sets items to undefined (breaks GC scanning).
+        if (self.children.items.len > 0) {
+            allocator.free(self.children.items);
+        }
+        self.children.items = &.{};
+        self.children.capacity = 0;
+    }
+
+    /// Detach this frame from its parent's children list.
+    /// Does NOT clear the overlay — child frames on the trampoline stack
+    /// may still need to walk the parent chain through this frame.
+    /// GC will reclaim the frame and its overlay when no references remain.
+    pub fn detachFromParent(self: *Frame) void {
+        // Parent may have already been deinited (its memory freed).
+        // We can't safely access it, so just clean up our own resources.
+        // The GC will handle the rest.
+        const allocator = self.root_env.allocator;
+        // Clear children list safely — do NOT use deinit() which sets items to undefined.
+        // GC may still scan this frame (parent's children list may reference it),
+        // so items must be a valid (empty) slice, not undefined.
+        if (self.children.items.len > 0) {
+            allocator.free(self.children.items);
+        }
+        self.children.items = &.{};
+        self.children.capacity = 0;
+        // Clear memo cache (not needed after frame is done)
+        self.memo_cache.deinit(allocator);
+        self.memo_cache = .{};
+        // Clear body_form (body was already evaluated, no longer needed)
+        if (self.body_form) |bf_val| {
+            var bf = bf_val;
+            valueDeinit(&bf, allocator);
+        }
+        self.body_form = null;
+        // Do NOT clear overlay — child frames on trampoline may still walk through us.
+        // Do NOT null parent — child frames need the parent chain.
+    }
+
+    /// Release this frame from its parent's children list WITHOUT clearing
+    /// the frame's own data. Used when a special form (let, letfn, binding)
+    /// returns a trampoline — child frames on the trampoline stack may still
+    /// need to walk the parent chain through this frame.
+    /// GC will reclaim the frame once no references remain.
+    pub fn releaseFromParent(self: *Frame, allocator: Allocator) void {
+        // Remove self from parent's children list so parent doesn't hold reference
+        if (self.parent) |parent| {
+            var i: usize = 0;
+            while (i < parent.children.items.len) : (i += 1) {
+                if (parent.children.items[i] == self) {
+                    const last = parent.children.items.len - 1;
+                    parent.children.items[i] = parent.children.items[last];
+                    parent.children.items.len = last;
+                    break;
+                }
+            }
+            // Check if parent still has active children
+            if (parent.children.items.len == 0) {
+                parent.has_active_children = false;
+            }
+        }
+        // Clear our own children list (they should have been detached already)
+        // Safe cleanup: do NOT use deinit() which sets items to undefined.
+        if (self.children.items.len > 0) {
+            allocator.free(self.children.items);
+        }
+        self.children.items = &.{};
+        self.children.capacity = 0;
+        // Do NOT clear overlay, memo_cache, or parent pointer —
+        // child frames may still need to walk through us.
+    }
+
+    /// Full cleanup (deinit + destroy). Used at thread exit.
+    pub fn deinit(self: *Frame, allocator: Allocator) void {
+        self.pop(allocator);
+        allocator.destroy(self);
     }
 };
 

@@ -65,6 +65,7 @@ pub const GCObjectType = enum(u8) {
     bytecode_program = 29, // BytecodeProgram { instructions, constants, symbols, source_markers, fn_pool }
     chunk_data = 30,         // ChunkData { items, off, end }
     chunked_cons_data = 31,  // ChunkedConsData { chunk, tail }
+    frame = 32,              // Frame — virtual stack frame (heap-allocated evaluation frame)
 };
 
 const Header = struct {
@@ -90,11 +91,20 @@ pub const ScanFn = *const fn (obj: *anyopaque, ctx: *ScanContext) void;
 
 /// Callback that returns dynamic roots at collect time.
 /// Called during the mark phase to get current root pointers.
-pub const RootFn = *const fn (gc: *GC) void;
+/// Receives the ScanContext so the callback can call markRecursive.
+pub const RootFn = *const fn (gc: *GC, ctx: *ScanContext) void;
 
 pub const ScanContext = struct {
     gc: *GC,
     scan_fn: ScanFn,
+};
+
+/// Entry in the thread roots list. Each child thread registers its root frame
+/// here so the GC can mark it during collection even though the frame is not
+/// reachable from the main thread's evaluation context.
+const ThreadRootEntry = struct {
+    frame: *anyopaque,
+    thread_id: u64,
 };
 
 // ============================================================
@@ -107,6 +117,122 @@ pub var current_gc: ?*GC = null;
 
 /// REPL input history buffer — registered as a root so it survives sweeps.
 pub var repl_history_buffer: []const u8 = "";
+
+// ============================================================
+// Debug allocation tracker — tracks allocations per return address
+// ============================================================
+const DebugAllocEntry = struct {
+    addr: usize,
+    count: usize,
+    total_bytes: usize,
+    source_file: []const u8,
+    source_line: usize,
+};
+var debug_alloc_entries: [256]DebugAllocEntry = undefined;
+var debug_alloc_count: usize = 0;
+var debug_alloc_enabled: bool = false;
+var debug_alloc_total: usize = 0;
+
+// Stack trace capture state - prints to stderr
+var stack_trace_capture_active: bool = false;
+var stack_trace_capture_count: usize = 0;
+var stack_trace_capture_limit: usize = 0;
+
+/// Start capturing stack traces (prints to stderr).
+pub fn debugAllocStartCapture(limit: usize) void {
+    stack_trace_capture_active = true;
+    stack_trace_capture_count = 0;
+    stack_trace_capture_limit = limit;
+}
+
+/// Stop capturing stack traces.
+pub fn debugAllocStopCapture() void {
+    stack_trace_capture_active = false;
+}
+
+/// Write a stack trace for the current allocation to stderr.
+fn debugAllocWriteStackTrace(size: usize) void {
+    if (!stack_trace_capture_active) return;
+    if (stack_trace_capture_count >= stack_trace_capture_limit) {
+        stack_trace_capture_active = false;
+        return;
+    }
+
+    var buf: [256]u8 = undefined;
+    const header = std.fmt.bufPrint(&buf, "\n--- Alloc #{d} size={d} ---\n", .{ stack_trace_capture_count + 1, size }) catch "";
+    std.debug.print("{s}", .{header});
+
+    // Capture stack trace (raw addresses)
+    var addr_buf: [64]usize = undefined;
+    const trace = std.debug.captureCurrentStackTrace(.{}, &addr_buf);
+    var i: usize = 0;
+    while (i < trace.return_addresses.len) : (i += 1) {
+        const ret_addr = trace.return_addresses[i];
+        std.debug.print("  0x{x}\n", .{ret_addr});
+    }
+    stack_trace_capture_count += 1;
+}
+
+/// Enable debug allocation tracking. Call before the code you want to measure.
+pub fn debugAllocEnable() void {
+    debug_alloc_enabled = true;
+    debug_alloc_count = 0;
+    debug_alloc_total = 0;
+}
+
+/// Disable debug allocation tracking.
+pub fn debugAllocDisable() void {
+    debug_alloc_enabled = false;
+}
+
+/// Record an allocation from a specific return address.
+fn debugAllocRecord(addr: usize, size: usize, src: std.builtin.SourceLocation) void {
+    if (!debug_alloc_enabled) return;
+    // Look for existing entry
+    var i: usize = 0;
+    while (i < debug_alloc_count) : (i += 1) {
+        if (debug_alloc_entries[i].addr == addr) {
+            debug_alloc_entries[i].count += 1;
+            debug_alloc_entries[i].total_bytes += size;
+            return;
+        }
+    }
+    // Add new entry
+    if (debug_alloc_count < 256) {
+        debug_alloc_entries[debug_alloc_count] = .{
+            .addr = addr,
+            .count = 1,
+            .total_bytes = size,
+            .source_file = src.file,
+            .source_line = src.line,
+        };
+        debug_alloc_count += 1;
+    }
+}
+
+/// Print the top 20 allocation sources by total bytes.
+pub fn debugAllocPrintTop() void {
+    if (!debug_alloc_enabled and debug_alloc_count == 0) return;
+    std.log.err("\n=== TOP ALLOCATION SOURCES (by bytes) ===\n", .{});
+    // Sort by total_bytes descending (simple insertion sort)
+    var i: usize = 1;
+    while (i < debug_alloc_count) : (i += 1) {
+        var j = i;
+        while (j > 0 and debug_alloc_entries[j - 1].total_bytes < debug_alloc_entries[j].total_bytes) : (j -= 1) {
+            const tmp = debug_alloc_entries[j - 1];
+            debug_alloc_entries[j - 1] = debug_alloc_entries[j];
+            debug_alloc_entries[j] = tmp;
+        }
+    }
+    const limit = if (debug_alloc_count < 20) debug_alloc_count else 20;
+    var k: usize = 0;
+    while (k < limit) : (k += 1) {
+        const e = debug_alloc_entries[k];
+        std.log.err("  #{d}: addr=0x{x} {s}:{d} count={d} bytes={d} ({d}KB)\n",
+            .{ k + 1, e.addr, e.source_file, e.source_line, e.count, e.total_bytes, e.total_bytes / 1024 });
+    }
+    std.log.err("=== END TOP ALLOCATION SOURCES ===\n", .{});
+}
 
 pub const GC = struct {
     const Self = @This();
@@ -123,6 +249,9 @@ pub const GC = struct {
 
     // Root pointers (always considered reachable)
     roots: std.ArrayListUnmanaged(*anyopaque) = .empty,
+    // Permanent roots: objects that must NEVER be swept (namespaces, function defs, global constants).
+    // Marked at the start of every collect cycle — always reachable, never collected.
+    permanent_roots: std.ArrayListUnmanaged(*anyopaque) = .empty,
     // Optional callback that registers dynamic roots at collect time.
     // Useful for roots that change address (e.g., HashMap entries after resize).
     root_fn: ?RootFn = null,
@@ -135,16 +264,23 @@ pub const GC = struct {
     sweep_enabled: bool = true,
     verbose: bool = false,
 
-    // GC lock: prevents concurrent GC collection while child threads are running.
-    // 0 = unlocked (GC can run), 1 = locked (GC must wait).
-    // Child threads lock before starting, unlock after finishing.
-    // Main thread tries to lock before collect, skips if already locked.
-    gc_lock: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
+    // GC lock counter: prevents concurrent GC collection while child threads are running.
+    // Uses a counter instead of binary lock to support nested threads (e.g., nested futures).
+    // Each child thread increments on start, decrements on end.
+    // GC only collects when counter is 0 (no child threads active).
+    gc_lock: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
 
     // Active thread counter: tracks how many detached threads are still running.
     // Incremented in threadStart, decremented in threadDone.
     // Main thread waits for this to reach 0 before shutting down the GC.
     active_thread_count: std.atomic.Value(usize) = std.atomic.Value(usize).init(0),
+
+    // Thread roots: per-thread entry frames registered by child threads.
+    // Protected by thread_roots_mutex (atomic spinlock) for thread safety.
+    // MEMORY_MODEL.md R6: Thread root rule — register entry frame on thread start,
+    // unregister on thread end. GC marks these during collection.
+    thread_roots_mutex: std.atomic.Value(u8) = std.atomic.Value(u8).init(0),
+    thread_roots: std.ArrayListUnmanaged(ThreadRootEntry) = .empty,
 
     // Auto-GC: trigger collection when memory grows past threshold since last sweep.
     // Threshold = max(last_collected_memory * 20%, 1MB).
@@ -214,11 +350,23 @@ pub const GC = struct {
         }
         self.roots = .empty;
 
+        // Free permanent_roots array
+        if (self.permanent_roots.items.len > 0) {
+            self.wrapped.free(self.permanent_roots.items);
+        }
+        self.permanent_roots = .empty;
+
         // Free temp_roots array if any
         if (self.temp_roots.items.len > 0) {
             self.wrapped.free(self.temp_roots.items);
         }
         self.temp_roots = .empty;
+
+        // Free thread_roots array
+        if (self.thread_roots.items.len > 0) {
+            self.wrapped.free(self.thread_roots.items);
+        }
+        self.thread_roots = .empty;
     }
 
     /// Return a std.mem.Allocator backed by the GC.
@@ -232,6 +380,14 @@ pub const GC = struct {
     /// Allocate a GC-tracked object of the given size and alignment.
     pub fn alloc(self: *Self, size: usize, alignment: Alignment) ?*anyopaque {
         const actual_size: usize = if (size == 0) 1 else size;
+
+        // Debug: track allocation source
+        debugAllocRecord(@returnAddress(), actual_size, @src());
+        if (debug_alloc_enabled) {
+            debug_alloc_total += 1;
+        }
+        // Stack trace capture (writes to file)
+        debugAllocWriteStackTrace(actual_size);
 
         // Convert log2 alignment to actual alignment value
         const data_align: usize = @as(usize, 1) << @intFromEnum(alignment);
@@ -483,6 +639,66 @@ pub const GC = struct {
         }
     }
 
+    /// Add a permanent root pointer (never collected under any circumstances).
+    /// Used for namespace environments, function definitions, and global constants.
+    /// Permanent roots are marked at the start of every collect cycle,
+    /// ensuring they and everything reachable from them are never swept.
+    pub fn addPermanentRoot(self: *Self, root: *anyopaque) void {
+        // Avoid duplicates
+        var i: usize = 0;
+        while (i < self.permanent_roots.items.len) : (i += 1) {
+            if (self.permanent_roots.items[i] == root) return;
+        }
+        self.permanent_roots.append(self.wrapped, root) catch {};
+        self.log("[GC] ADD_PERMANENT_ROOT ptr={*} perm_roots={d}\n", .{ root, self.permanent_roots.items.len });
+    }
+
+    /// Remove a permanent root pointer.
+    /// Use sparingly — typically permanent roots are added at startup and never removed.
+    pub fn removePermanentRoot(self: *Self, root: *anyopaque) void {
+        var i: usize = 0;
+        while (i < self.permanent_roots.items.len) : (i += 1) {
+            if (self.permanent_roots.items[i] == root) {
+                _ = self.permanent_roots.swapRemove(i);
+                self.log("[GC] REMOVE_PERMANENT_ROOT ptr={*} perm_roots={d}\n", .{ root, self.permanent_roots.items.len });
+                return;
+            }
+        }
+    }
+
+    // ============================================================
+    // Thread root registration (Phase 8: Thread Safety Integration)
+    // MEMORY_MODEL.md R6: Thread root rule
+    // ============================================================
+
+    /// Register a thread's entry frame as a GC root.
+    /// Called by child threads before evaluation starts.
+    /// Thread-safe: protected by thread_roots_mutex (atomic spinlock).
+    pub fn registerThreadRoot(self: *Self, frame: *anyopaque) void {
+        while (self.thread_roots_mutex.cmpxchgStrong(0, 1, .acq_rel, .monotonic) != null) {}
+        defer self.thread_roots_mutex.store(0, .release);
+        const id = std.Thread.getCurrentId();
+        self.thread_roots.append(self.wrapped, .{ .frame = frame, .thread_id = id }) catch {};
+        self.log("[GC] REGISTER_THREAD_ROOT thread={any} ptr={*}\n", .{ id, frame });
+    }
+
+    /// Unregister the current thread's entry frame from GC roots.
+    /// Called by child threads after evaluation completes.
+    /// Thread-safe: protected by thread_roots_mutex (atomic spinlock).
+    pub fn unregisterThreadRoot(self: *Self) void {
+        while (self.thread_roots_mutex.cmpxchgStrong(0, 1, .acq_rel, .monotonic) != null) {}
+        defer self.thread_roots_mutex.store(0, .release);
+        const id = std.Thread.getCurrentId();
+        var i: usize = 0;
+        while (i < self.thread_roots.items.len) : (i += 1) {
+            if (self.thread_roots.items[i].thread_id == id) {
+                _ = self.thread_roots.swapRemove(i);
+                self.log("[GC] UNREGISTER_THREAD_ROOT thread={any} roots={d}\n", .{ id, self.thread_roots.items.len });
+                return;
+            }
+        }
+    }
+
     /// Push a temporary root pointer onto the stack.
     /// Used to protect HAMT nodes reachable from stack-allocated Env structs.
     /// Must be paired with popTempRoot (use defer for safety).
@@ -503,8 +719,8 @@ pub const GC = struct {
         // are protected from sweeping (in-flight evaluation state).
         self.generation += 1;
 
-        self.log("[GC] === COLLECT START blocks={d} roots={d} gen={d} ===\n",
-            .{ self.block_count, self.roots.items.len, self.generation });
+        self.log("[GC] === COLLECT START blocks={d} perm_roots={d} roots={d} gen={d} ===\n",
+            .{ self.block_count, self.permanent_roots.items.len, self.roots.items.len, self.generation });
 
         // Build O(1) header lookup table for this collection cycle.
         self.buildHeaderTable();
@@ -519,8 +735,14 @@ pub const GC = struct {
         }
         self.block_mutex.store(0, .release);
 
-        // Phase 2: Mark from static roots
+        // Phase 2: Mark from permanent roots FIRST (namespaces, function defs, globals).
+        // These are always reachable — they must never be swept.
         var ctx = ScanContext{ .gc = self, .scan_fn = scan_fn };
+        for (self.permanent_roots.items) |root| {
+            self.markRecursive(root, &ctx);
+        }
+
+        // Phase 2.1: Mark from static roots
         for (self.roots.items) |root| {
             self.markRecursive(root, &ctx);
         }
@@ -530,9 +752,17 @@ pub const GC = struct {
             self.markRecursive(root, &ctx);
         }
 
-        // Phase 3: Call root callback for dynamic roots (marks directly)
+        // Phase 2.7: Mark from thread roots (child thread entry frames)
+        // Thread-safe: spinlock while iterating.
+        while (self.thread_roots_mutex.cmpxchgStrong(0, 1, .acq_rel, .monotonic) != null) {}
+        for (self.thread_roots.items) |entry| {
+            self.markRecursive(entry.frame, &ctx);
+        }
+        self.thread_roots_mutex.store(0, .release);
+
+        // Phase 3: Call root callback for dynamic roots (marks via ScanContext)
         if (self.root_fn) |fn_ptr| {
-            fn_ptr(self);
+            fn_ptr(self, &ctx);
         }
 
         // Phase 4: Sweep unmarked blocks
@@ -693,12 +923,9 @@ pub fn freeAllBlocks(self: *Self) void {
     /// where no in-flight allocations exist.
     /// Skips collection if child threads are active to avoid concurrent GC access.
     pub fn tryAutoCollect(self: *Self) void {
-        // Try to acquire the GC lock. If a child thread holds it, skip collection.
-        // cmpxchgStrong(0, 1) atomically checks if lock is 0 and sets to 1.
-        // Returns null on success (was 0), some(prev) on failure (was 1).
-        const prev = self.gc_lock.cmpxchgStrong(0, 1, .acq_rel, .monotonic);
-        if (prev != null) return; // lock held by child thread, skip
-        defer self.gc_lock.store(0, .release); // release lock
+        // Check if any child threads are active (gc_lock counter > 0).
+        // If so, skip collection to avoid concurrent access.
+        if (self.gc_lock.load(.acquire) > 0) return;
 
         const need_collect = self.auto_gc_pending or self.manual_sweep_pending;
         if (need_collect) {
@@ -715,9 +942,7 @@ pub fn freeAllBlocks(self: *Self) void {
     /// execution where auto-GC is unnecessary overhead (OS reclaims
     /// all memory on exit), but manual sweeps still need to run.
     pub fn tryDeferredSweep(self: *Self) void {
-        const prev = self.gc_lock.cmpxchgStrong(0, 1, .acq_rel, .monotonic);
-        if (prev != null) return; // lock held by child thread, skip
-        defer self.gc_lock.store(0, .release);
+        if (self.gc_lock.load(.acquire) > 0) return;
 
         if (self.manual_sweep_pending) {
             if (self.scan_fn) |fn_ptr| {
@@ -728,20 +953,19 @@ pub fn freeAllBlocks(self: *Self) void {
     }
 
     /// Lock the GC to prevent collection while a child thread runs.
-    /// Spins until the lock is acquired (GC is not running).
+    /// Increments the lock counter — supports nested threads (e.g., nested futures).
     pub fn threadStart(self: *Self) void {
         // Increment active thread count so main thread knows a thread is running.
         _ = self.active_thread_count.fetchAdd(1, .monotonic);
-        // Wait for GC to finish (lock == 0), then acquire the lock (set to 1).
-        while (self.gc_lock.cmpxchgStrong(0, 1, .acq_rel, .monotonic) != null) {
-            // Spin-wait: GC is running, wait for it to finish.
-            // The GC will set lock back to 0 when done.
-        }
+        // Increment the GC lock counter. This prevents GC from collecting
+        // while any child thread is active. Supports nesting (multiple threads).
+        _ = self.gc_lock.fetchAdd(1, .acq_rel);
     }
 
-    /// Unlock the GC, allowing collection to proceed.
+    /// Unlock the GC, allowing collection to proceed when all threads are done.
     pub fn threadDone(self: *Self) void {
-        self.gc_lock.store(0, .release);
+        // Decrement the GC lock counter. When it reaches 0, GC can collect.
+        _ = self.gc_lock.fetchSub(1, .release);
         // Decrement active thread count — main thread waits for this to reach 0.
         _ = self.active_thread_count.fetchSub(1, .release);
     }
@@ -764,6 +988,7 @@ pub fn freeAllBlocks(self: *Self) void {
         gc_count: usize = 0,
         block_count: usize = 0,
         root_count: usize = 0,
+        permanent_root_count: usize = 0,
         total_allocated: usize = 0,
         current_allocated: usize = 0,
         peak_allocated: usize = 0,
@@ -778,6 +1003,7 @@ pub fn freeAllBlocks(self: *Self) void {
             .gc_count = self.gc_count,
             .block_count = self.block_count,
             .root_count = self.roots.items.len,
+            .permanent_root_count = self.permanent_roots.items.len,
             .total_allocated = self.total_allocated,
             .current_allocated = self.current_allocated,
             .peak_allocated = self.peak_allocated,
@@ -1362,4 +1588,168 @@ test "gc::verbose mode produces output" {
     // We can't easily capture stderr in a unit test, but at least we verify
     // that verbose mode doesn't crash.
     try std.testing.expect(gc.stats().block_count == 1);
+}
+
+test "gc::permanent root survives collect (no regular roots)" {
+    var gc = GC.init(std.heap.page_allocator);
+    defer gc.deinit();
+
+    const a = allocNode(&gc, 1);
+    const b = allocNode(&gc, 2);
+    a.next = b;
+
+    // Register A as permanent root (never collected)
+    gc.addPermanentRoot(a);
+
+    // No regular roots registered — only permanent roots
+    gc.collect(testNodeScanFn);
+
+    // A and B survive because A is a permanent root
+    try std.testing.expect(a.id == 1);
+    try std.testing.expect(b.id == 2);
+    try std.testing.expect(gc.stats().block_count == 2);
+    try std.testing.expect(gc.stats().permanent_root_count == 1);
+}
+
+test "gc::permanent root protects deep chain" {
+    var gc = GC.init(std.heap.page_allocator);
+    defer gc.deinit();
+
+    // Chain: A -> B -> C -> D
+    const a = allocNode(&gc, 1);
+    const b = allocNode(&gc, 2);
+    const c = allocNode(&gc, 3);
+    const d = allocNode(&gc, 4);
+    a.next = b;
+    b.next = c;
+    c.next = d;
+
+    gc.addPermanentRoot(a);
+
+    // Multiple collects — permanent root keeps entire chain alive
+    gc.collect(testNodeScanFn);
+    gc.collect(testNodeScanFn);
+    gc.collect(testNodeScanFn);
+
+    try std.testing.expect(a.id == 1);
+    try std.testing.expect(b.id == 2);
+    try std.testing.expect(c.id == 3);
+    try std.testing.expect(d.id == 4);
+    try std.testing.expect(gc.stats().block_count == 4);
+}
+
+test "gc::permanent root + regular root coexist" {
+    var gc = GC.init(std.heap.page_allocator);
+    defer gc.deinit();
+
+    const perm = allocNode(&gc, 10);
+    const reg = allocNode(&gc, 20);
+    _ = allocNode(&gc, 30); // orphan
+
+    gc.addPermanentRoot(perm);
+    gc.addRoot(reg);
+
+    // Three collects for 3-generation protection (orphan gets swept)
+    gc.collect(testNodeScanFn);
+    gc.collect(testNodeScanFn);
+    gc.collect(testNodeScanFn);
+
+    try std.testing.expect(perm.id == 10);
+    try std.testing.expect(reg.id == 20);
+    // Orphan should be swept
+    try std.testing.expect(gc.stats().block_count == 2);
+}
+
+test "gc::remove permanent root allows collection" {
+    var gc = GC.init(std.heap.page_allocator);
+    defer gc.deinit();
+
+    const a = allocNode(&gc, 1);
+    gc.addPermanentRoot(a);
+
+    // First collect — A survives as permanent root
+    gc.collect(testNodeScanFn);
+    try std.testing.expect(gc.stats().block_count == 1);
+
+    // Remove permanent root
+    gc.removePermanentRoot(a);
+    try std.testing.expect(gc.stats().permanent_root_count == 0);
+
+    // Three collects for 3-generation protection
+    gc.collect(testNodeScanFn);
+    gc.collect(testNodeScanFn);
+    gc.collect(testNodeScanFn);
+
+    // A should now be swept (no roots)
+    try std.testing.expect(gc.stats().block_count == 0);
+}
+
+test "gc::permanent root duplicate add is no-op" {
+    var gc = GC.init(std.heap.page_allocator);
+    defer gc.deinit();
+
+    const a = allocNode(&gc, 1);
+    gc.addPermanentRoot(a);
+    gc.addPermanentRoot(a); // duplicate
+    gc.addPermanentRoot(a); // duplicate
+
+    try std.testing.expect(gc.stats().permanent_root_count == 1);
+}
+
+test "gc::permanent root remove non-existent is no-op" {
+    var gc = GC.init(std.heap.page_allocator);
+    defer gc.deinit();
+
+    const a = allocNode(&gc, 1);
+    const b = allocNode(&gc, 2);
+    gc.addPermanentRoot(a);
+
+    // Try to remove B which was never added
+    gc.removePermanentRoot(b);
+    try std.testing.expect(gc.stats().permanent_root_count == 1);
+
+    // Clean up
+    gc.removePermanentRoot(a);
+    try std.testing.expect(gc.stats().permanent_root_count == 0);
+}
+
+test "gc::permanent root with tree structure" {
+    var gc = GC.init(std.heap.page_allocator);
+    defer gc.deinit();
+
+    //       A (permanent)
+    //      / \
+    //     B   C
+    //    / \
+    //   D   E
+    //
+    //   F -> G  (unreachable cycle)
+    //   H        (orphan)
+    const a = allocNode(&gc, 1);
+    const b = allocNode(&gc, 2);
+    const c = allocNode(&gc, 3);
+    const d = allocNode(&gc, 4);
+    const e = allocNode(&gc, 5);
+    const f = allocNode(&gc, 6);
+    const g = allocNode(&gc, 7);
+    _ = allocNode(&gc, 8); // orphan H
+
+    a.next = b;
+    a.child = c;
+    b.next = d;
+    b.child = e;
+    f.next = g;
+    g.next = f; // unreachable cycle
+
+    gc.addPermanentRoot(a);
+
+    // Three collects for 3-generation protection
+    gc.collect(testNodeScanFn);
+    gc.collect(testNodeScanFn);
+    gc.collect(testNodeScanFn);
+
+    // A-E survive (reachable from permanent root A)
+    // F, G, H swept (unreachable)
+    try std.testing.expect(gc.stats().block_count == 5);
+    try std.testing.expect(gc.stats().permanent_root_count == 1);
 }

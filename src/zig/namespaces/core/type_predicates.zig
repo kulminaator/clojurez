@@ -143,7 +143,8 @@ pub fn core_vector_q(self: *const Value, args: *const list.List, _: *Env) anyerr
 pub fn core_map_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
-    return vm.boolValue(std.meta.activeTag(args.items[0]) == .map);
+    // In Clojure, map? returns true for both maps and records
+    return vm.boolValue(std.meta.activeTag(args.items[0]) == .map or std.meta.activeTag(args.items[0]) == .record);
 }
 
 pub fn core_record_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
@@ -195,7 +196,7 @@ pub fn core_keyword(self: *const Value, args: *const list.List, env_env: *Env) a
     const allocator = env_env.allocator;
     if (args.items.len == 1) {
         const arg = args.items[0];
-        if (std.meta.activeTag(arg) == .keyword) return try vm.clone(&arg, allocator);
+        if (std.meta.activeTag(arg) == .keyword) return try vm.shallowClone(&arg, allocator);
         if (std.meta.activeTag(arg) == .symbol) {
             return vm.keywordValue(allocator, arg.symbol);
         }
@@ -372,7 +373,7 @@ pub fn core_bigint(self: *const Value, args: *const list.List, env_env: *Env) an
     if (args.items.len != 1) return error.ArityError;
     const v = args.items[0];
     return switch (std.meta.activeTag(v)) {
-        .bigint => try vm.clone(&v, allocator),
+        .bigint => try vm.shallowClone(&v, allocator),
         .integer => try vm.bigIntValue(allocator, BI.bigIntFromI64(allocator, v.integer)),
         .float => {
             // Convert float to BigDecimal string, then truncate to BigInt
@@ -432,7 +433,7 @@ pub fn core_bigdec(self: *const Value, args: *const list.List, env_env: *Env) an
     if (args.items.len != 1) return error.ArityError;
     const v = args.items[0];
     return switch (std.meta.activeTag(v)) {
-        .decimal => try vm.clone(&v, allocator),
+        .decimal => try vm.shallowClone(&v, allocator),
         .integer => try vm.decimalValue(allocator, BD.BigDecimal.fromI64(allocator, v.integer, 0)),
         .float => {
             const s = try std.fmt.allocPrint(allocator, "{d}", .{v.float});
@@ -545,8 +546,102 @@ pub fn core_meta(self: *const Value, args: *const list.List, env_env: *Env) anye
         }
         return vm.nilValue();
     }
+
+    if (std.meta.activeTag(val) == .function) {
+        const fn_data = val.function;
+        // Check for cached metadata
+        if (fn_data.cached_meta) |cached| {
+            return cached;  // Share — metadata is immutable, GC keeps it alive
+        }
+        // Build and cache the metadata
+        const meta_map = try buildFnMeta(allocator, fn_data);
+        // Store in cache (fn_data is *FnData, mutable)
+        fn_data.cached_meta = meta_map;
+        // Return shared reference — metadata is immutable
+        return meta_map;
+    }
+
     // For other types, return nil
     return vm.nilValue();
+}
+
+/// Build metadata map for a function value: {:doc, :arglists, :name, :macro}
+fn buildFnMeta(allocator: Allocator, fn_data: *const vm.FnData) anyerror!Value {
+    var entries: vm.Map = .empty;
+    errdefer {
+        for (entries.items) |*entry| {
+            vm.valueDeinit(&entry.key, allocator);
+            vm.valueDeinit(&entry.value, allocator);
+        }
+        allocator.free(entries.items);
+    }
+
+    // :doc
+    if (fn_data.docstring) |doc| {
+        const doc_key = try vm.keywordValue(allocator, "doc");
+        const doc_val = try vm.stringValue(allocator, doc);
+        try entries.append(allocator, .{ .key = doc_key, .value = doc_val });
+    }
+
+    // :arglists
+    var arglists = try buildArglistsValue(allocator, fn_data);
+    defer vm.valueDeinit(&arglists, allocator);
+    const arglists_key = try vm.keywordValue(allocator, "arglists");
+    const arglists_val = try vm.shallowClone(&arglists, allocator);
+    try entries.append(allocator, .{ .key = arglists_key, .value = arglists_val });
+
+    // :name
+    if (fn_data.name) |name| {
+        const name_key = try vm.keywordValue(allocator, "name");
+        const name_val = try vm.symValue(allocator, name);
+        try entries.append(allocator, .{ .key = name_key, .value = name_val });
+    }
+
+    // :macro
+    const macro_key = try vm.keywordValue(allocator, "macro");
+    const macro_val = vm.boolValue(fn_data.is_macro);
+    try entries.append(allocator, .{ .key = macro_key, .value = macro_val });
+
+    return try vm.mapValue(allocator, entries);
+}
+
+/// Build arglists value from FnData arities: ((a) (a b) (a b & rest))
+fn buildArglistsValue(allocator: Allocator, fn_data: *const vm.FnData) anyerror!Value {
+    var arglists: std.ArrayListUnmanaged(Value) = .empty;
+    errdefer {
+        for (arglists.items) |*v| {
+            vm.valueDeinit(v, allocator);
+        }
+        allocator.free(arglists.items);
+    }
+
+    for (fn_data.arities.items) |arity| {
+        var param_list: std.ArrayListUnmanaged(Value) = .empty;
+        errdefer {
+            for (param_list.items) |*v| {
+                vm.valueDeinit(v, allocator);
+            }
+            allocator.free(param_list.items);
+        }
+
+        for (arity.params.items) |param| {
+            const cloned_param = try vm.shallowClone(&param, allocator);
+            try param_list.append(allocator, cloned_param);
+        }
+
+        // Handle rest param: add '& rest_name'
+        if (arity.rest_name) |rest_name| {
+            const amp = try vm.symValue(allocator, "&");
+            try param_list.append(allocator, amp);
+            const rest_sym = try vm.symValue(allocator, rest_name);
+            try param_list.append(allocator, rest_sym);
+        }
+
+        const arity_list = try vm.listValue(allocator, try list.clone(&param_list, allocator));
+        try arglists.append(allocator, arity_list);
+    }
+
+    return try vm.listValue(allocator, arglists);
 }
 
 /// Returns a copy of x with metadata m attached.
@@ -593,7 +688,7 @@ pub fn core_with_meta(self: *const Value, args: *const list.List, env_env: *Env)
         return try vm.recordValue(allocator, cloned_type_name, cloned_fields, cloned_extmap, new_meta_map);
     }
     // For other types, return a clone of the original value
-    return try vm.clone(&val, allocator);
+    return try vm.shallowClone(&val, allocator);
 }
 
 pub fn registerTypePredicateFunctions(env: *Env) anyerror!void {
@@ -643,6 +738,9 @@ pub fn registerTypePredicateFunctions(env: *Env) anyerror!void {
     try env.put("with-meta", vm.builtinFnValue(core_with_meta));
     // Chunked sequence predicate
     try env.put("chunked-seq?", vm.builtinFnValue(core_chunked_seq_q));
+    try env.put("has-doc?", vm.builtinFnValue(core_has_doc_q));
+    try env.put("get-doc", vm.builtinFnValue(core_get_doc));
+    try env.put("get-arglists", vm.builtinFnValue(core_get_arglists));
 }
 
 // chunked-seq? - check if s is a chunked sequence
@@ -650,6 +748,41 @@ pub fn core_chunked_seq_q(self: *const Value, args: *const list.List, _: *Env) a
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     return vm.boolValue(std.meta.activeTag(args.items[0]) == .chunked_cons);
+}
+
+// has-doc? - check if a function/macro has a docstring (no allocation)
+pub fn core_has_doc_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const val = args.items[0];
+    if (std.meta.activeTag(val) == .function) {
+        return vm.boolValue(val.function.docstring != null);
+    }
+    return vm.boolValue(false);
+}
+
+// get-doc - return the docstring of a function/macro, or nil (minimal allocation)
+pub fn core_get_doc(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const val = args.items[0];
+    if (std.meta.activeTag(val) == .function) {
+        if (val.function.docstring) |doc| {
+            return try vm.stringValue(env_env.allocator, doc);
+        }
+    }
+    return vm.nilValue();
+}
+
+// get-arglists - return the arglists of a function/macro, or nil
+pub fn core_get_arglists(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const val = args.items[0];
+    if (std.meta.activeTag(val) == .function) {
+        return try buildArglistsValue(env_env.allocator, val.function);
+    }
+    return vm.nilValue();
 }
 
 // ===== Unit Tests =====

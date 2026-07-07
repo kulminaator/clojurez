@@ -32,16 +32,13 @@ const PromiseState = struct {
 /// The function's captured environment is accessed via fn_val.FnData.env.
 fn futureThreadEntry(fn_val: Value, future_data: *vm.FutureData) void {
     const allocator = future_data.allocator;
+    const gc = gc_mod.current_gc orelse return;
 
-    // The GC lock was acquired BEFORE Thread.spawn in core_future_call.
-    // We release it when the thread finishes via threadDone().
+    // The GC lock counter was incremented BEFORE Thread.spawn in core_future_call.
+    // We decrement it when the thread finishes via threadDone().
     // Disable auto-GC in child threads since they're short-lived.
-    if (gc_mod.current_gc) |gc| {
-        defer gc.threadDone();
-        const prev_auto_gc = gc.auto_gc_active;
-        gc.auto_gc_active = false;
-        defer gc.auto_gc_active = prev_auto_gc;
-    }
+    const prev_auto_gc = gc.auto_gc_active;
+    gc.auto_gc_active = false;
 
     var result: Value = undefined;
 
@@ -57,13 +54,31 @@ fn futureThreadEntry(fn_val: Value, future_data: *vm.FutureData) void {
             future_data.state.store(FutureState.error_state, .release);
             break :errhandler;
         };
-        defer child_env.deinit(allocator);
 
-        // Call the function with no arguments using eval.call
+        // Phase 8: Create a root Frame for this thread and register it as a thread root.
+        // This ensures the frame chain is visible to GC during collection.
+        const root_frame = eval.createRootFrame(allocator, &child_env) catch {
+            child_env.deinit(allocator);
+            future_data.error_msg = allocator.dupe(u8, "failed to create root frame") catch null;
+            future_data.state.store(FutureState.error_state, .release);
+            break :errhandler;
+        };
+        gc.registerThreadRoot(@as(*anyopaque, @ptrCast(root_frame)));
+
+        // Call the function with no arguments using eval.call (Frame-based)
+        // Disable trampolining so callFunction evaluates body directly.
+        // trampoline_allowed is thread-local so this doesn't affect other threads.
+        const saved_trampoline = eval.trampoline_allowed;
+        eval.trampoline_allowed = false;
+        defer eval.trampoline_allowed = saved_trampoline;
         const empty_args: list.List = .empty;
-        const call_result = eval.call(allocator, &fn_val, &empty_args, &child_env, 0, null) catch {
+        const call_result = eval.call(allocator, &fn_val, &empty_args, root_frame, 0) catch {
             future_data.error_msg = allocator.dupe(u8, "evaluation error") catch null;
             future_data.state.store(FutureState.error_state, .release);
+            // Cleanup in error path: deinit frame, unregister, deinit env
+            root_frame.deinit(allocator);
+            gc.unregisterThreadRoot();
+            child_env.deinit(allocator);
             break :errhandler;
         };
         result = call_result.value.*;
@@ -71,7 +86,19 @@ fn futureThreadEntry(fn_val: Value, future_data: *vm.FutureData) void {
         // Store result and mark done
         future_data.result = result;
         future_data.state.store(FutureState.done, .release);
+
+        // Cleanup: deinit frame BEFORE unregistering thread root.
+        // This ensures the frame is fully cleaned up while still protected
+        // by gc_lock counter (main thread can't collect while counter > 0).
+        root_frame.deinit(allocator);
+        gc.unregisterThreadRoot();
+        child_env.deinit(allocator);
     }
+
+    // Restore auto-GC setting
+    gc.auto_gc_active = prev_auto_gc;
+    // Decrement GC lock counter — main thread can collect when counter reaches 0.
+    gc.threadDone();
 }
 
 /// Helper: get an Io instance for sleep calls.
@@ -97,7 +124,7 @@ pub fn core_future_call(self: *const Value, args: *const list.List, env_env: *En
     // Clone the function value for the child thread.
     // This deep-clones the FnData and its captured Env, so the child thread
     // gets an independent copy of the closure environment.
-    const cloned_fn = try vm.clone(&fn_val, allocator);
+    const cloned_fn = try vm.shallowClone(&fn_val, allocator);
 
     // Create the FutureData and store the cloned function in it.
     // Storing fn_val in FutureData is critical: the GC scans FutureData.fn_val
@@ -183,7 +210,7 @@ pub fn core_deref_future(self: *const Value, args: *const list.List, env_env: *E
     // Poll until done or timeout
     while (data.state.load(.acquire) == FutureState.running) {
         if (has_timeout and elapsed_ms >= timeout_ms) {
-            if (timeout_val) |tv| return try vm.clone(tv, allocator);
+            if (timeout_val) |tv| return try vm.shallowClone(tv, allocator);
             return vm.nilValue();
         }
         // Sleep 1ms between polls
@@ -195,7 +222,7 @@ pub fn core_deref_future(self: *const Value, args: *const list.List, env_env: *E
     const state = data.state.load(.monotonic);
     return switch (state) {
         FutureState.done => {
-            if (data.result) |*r| return try vm.clone(r, allocator);
+            if (data.result) |*r| return try vm.shallowClone(r, allocator);
             return vm.nilValue();
         },
         FutureState.error_state => {
@@ -276,7 +303,7 @@ pub fn core_deliver(self: *const Value, args: *const list.List, env_env: *Env) a
     const allocator = env_env.allocator;
 
     // Clone the value first.
-    const cloned = try vm.clone(&args.items[1], allocator);
+    const cloned = try vm.shallowClone(&args.items[1], allocator);
 
     // Atomically transition state from pending to delivered.
     // Only the first deliver succeeds; subsequent delivers are no-ops.
@@ -326,7 +353,7 @@ pub fn core_deref_promise(self: *const Value, args: *const list.List, env_env: *
     // Poll until delivered or timeout
     while (data.state.load(.acquire) == PromiseState.pending) {
         if (has_timeout and elapsed_ms >= timeout_ms) {
-            if (timeout_val) |tv| return try vm.clone(tv, allocator);
+            if (timeout_val) |tv| return try vm.shallowClone(tv, allocator);
             return vm.nilValue();
         }
         const sleep_duration = std.Io.Duration.fromMilliseconds(1);
@@ -335,7 +362,7 @@ pub fn core_deref_promise(self: *const Value, args: *const list.List, env_env: *
     }
 
     // Delivered — return the value
-    if (data.value) |*v| return try vm.clone(v, allocator);
+    if (data.value) |*v| return try vm.shallowClone(v, allocator);
     return vm.nilValue();
 }
 

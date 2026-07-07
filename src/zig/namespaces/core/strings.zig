@@ -6,13 +6,68 @@ const list = @import("../../list.zig");
 const Env = vm.Env;
 const helpers = @import("helpers.zig");
 const test_utils = @import("test_utils.zig");
+const protocols = @import("protocols.zig");
+const eval_ns = @import("../../eval_ns.zig");
+const Allocator = std.mem.Allocator;
+
+/// Try to call Object/toString on a value. Returns the string result or null if not implemented.
+fn tryToString(allocator: Allocator, val: *const Value, env: *Env) anyerror!?[]const u8 {
+    // Look up clojure.core namespace
+    const ns_mgr = eval_ns.findNsManager(env) orelse return null;
+    const core_env = ns_mgr.getNamespace("clojure.core") orelse return null;
+
+    // Look up Object protocol in clojure.core
+    const object_proto_val = core_env.get("Object") orelse return null;
+    if (std.meta.activeTag(object_proto_val) != .map) return null;
+
+    // Get :impls from protocol map (borrowed reference — do NOT deinit)
+    var impls_kw = try vm.keywordValue(allocator, "impls");
+    defer vm.valueDeinit(&impls_kw, allocator);
+    const impls_map = protocols.getMapEntry(object_proto_val, impls_kw) orelse return null;
+
+    // Get type keyword for this value
+    const type_kw_str = protocols.typeKeyword(val.*);
+    var type_kw = try vm.keywordValue(allocator, type_kw_str);
+    defer vm.valueDeinit(&type_kw, allocator);
+    const type_impls = protocols.getMapEntry(impls_map, type_kw) orelse return null;
+
+    // Check if toString method exists (borrowed reference — do NOT deinit)
+    var method_kw = try vm.keywordValue(allocator, "toString");
+    defer vm.valueDeinit(&method_kw, allocator);
+    const impl_fn = protocols.getMapEntry(type_impls, method_kw) orelse return null;
+
+    // Build args: (toString this)
+    var args: list.List = .empty;
+    defer args.deinit(allocator);
+    try args.append(allocator, try vm.shallowClone(val, allocator));
+
+    // Call the implementation directly
+    const eval_mod = @import("../../eval.zig");
+    const result = eval_mod.callWithEnvV(allocator, &impl_fn, &args, env, 0) catch return null;
+
+    if (std.meta.activeTag(result.*) == .string) {
+        return try allocator.dupe(u8, result.*.string);
+    }
+    vm.valueDeinit(&result.*, allocator);
+    allocator.destroy(result);
+    return null;
+}
 
 pub fn core_str(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
+    const allocator = env_env.allocator;
     var buf: std.ArrayList(u8) = .empty;
-    errdefer buf.deinit(env_env.allocator);
+    errdefer buf.deinit(allocator);
 
     for (args.items) |arg| {
+        // For records, try Object/toString first (avoids infinite recursion with symbols)
+        if (std.meta.activeTag(arg) == .record) {
+            if (try tryToString(allocator, &arg, env_env)) |to_str| {
+                defer allocator.free(to_str);
+                try buf.appendSlice(allocator, to_str);
+                continue;
+            }
+        }
         // Handle character type: convert code point to UTF-8 string
         if (std.meta.activeTag(arg) == .character) {
             var utf8_buf: [4]u8 = undefined;

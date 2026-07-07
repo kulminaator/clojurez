@@ -495,7 +495,6 @@ pub fn execute(
     allocator: Allocator,
     program: *const BytecodeProgram,
     env: *vm.Env,
-    ctx: ?*eval_mod.TrampolineStack,
 ) anyerror!VMResult {
     var stack = OperandStack.init(allocator);
     errdefer stack.deinit();
@@ -560,7 +559,7 @@ pub fn execute(
                 if (sym_idx >= program.symbols.items.len) return error.BytecodeError;
                 const sym_name = program.symbols.items[sym_idx];
                 const val_ptr = stack.pop() orelse return error.BytecodeError;
-                const val = try vm.clone(val_ptr, allocator);
+                const val = try vm.shallowClone(val_ptr, allocator);
                 vm.valueDeinit(val_ptr, allocator);
                 allocator.destroy(val_ptr);
                 try env.put(sym_name, val);
@@ -606,14 +605,14 @@ pub fn execute(
                     remaining_count -= 1;
                     const arg_ptr = temp_args.items[j - 1];
                     // Deep clone to avoid sharing internal pointers with the original
-                    const cloned = try vm.clone(arg_ptr, allocator);
+                    const cloned = try vm.shallowClone(arg_ptr, allocator);
                     try args.append(allocator, cloned);
                     vm.valueDeinit(arg_ptr, allocator);
                     allocator.destroy(arg_ptr);
                 }
                 allocator.free(temp_args.items);
 
-                const call_result = try eval_mod.call(allocator, fn_ptr, &args, env, 0, ctx);
+                const call_result = try eval_mod.callWithEnv(allocator, fn_ptr, &args, env, 0);
 
                 // Clean up fn_ptr
                 vm.valueDeinit(fn_ptr, allocator);
@@ -734,7 +733,7 @@ pub fn execute(
                 var j: usize = temp_items.items.len;
                 while (j > 0) : (j -= 1) {
                     const item_ptr = temp_items.items[j - 1];
-                    try l.append(allocator, try vm.clone(item_ptr, allocator));
+                    try l.append(allocator, try vm.shallowClone(item_ptr, allocator));
                     vm.valueDeinit(item_ptr, allocator);
                     allocator.destroy(item_ptr);
                 }
@@ -758,7 +757,7 @@ pub fn execute(
                 var j: usize = temp_items.items.len;
                 while (j > 0) : (j -= 1) {
                     const item_ptr = temp_items.items[j - 1];
-                    try v.append(allocator, try vm.clone(item_ptr, allocator));
+                    try v.append(allocator, try vm.shallowClone(item_ptr, allocator));
                     vm.valueDeinit(item_ptr, allocator);
                     allocator.destroy(item_ptr);
                 }
@@ -836,8 +835,8 @@ pub fn execute(
                     const key_ptr = temp_entries.items[j - 1];
                     const val_ptr = temp_entries.items[j - 2];
                     try m.append(allocator, .{
-                        .key = try vm.clone(key_ptr, allocator),
-                        .value = try vm.clone(val_ptr, allocator),
+                        .key = try vm.shallowClone(key_ptr, allocator),
+                        .value = try vm.shallowClone(val_ptr, allocator),
                     });
                     vm.valueDeinit(key_ptr, allocator);
                     allocator.destroy(key_ptr);
@@ -1069,14 +1068,14 @@ fn delegateArithmetic(op: OpCode, a: Value, b: Value, allocator: Allocator, env:
     // Build args list: [a, b]
     var args: list.List = .empty;
     errdefer args.deinit(allocator);
-    try args.append(allocator, try vm.clone(&a, allocator));
-    try args.append(allocator, try vm.clone(&b, allocator));
+    try args.append(allocator, try vm.shallowClone(&a, allocator));
+    try args.append(allocator, try vm.shallowClone(&b, allocator));
 
     // Call the builtin
-    const call_result = try eval_mod.call(allocator, &fn_val, &args, env, 0, null);
+    const call_result = try eval_mod.callWithEnv(allocator, &fn_val, &args, env, 0);
 
     switch (call_result) {
-        .value => |v| return try vm.clone(v, allocator),
+        .value => |v| return try vm.shallowClone(v, allocator),
         .trampoline => return error.NotImplemented,
     }
 }
@@ -1116,14 +1115,14 @@ fn vmFirst(allocator: Allocator, val: Value) anyerror!Value {
     switch (val) {
         .list => {
             if (val.list.items.items.len == 0) return vm.nilValue();
-            return try vm.clone(&val.list.items.items[0], allocator);
+            return try vm.shallowClone(&val.list.items.items[0], allocator);
         },
         .vector => {
             if (val.vector.items.items.len == 0) return vm.nilValue();
-            return try vm.clone(&val.vector.items.items[0], allocator);
+            return try vm.shallowClone(&val.vector.items.items[0], allocator);
         },
         .cons => {
-            return try vm.clone(&val.cons.head, allocator);
+            return try vm.shallowClone(&val.cons.head, allocator);
         },
         .string => {
             const s = val.string;
@@ -1144,7 +1143,7 @@ fn vmRest(allocator: Allocator, val: Value) anyerror!Value {
             var rest_list: list.List = .empty;
             errdefer rest_list.deinit(allocator);
             for (val.list.items.items[1..]) |item| {
-                try rest_list.append(allocator, try vm.clone(&item, allocator));
+                try rest_list.append(allocator, try vm.shallowClone(&item, allocator));
             }
             return try vm.listValue(allocator, rest_list);
         },
@@ -1153,13 +1152,13 @@ fn vmRest(allocator: Allocator, val: Value) anyerror!Value {
             var rest_list: list.List = .empty;
             errdefer rest_list.deinit(allocator);
             for (val.vector.items.items[1..]) |item| {
-                try rest_list.append(allocator, try vm.clone(&item, allocator));
+                try rest_list.append(allocator, try vm.shallowClone(&item, allocator));
             }
             return try vm.listValue(allocator, rest_list);
         },
         .cons => {
             // rest of cons is the tail
-            return try vm.clone(&val.cons.tail, allocator);
+            return try vm.shallowClone(&val.cons.tail, allocator);
         },
         else => return try vm.listValue(allocator, list.empty()),
     }
@@ -1177,13 +1176,13 @@ fn vmCount(allocator: Allocator, val: Value) anyerror!Value {
         .cons => {
             // Count cons chain recursively
             var count: i64 = 0;
-            var current = try vm.clone(&val, allocator);
+            var current = try vm.shallowClone(&val, allocator);
             errdefer vm.valueDeinit(&current, allocator);
             while (true) {
                 switch (current) {
                     .cons => {
                         count += 1;
-                        const tail = try vm.clone(&current.cons.tail, allocator);
+                        const tail = try vm.shallowClone(&current.cons.tail, allocator);
                         vm.valueDeinit(&current, allocator);
                         current = tail;
                     },
@@ -1215,22 +1214,22 @@ fn vmGet(allocator: Allocator, coll: Value, key: Value) anyerror!Value {
     switch (coll) {
         .map => {
             for (coll.map.entries.items) |entry| {
-                if (vm.equals(entry.key, key)) return try vm.clone(&entry.value, allocator);
+                if (vm.equals(entry.key, key)) return try vm.shallowClone(&entry.value, allocator);
             }
             return vm.nilValue();
         },
         .set => {
             for (coll.set.items.items) |item| {
-                if (vm.equals(item, key)) return try vm.clone(&item, allocator);
+                if (vm.equals(item, key)) return try vm.shallowClone(&item, allocator);
             }
             return vm.nilValue();
         },
         .record => {
             for (coll.record.fields.items) |entry| {
-                if (vm.equals(entry.key, key)) return try vm.clone(&entry.value, allocator);
+                if (vm.equals(entry.key, key)) return try vm.shallowClone(&entry.value, allocator);
             }
             for (coll.record.extmap.items) |entry| {
-                if (vm.equals(entry.key, key)) return try vm.clone(&entry.value, allocator);
+                if (vm.equals(entry.key, key)) return try vm.shallowClone(&entry.value, allocator);
             }
             return vm.nilValue();
         },
@@ -1253,21 +1252,21 @@ fn vmAssoc(allocator: Allocator, map_val: Value, key: Value, val: Value) anyerro
     for (map_val.map.entries.items) |entry| {
         if (vm.equals(entry.key, key)) {
             try new_map.append(allocator, .{
-                .key = try vm.clone(&entry.key, allocator),
-                .value = try vm.clone(&val, allocator),
+                .key = try vm.shallowClone(&entry.key, allocator),
+                .value = try vm.shallowClone(&val, allocator),
             });
         } else {
             try new_map.append(allocator, .{
-                .key = try vm.clone(&entry.key, allocator),
-                .value = try vm.clone(&entry.value, allocator),
+                .key = try vm.shallowClone(&entry.key, allocator),
+                .value = try vm.shallowClone(&entry.value, allocator),
             });
         }
     }
     // Key not found — add new entry
     if (new_map.items.len == map_val.map.entries.items.len) {
         try new_map.append(allocator, .{
-            .key = try vm.clone(&key, allocator),
-            .value = try vm.clone(&val, allocator),
+            .key = try vm.shallowClone(&key, allocator),
+            .value = try vm.shallowClone(&val, allocator),
         });
     }
     return try vm.mapValue(allocator, new_map);
@@ -1279,9 +1278,9 @@ fn vmConj(allocator: Allocator, coll: Value, item: Value) anyerror!Value {
         .list => {
             var new_list: list.List = .empty;
             errdefer new_list.deinit(allocator);
-            try new_list.append(allocator, try vm.clone(&item, allocator));
+            try new_list.append(allocator, try vm.shallowClone(&item, allocator));
             for (coll.list.items.items) |e| {
-                try new_list.append(allocator, try vm.clone(&e, allocator));
+                try new_list.append(allocator, try vm.shallowClone(&e, allocator));
             }
             return try vm.listValue(allocator, new_list);
         },
@@ -1289,9 +1288,9 @@ fn vmConj(allocator: Allocator, coll: Value, item: Value) anyerror!Value {
             var new_vec: vec.Vector = .empty;
             errdefer new_vec.deinit(allocator);
             for (coll.vector.items.items) |e| {
-                try new_vec.append(allocator, try vm.clone(&e, allocator));
+                try new_vec.append(allocator, try vm.shallowClone(&e, allocator));
             }
-            try new_vec.append(allocator, try vm.clone(&item, allocator));
+            try new_vec.append(allocator, try vm.shallowClone(&item, allocator));
             return try vm.vectorValue(allocator, new_vec);
         },
         .map => {
@@ -1313,14 +1312,14 @@ fn vmConj(allocator: Allocator, coll: Value, item: Value) anyerror!Value {
                 allocator.free(new_set.items);
             }
             for (coll.set.items.items) |e| {
-                try new_set.append(allocator, try vm.clone(&e, allocator));
+                try new_set.append(allocator, try vm.shallowClone(&e, allocator));
             }
             // Check if already present
             var found = false;
             for (coll.set.items.items) |e| {
                 if (vm.equals(e, item)) { found = true; break; }
             }
-            if (!found) try new_set.append(allocator, try vm.clone(&item, allocator));
+            if (!found) try new_set.append(allocator, try vm.shallowClone(&item, allocator));
             return try vm.setValue(allocator, new_set);
         },
         else => return error.TypeError,
@@ -1339,11 +1338,11 @@ fn vmNth(allocator: Allocator, coll: Value, idx_val: Value) anyerror!Value {
     switch (coll) {
         .list => {
             if (idx >= coll.list.items.items.len) return error.IndexOutOfBounds;
-            return try vm.clone(&coll.list.items.items[idx], allocator);
+            return try vm.shallowClone(&coll.list.items.items[idx], allocator);
         },
         .vector => {
             if (idx >= coll.vector.items.items.len) return error.IndexOutOfBounds;
-            return try vm.clone(&coll.vector.items.items[idx], allocator);
+            return try vm.shallowClone(&coll.vector.items.items[idx], allocator);
         },
         .string => {
             const cp_bytes = vm.utf8CodepointAt(coll.string, idx) orelse return error.IndexOutOfBounds;
@@ -1352,7 +1351,7 @@ fn vmNth(allocator: Allocator, coll: Value, idx_val: Value) anyerror!Value {
         },
         .queue => {
             if (idx >= coll.queue.items.items.len) return error.IndexOutOfBounds;
-            return try vm.clone(&coll.queue.items.items[idx], allocator);
+            return try vm.shallowClone(&coll.queue.items.items[idx], allocator);
         },
         else => return error.TypeError,
     }
@@ -1364,14 +1363,14 @@ fn vmSeq(allocator: Allocator, val: Value) anyerror!Value {
         .nil => return vm.nilValue(),
         .list => {
             if (val.list.items.items.len == 0) return vm.nilValue();
-            return try vm.clone(&val, allocator);
+            return try vm.shallowClone(&val, allocator);
         },
         .vector => {
             if (val.vector.items.items.len == 0) return vm.nilValue();
             var l: list.List = .empty;
             errdefer l.deinit(allocator);
             for (val.vector.items.items) |item| {
-                try l.append(allocator, try vm.clone(&item, allocator));
+                try l.append(allocator, try vm.shallowClone(&item, allocator));
             }
             return try vm.listValue(allocator, l);
         },
@@ -1381,8 +1380,8 @@ fn vmSeq(allocator: Allocator, val: Value) anyerror!Value {
             errdefer l.deinit(allocator);
             for (val.map.entries.items) |entry| {
                 var pair: list.List = .empty;
-                try pair.append(allocator, try vm.clone(&entry.key, allocator));
-                try pair.append(allocator, try vm.clone(&entry.value, allocator));
+                try pair.append(allocator, try vm.shallowClone(&entry.key, allocator));
+                try pair.append(allocator, try vm.shallowClone(&entry.value, allocator));
                 try l.append(allocator, try vm.listValue(allocator, pair));
             }
             return try vm.listValue(allocator, l);
@@ -1392,7 +1391,7 @@ fn vmSeq(allocator: Allocator, val: Value) anyerror!Value {
             var l: list.List = .empty;
             errdefer l.deinit(allocator);
             for (val.set.items.items) |item| {
-                try l.append(allocator, try vm.clone(&item, allocator));
+                try l.append(allocator, try vm.shallowClone(&item, allocator));
             }
             return try vm.listValue(allocator, l);
         },
@@ -1410,7 +1409,7 @@ fn vmSeq(allocator: Allocator, val: Value) anyerror!Value {
             }
             return try vm.listValue(allocator, l);
         },
-        .cons => return try vm.clone(&val, allocator),
+        .cons => return try vm.shallowClone(&val, allocator),
         else => return error.TypeError,
     }
 }
@@ -1418,8 +1417,8 @@ fn vmSeq(allocator: Allocator, val: Value) anyerror!Value {
 /// VM implementation of deref — handles atom, reduced, future, promise.
 fn vmDeref(allocator: Allocator, val: Value) anyerror!Value {
     switch (val) {
-        .atom => |data| return try vm.clone(&data.value, allocator),
-        .reduced => |data| return try vm.clone(data, allocator),
+        .atom => |data| return try vm.shallowClone(&data.value, allocator),
+        .reduced => |data| return try vm.shallowClone(data, allocator),
         .future => {
             // Block until done
             const data = val.future;
@@ -1429,7 +1428,7 @@ fn vmDeref(allocator: Allocator, val: Value) anyerror!Value {
                 std.Io.sleep(io, duration, std.Io.Clock.awake) catch {};
             }
             if (data.state.load(.monotonic) == 1) {
-                if (data.result) |r| return try vm.clone(&r, allocator);
+                if (data.result) |r| return try vm.shallowClone(&r, allocator);
             }
             return vm.nilValue();
         },
@@ -1441,7 +1440,7 @@ fn vmDeref(allocator: Allocator, val: Value) anyerror!Value {
                 const duration = std.Io.Duration.fromMilliseconds(1);
                 std.Io.sleep(io, duration, std.Io.Clock.awake) catch {};
             }
-            if (data.value) |*v| return try vm.clone(v, allocator);
+            if (data.value) |*v| return try vm.shallowClone(v, allocator);
             return vm.nilValue();
         },
         else => return error.TypeError,
@@ -1488,7 +1487,7 @@ fn vmMakeFn(allocator: Allocator, meta: *const FnMetadata, env: *const vm.Env) a
         .ns_manager = env.ns_manager,
     };
     var fn_val = try vm.fnValue(allocator, arities, fn_env, false);
-    const persistent_fn = try vm.clone(&fn_val, allocator);
+    const persistent_fn = try vm.shallowClone(&fn_val, allocator);
     vm.valueDeinit(&fn_val, allocator);
     return persistent_fn;
 }
@@ -1549,7 +1548,7 @@ const Compiler = struct {
                 _ = try self.program.emit(self.allocator, .push_const, idx);
             },
             .string, .keyword, .bigint, .ratio, .decimal, .regex, .character => {
-                const idx = try self.program.addConstant(self.allocator, try vm.clone(&form, self.allocator));
+                const idx = try self.program.addConstant(self.allocator, try vm.shallowClone(&form, self.allocator));
                 _ = try self.program.emit(self.allocator, .push_const, idx);
             },
             .symbol => |s| {
@@ -1572,7 +1571,7 @@ const Compiler = struct {
             },
             else => {
                 // Functions, lazy_seqs, etc. are self-evaluating
-                const idx = try self.program.addConstant(self.allocator, try vm.clone(&form, self.allocator));
+                const idx = try self.program.addConstant(self.allocator, try vm.shallowClone(&form, self.allocator));
                 _ = try self.program.emit(self.allocator, .push_const, idx);
             },
         }
@@ -1594,7 +1593,7 @@ const Compiler = struct {
             // (quote form) — just push the form as a constant
             if (std.mem.eql(u8, sym, "quote")) {
                 if (l.items.len == 2) {
-                    const idx = try self.program.addConstant(self.allocator, try vm.clone(&l.items[1], self.allocator));
+                    const idx = try self.program.addConstant(self.allocator, try vm.shallowClone(&l.items[1], self.allocator));
                     _ = try self.program.emit(self.allocator, .push_const, idx);
                     return;
                 }
@@ -1872,15 +1871,15 @@ fn isSimpleBytecodeForm(form: Value) bool {
         defer macro_args.deinit(self.allocator);
         var i: usize = 1;
         while (i < l.items.len) : (i += 1) {
-            try macro_args.append(self.allocator, try vm.clone(&l.items[i], self.allocator));
+            try macro_args.append(self.allocator, try vm.shallowClone(&l.items[i], self.allocator));
         }
 
         // Call the macro
-        const macro_r = try eval_mod.call(self.allocator, &op_val.?, &macro_args, env, 0, null);
+        const macro_r = try eval_mod.callWithEnv(self.allocator, &op_val.?, &macro_args, env, 0);
         defer vm.valueDeinit(macro_r.value, self.allocator);
 
         // The macro returns a form (usually a list). Clone and wrap it in a list for compilation.
-        const cloned = try vm.clone(macro_r.value, self.allocator);
+        const cloned = try vm.shallowClone(macro_r.value, self.allocator);
         var expanded: list.List = .empty;
         errdefer expanded.deinit(self.allocator);
         try expanded.append(self.allocator, cloned);
@@ -2081,7 +2080,7 @@ fn isSimpleBytecodeForm(form: Value) bool {
                 errdefer body_list.deinit(self.allocator);
                 try body_list.append(self.allocator, try vm.symValue(self.allocator, "do"));
                 for (body_forms) |bf| {
-                    try body_list.append(self.allocator, try vm.clone(&bf, self.allocator));
+                    try body_list.append(self.allocator, try vm.shallowClone(&bf, self.allocator));
                 }
                 const bc = try compile(self.allocator, body_list, "<fn>", self.env);
                 const bc_created = try self.allocator.create(BytecodeProgram);
@@ -2452,13 +2451,13 @@ fn isSimpleBytecodeForm(form: Value) bool {
             errdefer fn_form.deinit(self.allocator);
             try fn_form.append(self.allocator, try vm.symValue(self.allocator, "fn"));
             // Add name
-            try fn_form.append(self.allocator, try vm.clone(&fname, self.allocator));
+            try fn_form.append(self.allocator, try vm.shallowClone(&fname, self.allocator));
             // Add arity: ([params] body...)
             // The second element is params, rest is body
             var arity_form: list.List = .empty;
             errdefer arity_form.deinit(self.allocator);
             for (b.items.items[1..]) |form_item| {
-                try arity_form.append(self.allocator, try vm.clone(&form_item, self.allocator));
+                try arity_form.append(self.allocator, try vm.shallowClone(&form_item, self.allocator));
             }
             try fn_form.append(self.allocator, try vm.listValue(self.allocator, arity_form));
 
@@ -2690,7 +2689,7 @@ fn listFromVector(allocator: Allocator, v: vec.Vector) anyerror!list.List {
     var l: list.List = .empty;
     errdefer l.deinit(allocator);
     for (v.items) |item| {
-        try l.append(allocator, try vm.clone(&item, allocator));
+        try l.append(allocator, try vm.shallowClone(&item, allocator));
     }
     return l;
 }
@@ -2737,7 +2736,7 @@ fn parseParams(allocator: Allocator, params: list.List) anyerror!ParsedParams {
             rest_name = try allocator.dupe(u8, item.symbol);
             break;
         } else {
-            try regular_params.append(allocator, try vm.clone(&item, allocator));
+            try regular_params.append(allocator, try vm.shallowClone(&item, allocator));
         }
     }
 
@@ -2794,7 +2793,7 @@ test "bytecode::vm: push and return" {
     };
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .integer);
@@ -2855,7 +2854,7 @@ test "bytecode::compile: literal nil" {
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .nil);
@@ -2878,7 +2877,7 @@ test "bytecode::compile: literal integer" {
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .integer);
@@ -2902,7 +2901,7 @@ test "bytecode::compile: literal boolean" {
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .bool);
@@ -2928,7 +2927,7 @@ test "bytecode::compile: variable reference" {
     defer env.deinit(allocator);
     try env.put("x", vm.intValue(99));
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .integer);
@@ -2964,7 +2963,7 @@ test "bytecode::compile: if true branch" {
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .integer);
@@ -3001,7 +3000,7 @@ test "bytecode::compile: if nil branch" {
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .integer);
@@ -3030,7 +3029,7 @@ test "bytecode::compile: store and load variable" {
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .integer);
@@ -3085,7 +3084,7 @@ test "bytecode::arithmetic: bigint add" {
     var env = createTestEnvWithArithmetic(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             // i64.max + i64.max = 18446744073709551614 (exceeds i64, must be bigint)
@@ -3121,7 +3120,7 @@ test "bytecode::arithmetic: bigint sub" {
     var env = createTestEnvWithArithmetic(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             // 10000000000000000000 - 42 = 9999999999999999958 (exceeds i64)
@@ -3157,7 +3156,7 @@ test "bytecode::arithmetic: bigint mul" {
     var env = createTestEnvWithArithmetic(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             // 10^18 * 10^18 = 10^36 (way exceeds i64)
@@ -3192,7 +3191,7 @@ test "bytecode::arithmetic: mixed int+bigint add" {
     var env = createTestEnvWithArithmetic(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             // 42 + 12345678901234567890 = 12345678901234567932
@@ -3226,7 +3225,7 @@ test "bytecode::arithmetic: int+float add" {
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .float);
@@ -3253,7 +3252,7 @@ test "bytecode::negate: integer" {
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .integer);
@@ -3280,7 +3279,7 @@ test "bytecode::negate: float" {
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .float);
@@ -3309,7 +3308,7 @@ test "bytecode::negate: bigint" {
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .bigint);
@@ -3387,7 +3386,7 @@ test "bytecode::loop_recur: simple counter" {
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .integer);
@@ -3465,7 +3464,7 @@ test "bytecode::loop_recur: accumulator" {
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
 
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .integer);
@@ -3505,7 +3504,7 @@ test "bytecode::compile: add opcode emission" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .integer);
@@ -3537,7 +3536,7 @@ test "bytecode::compile: sub opcode emission" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(v.*.integer == 7);
@@ -3568,7 +3567,7 @@ test "bytecode::compile: mul opcode emission" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(v.*.integer == 42);
@@ -3599,7 +3598,7 @@ test "bytecode::compile: div opcode emission" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(v.*.integer == 5);
@@ -3630,7 +3629,7 @@ test "bytecode::compile: rem opcode emission" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(v.*.integer == 2);
@@ -3662,7 +3661,7 @@ test "bytecode::compile: neg single arg" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(v.*.integer == -42);
@@ -3693,7 +3692,7 @@ test "bytecode::compile: eq opcode emission" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .bool);
@@ -3730,7 +3729,7 @@ test "bytecode::compile: not opcode emission" {
         var program = try compile(allocator, ast, "<test>", null);
         defer program.deinit(allocator);
         try std.testing.expect(program.instructions.items[1].opcode == .not);
-        const result = try execute(allocator, &program, &env, null);
+        const result = try execute(allocator, &program, &env);
         switch (result) {
             .value => |v| {
                 try std.testing.expect(v.*.bool == false);
@@ -3754,7 +3753,7 @@ test "bytecode::compile: not opcode emission" {
         var program = try compile(allocator, ast, "<test>", null);
         defer program.deinit(allocator);
         try std.testing.expect(program.instructions.items[1].opcode == .not);
-        const result = try execute(allocator, &program, &env, null);
+        const result = try execute(allocator, &program, &env);
         switch (result) {
             .value => |v| {
                 try std.testing.expect(v.*.bool == true);
@@ -3777,7 +3776,7 @@ test "bytecode::compile: not opcode emission" {
         try ast.append(allocator, try vm.listValue(allocator, body));
         var program = try compile(allocator, ast, "<test>", null);
         defer program.deinit(allocator);
-        const result = try execute(allocator, &program, &env, null);
+        const result = try execute(allocator, &program, &env);
         switch (result) {
             .value => |v| {
                 try std.testing.expect(v.*.bool == false);
@@ -3816,7 +3815,7 @@ test "bytecode::compile: multi-arg arithmetic" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(v.*.integer == 10);
@@ -3850,7 +3849,7 @@ test "bytecode::compile: multi-arg sub" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(v.*.integer == 5);
@@ -3883,7 +3882,7 @@ test "bytecode::compile: 2-arg eq" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(v.*.bool == true);
@@ -3915,7 +3914,7 @@ test "bytecode::compile: ne/not= opcode emission" {
         var program = try compile(allocator, ast, "<test>", null);
         defer program.deinit(allocator);
         try std.testing.expect(program.instructions.items[2].opcode == .ne);
-        const result = try execute(allocator, &program, &env, null);
+        const result = try execute(allocator, &program, &env);
         switch (result) {
             .value => |v| {
                 try std.testing.expect(v.*.bool == true);
@@ -3940,7 +3939,7 @@ test "bytecode::compile: ne/not= opcode emission" {
         var program = try compile(allocator, ast, "<test>", null);
         defer program.deinit(allocator);
         try std.testing.expect(program.instructions.items[2].opcode == .ne);
-        const result = try execute(allocator, &program, &env, null);
+        const result = try execute(allocator, &program, &env);
         switch (result) {
             .value => |v| {
                 try std.testing.expect(v.*.bool == false);
@@ -4055,7 +4054,7 @@ test "bytecode::compile: case match first" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .string);
@@ -4092,7 +4091,7 @@ test "bytecode::compile: case match second" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .string);
@@ -4129,7 +4128,7 @@ test "bytecode::compile: case default" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .string);
@@ -4164,7 +4163,7 @@ test "bytecode::compile: case no match no default" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .nil);
@@ -4200,7 +4199,7 @@ test "bytecode::compile: case string match" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .keyword);
@@ -4252,7 +4251,7 @@ test "bytecode::compile: letfn compiles without crash" {
 
     var env = createTestEnv(allocator);
     defer env.deinit(allocator);
-    const result = try execute(allocator, &program, &env, null);
+    const result = try execute(allocator, &program, &env);
     switch (result) {
         .value => |v| {
             try std.testing.expect(std.meta.activeTag(v.*) == .integer);
