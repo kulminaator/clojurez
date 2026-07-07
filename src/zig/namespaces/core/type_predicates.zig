@@ -740,6 +740,7 @@ pub fn registerTypePredicateFunctions(env: *Env) anyerror!void {
     try env.put("chunked-seq?", vm.builtinFnValue(core_chunked_seq_q));
     try env.put("has-doc?", vm.builtinFnValue(core_has_doc_q));
     try env.put("get-doc", vm.builtinFnValue(core_get_doc));
+    try env.put("get-arglists", vm.builtinFnValue(core_get_arglists));
 }
 
 // chunked-seq? - check if s is a chunked sequence
@@ -769,6 +770,17 @@ pub fn core_get_doc(self: *const Value, args: *const list.List, env_env: *Env) a
         if (val.function.docstring) |doc| {
             return try vm.stringValue(env_env.allocator, doc);
         }
+    }
+    return vm.nilValue();
+}
+
+// get-arglists - return the arglists of a function/macro, or nil
+pub fn core_get_arglists(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const val = args.items[0];
+    if (std.meta.activeTag(val) == .function) {
+        return try buildArglistsValue(env_env.allocator, val.function);
     }
     return vm.nilValue();
 }

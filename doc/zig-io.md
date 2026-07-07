@@ -31,11 +31,15 @@
 
 ## alength
 
+[(^String s)]
+
 Get length of string.
 
 ---
 
 ## as-relative-path
+
+[(x)]
 
 Take an as-file-able thing and return a string if it is
    a relative path, else throw an exception.
@@ -44,11 +48,15 @@ Take an as-file-able thing and return a string if it is
 
 ## char-at
 
+[(s i)]
+
 Get character at index in string.
 
 ---
 
 ## copy
+
+[(input output & opts)]
 
 Copies data from input to output. Returns nil.
 
@@ -63,6 +71,8 @@ Copies data from input to output. Returns nil.
 
 ## file
 
+[(arg) (parent child) (parent child & more)]
+
 Returns a file map, passing each arg to as-file.  Multiple-arg
    versions treat the first argument as parent and subsequent args as
    children relative to the parent.
@@ -72,6 +82,8 @@ Returns a file map, passing each arg to as-file.  Multiple-arg
 ---
 
 ## input-stream
+
+[(x & opts)]
 
 Attempts to coerce its argument into an open input stream handle.
 
@@ -84,12 +96,16 @@ Attempts to coerce its argument into an open input stream handle.
 
 ## line-seq
 
+[(reader)]
+
 Returns a lazy sequence of lines from a reader handle.
    Each line is a string without the newline character.
 
 ---
 
 ## output-stream
+
+[(x & opts)]
 
 Attempts to coerce its argument into an open output stream handle.
 
@@ -103,11 +119,15 @@ Attempts to coerce its argument into an open output stream handle.
 
 ## parse-sh-args
 
+[(args)]
+
 Separate command strings from keyword options.
 
 ---
 
 ## reader
+
+[(x & opts)]
 
 Attempts to coerce its argument into an open reader handle.
 
@@ -120,6 +140,8 @@ Attempts to coerce its argument into an open reader handle.
 ---
 
 ## sh
+
+[(& args)]
 
 Launches a sub-process with the given command and arguments.
 
@@ -141,6 +163,8 @@ Launches a sub-process with the given command and arguments.
 
 ## sh-close-in
 
+[(handle)]
+
 Close the stdin pipe of a process handle, signaling EOF to
    the subprocess.
 
@@ -149,6 +173,8 @@ Close the stdin pipe of a process handle, signaling EOF to
 ---
 
 ## sh-err
+
+[(handle) (handle max-bytes)]
 
 Read available output from a process handle's stderr.
 
@@ -161,6 +187,8 @@ Read available output from a process handle's stderr.
 
 ## sh-in
 
+[(handle data)]
+
 Write data to a process handle's stdin.
 
    Returns nil.
@@ -169,6 +197,8 @@ Write data to a process handle's stdin.
 
 ## sh-kill
 
+[(handle)]
+
 Kill a running subprocess.
 
    Terminates the process and cleans up resources. Returns nil.
@@ -176,6 +206,8 @@ Kill a running subprocess.
 ---
 
 ## sh-out
+
+[(handle) (handle max-bytes)]
 
 Read available output from a process handle's stdout.
 
@@ -187,6 +219,8 @@ Read available output from a process handle's stdout.
 ---
 
 ## sh-stream
+
+[(& args)]
 
 Spawns a subprocess and returns a process handle for async I/O.
 
@@ -203,6 +237,8 @@ Spawns a subprocess and returns a process handle for async I/O.
 
 ## sh-wait
 
+[(handle)]
+
 Wait for a subprocess to finish and return its exit code.
 
    Closes all pipes and cleans up resources. Returns the exit code
@@ -212,11 +248,15 @@ Wait for a subprocess to finish and return its exit code.
 
 ## split-path
 
+[(path)]
+
 Split a path string into directory and name components.
 
 ---
 
 ## with-open
+
+[(bindings & body)]
 
 bindings => [name1 init1 name2 init2 ...]
 
@@ -230,17 +270,23 @@ bindings => [name1 init1 name2 init2 ...]
 
 ## with-sh-dir
 
+[(dir & forms)]
+
 Sets the directory for use with sh.
 
 ---
 
 ## with-sh-env
 
+[(env & forms)]
+
 Sets the environment for use with sh.
 
 ---
 
 ## writer
+
+[(x & opts)]
 
 Attempts to coerce its argument into an open writer handle.
 

@@ -43,8 +43,14 @@
              "ns, lazy-seq, and, or, cond, set!, var, deref, quit, exit\n"))
   (println "Wrote doc/special-forms.md"))
 
-(defn doc-entry [k doc-str]
-  (str "\n---\n\n## " k "\n\n" doc-str "\n"))
+(defn format-arglists [arglists]
+  "Format arglists as a single line: ((a b) (a b & rest)) -> [(a b) (a b & rest)]"
+  (when arglists
+    (str "[" (clojure.string/join " " (map str arglists)) "]")))
+
+(defn doc-entry [k arglists doc-str]
+  (let [args-line (when arglists (str arglists "\n\n"))]
+    (str "\n---\n\n## " k "\n\n" (or args-line "") doc-str "\n")))
 
 (defn anchor-link [sym]
   "Create a markdown anchor for a symbol heading." (str "#" (str sym)))
@@ -72,8 +78,9 @@
       (loop [i 0]
         (when (< i (zig.core/count public-with-docs))
           (let [k (zig.core/nth public-with-docs i)
-                v (zig.core/get interns k)]
-            (spit file-path (doc-entry k (get-doc v)) :append true)
+                v (zig.core/get interns k)
+                args (format-arglists (get-arglists v))]
+            (spit file-path (doc-entry k args (get-doc v)) :append true)
             (recur (zig.core/plus i 1)))))
       (println (str "Wrote " file-path)))))
 

@@ -255,11 +255,15 @@
 
 ## !=
 
+[(& args)]
+
 Returns true if not all args are equal. Requires at least 2 args.
 
 ---
 
 ## +
+
+[() (a) (a b) (a b & args)]
 
 Returns the sum of nums. (+) returns 0.
 
@@ -267,11 +271,15 @@ Returns the sum of nums. (+) returns 0.
 
 ## /
 
+[(a) (a b) (a b & args)]
+
 Divides nums. (/ x) returns the reciprocal. (/) throws.
 
 ---
 
 ## <
+
+[(& args)]
 
 Returns true if numerically ascending (strictly less than). Requires at least 2 args.
 
@@ -279,17 +287,23 @@ Returns true if numerically ascending (strictly less than). Requires at least 2 
 
 ## <=
 
+[(& args)]
+
 Returns true if numerically ascending (less than or equal). Requires at least 2 args.
 
 ---
 
 ## =
 
+[(& args)]
+
 Returns true if all args are equal (value equality). Requires at least 2 args.
 
 ---
 
 ## ==
+
+[(& args)]
 
 Numeric equality (type-independent). Returns true if all args are
    numerically equal (e.g. (== 1 1.0) => true). For non-numeric args,
@@ -299,11 +313,15 @@ Numeric equality (type-independent). Returns true if all args are
 
 ## >
 
+[(& args)]
+
 Returns true if numerically descending (strictly greater than). Requires at least 2 args.
 
 ---
 
 ## >=
+
+[(& args)]
 
 Returns true if numerically descending (greater than or equal). Requires at least 2 args.
 
@@ -311,11 +329,15 @@ Returns true if numerically descending (greater than or equal). Requires at leas
 
 ## NaN?
 
+[(x)]
+
 Returns true if x is a not-a-number (NaN) value.
 
 ---
 
 ## abs
+
+[(n)]
 
 Returns the absolute value of a.
 
@@ -323,17 +345,23 @@ Returns the absolute value of a.
 
 ## apply
 
+[(fn & args)]
+
 Applies fn f to the argument list formed by prepending intervening arguments to args.
 
 ---
 
 ## assoc
 
+[(& args)]
+
 Associates key(s) with value(s) in a map, returning a new map.
 
 ---
 
 ## assoc-in
+
+[(m ks v)]
 
 Associates a value in a nested associative structure, where ks is a
    sequence of keys and v is the new value. If any levels do not exist,
@@ -343,11 +371,15 @@ Associates a value in a nested associative structure, where ks is a
 
 ## atom
 
+[(v)]
+
 Creates and returns an Atom with an initial value and no validators or watchers.
 
 ---
 
 ## bigdec
+
+[(x)]
 
 Coerce to arbitrary-precision decimal.
 
@@ -355,11 +387,15 @@ Coerce to arbitrary-precision decimal.
 
 ## bigint
 
+[(x)]
+
 Coerce to arbitrary-precision integer. Truncates floats to integer part.
 
 ---
 
 ## bit-and
+
+[(& args)]
 
 Returns the bitwise AND of the args.
 
@@ -367,11 +403,15 @@ Returns the bitwise AND of the args.
 
 ## bit-and-not
 
+[(x y)]
+
 Returns the bitwise AND NOT (clear bits in x that are set in y).
 
 ---
 
 ## bit-clear
+
+[(x n)]
 
 Clears the bit at position n in x (sets it to 0).
 
@@ -379,11 +419,15 @@ Clears the bit at position n in x (sets it to 0).
 
 ## bit-flip
 
+[(x n)]
+
 Flips the bit at position n in x (0 becomes 1, 1 becomes 0).
 
 ---
 
 ## bit-not
+
+[(x)]
 
 Returns the bitwise NOT of the arg.
 
@@ -391,11 +435,15 @@ Returns the bitwise NOT of the arg.
 
 ## bit-or
 
+[(& args)]
+
 Returns the bitwise OR of the args.
 
 ---
 
 ## bit-set
+
+[(x n)]
 
 Sets the bit at position n in x (sets it to 1).
 
@@ -403,11 +451,15 @@ Sets the bit at position n in x (sets it to 1).
 
 ## bit-shift-left
 
+[(x n)]
+
 Shifts the bits of x to the left by n positions.
 
 ---
 
 ## bit-shift-right
+
+[(x n)]
 
 Shifts the bits of x to the right by n positions (arithmetic shift, preserves sign).
 
@@ -415,11 +467,15 @@ Shifts the bits of x to the right by n positions (arithmetic shift, preserves si
 
 ## bit-test
 
+[(x n)]
+
 Returns true if the bit at position n in x is set, false otherwise.
 
 ---
 
 ## bit-xor
+
+[(& args)]
 
 Returns the bitwise XOR of the args.
 
@@ -427,11 +483,15 @@ Returns the bitwise XOR of the args.
 
 ## boolean
 
+[(x)]
+
 Coerce to boolean.
 
 ---
 
 ## boolean?
+
+[(x)]
 
 Returns true if x is a boolean (true or false), false otherwise.
 
@@ -439,11 +499,15 @@ Returns true if x is a boolean (true or false), false otherwise.
 
 ## bounded-count
 
+[(n coll)]
+
 Returns the count of coll if it is <= n, else returns n.
 
 ---
 
 ## byte
+
+[(x)]
 
 Coerce to byte (truncates to 8 bits).
 
@@ -451,11 +515,15 @@ Coerce to byte (truncates to 8 bits).
 
 ## cat
 
+[(& colls)]
+
 Concatenate the contents of each collection into one sequence.
 
 ---
 
 ## coll?
+
+[(x)]
 
 Returns true if x is a collection (list, vector, map, set, or queue).
 
@@ -463,11 +531,15 @@ Returns true if x is a collection (list, vector, map, set, or queue).
 
 ## comp
 
+[(& fns)]
+
 Returns a function that is the composition of the supplied functions.
 
 ---
 
 ## comparator
+
+[(f)]
 
 Returns a comparator (a function of two arguments) that imposes an ordering
    based on f. Returns a function of two arguments that returns -1, 0, or 1.
@@ -476,6 +548,8 @@ Returns a comparator (a function of two arguments) that imposes an ordering
 
 ## compare
 
+[(x y)]
+
 Compare two values. Returns -1, 0, or 1 indicating less-than, equal-to,
    or greater-than. Supports numbers, strings, and collections.
 
@@ -483,12 +557,16 @@ Compare two values. Returns -1, 0, or 1 indicating less-than, equal-to,
 
 ## complement
 
+[(f)]
+
 Takes a fn f and returns a fn that takes the same arguments as f,
    has the same effects, if any, and returns the opposite truth value.
 
 ---
 
 ## completing
+
+[(f completion)]
 
 Takes a reducing function f (of 2 params) and a completion value,
    and returns a reducing function with the same arity that supplies
@@ -498,11 +576,15 @@ Takes a reducing function f (of 2 params) and a completion value,
 
 ## concat
 
+[(& args)]
+
 Returns a lazy sequence consisting of the items in each collection, in order.
 
 ---
 
 ## conj
+
+[(& args)]
 
 Conj[oin]. Returns a new collection with the items added.
    (conj item) returns a list with item.
@@ -512,6 +594,8 @@ Conj[oin]. Returns a new collection with the items added.
 
 ## cons
 
+[(x xs)]
+
 Returns a list/seq with x as the first element and xs as the rest.
    Unlike (concat (list x) xs), this creates a proper cons cell that
    preserves lazy-seq semantics.
@@ -520,11 +604,15 @@ Returns a list/seq with x as the first element and xs as the rest.
 
 ## constantly
 
+[(x)]
+
 Returns a function that takes any number of arguments and returns x.
 
 ---
 
 ## contains?
+
+[(coll key)]
 
 Returns true if key is present in the collection.
 
@@ -532,11 +620,15 @@ Returns true if key is present in the collection.
 
 ## count
 
+[(coll)]
+
 Returns the number of items in a collection. For strings, returns code point count.
 
 ---
 
 ## cycle
+
+[(coll)]
 
 Returns a lazy (infinite) sequence of the items in coll, repeated indefinitely.
 
@@ -544,11 +636,15 @@ Returns a lazy (infinite) sequence of the items in coll, repeated indefinitely.
 
 ## dec
 
+[(n)]
+
 Returns a number one less than num.
 
 ---
 
 ## dedupe
+
+[(coll)]
 
 Returns a lazy sequence removing consecutive duplicates in coll.
 
@@ -556,11 +652,15 @@ Returns a lazy sequence removing consecutive duplicates in coll.
 
 ## defonce
 
+[(name expr)]
+
 Like def but only defines if the var has no value yet.
 
 ---
 
 ## deliver
+
+[(p val)]
 
 Delivers the supplied value to the promise. If the promise has already
    been delivered to, this has no effect. Returns the promise.
@@ -569,6 +669,8 @@ Delivers the supplied value to the promise. If the promise has already
 
 ## denom
 
+[(x)]
+
 Returns the denominator of x, which must be an integer, bigint, or ratio.
    Alias for denominator.
 
@@ -576,12 +678,16 @@ Returns the denominator of x, which must be an integer, bigint, or ratio.
 
 ## denominator
 
+[(x)]
+
 Returns the denominator of x, which must be an integer, bigint, or ratio.
    For integers/bigints, returns 1. For ratios, returns the denominator.
 
 ---
 
 ## deref
+
+[(v)]
 
 Returns the current value of the atom, future, promise, or var.
    For futures and promises, blocks until the computation completes.
@@ -591,11 +697,15 @@ Returns the current value of the atom, future, promise, or var.
 
 ## difference
 
+[(s1 s2)]
+
 Return a set that is the first set without elements of the remaining sets
 
 ---
 
 ## disj
+
+[(& args)]
 
 Returns a new set with the items removed.
 
@@ -603,11 +713,15 @@ Returns a new set with the items removed.
 
 ## dissoc
 
+[(& args)]
+
 Returns a new map without the given keys.
 
 ---
 
 ## distinct
+
+[(coll)]
 
 Returns a lazy sequence of the distinct elements in coll.
    Preserves order of first occurrence.
@@ -616,11 +730,15 @@ Returns a lazy sequence of the distinct elements in coll.
 
 ## distinct?
 
+[(coll)]
+
 Returns true if no two elements in the collection are equal.
 
 ---
 
 ## doall
+
+[(coll)]
 
 Realizes all elements of a lazy sequence and returns it.
 
@@ -628,11 +746,15 @@ Realizes all elements of a lazy sequence and returns it.
 
 ## doseq
 
+[(seq-exprs & body)]
+
 Repeatedly executes body for side-effects. Returns nil.
 
 ---
 
 ## double
+
+[(x)]
 
 Coerce to double-precision floating point number.
 
@@ -640,11 +762,15 @@ Coerce to double-precision floating point number.
 
 ## double?
 
+[(x)]
+
 Returns true if x is a double-precision floating point number.
 
 ---
 
 ## drop
+
+[(n coll)]
 
 Returns a lazy sequence of all but the first n items in coll.
 
@@ -652,11 +778,15 @@ Returns a lazy sequence of all but the first n items in coll.
 
 ## drop-last
 
+[(coll) (n coll)]
+
 Return a lazy sequence of all but the last n (default 1) items in coll.
 
 ---
 
 ## drop-while
+
+[(pred coll)]
 
 Returns a lazy sequence of the items in coll starting from the first item
    for which (pred item) returns logical false.
@@ -665,11 +795,15 @@ Returns a lazy sequence of the items in coll starting from the first item
 
 ## empty
 
+[(coll)]
+
 Returns an empty collection of the same category as coll, or nil.
 
 ---
 
 ## empty?
+
+[(coll)]
 
 Returns true if coll has no items. Different from (not coll) because both
    nil and false return true for not. nil is considered empty.
@@ -678,11 +812,15 @@ Returns true if coll has no items. Different from (not coll) because both
 
 ## ensure-reduced
 
+[(v)]
+
 If v is a Reduced wrapper, returns it. Otherwise wraps v in Reduced.
 
 ---
 
 ## eval
+
+[(form)]
 
 Evaluates a single Clojure form (data structure) in the current environment.
 
@@ -690,11 +828,15 @@ Evaluates a single Clojure form (data structure) in the current environment.
 
 ## even?
 
+[(n)]
+
 Returns true if n is even, else false.
 
 ---
 
 ## every-pred
+
+[(& preds)]
 
 Takes a set of predicates and returns a function f that returns true if all of its
   composing predicates return a logical true value against all of its arguments.
@@ -705,11 +847,15 @@ Takes a set of predicates and returns a function f that returns true if all of i
 
 ## every?
 
+[(pred coll)]
+
 Returns true if (pred x) is logical true for every x in coll, else false.
 
 ---
 
 ## extenders
+
+[(protocol)]
 
 Returns a set of types for which protocol has implementations.
 
@@ -717,11 +863,15 @@ Returns a set of types for which protocol has implementations.
 
 ## extends?
 
+[(protocol atype)]
+
 Returns true if protocol has an implementation for atype (a keyword like :string).
 
 ---
 
 ## false?
+
+[(x)]
 
 Returns true if x is the value false, false otherwise.
 
@@ -729,17 +879,23 @@ Returns true if x is the value false, false otherwise.
 
 ## filter
 
+[(pred coll)]
+
 Returns a lazy sequence of the items in coll for which (pred item) returns logical true.
 
 ---
 
 ## filterv
 
+[(pred coll)]
+
 Returns a vector of the items in coll for which (pred item) returns logical true.
 
 ---
 
 ## find
+
+[(m key)]
 
 Returns the map entry for key, or nil if the key is not in the map.
    The map entry is a map with :key and :val keys.
@@ -748,11 +904,15 @@ Returns the map entry for key, or nil if the key is not in the map.
 
 ## first
 
+[(coll)]
+
 Returns the first item of a collection, or nil if empty.
 
 ---
 
 ## flatten
+
+[(x)]
 
 Takes any nested combination of sequential things (lists, vectors, etc.)
    and returns the contents as a single, flat sequence.
@@ -761,11 +921,15 @@ Takes any nested combination of sequential things (lists, vectors, etc.)
 
 ## float
 
+[(x)]
+
 Coerce to floating point number. Returns the value for floats, converts integers.
 
 ---
 
 ## float?
+
+[(x)]
 
 Returns true if x is a floating point number (float or double).
 
@@ -773,11 +937,15 @@ Returns true if x is a floating point number (float or double).
 
 ## fn?
 
+[(x)]
+
 Returns true if x is a function.
 
 ---
 
 ## fnil
+
+[(f & defaults)]
 
 Returns a function that calls f with nil replaced by the supplied defaults.
 
@@ -785,11 +953,15 @@ Returns a function that calls f with nil replaced by the supplied defaults.
 
 ## for
 
+[(seq-exprs body-expr)]
+
 List comprehension. Supports :when and :while modifiers.
 
 ---
 
 ## frequencies
+
+[(coll)]
 
 Returns a map from distinct items in coll to the number of times
   they appear.
@@ -798,6 +970,8 @@ Returns a map from distinct items in coll to the number of times
 
 ## future
 
+[(& body)]
+
 Takes a body of expressions and yields a future object that will
    invoke the body in another thread, and will cache the result and
    return it on all subsequent calls to deref/@.
@@ -805,6 +979,8 @@ Takes a body of expressions and yields a future object that will
 ---
 
 ## future-call
+
+[(f)]
 
 Takes a function of no args and yields a future object that will
    invoke the function in another thread, and will cache the result and
@@ -815,17 +991,23 @@ Takes a function of no args and yields a future object that will
 
 ## future-done?
 
+[(f)]
+
 Returns true if future f is done.
 
 ---
 
 ## future?
 
+[(x)]
+
 Returns true if x is a future.
 
 ---
 
 ## gensym
+
+[() (prefix)]
 
 Makes a new symbol with a unique name. If prefix is supplied, the name
    starts with prefix, otherwise it starts with 'G'.
@@ -834,11 +1016,15 @@ Makes a new symbol with a unique name. If prefix is supplied, the name
 
 ## get
 
+[(& args)]
+
 Returns the value mapped to key, not-found (nil) if not present.
 
 ---
 
 ## get-in
+
+[(m ks)]
 
 Returns the value in a nested associative structure,
    where ks is a sequence of keys. Returns nil if the key is not present.
@@ -847,11 +1033,15 @@ Returns the value in a nested associative structure,
 
 ## group-by
 
+[(f coll)]
+
 Returns a map of key -> (list of items) grouped by the result of f.
 
 ---
 
 ## hash-map
+
+[(& args)]
 
 Returns a map with the given key-value pairs.
 
@@ -859,11 +1049,15 @@ Returns a map with the given key-value pairs.
 
 ## hash-set
 
+[(& args)]
+
 Returns a set containing the given args.
 
 ---
 
 ## identical?
+
+[(x y)]
 
 Returns true if x and y are the same object (by identity/reference),
    not merely equal in value.
@@ -872,11 +1066,15 @@ Returns true if x and y are the same object (by identity/reference),
 
 ## identity
 
+[(x)]
+
 Returns its argument.
 
 ---
 
 ## if-let
+
+[(bindings then else)]
 
 bindings => binding-form test
 
@@ -887,11 +1085,15 @@ bindings => binding-form test
 
 ## if-not
 
+[(test then) (test then not-then)]
+
 If test is logical false, evaluates then, else evaluates not-then (or nil if not-then omitted).
 
 ---
 
 ## inc
+
+[(n)]
 
 Returns a number one greater than num.
 
@@ -899,11 +1101,15 @@ Returns a number one greater than num.
 
 ## infinite?
 
+[(x)]
+
 Returns true if x is positive or negative infinity.
 
 ---
 
 ## int
+
+[(x)]
 
 Coerce to 64-bit integer. Truncates floats, returns the value for integers.
 
@@ -911,11 +1117,15 @@ Coerce to 64-bit integer. Truncates floats, returns the value for integers.
 
 ## int?
 
+[(x)]
+
 Returns true if x is a 64-bit integer.
 
 ---
 
 ## integer?
+
+[(x)]
 
 Returns true if x is an integer (64-bit int or BigInt).
 
@@ -923,11 +1133,15 @@ Returns true if x is an integer (64-bit int or BigInt).
 
 ## interleave
 
+[() (c1) (c1 c2)]
+
 Returns a lazy seq of the first item in each coll, then the second etc.
 
 ---
 
 ## interpose
+
+[(sep coll)]
 
 Returns a lazy seq of the elements of coll separated by sep.
 
@@ -935,11 +1149,15 @@ Returns a lazy seq of the elements of coll separated by sep.
 
 ## intersection
 
+[(s1 s2)]
+
 Return a set that is the intersection of the input sets
 
 ---
 
 ## into
+
+[(to from)]
 
 Returns a new coll consisting of to with all of the items of from conjoined.
 
@@ -947,17 +1165,23 @@ Returns a new coll consisting of to with all of the items of from conjoined.
 
 ## into-array
 
+[(coll)]
+
 Returns the collection as a vector.
 
 ---
 
 ## iterate
 
+[(f x)]
+
 Returns a lazy (infinite) sequence of x, (f x), (f (f x)) etc.
 
 ---
 
 ## juxt
+
+[(& fns)]
 
 Returns a function that calls each of the supplied functions and returns
    a vector of the results.
@@ -966,11 +1190,15 @@ Returns a function that calls each of the supplied functions and returns
 
 ## keep
 
+[(f coll)]
+
 Returns a lazy sequence of the non-nil results of (f item).
 
 ---
 
 ## keep-indexed
+
+[(f coll)]
 
 Returns a lazy sequence of the non-nil results of (f i x).
 
@@ -978,11 +1206,15 @@ Returns a lazy sequence of the non-nil results of (f i x).
 
 ## keepv
 
+[(f coll)]
+
 Returns a vector of the non-nil results of (f applied to) the items in coll.
 
 ---
 
 ## key
+
+[(e)]
 
 Returns the key of the map entry.
 
@@ -990,11 +1222,15 @@ Returns the key of the map entry.
 
 ## keys
 
+[(m)]
+
 Returns a sequence of the keys in the map.
 
 ---
 
 ## keyword
+
+[(name) (namespace name)]
 
 Converts a string or symbol to a keyword. With two args, creates a namespaced keyword.
 
@@ -1002,11 +1238,15 @@ Converts a string or symbol to a keyword. With two args, creates a namespaced ke
 
 ## keyword?
 
+[(x)]
+
 Returns true if x is a keyword.
 
 ---
 
 ## last
+
+[(coll)]
 
 Returns the last item in a collection.
 
@@ -1014,11 +1254,15 @@ Returns the last item in a collection.
 
 ## list
 
+[(& args)]
+
 Returns a list of the args.
 
 ---
 
 ## list?
+
+[(x)]
 
 Returns true if x is a list.
 
@@ -1026,11 +1270,15 @@ Returns true if x is a list.
 
 ## load-file
 
+[(filename)]
+
 Loads and evaluates all forms in a file. Returns the value of the last form.
 
 ---
 
 ## map
+
+[(f coll)]
 
 Returns a lazy sequence consisting of the result of applying f to the
    set of first items of each collection, followed by applying f to the set
@@ -1040,17 +1288,23 @@ Returns a lazy sequence consisting of the result of applying f to the
 
 ## map-indexed
 
+[(f coll)]
+
 Returns a lazy sequence of ([i (f i x1)] for each item x1 and index i).
 
 ---
 
 ## map?
 
+[(x)]
+
 Returns true if x is a map.
 
 ---
 
 ## mapcat
+
+[(f coll)]
 
 Returns a lazy sequence which is the concatenation of the results of applying f to the
    elements of the collections. f should return a collection.
@@ -1059,17 +1313,23 @@ Returns a lazy sequence which is the concatenation of the results of applying f 
 
 ## mapv
 
+[(f coll)]
+
 Returns a vector of (f applied to) the items in coll.
 
 ---
 
 ## max
 
+[(a b)]
+
 Returns the greatest of the nums.
 
 ---
 
 ## memoize
+
+[(f)]
 
 Returns a memoized version of a referentially transparent function.
   The memoized version keeps a cache of the mapping of arguments to results.
@@ -1078,17 +1338,23 @@ Returns a memoized version of a referentially transparent function.
 
 ## merge
 
+[(& args)]
+
 Merges multiple maps into one. Later maps override earlier ones for duplicate keys.
 
 ---
 
 ## min
 
+[(a b)]
+
 Returns the least of the nums.
 
 ---
 
 ## mod
+
+[(num den)]
 
 Returns modulus of numerator and denominator.
    Sign follows the divisor.
@@ -1097,12 +1363,16 @@ Returns modulus of numerator and denominator.
 
 ## name
 
+[(x)]
+
 Returns the name String of a string or symbol.
    For symbols, returns the local name without namespace prefix.
 
 ---
 
 ## nano-time
+
+[()]
 
 Returns current instant's nanosecond time (monotonic clock).
    Useful for measuring elapsed time.
@@ -1111,11 +1381,15 @@ Returns current instant's nanosecond time (monotonic clock).
 
 ## nat-int?
 
+[(n)]
+
 Return true if x is a non-negative fixed precision integer.
 
 ---
 
 ## neg-int?
+
+[(n)]
 
 Return true if x is a negative fixed precision integer.
 
@@ -1123,11 +1397,15 @@ Return true if x is a negative fixed precision integer.
 
 ## neg?
 
+[(n)]
+
 Returns true if num is less than zero, else false.
 
 ---
 
 ## next
+
+[(coll)]
 
 Returns the rest of the collection after the first element, or nil if empty.
 
@@ -1135,11 +1413,15 @@ Returns the rest of the collection after the first element, or nil if empty.
 
 ## nil?
 
+[(x)]
+
 Returns true if x is nil.
 
 ---
 
 ## not
+
+[(x)]
 
 Returns true if x is logical false, true otherwise.
 
@@ -1147,11 +1429,15 @@ Returns true if x is logical false, true otherwise.
 
 ## not-any?
 
+[(f coll)]
+
 Returns true if (some f coll) is logical false.
 
 ---
 
 ## not-empty
+
+[(coll)]
 
 Returns the first item of coll if it is not empty, nil otherwise.
 
@@ -1159,11 +1445,15 @@ Returns the first item of coll if it is not empty, nil otherwise.
 
 ## not=
 
+[(& args)]
+
 Returns true if not all args are equal. Alias for !=. Requires at least 2 args.
 
 ---
 
 ## ns-name
+
+[(ns)]
 
 Returns the name of a namespace as a symbol.
 
@@ -1171,17 +1461,23 @@ Returns the name of a namespace as a symbol.
 
 ## nth
 
+[(coll index) (coll index not-found)]
+
 Returns the item at index. Returns nil if index is out of bounds.
 
 ---
 
 ## nthnext
 
+[(coll n)]
+
 Returns the nth next of coll. (nthnext coll 1) is equivalent to (next coll).
 
 ---
 
 ## num
+
+[(x)]
 
 Returns the numerator of x, which must be an integer, bigint, or ratio.
    Alias for numerator.
@@ -1190,11 +1486,15 @@ Returns the numerator of x, which must be an integer, bigint, or ratio.
 
 ## number?
 
+[(x)]
+
 Returns true if x is a number (integer, float, bigint, ratio, or decimal).
 
 ---
 
 ## numerator
+
+[(x)]
 
 Returns the numerator of x, which must be an integer, bigint, or ratio.
    For integers/bigints, returns the value itself. For ratios, returns the numerator.
@@ -1203,17 +1503,23 @@ Returns the numerator of x, which must be an integer, bigint, or ratio.
 
 ## odd?
 
+[(n)]
+
 Returns true if n is odd, else false.
 
 ---
 
 ## partial
 
+[(f & args)]
+
 Returns a function that is a partial application of f with the supplied args.
 
 ---
 
 ## partition
+
+[(n coll)]
 
 Returns a lazy sequence of lists of n elements each, at intervals
    of step. Returns nil if there are fewer than n elements remaining.
@@ -1222,12 +1528,16 @@ Returns a lazy sequence of lists of n elements each, at intervals
 
 ## partition-all
 
+[(n coll)]
+
 Returns a lazy sequence of lists like partition, but may include
    partitions with fewer than n items at the end.
 
 ---
 
 ## partition-by
+
+[(f coll)]
 
 Applies f to each value in coll, splitting it each time f returns a
    new value. Returns a lazy seq of partitions.
@@ -1236,12 +1546,16 @@ Applies f to each value in coll, splitting it each time f returns a
 
 ## peek
 
+[(coll)]
+
 Returns the last item of a collection without removing it.
    For vectors, returns the last element. For lists/queues, returns the first.
 
 ---
 
 ## pop
+
+[(coll)]
 
 Returns a new collection with the last item removed.
    For vectors, removes the last element. For lists, removes the first.
@@ -1250,11 +1564,15 @@ Returns a new collection with the last item removed.
 
 ## pos-int?
 
+[(n)]
+
 Return true if x is a positive fixed precision integer.
 
 ---
 
 ## pos?
+
+[(n)]
 
 Returns true if num is greater than zero, else false.
 
@@ -1262,11 +1580,15 @@ Returns true if num is greater than zero, else false.
 
 ## pr-str
 
+[(x)]
+
 Returns the printed representation of x as a string.
 
 ---
 
 ## print
+
+[(& args)]
 
 Prints the string representation of the args to stdout.
 
@@ -1274,11 +1596,15 @@ Prints the string representation of the args to stdout.
 
 ## println
 
+[(& args)]
+
 Prints the string representation of the args to stdout, followed by a newline.
 
 ---
 
 ## promise
+
+[()]
 
 Returns a promise object that can be delivered to at most once.
 
@@ -1286,11 +1612,15 @@ Returns a promise object that can be delivered to at most once.
 
 ## promise?
 
+[(x)]
+
 Returns true if x is a promise.
 
 ---
 
 ## queue?
+
+[(x)]
 
 Returns true if x is a queue.
 
@@ -1298,11 +1628,15 @@ Returns true if x is a queue.
 
 ## quot
 
+[(num den)]
+
 Integer division. Truncates toward zero.
 
 ---
 
 ## rand
+
+[() (n)]
 
 Returns a random floating point number between 0 (inclusive) and 1.0 (exclusive).
    With an argument n, returns a random float between 0 and n.
@@ -1311,11 +1645,15 @@ Returns a random floating point number between 0 (inclusive) and 1.0 (exclusive)
 
 ## rand-int
 
+[(n)]
+
 Returns a random integer between 0 (inclusive) and n (exclusive).
 
 ---
 
 ## rand-nth
+
+[(coll)]
 
 Return a random element of the (sequential) collection. O(1) when possible.
 
@@ -1323,11 +1661,15 @@ Return a random element of the (sequential) collection. O(1) when possible.
 
 ## random-sample
 
+[(prob coll)]
+
 Returns items from coll with random probability of prob (0.0 - 1.0).
 
 ---
 
 ## range
+
+[(end) (start end) (start end step)]
 
 Returns a lazy sequence of integers from start (inclusive) to end (exclusive),
    with optional step. (range end) starts from 0. (range start end) uses step 1.
@@ -1335,6 +1677,8 @@ Returns a lazy sequence of integers from start (inclusive) to end (exclusive),
 ---
 
 ## rational
+
+[(x)]
 
 Returns the rational number equivalent of x.
    For integers, returns the integer. For floats, returns a ratio.
@@ -1344,6 +1688,8 @@ Returns the rational number equivalent of x.
 
 ## rationalize
 
+[(x)]
+
 Returns the simplest ratio that is within 0.5 of mag.
    For integers, returns the integer. For floats, returns a ratio.
    For ratios, returns the ratio.
@@ -1352,12 +1698,16 @@ Returns the simplest ratio that is within 0.5 of mag.
 
 ## re-find
 
+[(re s)]
+
 Returns the first match, if any, of string to pattern.
    Returns the matched string or nil.
 
 ---
 
 ## re-matches
+
+[(re s)]
 
 Returns the match, if any, of string to pattern using full string matching.
    Returns the matched string or nil.
@@ -1366,11 +1716,15 @@ Returns the match, if any, of string to pattern using full string matching.
 
 ## re-pattern
 
+[(s)]
+
 Returns a regex pattern from a string. If s is already a regex, returns it.
 
 ---
 
 ## re-seq
+
+[(re s)]
 
 Returns a vector of successive matches of pattern in string.
 
@@ -1378,11 +1732,15 @@ Returns a vector of successive matches of pattern in string.
 
 ## read-line
 
+[()]
+
 Reads a line from stdin (or the input stream). Returns nil on EOF.
 
 ---
 
 ## read-string
+
+[(s)]
 
 Reads one Clojure form from a string. Returns the parsed data structure.
 
@@ -1390,11 +1748,15 @@ Reads one Clojure form from a string. Returns the parsed data structure.
 
 ## realized?
 
+[(x)]
+
 Returns true if a value has been produced for a promise, future or lazy sequence.
 
 ---
 
 ## reduce
+
+[(f coll) (f val coll)]
 
 f should be a function of 2 arguments. If val is not supplied, returns the
    result of applying f to the first 2 items in coll, then applying f to that
@@ -1406,17 +1768,23 @@ f should be a function of 2 arguments. If val is not supplied, returns the
 
 ## reduced
 
+[(v)]
+
 Wrap a value in Reduced to signal early termination of a reduction.
 
 ---
 
 ## reduced?
 
+[(v)]
+
 Returns true if v is a Reduced wrapper.
 
 ---
 
 ## reducev
+
+[(f init coll)]
 
 f should be a function of 2 arguments. Returns the result of applying f
    to init and the first item in coll, then applying f to that result and
@@ -1426,6 +1794,8 @@ f should be a function of 2 arguments. Returns the result of applying f
 
 ## reductions
 
+[(f coll) (f init coll)]
+
 Returns a lazy sequence of the intermediate values of a reduction.
    With init, starts from init. Without init, starts from first element.
 
@@ -1433,11 +1803,15 @@ Returns a lazy sequence of the intermediate values of a reduction.
 
 ## regex?
 
+[(x)]
+
 Returns true if x is a regex pattern.
 
 ---
 
 ## rem
+
+[(num den)]
 
 Returns remainder of dividing numerator by denominator.
    Sign follows the dividend.
@@ -1446,17 +1820,23 @@ Returns remainder of dividing numerator by denominator.
 
 ## remove
 
+[(pred coll)]
+
 Returns a lazy sequence of the items in coll for which (pred item) returns logical false.
 
 ---
 
 ## repeat
 
+[(x) (n x)]
+
 Returns a lazy (infinite) sequence of x. Also accepts count: (repeat n x).
 
 ---
 
 ## repeatedly
+
+[(f) (n f)]
 
 Takes a function of no args, presumably with side effects, and
   returns an infinite (or length n if supplied) lazy sequence of calls
@@ -1466,11 +1846,15 @@ Takes a function of no args, presumably with side effects, and
 
 ## replace
 
+[(smap coll)]
+
 Returns a lazy sequence with elements replaced using the given map.
 
 ---
 
 ## replicate
+
+[(n x)]
 
 Returns a lazy sequence of n copies of x. Same as (repeat n x).
 
@@ -1478,11 +1862,15 @@ Returns a lazy sequence of n copies of x. Same as (repeat n x).
 
 ## requiring-resolve
 
+[(sym)]
+
 Resolves a qualified symbol. If not found, requires its namespace and retries.
 
 ---
 
 ## reset!
+
+[(a new-val)]
 
 Reset the atom's value to new-val and return it.
 
@@ -1490,11 +1878,15 @@ Reset the atom's value to new-val and return it.
 
 ## rest
 
+[(coll)]
+
 Returns a possibly-empty sequence of the items after the first.
 
 ---
 
 ## reverse
+
+[(coll)]
 
 Returns a seq of the items in coll in reverse order.
 
@@ -1502,11 +1894,15 @@ Returns a seq of the items in coll in reverse order.
 
 ## satisfies?
 
+[(protocol x)]
+
 Returns true if x satisfies protocol (i.e. has an implementation for it).
 
 ---
 
 ## second
+
+[(xs)]
 
 Same as (first (rest x)).
 
@@ -1514,11 +1910,15 @@ Same as (first (rest x)).
 
 ## select-keys
 
+[(map keyseq)]
+
 Returns a map containing only those entries in map whose key is in keys
 
 ---
 
 ## seq
+
+[(coll)]
 
 Returns a sequence of the collection. Returns nil if the collection is empty.
 
@@ -1526,11 +1926,15 @@ Returns a sequence of the collection. Returns nil if the collection is empty.
 
 ## sequential?
 
+[(x)]
+
 Returns true if x is a sequential collection (list or vector).
 
 ---
 
 ## set
+
+[(coll)]
 
 Returns a set of the items in coll.
 
@@ -1538,11 +1942,15 @@ Returns a set of the items in coll.
 
 ## set?
 
+[(x)]
+
 Returns true if x is a set.
 
 ---
 
 ## short
+
+[(x)]
 
 Coerce to short (truncates to 16 bits).
 
@@ -1550,11 +1958,15 @@ Coerce to short (truncates to 16 bits).
 
 ## shuffle
 
+[(coll)]
+
 Return a random permutation of coll. Uses Fisher-Yates shuffle.
 
 ---
 
 ## sleep
+
+[(ms)]
 
 Causes the current thread to sleep for the given number of milliseconds.
 
@@ -1562,17 +1974,23 @@ Causes the current thread to sleep for the given number of milliseconds.
 
 ## slurp
 
+[(filename)]
+
 Opens and reads the file from the given path, returning its contents as a string.
 
 ---
 
 ## some
 
+[(pred coll)]
+
 Returns the first logical true value of (pred x) for any x in coll, else nil.
 
 ---
 
 ## some-fn
+
+[(& preds)]
 
 Takes a set of predicates and returns a function f that returns the first logical true value
   returned by one of its composing predicates against any of its arguments,
@@ -1584,11 +2002,15 @@ Takes a set of predicates and returns a function f that returns the first logica
 
 ## some?
 
+[(x)]
+
 Returns true if x is not nil, false otherwise.
 
 ---
 
 ## sort
+
+[(coll)]
 
 Returns a sorted sequence of the items in coll, sorted by compare.
    coll must support count and nth.
@@ -1597,12 +2019,16 @@ Returns a sorted sequence of the items in coll, sorted by compare.
 
 ## sort-by
 
+[(keyfn coll)]
+
 Returns a sorted sequence of the items in coll, sorted by the comparison
    of (keyfn item). coll must support count and nth.
 
 ---
 
 ## spit
+
+[(filename content & options)]
 
 Writes the string content to a file, creating it if it doesn't exist.
   Optional :append true writes in append mode instead of overwriting.
@@ -1611,17 +2037,23 @@ Writes the string content to a file, creating it if it doesn't exist.
 
 ## split-at
 
+[(n coll)]
+
 Returns a vector of [(take n coll) (drop n coll)].
 
 ---
 
 ## split-with
 
+[(pred coll)]
+
 Returns a vector of [(take-while pred coll) (drop-while pred coll)].
 
 ---
 
 ## str
+
+[(& args)]
 
 With no args, returns the empty string. With one arg, returns
    (.toString arg). With more args, returns the concatenation of
@@ -1631,11 +2063,15 @@ With no args, returns the empty string. With one arg, returns
 
 ## string?
 
+[(x)]
+
 Returns true if x is a string.
 
 ---
 
 ## subs
+
+[(s start) (s start end)]
 
 Returns the substring of s beginning at start inclusive, and ending
    at end (defaults to length of string), exclusive.
@@ -1644,11 +2080,15 @@ Returns the substring of s beginning at start inclusive, and ending
 
 ## subset?
 
+[(set1 set2)]
+
 Is set1 a subset of set2?
 
 ---
 
 ## subvec
+
+[(v start) (v start end)]
 
 Returns a persistent vector of the items in vector from
    start (inclusive) to end (exclusive). If end is not supplied,
@@ -1658,11 +2098,15 @@ Returns a persistent vector of the items in vector from
 
 ## superset?
 
+[(set1 set2)]
+
 Is set1 a superset of set2?
 
 ---
 
 ## swap!
+
+[(& args)]
 
 Atomically swaps the value of the atom to be: (apply f current-value & args).
 
@@ -1670,11 +2114,15 @@ Atomically swaps the value of the atom to be: (apply f current-value & args).
 
 ## symbol?
 
+[(x)]
+
 Returns true if x is a symbol.
 
 ---
 
 ## take
+
+[(n coll)]
 
 Returns a lazy sequence of the first n items in coll.
 
@@ -1682,11 +2130,15 @@ Returns a lazy sequence of the first n items in coll.
 
 ## take-last
 
+[(n coll)]
+
 Returns a seq of the last n items in coll.
 
 ---
 
 ## take-nth
+
+[(n coll)]
 
 Returns a lazy seq of every nth item in coll.
 
@@ -1694,11 +2146,15 @@ Returns a lazy seq of every nth item in coll.
 
 ## take-while
 
+[(pred coll)]
+
 Returns a lazy sequence of successive items from coll for which (pred item) returns logical true.
 
 ---
 
 ## third
+
+[(xs)]
 
 Same as (first (rest (rest x))).
 
@@ -1706,11 +2162,15 @@ Same as (first (rest (rest x))).
 
 ## time
 
+[(expr)]
+
 Evaluates expr and prints the time it took. Returns the value of expr.
 
 ---
 
 ## trampoline
+
+[(f & args)]
 
 Calls f with the supplied args. If f returns a fn, calls that fn,
    repeating until a non-fn result is returned.
@@ -1719,11 +2179,15 @@ Calls f with the supplied args. If f returns a fn, calls that fn,
 
 ## true?
 
+[(x)]
+
 Returns true if x is the value true, false otherwise.
 
 ---
 
 ## union
+
+[(s1 s2)]
 
 Return a set that is the union of the input sets
 
@@ -1731,17 +2195,23 @@ Return a set that is the union of the input sets
 
 ## unreduced
 
+[(v)]
+
 If v is a Reduced wrapper, unwraps and returns the inner value. Otherwise returns v.
 
 ---
 
 ## unsigned-bit-shift-right
 
+[(x n)]
+
 Shifts the bits of x to the right by n positions (logical shift, fills with zeros).
 
 ---
 
 ## update
+
+[(m k f) (m k f & args)]
 
 Returns a map with the value at key updated by applying f to the current value.
    With extra args, applies (apply f (get m k) args).
@@ -1750,11 +2220,15 @@ Returns a map with the value at key updated by applying f to the current value.
 
 ## use
 
+[(& args)]
+
 Like require but also refers all public vars into current namespace.
 
 ---
 
 ## utf8-valid?
+
+[(s)]
 
 Returns true if the string is valid UTF-8.
 
@@ -1762,11 +2236,15 @@ Returns true if the string is valid UTF-8.
 
 ## val
 
+[(e)]
+
 Returns the value of the map entry.
 
 ---
 
 ## vals
+
+[(m)]
 
 Returns a sequence of the values in the map.
 
@@ -1774,17 +2252,23 @@ Returns a sequence of the values in the map.
 
 ## vec
 
+[(& args)]
+
 Returns a vector of the args, or converts a collection to a vector.
 
 ---
 
 ## vector?
 
+[(x)]
+
 Returns true if x is a vector.
 
 ---
 
 ## when-first
+
+[(bindings & body)]
 
 bindings => x xs
 
@@ -1794,6 +2278,8 @@ bindings => x xs
 
 ## when-let
 
+[(bindings & body)]
+
 bindings => binding-form test
 
   When test is true, evaluates body with binding-form bound to the value of test.
@@ -1802,11 +2288,15 @@ bindings => binding-form test
 
 ## when-not
 
+[(test & body)]
+
 Evaluates test. If logical false, evaluates body in an implicit do.
 
 ---
 
 ## when-some
+
+[(bindings & body)]
 
 bindings => binding-form test
 
@@ -1817,10 +2307,14 @@ bindings => binding-form test
 
 ## zero?
 
+[(n)]
+
 Returns true if num is zero, else false.
 
 ---
 
 ## zipmap
+
+[(keys vals)]
 
 Returns a map with the keys mapped to the corresponding vals.
