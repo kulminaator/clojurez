@@ -39,12 +39,14 @@ pub fn toF64(allocator: Allocator, v: Value) anyerror!f64 {
 pub fn core_E(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     _ = args;
+    if (vm.cachedE()) |v| return v;
     return vm.floatValue(std.math.e);
 }
 
 pub fn core_PI(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     _ = args;
+    if (vm.cachedPI()) |v| return v;
     return vm.floatValue(std.math.pi);
 }
 

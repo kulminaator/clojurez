@@ -30,7 +30,6 @@ pub const EvalResult = union(enum) {
 };
 
 /// Allocate a Value on the GC heap and initialize it from a stack Value.
-/// Used for Values constructed directly (not cloned), e.g. vm.nilValue(), vm.listValue(...).
 pub fn allocValue(allocator: Allocator, val: Value) anyerror!*Value {
     const ptr = try allocator.create(Value);
     ptr.* = val;
@@ -1278,7 +1277,11 @@ fn bindArityParamsFrame(allocator: Allocator, arity: *const vm.Arity, args: *con
             try frame.put(arity.rest_name.?, try vm.listValue(allocator, rest_list));
         } else {
             // No extra args: bind empty list to rest parameter
-            try frame.put(arity.rest_name.?, try vm.listValue(allocator, .empty));
+            if (vm.cachedEmptyList()) |empty| {
+                try frame.put(arity.rest_name.?, empty);
+            } else {
+                try frame.put(arity.rest_name.?, try vm.listValue(allocator, .empty));
+            }
         }
     }
 }
@@ -1308,7 +1311,11 @@ fn bindArityParamsEnv(allocator: Allocator, arity: *const vm.Arity, args: *const
             try new_env.put(arity.rest_name.?, try vm.listValue(allocator, rest_list));
         } else {
             // No extra args: bind empty list to rest parameter
-            try new_env.put(arity.rest_name.?, try vm.listValue(allocator, .empty));
+            if (vm.cachedEmptyList()) |empty| {
+                try new_env.put(arity.rest_name.?, empty);
+            } else {
+                try new_env.put(arity.rest_name.?, try vm.listValue(allocator, .empty));
+            }
         }
     }
 }

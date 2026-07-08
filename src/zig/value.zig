@@ -18,6 +18,179 @@ fn tagStringData(ptr: *anyopaque) void {
 }
 
 // ============================================================
+// Value Cache — pre-allocated singleton values for common immediates
+// ============================================================
+// Avoids repeated GC heap allocations for nil, true, false,
+// small integers (-128..127), and latin characters (0..127).
+// The cache struct is a permanent GC root — never collected.
+//
+// Layout:
+//   nil_ptr, true_ptr, false_ptr  — 3 singletons
+//   int_cache[256]                 — index = value + 128
+//   char_cache[128]                — index = codepoint
+//
+// Thread-safe: read-only after initialization.
+// ============================================================
+
+pub const ValueCache = struct {
+    nil_ptr: *Value = undefined,
+    true_ptr: *Value = undefined,
+    false_ptr: *Value = undefined,
+    int_cache: [256]*Value = undefined,  // index = int + 128
+    char_cache: [128]*Value = undefined, // index = codepoint
+    // Math constants
+    e_ptr: *Value = undefined,
+    pi_ptr: *Value = undefined,
+    // Empty collections
+    empty_string_ptr: *Value = undefined,
+    empty_list_ptr: *Value = undefined,
+    empty_vector_ptr: *Value = undefined,
+    empty_map_ptr: *Value = undefined,
+    empty_set_ptr: *Value = undefined,
+
+    /// Initialize the cache. Allocates the struct and all child values
+    /// through the GC allocator. Tags the struct as value_cache type.
+    /// Must be called once at VM startup.
+    pub fn init(self: *ValueCache, allocator: Allocator) anyerror!void {
+        self.nil_ptr = try allocator.create(Value);
+        self.nil_ptr.* = .nil;
+
+        self.true_ptr = try allocator.create(Value);
+        self.true_ptr.* = .{ .bool = true };
+
+        self.false_ptr = try allocator.create(Value);
+        self.false_ptr.* = .{ .bool = false };
+
+        // Math constants
+        self.e_ptr = try allocator.create(Value);
+        self.e_ptr.* = .{ .float = std.math.e };
+        self.pi_ptr = try allocator.create(Value);
+        self.pi_ptr.* = .{ .float = std.math.pi };
+
+        // Empty string
+        self.empty_string_ptr = try allocator.create(Value);
+        self.empty_string_ptr.* = .{ .string = try allocator.dupe(u8, "") };
+        tagStringData(@as(*anyopaque, @ptrCast(@constCast(self.empty_string_ptr.*.string.ptr))));
+
+        // Empty list
+        self.empty_list_ptr = try allocator.create(Value);
+        const empty_list_data = try allocator.create(ListData);
+        if (gc_mod.current_gc) |gc| {
+            gc.setObjectType(@as(*anyopaque, @ptrCast(empty_list_data)), gc_mod.GCObjectType.list_data);
+        }
+        empty_list_data.* = .{ .items = list.empty(), .src_line = 0 };
+        self.empty_list_ptr.* = .{ .list = empty_list_data };
+
+        // Empty vector
+        self.empty_vector_ptr = try allocator.create(Value);
+        const empty_vec_data = try allocator.create(VectorData);
+        if (gc_mod.current_gc) |gc| {
+            gc.setObjectType(@as(*anyopaque, @ptrCast(empty_vec_data)), gc_mod.GCObjectType.vector_data);
+        }
+        empty_vec_data.* = .{ .items = vec.empty() };
+        self.empty_vector_ptr.* = .{ .vector = empty_vec_data };
+
+        // Empty map
+        self.empty_map_ptr = try allocator.create(Value);
+        const empty_map_data = try allocator.create(MapData);
+        if (gc_mod.current_gc) |gc| {
+            gc.setObjectType(@as(*anyopaque, @ptrCast(empty_map_data)), gc_mod.GCObjectType.map_data);
+        }
+        empty_map_data.* = .{ .entries = .empty };
+        self.empty_map_ptr.* = .{ .map = empty_map_data };
+
+        // Empty set
+        self.empty_set_ptr = try allocator.create(Value);
+        const empty_set_data = try allocator.create(SetData);
+        if (gc_mod.current_gc) |gc| {
+            gc.setObjectType(@as(*anyopaque, @ptrCast(empty_set_data)), gc_mod.GCObjectType.set_data);
+        }
+        empty_set_data.* = .{ .items = .empty };
+        self.empty_set_ptr.* = .{ .set = empty_set_data };
+
+        var i: i64 = -128;
+        while (i <= 127) : (i += 1) {
+            const idx: usize = @as(usize, @intCast(i + 128));
+            self.int_cache[idx] = try allocator.create(Value);
+            self.int_cache[idx].* = .{ .integer = i };
+        }
+
+        var c: u21 = 0;
+        while (c < 128) : (c += 1) {
+            self.char_cache[c] = try allocator.create(Value);
+            self.char_cache[c].* = .{ .character = c };
+        }
+    }
+
+    /// Try to get a cached pointer for the given value.
+    /// Returns null if the value is not in the cache.
+    pub fn get(self: *const ValueCache, val: Value) ?*const Value {
+        return switch (val) {
+            .nil => self.nil_ptr,
+            .bool => |b| if (b) self.true_ptr else self.false_ptr,
+            .integer => |n| if (n >= -128 and n <= 127)
+                self.int_cache[@as(usize, @intCast(n + 128))]
+            else null,
+            .character => |c| if (c < 128)
+                self.char_cache[c]
+            else null,
+            else => null,
+        };
+    }
+};
+
+/// Global value cache pointer. Allocated through GC at VM startup.
+/// Registered as a permanent root — never collected.
+pub var value_cache: ?*ValueCache = null;
+
+/// Check if the value cache has been initialized.
+pub fn isValueCacheReady() bool {
+    return value_cache != null;
+}
+
+/// Get cached E constant value.
+pub fn cachedE() ?Value {
+    if (value_cache) |cache| return cache.e_ptr.*;
+    return null;
+}
+
+/// Get cached PI constant value.
+pub fn cachedPI() ?Value {
+    if (value_cache) |cache| return cache.pi_ptr.*;
+    return null;
+}
+
+/// Get cached empty string value.
+pub fn cachedEmptyString() ?Value {
+    if (value_cache) |cache| return cache.empty_string_ptr.*;
+    return null;
+}
+
+/// Get cached empty list value.
+pub fn cachedEmptyList() ?Value {
+    if (value_cache) |cache| return cache.empty_list_ptr.*;
+    return null;
+}
+
+/// Get cached empty vector value.
+pub fn cachedEmptyVector() ?Value {
+    if (value_cache) |cache| return cache.empty_vector_ptr.*;
+    return null;
+}
+
+/// Get cached empty map value.
+pub fn cachedEmptyMap() ?Value {
+    if (value_cache) |cache| return cache.empty_map_ptr.*;
+    return null;
+}
+
+/// Get cached empty set value.
+pub fn cachedEmptySet() ?Value {
+    if (value_cache) |cache| return cache.empty_set_ptr.*;
+    return null;
+}
+
+// ============================================================
 // Type enum — discriminant for the Value tagged union
 // ============================================================
 

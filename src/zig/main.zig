@@ -121,6 +121,16 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     gc_instance.setAutoGC(gc_scan.valueScanFn);
     gc_mod.current_gc = &gc_instance;
 
+    // Initialize value cache: pre-allocates singleton values for nil, true, false,
+    // small integers (-128..127), and latin characters (0..127).
+    // Allocated through GC, tagged as value_cache, registered as permanent root.
+    const cache_alloc = gc_instance.allocator();
+    const cache_ptr = try cache_alloc.create(vm.ValueCache);
+    try cache_ptr.init(cache_alloc);
+    gc_instance.setObjectType(@as(*anyopaque, @ptrCast(cache_ptr)), gc_mod.GCObjectType.value_cache);
+    vm.value_cache = cache_ptr;
+    gc_instance.addPermanentRoot(@as(*anyopaque, @ptrCast(cache_ptr)));
+
     // Optional debug tracing on top of GC (zero overhead when disabled).
     var debug_alloc: debug_allocator.DebugAllocator = undefined;
     if (debug_allocator.getMemTraceConfig(init.environ)) |trace_cfg| {
