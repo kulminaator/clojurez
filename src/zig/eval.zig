@@ -362,7 +362,7 @@ pub fn evalWithFile(allocator: Allocator, form: Value, env: *Env, file: []const 
 /// Wrapper: evalRec that extracts .value from EvalResult.
 /// Phase 9: Disables trampolining to avoid interfering with the main eval loop.
 /// callFunction evaluates body directly when trampoline_allowed is false.
-fn evalRecV(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: usize) anyerror!*Value {
+pub fn evalRecV(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: usize) anyerror!*Value {
     // Disable trampolining: callFunction will evaluate body directly
     const saved_trampoline = trampoline_allowed;
     trampoline_allowed = false;

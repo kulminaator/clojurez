@@ -1874,12 +1874,12 @@ fn isSimpleBytecodeForm(form: Value) bool {
             try macro_args.append(self.allocator, try vm.shallowClone(&l.items[i], self.allocator));
         }
 
-        // Call the macro
-        const macro_r = try eval_mod.callWithEnv(self.allocator, &op_val.?, &macro_args, env, 0);
-        defer vm.valueDeinit(macro_r.value, self.allocator);
+        // Call the macro (synchronously — macro expansion must not trampoline)
+        const macro_ptr = try eval_mod.callWithEnvV(self.allocator, &op_val.?, &macro_args, env, 0);
+        defer vm.valueDeinit(macro_ptr, self.allocator);
 
         // The macro returns a form (usually a list). Clone and wrap it in a list for compilation.
-        const cloned = try vm.shallowClone(macro_r.value, self.allocator);
+        const cloned = try vm.shallowClone(macro_ptr, self.allocator);
         var expanded: list.List = .empty;
         errdefer expanded.deinit(self.allocator);
         try expanded.append(self.allocator, cloned);
