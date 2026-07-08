@@ -435,11 +435,7 @@ fi
 # Regression: namespace loading with trampolining at top level (eval_ns.zig fix)
 # Previously crashed with "access of union field 'value' while field 'trampoline' is active"
 TEST_TOTAL=$((TEST_TOTAL + 1))
-TRAMP_NS_DIR=$(mktemp -d)
-mkdir -p "$TRAMP_NS_DIR/tramp"
-echo '(ns tramp.test)(defn f [x] (fn [] (+ x 1)))(def result (trampoline f 999))' > "$TRAMP_NS_DIR/tramp/test.clj"
-result=$($TOOL_TIMEOUT $TIMEOUT $VM -cp "$TRAMP_NS_DIR" -e "(require 'tramp.test) tramp.test/result" 2>&1)
-rm -rf "$TRAMP_NS_DIR"
+result=$($TOOL_TIMEOUT $TIMEOUT $VM -cp tests/complex-samples/sample_4_ns_trampoline/src -e "(require 'tramp.test) tramp.test/result" 2>&1)
 if [ "$result" = "1000" ]; then
     echo "PASS: ns-loading with trampolining at top level"
     TEST_PASS=$((TEST_PASS + 1))
