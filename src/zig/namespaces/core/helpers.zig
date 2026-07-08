@@ -42,6 +42,14 @@ pub fn toInt(v: Value) anyerror!i64 {
     };
 }
 
+pub fn toInt32(v: Value) anyerror!i32 {
+    return switch (std.meta.activeTag(v)) {
+        .integer => @as(i32, @intCast(v.integer)),
+        .float => @as(i32, @intFromFloat(v.float)),
+        else => return error.TypeError,
+    };
+}
+
 pub fn toNum(v: Value) f64 {
     return switch (std.meta.activeTag(v)) {
         .integer => @as(f64, @floatFromInt(v.integer)),
