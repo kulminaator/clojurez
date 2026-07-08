@@ -1321,7 +1321,7 @@ Returns a vector of (f applied to) the items in coll.
 
 ## max
 
-[(a b)]
+[(x) (x y) (x y & more)]
 
 Returns the greatest of the nums.
 
@@ -1346,7 +1346,7 @@ Merges multiple maps into one. Later maps override earlier ones for duplicate ke
 
 ## min
 
-[(a b)]
+[(x) (x y) (x y & more)]
 
 Returns the least of the nums.
 
@@ -2010,9 +2010,11 @@ Returns true if x is not nil, false otherwise.
 
 ## sort
 
-[(coll)]
+[(coll) (comparator coll)]
 
-Returns a sorted sequence of the items in coll, sorted by compare.
+Returns a sorted sequence of the items in coll. If no comparator is
+   supplied, uses compare. comparator must return a negative number if
+   x < y, zero if x == y, and a positive number if x > y.
    coll must support count and nth.
 
 ---

@@ -5,6 +5,7 @@ Auto-generated documentation.
 ## Namespaces
 
 - [clojure.core](clojure-core.md)
+- [clojure.math](clojure-math.md)
 - [clojure.string](clojure-string.md)
 - [doc.gen-docs](doc-gen-docs.md)
 - [zig.core](zig-core.md)

@@ -8,6 +8,7 @@ const vec = @import("../../vector.zig");
 const Env = vm.Env;
 const phm = @import("../../persistent_hash_map.zig");
 const helpers = @import("helpers.zig");
+const sequences = @import("sequences.zig");
 const eval_helpers = @import("eval_helpers.zig");
 const arithmetic = @import("arithmetic.zig");
 const sequences_mod = @import("sequences.zig");
@@ -88,14 +89,27 @@ pub fn forceToConcreteList(allocator: Allocator, val: Value) anyerror!list.List 
 }
 
 pub fn core_map(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
-    _ = self;
     const allocator = env_env.allocator;
     if (args.items.len != 2) return error.ArityError;
     const f = args.items[0];
-    const coll = args.items[1];
+    var coll = args.items[1];
 
     // Handle nil — (map f nil) returns nil
     if (std.meta.activeTag(coll) == .nil) return vm.nilValue();
+
+    // Strings are sequences of characters in Clojure
+    // Convert string to char list, then map over it
+    if (std.meta.activeTag(coll) == .string) {
+        const s = coll.string;
+        const char_list = try sequences.stringToCharList(allocator, s);
+        const list_val = try vm.listValue(allocator, char_list);
+        // Recurse with the char list as the collection
+        var new_args: list.List = .empty;
+        defer new_args.deinit(allocator);
+        try new_args.append(allocator, try vm.shallowClone(&f, allocator));
+        try new_args.append(allocator, list_val);
+        return core_map(self, &new_args, env_env);
+    }
 
     // Validate collection type
     switch (std.meta.activeTag(coll)) {
@@ -279,6 +293,13 @@ pub fn core_reduce(self: *const Value, args: *const list.List, env_env: *Env) an
             }
             items = pairs.items;
             owned_items = pairs;
+        },
+        .string => {
+            // Strings are sequences of characters in Clojure
+            // Convert string to char list, then reduce over it
+            const char_list = try sequences.stringToCharList(allocator, coll.string);
+            items = char_list.items;
+            owned_items = char_list;
         },
         else => return error.TypeError,
     }
@@ -639,14 +660,26 @@ pub fn core_nthnext(self: *const Value, args: *const list.List, env_env: *Env) a
 }
 
 pub fn core_filter(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
-    _ = self;
     if (args.items.len != 2) return error.ArityError;
     const allocator = env_env.allocator;
     const pred = args.items[0];
-    const coll = args.items[1];
+    var coll = args.items[1];
 
     // Handle nil — (filter pred nil) returns nil
     if (std.meta.activeTag(coll) == .nil) return vm.nilValue();
+
+    // Strings are sequences of characters in Clojure
+    // Convert string to char list, then filter over it
+    if (std.meta.activeTag(coll) == .string) {
+        const s = coll.string;
+        const char_list = try sequences.stringToCharList(allocator, s);
+        const list_val = try vm.listValue(allocator, char_list);
+        var new_args: list.List = .empty;
+        defer new_args.deinit(allocator);
+        try new_args.append(allocator, try vm.shallowClone(&pred, allocator));
+        try new_args.append(allocator, list_val);
+        return core_filter(self, &new_args, env_env);
+    }
 
     // Validate collection type
     switch (std.meta.activeTag(coll)) {

@@ -20,7 +20,7 @@ pub fn initRandom() void {
 }
 
 // Get a random u64 from the PRNG
-fn nextRandom() u64 {
+pub fn nextRandom() u64 {
     return prng.next();
 }
 

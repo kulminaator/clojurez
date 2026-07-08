@@ -11,6 +11,8 @@ const repl = @import("repl.zig");
 const core_clj = @import("namespaces/core/core_clj.zig");
 const string_clj = @import("namespaces/core/string_clj.zig");
 const io_clj = @import("namespaces/core/io_clj.zig");
+const math_clj = @import("namespaces/core/math_clj.zig");
+const math_builtins = @import("namespaces/core/math.zig");
 const io_fs = @import("namespaces/core/io_fs.zig");
 const io_stream = @import("namespaces/core/io_stream.zig");
 const io_shell = @import("namespaces/core/io_shell.zig");
@@ -119,6 +121,16 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     gc_instance.setAutoGC(gc_scan.valueScanFn);
     gc_mod.current_gc = &gc_instance;
 
+    // Initialize value cache: pre-allocates singleton values for nil, true, false,
+    // small integers (-128..127), and latin characters (0..127).
+    // Allocated through GC, tagged as value_cache, registered as permanent root.
+    const cache_alloc = gc_instance.allocator();
+    const cache_ptr = try cache_alloc.create(vm.ValueCache);
+    try cache_ptr.init(cache_alloc);
+    gc_instance.setObjectType(@as(*anyopaque, @ptrCast(cache_ptr)), gc_mod.GCObjectType.value_cache);
+    vm.value_cache = cache_ptr;
+    gc_instance.addPermanentRoot(@as(*anyopaque, @ptrCast(cache_ptr)));
+
     // Optional debug tracing on top of GC (zero overhead when disabled).
     var debug_alloc: debug_allocator.DebugAllocator = undefined;
     if (debug_allocator.getMemTraceConfig(init.environ)) |trace_cfg| {
@@ -184,6 +196,19 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // Load embedded Clojure string library into clojure.string namespace.
     // The defn wrappers shadow the raw builtins with docstrings.
     try loadStringLibrary(allocator, cs_env);
+
+    // Create clojure.math namespace — math utility functions.
+    // Parent set to clojure.core so math code can use core functions.
+    const cm_env = try ns_mgr.createNamespace("clojure.math");
+    cm_env.parent = clojure_core_env;
+    cm_env.ns_manager = ns_mgr;
+
+    // Register clojure.math built-in functions in zig.core.
+    // The Clojure wrappers in math.clj reference zig.core/sin etc.
+    try math_builtins.registerMathFunctions(zc_env);
+
+    // Load embedded Clojure math library into clojure.math namespace.
+    try loadMathLibrary(allocator, cm_env);
 
     // Create zig.regexp virtual namespace — regexp engine in pure Zig.
     // Parent set to clojure.core so regexp code can use core functions.
@@ -252,7 +277,7 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // Register all namespace environments and NamespaceManager as permanent roots.
     // Permanent roots are NEVER swept — they and everything reachable from them
     // (function definitions, vars, metadata) survive all GC cycles.
-    registerPermanentRoots(&gc_instance, ns_mgr, clojure_core_env, zc_env, cs_env, zr_env, zio_env);
+    registerPermanentRoots(&gc_instance, ns_mgr, clojure_core_env, zc_env, cs_env, cm_env, zr_env, zio_env);
 
     // Count arguments
     const arg_count = countArgs(init.args, allocator);
@@ -418,6 +443,24 @@ fn loadIoLibrary(allocator: Allocator, env: *Env) anyerror!void {
         vm.valueDeinit(&result_ptr.*, allocator);
         // GC handles result cleanup.
         // Silent: don't print results during io library loading
+    }
+}
+
+/// Load the embedded Clojure math library silently (no output for defn names).
+fn loadMathLibrary(allocator: Allocator, env: *Env) anyerror!void {
+    const content = math_clj.math_clj_source;
+
+    var p = try parser.Parser.init(allocator, content);
+    defer p.deinit();
+
+    const forms = try p.parseAll();
+    // GC handles cleanup.
+
+    for (forms.items) |form| {
+        const result_ptr = try eval.eval(allocator, form, env);
+        vm.valueDeinit(&result_ptr.*, allocator);
+        // GC handles result cleanup.
+        // Silent: don't print results during math library loading
     }
 }
 
@@ -768,6 +811,7 @@ fn registerPermanentRoots(
     clojure_core: *Env,
     zig_core: *Env,
     clojure_string: *Env,
+    clojure_math: *Env,
     zig_regexp: *Env,
     zig_io: *Env,
 ) void {
@@ -778,6 +822,7 @@ fn registerPermanentRoots(
     gc_inst.addPermanentRoot(@as(*anyopaque, @ptrCast(clojure_core)));
     gc_inst.addPermanentRoot(@as(*anyopaque, @ptrCast(zig_core)));
     gc_inst.addPermanentRoot(@as(*anyopaque, @ptrCast(clojure_string)));
+    gc_inst.addPermanentRoot(@as(*anyopaque, @ptrCast(clojure_math)));
     gc_inst.addPermanentRoot(@as(*anyopaque, @ptrCast(zig_regexp)));
     gc_inst.addPermanentRoot(@as(*anyopaque, @ptrCast(zig_io)));
 

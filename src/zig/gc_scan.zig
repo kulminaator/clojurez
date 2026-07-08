@@ -75,6 +75,7 @@ pub fn valueScanFn(obj: *anyopaque, ctx: *gc.ScanContext) void {
         .chunk_data => scanChunkData(obj, ctx),
         .chunked_cons_data => scanChunkedConsData(obj, ctx),
         .frame => scanFrame(obj, ctx),
+        .value_cache => scanValueCache(obj, ctx),
     }
 }
 
@@ -798,5 +799,51 @@ fn scanFrame(frame_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     // Mark body_form if present (Phase 9: trampoline body stored in Frame)
     if (frame.body_form) |*bf| {
         scanValueChildrenDirect(bf, ctx);
+    }
+}
+
+/// Scan the value cache — marks all pre-cached singleton Value pointers.
+fn scanValueCache(cache_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const cache: *vm.ValueCache = @ptrCast(@alignCast(cache_ptr));
+
+    // Mark singleton pointers
+    markPtr(cache.nil_ptr, ctx);
+    markPtr(cache.true_ptr, ctx);
+    markPtr(cache.false_ptr, ctx);
+
+    // Mark math constants
+    markPtr(cache.e_ptr, ctx);
+    markPtr(cache.pi_ptr, ctx);
+
+    // Mark empty collections (the *Value wrappers)
+    markPtr(cache.empty_string_ptr, ctx);
+    markPtr(cache.empty_list_ptr, ctx);
+    markPtr(cache.empty_vector_ptr, ctx);
+    markPtr(cache.empty_map_ptr, ctx);
+    markPtr(cache.empty_set_ptr, ctx);
+
+    // Mark the underlying data structures for empty collections
+    // (these are GC-tracked and need to be marked too)
+    if (std.meta.activeTag(cache.empty_list_ptr.*) == .list) {
+        markPtr(cache.empty_list_ptr.*.list, ctx);
+    }
+    if (std.meta.activeTag(cache.empty_vector_ptr.*) == .vector) {
+        markPtr(cache.empty_vector_ptr.*.vector, ctx);
+    }
+    if (std.meta.activeTag(cache.empty_map_ptr.*) == .map) {
+        markPtr(cache.empty_map_ptr.*.map, ctx);
+    }
+    if (std.meta.activeTag(cache.empty_set_ptr.*) == .set) {
+        markPtr(cache.empty_set_ptr.*.set, ctx);
+    }
+
+    // Mark all cached integer values
+    for (cache.int_cache) |ptr| {
+        markPtr(ptr, ctx);
+    }
+
+    // Mark all cached character values
+    for (cache.char_cache) |ptr| {
+        markPtr(ptr, ctx);
     }
 }

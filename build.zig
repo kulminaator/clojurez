@@ -34,6 +34,16 @@ pub fn build(b: *std.Build) void {
     });
     copy_io.addFileInput(b.path("src/clj/io.clj"));
 
+    // Copy math.clj into zig package for @embedFile
+    // Source of truth: src/clj/math.clj
+    // Destination: src/zig/namespaces/core/clj/math.clj (referenced by math_clj.zig)
+    const copy_math = b.addSystemCommand(&.{
+        "cp",
+        "src/clj/math.clj",
+        "src/zig/namespaces/core/clj/math.clj",
+    });
+    copy_math.addFileInput(b.path("src/clj/math.clj"));
+
     const src_path = b.path("src/zig/main.zig");
 
     // Build 3 variants into zig-out/bin/:
@@ -78,6 +88,7 @@ pub fn build(b: *std.Build) void {
         exe.step.dependOn(&copy_core.step);
         exe.step.dependOn(&copy_string.step);
         exe.step.dependOn(&copy_io.step);
+        exe.step.dependOn(&copy_math.step);
 
         const install = b.addInstallArtifact(exe, .{});
         b.getInstallStep().dependOn(&install.step);

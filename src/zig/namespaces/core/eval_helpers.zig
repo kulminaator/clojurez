@@ -22,35 +22,131 @@ const LoopContext = struct {
 
 var loop_stack: std.ArrayListUnmanaged(LoopContext) = .empty;
 
-// Bind a parameter to an argument, supporting destructuring
+/// Check if a form looks like a multi-arity fn body: ([params] body...) or ([params] body...)
+fn isMultiArityForm(form: Value) bool {
+    const items = switch (std.meta.activeTag(form)) {
+        .list => form.list.items.items,
+        .vector => form.vector.items.items,
+        else => return false,
+    };
+    if (items.len < 1) return false;
+    return std.meta.activeTag(items[0]) == .list or std.meta.activeTag(items[0]) == .vector;
+}
+
+// Bind a parameter to an argument, supporting destructuring.
+// Delegates to bindPattern which handles symbols, vectors with & rest, nested patterns.
 fn bindParam(allocator: Allocator, param: *const Value, arg: *const Value, env: *vm.Env) anyerror!void {
-    switch (std.meta.activeTag(param.*)) {
+    try bindPattern(allocator, param.*, arg.*, env);
+}
+
+/// Bind a pattern (symbol or destructuring vector) to a value.
+/// Handles: symbols, vector destructuring [a b], [a & rest], nested vectors.
+fn bindPattern(allocator: Allocator, pattern: Value, val: Value, env: *vm.Env) anyerror!void {
+    switch (std.meta.activeTag(pattern)) {
         .symbol => {
-            try env.put(param.symbol, try vm.shallowClone(arg, allocator));
+            try env.put(pattern.symbol, try vm.shallowClone(&val, allocator));
         },
         .vector => {
-            var arg_items: []const Value = undefined;
-            switch (std.meta.activeTag(arg.*)) {
-                .list => arg_items = arg.list.items.items,
-                .vector => arg_items = arg.vector.items.items,
+            // Vector destructuring: [a b & rest] matches elements of val
+            const vitems = switch (std.meta.activeTag(val)) {
+                .list => val.list.items.items,
+                .vector => val.vector.items.items,
                 else => return error.TypeError,
-            }
-            if (param.vector.items.items.len != arg_items.len) return error.ArityError;
-            var i: usize = 0;
-            while (i < param.vector.items.items.len) : (i += 1) {
-                try bindParam(allocator, &param.vector.items.items[i], &arg_items[i], env);
+            };
+            var j: usize = 0;
+            while (j < pattern.vector.items.items.len) : (j += 1) {
+                const pat_item = pattern.vector.items.items[j];
+                // Handle & rest (& is parsed as a symbol)
+                if (std.meta.activeTag(pat_item) == .symbol and std.mem.eql(u8, pat_item.symbol, "&")) {
+                    if (j + 1 < pattern.vector.items.items.len) {
+                        const rest_sym = pattern.vector.items.items[j + 1];
+                        // Collect remaining items into a list (starting from current position j)
+                        var rest_list: list.List = .empty;
+                        errdefer rest_list.deinit(allocator);
+                        var k: usize = j;
+                        while (k < vitems.len) : (k += 1) {
+                            try rest_list.append(allocator, try vm.shallowClone(&vitems[k], allocator));
+                        }
+                        if (std.meta.activeTag(rest_sym) == .symbol) {
+                            try env.put(rest_sym.symbol, try vm.listValue(allocator, rest_list));
+                        }
+                        j += 1; // Skip the rest symbol
+                    }
+                    break;
+                } else if (j < vitems.len) {
+                    try bindPattern(allocator, pat_item, vitems[j], env);
+                }
             }
         },
         .list => {
-            if (param.list.items.items.len != arg.list.items.items.len) return error.ArityError;
-            var i: usize = 0;
-            while (i < param.list.items.items.len) : (i += 1) {
-                try bindParam(allocator, &param.list.items.items[i], &arg.list.items.items[i], env);
+            // List destructuring: same as vector
+            const vitems = switch (std.meta.activeTag(val)) {
+                .list => val.list.items.items,
+                .vector => val.vector.items.items,
+                else => return error.TypeError,
+            };
+            var j: usize = 0;
+            while (j < pattern.list.items.items.len) : (j += 1) {
+                const pat_item = pattern.list.items.items[j];
+                if (std.meta.activeTag(pat_item) == .symbol and std.mem.eql(u8, pat_item.symbol, "&")) {
+                    if (j + 1 < pattern.list.items.items.len) {
+                        const rest_sym = pattern.list.items.items[j + 1];
+                        var rest_list: list.List = .empty;
+                        errdefer rest_list.deinit(allocator);
+                        var k: usize = j;
+                        while (k < vitems.len) : (k += 1) {
+                            try rest_list.append(allocator, try vm.shallowClone(&vitems[k], allocator));
+                        }
+                        if (std.meta.activeTag(rest_sym) == .symbol) {
+                            try env.put(rest_sym.symbol, try vm.listValue(allocator, rest_list));
+                        }
+                        j += 1;
+                    }
+                    break;
+                } else if (j < vitems.len) {
+                    try bindPattern(allocator, pat_item, vitems[j], env);
+                }
             }
         },
-        else => {},
+        else => return error.TypeError,
     }
 }
+
+/// Parse a parameter list, extracting regular params and optional rest param.
+/// E.g., [a b & rest] => { params: (a b), rest_name: "rest" }
+/// E.g., [a b]        => { params: (a b), rest_name: null }
+pub fn parseParams(allocator: Allocator, params: list.List) anyerror!ParsedParams {
+    var regular_params: list.List = .empty;
+    errdefer regular_params.deinit(allocator);
+    var rest_name: ?[]u8 = null;
+
+    var i: usize = 0;
+    var found_amp = false;
+    while (i < params.items.len) : (i += 1) {
+        const item = params.items[i];
+        if (!found_amp and std.meta.activeTag(item) == .symbol and std.mem.eql(u8, item.symbol, "&")) {
+            found_amp = true;
+            continue;
+        }
+        if (found_amp) {
+            if (std.meta.activeTag(item) != .symbol) return error.TypeError;
+            rest_name = try allocator.dupe(u8, item.symbol);
+            break;
+        } else {
+            try regular_params.append(allocator, try vm.shallowClone(&item, allocator));
+        }
+    }
+
+    return ParsedParams{
+        .params = regular_params,
+        .rest_name = rest_name,
+    };
+}
+
+pub const ParsedParams = struct {
+    params: list.List,
+    rest_name: ?[]u8,
+};
 
 pub fn callBuiltin(allocator: Allocator, f: *const Value, args_list: *const list.List, env: *vm.Env) anyerror!*Value {
     switch (std.meta.activeTag(f.*)) {
@@ -488,9 +584,9 @@ fn evalLet(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Val
     var bi: usize = 0;
     while (bi < bind_items.len) : (bi += 2) {
         const sym = &bind_items[bi];
-        if (std.meta.activeTag(sym.*) != .symbol) return error.TypeError;
         const val_ptr = try evalForm(allocator, &bind_items[bi + 1], &new_env);
-        try new_env.put(sym.symbol, val_ptr.*);
+        // Use bindPattern to support destructuring: [a b], [a & rest], nested
+        try bindPattern(allocator, sym.*, val_ptr.*, &new_env);
     }
 
     return evalDoSlice(allocator, form.list.items.items[2..], &new_env);
@@ -576,6 +672,7 @@ fn evalRecur(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*V
 }
 
 /// (fn name? ([params] body...)...) — anonymous function.
+/// Handles single-arity, multi-arity, and & rest parameters.
 fn evalFn(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Value {
     if (form.list.items.items.len < 2) return error.ArityError;
     var idx: usize = 1;
@@ -586,21 +683,86 @@ fn evalFn(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Valu
         idx += 1;
     }
     if (idx >= form.list.items.items.len) return error.ArityError;
-    const params = &form.list.items.items[idx];
-    if (std.meta.activeTag(params.*) != .list and std.meta.activeTag(params.*) != .vector) return error.TypeError;
-    const params_list = if (std.meta.activeTag(params.*) == .vector) try helpers.listFromVector(allocator, params.vector.items) else params.list.items;
-    const body = if (form.list.items.items.len >= idx + 1) form.list.items.items[idx + 1 ..] else &[_]Value{};
 
-    var body_list: list.List = .empty;
-    errdefer body_list.deinit(allocator);
-    try body_list.append(allocator, try vm.symValue(allocator, "do"));
-    for (body) |form_item| {
-        try body_list.append(allocator, try vm.shallowClone(&form_item, allocator));
+    // Check if this is multi-arity: first item is a list/vector whose first element
+    // is also a list/vector (i.e., ([params] body...) is the first form).
+    const first_form = &form.list.items.items[idx];
+    const is_multi_arity = isMultiArityForm(first_form.*);
+
+    var arities: std.ArrayListUnmanaged(vm.Arity) = .empty;
+    errdefer {
+        for (arities.items) |*a| {
+            a.params.deinit(allocator);
+            a.body.deinit(allocator);
+            if (a.rest_name) |rn| allocator.free(rn);
+        }
+        arities.deinit(allocator);
     }
-    const cloned_params = try params_list.clone(allocator);
-    const cloned_body = try body_list.clone(allocator);
+
+    if (is_multi_arity) {
+        // Multi-arity: each form is ([params] body...)
+        var ai: usize = idx;
+        while (ai < form.list.items.items.len) : (ai += 1) {
+            const arity_form = &form.list.items.items[ai];
+            const arity_items = if (std.meta.activeTag(arity_form.*) == .list)
+                arity_form.*.list.items.items
+            else
+                arity_form.*.vector.items.items;
+            if (arity_items.len < 2) return error.ArityError;
+
+            // Parse params (extract & rest)
+            const params_raw = if (std.meta.activeTag(arity_items[0]) == .vector)
+                try helpers.listFromVector(allocator, arity_items[0].vector.items)
+            else
+                arity_items[0].list.items;
+            var parsed = try parseParams(allocator, params_raw);
+
+            // Build body: (do body...)
+            var body_list: list.List = .empty;
+            errdefer body_list.deinit(allocator);
+            try body_list.append(allocator, try vm.symValue(allocator, "do"));
+            for (arity_items[1..]) |form_item| {
+                try body_list.append(allocator, try vm.shallowClone(&form_item, allocator));
+            }
+
+            try arities.append(allocator, vm.Arity{
+                .params = try parsed.params.clone(allocator),
+                .body = try body_list.clone(allocator),
+                .rest_name = parsed.rest_name,
+                .bytecode = null,
+            });
+            // Clean up parsed (clone was made above)
+            parsed.params.deinit(allocator);
+            if (parsed.rest_name) |rn| allocator.free(rn);
+        }
+    } else {
+        // Single-arity: ([params] body...)
+        const params_raw = if (std.meta.activeTag(first_form.*) == .vector)
+            try helpers.listFromVector(allocator, first_form.*.vector.items)
+        else
+            first_form.*.list.items;
+        var parsed = try parseParams(allocator, params_raw);
+        const body = if (form.list.items.items.len >= idx + 1) form.list.items.items[idx + 1 ..] else &[_]Value{};
+
+        var body_list: list.List = .empty;
+        errdefer body_list.deinit(allocator);
+        try body_list.append(allocator, try vm.symValue(allocator, "do"));
+        for (body) |form_item| {
+            try body_list.append(allocator, try vm.shallowClone(&form_item, allocator));
+        }
+
+        try arities.append(allocator, vm.Arity{
+            .params = try parsed.params.clone(allocator),
+            .body = try body_list.clone(allocator),
+            .rest_name = parsed.rest_name,
+            .bytecode = null,
+        });
+        parsed.params.deinit(allocator);
+        if (parsed.rest_name) |rn| allocator.free(rn);
+    }
+
     const fn_env = try env.clone(allocator);
-    return try allocBuiltinResult(allocator, try vm.fnValueSingleNamed(allocator, cloned_params, cloned_body, fn_env, null, false, fn_name));
+    return try allocBuiltinResult(allocator, try vm.fnValueNamed(allocator, arities, fn_env, false, fn_name));
 }
 
 /// (lazy-seq body...) — create a lazy sequence.
