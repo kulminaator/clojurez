@@ -431,3 +431,17 @@ else
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
 fi
+
+# Regression: namespace loading with trampolining at top level (eval_ns.zig fix)
+# Previously crashed with "access of union field 'value' while field 'trampoline' is active"
+TEST_TOTAL=$((TEST_TOTAL + 1))
+result=$($TOOL_TIMEOUT $TIMEOUT $VM -cp tests/complex-samples/sample_4_ns_trampoline/src -e "(require 'tramp.test) tramp.test/result" 2>&1)
+if [ "$result" = "1000" ]; then
+    echo "PASS: ns-loading with trampolining at top level"
+    TEST_PASS=$((TEST_PASS + 1))
+else
+    echo "FAIL: ns-loading with trampolining at top level"
+    echo "  Expected: 1000"
+    echo "  Got:      $result"
+    TEST_FAIL=$((TEST_FAIL + 1))
+fi
