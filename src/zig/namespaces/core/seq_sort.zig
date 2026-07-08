@@ -19,9 +19,12 @@ const toInt = helpers.toInt;
 // Uses a simple insertion sort (fine for small collections)
 pub fn core_sort(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
-    if (args.items.len != 1) return error.ArityError;
+    if (args.items.len < 1 or args.items.len > 2) return error.ArityError;
     const allocator = env_env.allocator;
-    const coll = args.items[0];
+
+    const has_comparator = args.items.len == 2;
+    const comparator = if (has_comparator) args.items[0] else null;
+    const coll = if (has_comparator) args.items[1] else args.items[0];
 
     // Force to a list
     var items = try seq_ops.forceToConcreteList(allocator, coll);
@@ -34,14 +37,18 @@ pub fn core_sort(self: *const Value, args: *const list.List, env_env: *Env) anye
         sorted[i] = try vm.shallowClone(&items.items[i], allocator);
     }
 
-    // Insertion sort using compare
+    // Insertion sort
     var j: usize = 1;
     while (j < sorted.len) : (j += 1) {
         const key = sorted[j];
         var k: usize = j;
-        while (k > 0 and vm.compare(sorted[k - 1], key) > 0) {
+        while (k > 0) : (k -= 1) {
+            const cmp_result = if (has_comparator)
+                try sortCallComparator(allocator, &comparator.?, &sorted[k - 1], &key, env_env)
+            else
+                vm.compare(sorted[k - 1], key);
+            if (cmp_result <= 0) break;
             sorted[k] = sorted[k - 1];
-            k -= 1;
         }
         sorted[k] = key;
     }
@@ -55,6 +62,40 @@ pub fn core_sort(self: *const Value, args: *const list.List, env_env: *Env) anye
     }
     allocator.free(sorted);
     return try vm.listValue(allocator, result);
+}
+
+// Helper: call a user comparator function with two args, return i64 result.
+// Handles both numeric comparators (like compare) returning <0/0/>0
+// and boolean predicates (like >, <) returning true/false.
+fn sortCallComparator(
+    allocator: Allocator,
+    comp_fn: *const Value,
+    a: *const Value,
+    b: *const Value,
+    env: *Env,
+) anyerror!i64 {
+    var arg_list: list.List = .empty;
+    defer arg_list.deinit(allocator);
+    try arg_list.append(allocator, try vm.shallowClone(a, allocator));
+    try arg_list.append(allocator, try vm.shallowClone(b, allocator));
+    const result_ptr = try eval_helpers.callBuiltin(allocator, comp_fn, &arg_list, env);
+    defer allocator.destroy(result_ptr);
+
+    // If result is boolean, wrap like JVM Clojure's comparator:
+    // (pred a b) -> -1, (pred b a) -> 1, else 0
+    if (std.meta.activeTag(result_ptr.*) == .bool) {
+        if (result_ptr.bool) return -1;
+        // Check reverse: (pred b a)
+        var rev_list: list.List = .empty;
+        defer rev_list.deinit(allocator);
+        try rev_list.append(allocator, try vm.shallowClone(b, allocator));
+        try rev_list.append(allocator, try vm.shallowClone(a, allocator));
+        const rev_ptr = try eval_helpers.callBuiltin(allocator, comp_fn, &rev_list, env);
+        defer allocator.destroy(rev_ptr);
+        if (std.meta.activeTag(rev_ptr.*) == .bool and rev_ptr.bool) return 1;
+        return 0;
+    }
+    return toInt(result_ptr.*);
 }
 
 // sort-by: returns a sorted sequence of coll, sorted by the comparison of (keyfn item)

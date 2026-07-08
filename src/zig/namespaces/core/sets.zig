@@ -12,34 +12,56 @@ pub fn core_set(self: *const Value, args: *const list.List, env_env: *Env) anyer
     const coll = args.items[0];
     if (std.meta.activeTag(coll) == .set) return try vm.shallowClone(&coll, env_env.allocator);
 
+    const allocator = env_env.allocator;
     var new_set: vm.Set = .empty;
     errdefer {
         for (new_set.items) |*item| {
-            vm.valueDeinit(item, env_env.allocator);
+            vm.valueDeinit(item, allocator);
         }
-        env_env.allocator.free(new_set.items);
+        allocator.free(new_set.items);
     }
 
-    var items: []const Value = undefined;
     switch (std.meta.activeTag(coll)) {
-        .list => items = coll.list.items.items,
-        .vector => items = coll.vector.items.items,
+        .list => {
+            for (coll.list.items.items) |item| {
+                try addToSet(&new_set, allocator, item);
+            }
+        },
+        .vector => {
+            for (coll.vector.items.items) |item| {
+                try addToSet(&new_set, allocator, item);
+            }
+        },
+        .string => {
+            // Strings are sequences of characters in Clojure
+            // (set "abc") => #{\a \b \c}
+            const s = coll.string;
+            const codepoint_count = vm.utf8CodepointCount(s);
+            var idx: usize = 0;
+            while (idx < codepoint_count) : (idx += 1) {
+                const cp_bytes = vm.utf8CodepointAt(s, idx) orelse break;
+                const cp = std.unicode.utf8Decode(cp_bytes) catch break;
+                const char_val = vm.charValue(cp);
+                try addToSet(&new_set, allocator, char_val);
+            }
+        },
         else => return error.TypeError,
     }
+    return try vm.setValue(allocator, new_set);
+}
 
-    for (items) |item| {
-        var found = false;
-        for (new_set.items) |existing| {
-            if (vm.equals(existing, item)) {
-                found = true;
-                break;
-            }
-        }
-        if (!found) {
-            try new_set.append(env_env.allocator, try vm.shallowClone(&item, env_env.allocator));
+/// Helper: add a value to a set if not already present.
+fn addToSet(new_set: *vm.Set, allocator: std.mem.Allocator, item: Value) anyerror!void {
+    var found = false;
+    for (new_set.items) |existing| {
+        if (vm.equals(existing, item)) {
+            found = true;
+            break;
         }
     }
-    return try vm.setValue(env_env.allocator, new_set);
+    if (!found) {
+        try new_set.append(allocator, try vm.shallowClone(&item, allocator));
+    }
 }
 
 pub fn core_set_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {

@@ -13,6 +13,20 @@ const test_utils = @import("test_utils.zig");
 const gc_mod = @import("../../gc.zig");
 const Allocator = std.mem.Allocator;
 
+/// Convert a UTF-8 string to a list of character values.
+pub fn stringToCharList(allocator: Allocator, s: []const u8) anyerror!list.List {
+    var result: list.List = .empty;
+    errdefer result.deinit(allocator);
+    const codepoint_count = vm.utf8CodepointCount(s);
+    var idx: usize = 0;
+    while (idx < codepoint_count) : (idx += 1) {
+        const cp_bytes = vm.utf8CodepointAt(s, idx) orelse break;
+        const cp = std.unicode.utf8Decode(cp_bytes) catch break;
+        try result.append(allocator, vm.charValue(cp));
+    }
+    return result;
+}
+
 /// Force a value and append to target list.
 /// If val is a lazy_seq, append it as-is (don't force recursively).
 /// Otherwise, clone and append as a single element.
@@ -248,9 +262,13 @@ pub fn core_first(self: *const Value, args: *const list.List, env_env: *Env) any
     const allocator = env_env.allocator;
     var val = try vm.shallowClone(&args.items[0], allocator);
     defer vm.valueDeinit(&val, allocator);
-    // Handle lazy_seq: evaluate thunk, get result
-    if (std.meta.activeTag(val) == .lazy_seq) {
-        val = try forceLazySeqGetResult(allocator, &val);
+    // Handle lazy_seq: keep forcing until we get a concrete result.
+    // filter/remove lazy-seqs may return nested lazy_seqs when elements
+    // don't match the predicate, so a single force is not enough.
+    while (std.meta.activeTag(val) == .lazy_seq) {
+        const result = try forceLazySeqGetResult(allocator, &val);
+        vm.valueDeinit(&val, allocator);
+        val = result;
     }
     switch (std.meta.activeTag(val)) {
         .list => {
@@ -288,9 +306,13 @@ pub fn core_rest(self: *const Value, args: *const list.List, env_env: *Env) anye
     const allocator = env_env.allocator;
     var val = try vm.shallowClone(&args.items[0], allocator);
     defer vm.valueDeinit(&val, allocator);
-    // Handle lazy_seq: evaluate thunk, get result
-    if (std.meta.activeTag(val) == .lazy_seq) {
-        val = try forceLazySeqGetResult(allocator, &val);
+    // Handle lazy_seq: keep forcing until we get a concrete result.
+    // filter/remove lazy-seqs may return nested lazy_seqs when elements
+    // don't match the predicate, so a single force is not enough.
+    while (std.meta.activeTag(val) == .lazy_seq) {
+        const result = try forceLazySeqGetResult(allocator, &val);
+        vm.valueDeinit(&val, allocator);
+        val = result;
     }
     switch (std.meta.activeTag(val)) {
         .list => {
@@ -1447,10 +1469,11 @@ pub fn core_seq(self: *const Value, args: *const list.List, env_env: *Env) anyer
         .set => coll.set.items.items.len,
         .queue => coll.queue.items.items.len,
         .string => {
-            // For strings, seq returns the string itself (iterable via first/rest/nth)
-            // But only if non-empty
+            // For strings, seq returns a list of character values (not the string itself)
+            // This matches JVM Clojure: (seq "abc") => (\a \b \c)
             if (coll.string.len == 0) return vm.nilValue();
-            return try vm.shallowClone(&coll, allocator);
+            const char_list = try stringToCharList(allocator, coll.string);
+            return try vm.listValue(allocator, char_list);
         },
         else => return vm.nilValue(),
     };

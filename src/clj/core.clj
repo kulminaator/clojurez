@@ -207,13 +207,19 @@
 
 (defn max
   "Returns the greatest of the nums."
-  [a b]
-  (if (> a b) a b))
+  ([x] x)
+  ([x y]
+   (if (> x y) x y))
+  ([x y & more]
+   (reduce max (max x y) more)))
 
 (defn min
   "Returns the least of the nums."
-  [a b]
-  (if (< a b) a b))
+  ([x] x)
+  ([x y]
+   (if (< x y) x y))
+  ([x y & more]
+   (reduce min (min x y) more)))
 
 ;; ---- List helpers ----
 
@@ -793,9 +799,14 @@
 ;; ---- Sort operations ----
 
 (defn sort
-  "Returns a sorted sequence of the items in coll, sorted by compare.
-   coll must support count and nth." [coll]
-  (zig.core/sort coll))
+  "Returns a sorted sequence of the items in coll. If no comparator is
+   supplied, uses compare. comparator must return a negative number if
+   x < y, zero if x == y, and a positive number if x > y.
+   coll must support count and nth."
+  ([coll]
+   (sort compare coll))
+  ([comparator coll]
+   (zig.core/sort comparator coll)))
 
 (defn sort-by
   "Returns a sorted sequence of the items in coll, sorted by the comparison

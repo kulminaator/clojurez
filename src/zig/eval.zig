@@ -1579,79 +1579,17 @@ fn forceLazySeq(allocator: Allocator, lazy: Value, frame: *vm.Frame, depth: usiz
 
 // Bind a parameter to an argument, supporting destructuring
 // e.g., param=[a b], arg=[1 2] => binds a=1, b=2
-fn bindParam(allocator: Allocator, param: Value, arg: Value, env: *Env) anyerror!void {
-    switch (std.meta.activeTag(param)) {
-        .symbol => {
-            // Use shallowClone - all Clojure values are immutable.
-            // Sharing is safe; GC handles lifetime.
-            try env.put(param.symbol, try vm.shallowClone(&arg, allocator));
-        },
-        .vector => {
-            // Destructure: param is [x y z], arg should be a collection
-            var arg_items: []const Value = undefined;
-            switch (std.meta.activeTag(arg)) {
-                .list => arg_items = arg.list.items.items,
-                .vector => arg_items = arg.vector.items.items,
-                else => return error.TypeError,
-            }
-            if (param.vector.items.items.len != arg_items.len) {
-                return error.ArityError;
-            }
-            var i: usize = 0;
-            while (i < param.vector.items.items.len) : (i += 1) {
-                try bindParam(allocator, param.vector.items.items[i], arg_items[i], env);
-            }
-        },
-        .list => {
-            // Same as vector but from a list
-            if (param.list.items.items.len != arg.list.items.items.len) {
-                return error.ArityError;
-            }
-            var i: usize = 0;
-            while (i < param.list.items.items.len) : (i += 1) {
-                try bindParam(allocator, param.list.items.items[i], arg.list.items.items[i], env);
-            }
-        },
-        else => {}, // Ignore other param types
-    }
+fn bindParam(allocator: Allocator, param: Value, arg: Value, env: *vm.Env) anyerror!void {
+    // Delegate to bindPattern which handles symbols, vector destructuring,
+    // & rest patterns, and nested destructuring.
+    try bindPattern(allocator, param, arg, env);
 }
 
 // Frame version of bindParam
 fn bindParamFrame(allocator: Allocator, param: Value, arg: Value, frame: *vm.Frame) anyerror!void {
-    switch (std.meta.activeTag(param)) {
-        .symbol => {
-            // Use shallowClone - all Clojure values are immutable.
-            // Sharing is safe; GC handles lifetime.
-            try frame.put(param.symbol, try vm.shallowClone(&arg, allocator));
-        },
-        .vector => {
-            // Destructure: param is [x y z], arg should be a collection
-            var arg_items: []const Value = undefined;
-            switch (std.meta.activeTag(arg)) {
-                .list => arg_items = arg.list.items.items,
-                .vector => arg_items = arg.vector.items.items,
-                else => return error.TypeError,
-            }
-            if (param.vector.items.items.len != arg_items.len) {
-                return error.ArityError;
-            }
-            var i: usize = 0;
-            while (i < param.vector.items.items.len) : (i += 1) {
-                try bindParamFrame(allocator, param.vector.items.items[i], arg_items[i], frame);
-            }
-        },
-        .list => {
-            // Same as vector but from a list
-            if (param.list.items.items.len != arg.list.items.items.len) {
-                return error.ArityError;
-            }
-            var i: usize = 0;
-            while (i < param.list.items.items.len) : (i += 1) {
-                try bindParamFrame(allocator, param.list.items.items[i], arg.list.items.items[i], frame);
-            }
-        },
-        else => {}, // Ignore other param types
-    }
+    // Delegate to bindPatternFrame which handles symbols, vector destructuring,
+    // & rest patterns, and nested destructuring.
+    try bindPatternFrame(allocator, param, arg, frame);
 }
 
 // Check if a form looks like a parameter list (vector/list of symbols, possibly with & rest)
