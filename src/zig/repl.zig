@@ -199,6 +199,11 @@ fn evaluateAndPrint(allocator: Allocator, input: []const u8, env: *vm.Env) anyer
                 eval.EvalError.ReplExit => {
                     return true; // signal exit
                 },
+                eval.EvalError.Exception => {
+                    // Exception already printed by evalWithFile
+                    pos += consumed;
+                    continue;
+                },
                 else => {
                     try writeStdout("Error: ");
                     try writeStdout(@errorName(err));

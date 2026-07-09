@@ -56,6 +56,7 @@
 - [denom](#denom)
 - [denominator](#denominator)
 - [deref](#deref)
+- [derive](#derive)
 - [difference](#difference)
 - [disj](#disj)
 - [dissoc](#dissoc)
@@ -75,6 +76,11 @@
 - [even?](#even?)
 - [every-pred](#every-pred)
 - [every?](#every?)
+- [ex-cause](#ex-cause)
+- [ex-data](#ex-data)
+- [ex-info](#ex-info)
+- [ex-message](#ex-message)
+- [exception?](#exception?)
 - [extenders](#extenders)
 - [extends?](#extends?)
 - [false?](#false?)
@@ -113,6 +119,7 @@
 - [intersection](#intersection)
 - [into](#into)
 - [into-array](#into-array)
+- [isa?](#isa?)
 - [iterate](#iterate)
 - [juxt](#juxt)
 - [keep](#keep)
@@ -154,6 +161,7 @@
 - [number?](#number?)
 - [numerator](#numerator)
 - [odd?](#odd?)
+- [parents](#parents)
 - [partial](#partial)
 - [partition](#partition)
 - [partition-all](#partition-all)
@@ -695,6 +703,16 @@ Returns the current value of the atom, future, promise, or var.
 
 ---
 
+## derive
+
+[(child parent)]
+
+Derives a child type from a parent type in the type hierarchy.
+   Both child and parent should be keywords or symbols.
+   Used to define custom exception types and (future) multimethod dispatch.
+
+---
+
 ## difference
 
 [(s1 s2)]
@@ -850,6 +868,50 @@ Takes a set of predicates and returns a function f that returns true if all of i
 [(pred coll)]
 
 Returns true if (pred x) is logical true for every x in coll, else false.
+
+---
+
+## ex-cause
+
+[(ex)]
+
+Returns the cause of ex if ex is a Throwable.
+   Otherwise returns nil.
+
+---
+
+## ex-data
+
+[(ex)]
+
+Returns exception data (a map) if ex is an IExceptionInfo.
+   Otherwise returns nil.
+
+---
+
+## ex-info
+
+[(msg data) (msg data cause)]
+
+Create an instance of ExceptionInfo that carries a map of additional data.
+   Optionally takes a cause exception as the third argument.
+
+---
+
+## ex-message
+
+[(ex)]
+
+Returns the message attached to ex if ex is a Throwable.
+   Otherwise returns nil.
+
+---
+
+## exception?
+
+[(x)]
+
+Returns true if x is an exception value.
 
 ---
 
@@ -1168,6 +1230,14 @@ Returns a new coll consisting of to with all of the items of from conjoined.
 [(coll)]
 
 Returns the collection as a vector.
+
+---
+
+## isa?
+
+[(child parent)]
+
+Returns true if child is parent or derives from parent in the hierarchy.
 
 ---
 
@@ -1506,6 +1576,14 @@ Returns the numerator of x, which must be an integer, bigint, or ratio.
 [(n)]
 
 Returns true if n is odd, else false.
+
+---
+
+## parents
+
+[(child)]
+
+Returns the set of direct parents of child in the hierarchy.
 
 ---
 

@@ -124,6 +124,19 @@
   (equals [this other] (= this other))
   (hashCode [this] (hash this)))
 
+;; ---- IExceptionInfo protocol ----
+;; Protocol for exceptions that carry data (like Java's IExceptionInfo interface).
+(defprotocol IExceptionInfo
+  "Protocol for exceptions that carry data.
+   Implemented by exception values created via ex-info."
+  (-ex-data [this] "Returns the data map associated with the exception."))
+
+;; Extend IExceptionInfo for exception values
+(extend-type :exception
+  IExceptionInfo
+  (-ex-data [this]
+    (zig.core/ex-data this)))
+
 ;; ---- Symbol utilities ----
 
 (defn name
@@ -1836,3 +1849,53 @@
        (if ~g
          '~name
          (def ~name ~expr)))))
+
+;; ---- Exception support ----
+
+(defn ex-info
+  "Create an instance of ExceptionInfo that carries a map of additional data.
+   Optionally takes a cause exception as the third argument."
+  ([msg data]
+   (zig.core/ex-info msg data))
+  ([msg data cause]
+   (zig.core/ex-info msg data cause)))
+
+(defn ex-data
+  "Returns exception data (a map) if ex is an IExceptionInfo.
+   Otherwise returns nil."
+  [ex]
+  (zig.core/ex-data ex))
+
+(defn ex-message
+  "Returns the message attached to ex if ex is a Throwable.
+   Otherwise returns nil."
+  [ex]
+  (zig.core/ex-message ex))
+
+(defn ex-cause
+  "Returns the cause of ex if ex is a Throwable.
+   Otherwise returns nil."
+  [ex]
+  (zig.core/ex-cause ex))
+
+(defn exception?
+  "Returns true if x is an exception value."
+  [x]
+  (zig.core/exception? x))
+
+(defn derive
+  "Derives a child type from a parent type in the type hierarchy.
+   Both child and parent should be keywords or symbols.
+   Used to define custom exception types and (future) multimethod dispatch."
+  [child parent]
+  (zig.core/derive child parent))
+
+(defn parents
+  "Returns the set of direct parents of child in the hierarchy."
+  [child]
+  (zig.core/parents child))
+
+(defn isa?
+  "Returns true if child is parent or derives from parent in the hierarchy."
+  [child parent]
+  (zig.core/isa? child parent))

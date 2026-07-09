@@ -526,6 +526,7 @@ pub fn core_type(self: *const Value, args: *const list.List, env_env: *Env) anye
         .reduced => "reduced",
         .wrapped => "wrapped",
         .record => args.items[0].record.type_name,
+        .exception => "exception",
     };
     return try vm.keywordValue(env_env.allocator, type_name);
 }
@@ -741,6 +742,8 @@ pub fn registerTypePredicateFunctions(env: *Env) anyerror!void {
     try env.put("has-doc?", vm.builtinFnValue(core_has_doc_q));
     try env.put("get-doc", vm.builtinFnValue(core_get_doc));
     try env.put("get-arglists", vm.builtinFnValue(core_get_arglists));
+    // Exception type predicate
+    try env.put("exception?", vm.builtinFnValue(core_exception_q));
 }
 
 // chunked-seq? - check if s is a chunked sequence
@@ -748,6 +751,13 @@ pub fn core_chunked_seq_q(self: *const Value, args: *const list.List, _: *Env) a
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     return vm.boolValue(std.meta.activeTag(args.items[0]) == .chunked_cons);
+}
+
+// exception? - check if x is an exception value
+pub fn core_exception_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    return vm.boolValue(std.meta.activeTag(args.items[0]) == .exception);
 }
 
 // has-doc? - check if a function/macro has a docstring (no allocation)

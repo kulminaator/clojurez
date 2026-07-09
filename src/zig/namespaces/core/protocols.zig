@@ -53,6 +53,7 @@ pub fn typeKeyword(v: Value) []const u8 {
         .reduced => "reduced",
         .wrapped => "wrapped",
         .record => v.record.type_name,
+        .exception => "exception",
     };
 }
 
