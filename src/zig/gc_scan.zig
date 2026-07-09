@@ -76,6 +76,7 @@ pub fn valueScanFn(obj: *anyopaque, ctx: *gc.ScanContext) void {
         .chunked_cons_data => scanChunkedConsData(obj, ctx),
         .frame => scanFrame(obj, ctx),
         .value_cache => scanValueCache(obj, ctx),
+        .exception_data => scanExceptionData(obj, ctx),
     }
 }
 
@@ -157,7 +158,7 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         .nil, .bool, .integer, .float, .bigint, .ratio, .decimal,
         .string, .regex, .character, .symbol, .keyword,
         .list, .vector, .map, .set, .queue, .function, .builtin_fn,
-        .lazy_seq, .cons, .chunk, .chunked_cons, .atom, .future, .promise, .reduced, .wrapped, .record,
+        .lazy_seq, .cons, .chunk, .chunked_cons, .atom, .future, .promise, .reduced, .wrapped, .record, .exception,
     };
     var is_valid = false;
     for (valid_types) |vt| {
@@ -376,6 +377,13 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
             markPtr(rd, ctx);
             // Then scan its children (type_name, fields, extmap, meta)
             scanRecordData(@as(*anyopaque, @ptrCast(@constCast(rd))), ctx);
+        },
+
+        .exception => |ed| {
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!isValidGCPtr(ed, ctx)) return;
+            // Mark the ExceptionData block itself so it survives GC sweep
+            ctx.gc.markRecursive(ed, ctx);
         },
     }
 }
@@ -799,6 +807,30 @@ fn scanFrame(frame_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     // Mark body_form if present (Phase 9: trampoline body stored in Frame)
     if (frame.body_form) |*bf| {
         scanValueChildrenDirect(bf, ctx);
+    }
+}
+
+/// Scan ExceptionData: { message, data, cause, type_kw, allocator }.
+/// All child pointers must be marked so GC doesn't sweep them.
+fn scanExceptionData(ed_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const ed: *vm.ExceptionData = @ptrCast(@alignCast(ed_ptr));
+    // 1. Message string — owned (dupe), tagged as string_data
+    if (ed.message.len > 0) {
+        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(ed.message.ptr))), ctx);
+    }
+    // 2. type_kw string — owned (dupe), tagged as string_data
+    if (ed.type_kw.len > 0) {
+        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(ed.type_kw.ptr))), ctx);
+    }
+    // 3. Data map — SHARED *MapData pointer. Mark the block + all entries.
+    ctx.gc.markRecursive(ed.data, ctx);
+    for (ed.data.entries.items) |*entry| {
+        scanValueChildrenDirect(&entry.key, ctx);
+        scanValueChildrenDirect(&entry.value, ctx);
+    }
+    // 4. Cause — SHARED pointer to parent ExceptionData. Walk the chain.
+    if (ed.cause) |cause| {
+        ctx.gc.markRecursive(cause, ctx);
     }
 }
 

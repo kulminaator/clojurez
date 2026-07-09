@@ -67,6 +67,7 @@ pub const GCObjectType = enum(u8) {
     chunked_cons_data = 31,  // ChunkedConsData { chunk, tail }
     frame = 32,              // Frame — virtual stack frame (heap-allocated evaluation frame)
     value_cache = 33,        // ValueCache — pre-cached singleton values (nil, bool, small int, latin char)
+    exception_data = 34,     // ExceptionData — runtime exception value
 };
 
 const Header = struct {

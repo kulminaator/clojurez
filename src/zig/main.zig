@@ -26,6 +26,7 @@ const gc_scan = @import("gc_scan.zig");
 const stack_stats = @import("stack_stats.zig");
 const sequences = @import("namespaces/core/sequences.zig");
 const phm = @import("persistent_hash_map.zig");
+const exception = @import("exception.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -131,6 +132,9 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     vm.value_cache = cache_ptr;
     gc_instance.addPermanentRoot(@as(*anyopaque, @ptrCast(cache_ptr)));
 
+    // Initialize the built-in exception type hierarchy.
+    try exception.initExceptionHierarchy(gc_instance.allocator());
+
     // Optional debug tracing on top of GC (zero overhead when disabled).
     var debug_alloc: debug_allocator.DebugAllocator = undefined;
     if (debug_allocator.getMemTraceConfig(init.environ)) |trace_cfg| {
@@ -171,6 +175,7 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // No global builtins in root env — everything is namespaced.
     try core.registerCoreFunctions(zc_env);
     try stack_stats.registerStackStats(zc_env);
+    try exception.registerExceptionFunctions(zc_env);
 
     // Copy builtins to clojure.core as well, so they are directly accessible.
     // The Clojure wrappers in core.clj will shadow these with docstrings.

@@ -224,6 +224,7 @@ pub const Type = enum {
     reduced, // Wrapper for early reduction termination
     wrapped, // Raw pointer wrapper — stores a usize pointer
     record,  // defrecord instance: named struct-like data with fields
+    exception,  // ExceptionData — runtime exception value
 };
 
 // ============================================================
@@ -342,6 +343,18 @@ pub const RecordData = struct {
     allocator: Allocator,
 };
 
+/// Exception data: heap-allocated, immutable once created.
+/// Used by throw/try/catch for runtime exceptions.
+/// message and type_kw are owned (duped strings).
+/// data and cause are SHARED pointers — never cloned.
+pub const ExceptionData = struct {
+    message: []const u8,    // Human-readable message (UTF-8, GC-allocated via dupe)
+    data: *MapData,         // SHARED pointer to the map's data struct (never cloned)
+    cause: ?*ExceptionData, // SHARED pointer to cause exception (never cloned)
+    type_kw: []const u8,    // Exception type string, e.g. "clojure.lang/ArithmeticException"
+    allocator: Allocator,
+};
+
 /// Cons cell data: heap-allocated, contains head, tail, and the allocator used.
 pub const ConsData = struct {
     head: Value,
@@ -426,6 +439,7 @@ pub const Value = union(Type) {
     reduced: *Value,
     wrapped: usize,
     record: *RecordData,
+    exception: *ExceptionData,
 };
 
 // ============================================================
@@ -964,6 +978,10 @@ pub fn clone(val: *const Value, allocator: Allocator) anyerror!Value {
             }
             return try recordValue(allocator, owned_name, cloned_fields, cloned_extmap, cloned_meta);
         },
+        .exception => |ed| {
+            // Exceptions are immutable — share the ExceptionData pointer
+            return Value{ .exception = ed };
+        },
     }
 }
 
@@ -990,6 +1008,7 @@ pub fn shallowClone(val: *const Value, allocator: Allocator) anyerror!Value {
         .string => |s| return stringValue(allocator, s),
         .symbol => |s| return symValue(allocator, s),
         .keyword => |s| return keywordValue(allocator, s),
+        .exception => |ed| return Value{ .exception = ed }, // share, immutable
         // All other types: share the Value (GC-managed or immediate)
         else => return val.*,
     }
@@ -1108,6 +1127,15 @@ pub fn equals(val: Value, other: Value) bool {
                 if (b_val == null or !equals(a_entry.value, b_val.?)) return false;
             }
             return true;
+        },
+        .exception => |a| {
+            const b = other.exception;
+            if (!std.mem.eql(u8, a.message, b.message)) return false;
+            if (!std.mem.eql(u8, a.type_kw, b.type_kw)) return false;
+            // Compare data maps
+            if (!equals(Value{ .map = a.data }, Value{ .map = b.data })) return false;
+            // Compare cause chains
+            return exceptionCausesEqual(a.cause, b.cause);
         },
         else => return false,
     }
@@ -1246,12 +1274,31 @@ pub fn fmt(val: Value, allocator: Allocator) anyerror![]const u8 {
         },
         .wrapped => |w| try std.fmt.allocPrint(allocator, "#ptr({X})", .{w}),
         .record => |rd| return try recordFmt(rd, allocator),
+        .exception => |ed| return try exceptionFmt(ed, allocator),
     };
 }
 
 // ============================================================
 // Deep-clone a vm.Map
 // ============================================================
+
+/// Format an ExceptionData for printing.
+fn exceptionFmt(ed: *const ExceptionData, allocator: Allocator) anyerror![]const u8 {
+    return try std.fmt.allocPrint(allocator,
+        "#error({s}: \"{s}\")", .{ ed.type_kw, ed.message });
+}
+
+/// Compare two cause chains for equality.
+fn exceptionCausesEqual(a: ?*ExceptionData, b: ?*ExceptionData) bool {
+    if (a == null and b == null) return true;
+    if (a == null or b == null) return false;
+    const a_ex = a.?;
+    const b_ex = b.?;
+    if (!std.mem.eql(u8, a_ex.message, b_ex.message)) return false;
+    if (!std.mem.eql(u8, a_ex.type_kw, b_ex.type_kw)) return false;
+    if (!equals(Value{ .map = a_ex.data }, Value{ .map = b_ex.data })) return false;
+    return exceptionCausesEqual(a_ex.cause, b_ex.cause);
+}
 
 pub fn cloneMap(allocator: Allocator, src: Map) anyerror!Map {
     var dst: Map = .empty;
@@ -1582,6 +1629,47 @@ pub fn recordValue(
         gc_inst.setObjectType(@as(*anyopaque, @ptrCast(rd)), gc_mod.GCObjectType.record_data);
     }
     return .{ .record = rd };
+}
+
+// ============================================================
+// Exception constructors
+// ============================================================
+
+/// Create an exception value from components.
+/// message and type_kw are owned (duped strings).
+/// data is a SHARED pointer to MapData — never cloned.
+/// cause is a SHARED pointer to ExceptionData — never cloned.
+pub fn exceptionValue(
+    allocator: Allocator,
+    message: []const u8,
+    data: *MapData,
+    cause: ?*ExceptionData,
+    type_kw: []const u8,
+) anyerror!Value {
+    const ed = try allocator.create(ExceptionData);
+    errdefer allocator.destroy(ed);
+    ed.* = .{
+        .message = try allocator.dupe(u8, message),
+        .data = data,           // SHARED — immutable Clojure map, never clone
+        .cause = cause,         // SHARED — immutable ExceptionData, never clone
+        .type_kw = try allocator.dupe(u8, type_kw),
+        .allocator = allocator,
+    };
+    // Tag strings for GC
+    tagStringData(@as(*anyopaque, @ptrCast(@constCast(ed.message.ptr))));
+    tagStringData(@as(*anyopaque, @ptrCast(@constCast(ed.type_kw.ptr))));
+    // Tag ExceptionData for GC
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(ed)), gc_mod.GCObjectType.exception_data);
+    }
+    return .{ .exception = ed };
+}
+
+/// Wrap an existing ExceptionData pointer into a Value (shared, no clone).
+/// Used by ex-cause and by try/catch binding.
+/// Cannot fail — just wraps a pointer.
+pub fn exceptionValueFromData(ed: *ExceptionData) Value {
+    return Value{ .exception = ed };
 }
 
 // ============================================================

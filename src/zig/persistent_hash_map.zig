@@ -126,6 +126,7 @@ pub fn valueHash(val: Value) i32 {
             }
             return h;
         },
+        .exception => hashIdentity(),
     };
 }
 

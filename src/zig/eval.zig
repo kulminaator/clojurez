@@ -10,6 +10,7 @@ const eval_helpers = @import("namespaces/core/eval_helpers.zig");
 const helpers = @import("namespaces/core/helpers.zig");
 const sequences = @import("namespaces/core/sequences.zig");
 const eval_thread = @import("eval_thread.zig");
+const eval_try = @import("eval_try.zig");
 const eval_macro = @import("eval_macro.zig");
 const eval_ns = @import("eval_ns.zig");
 const protocols = @import("namespaces/core/protocols.zig");
@@ -63,6 +64,27 @@ pub var eval_context: EvalContext = .{};
 // Thread-local to avoid race conditions when multiple futures evaluate concurrently.
 pub threadlocal var trampoline_allowed: bool = true;
 
+// Phase 3: Thread-local exception state for try/catch/throw.
+// Each OS thread (including future threads) has independent exception state.
+pub threadlocal var current_exception: ?*vm.ExceptionData = null;
+pub threadlocal var exception_thrown: bool = false;
+
+/// Clear the exception state (called after try/catch handles it)
+pub fn clearException() void {
+    current_exception = null;
+    exception_thrown = false;
+}
+
+/// Check if an exception is currently in flight
+pub fn hasException() bool {
+    return exception_thrown;
+}
+
+/// Get the current exception data
+pub fn getException() ?*vm.ExceptionData {
+    return current_exception;
+}
+
 /// GC root callback for frame lifecycle (Phase 5/9).
 /// Marks all active evaluation frames so they survive GC collection.
 ///
@@ -75,6 +97,10 @@ pub fn markFrameRoots(gc_inst: *gc_mod.GC, ctx: *gc_mod.ScanContext) void {
     // Mark the current evaluation frame (set by callFunction for trampoline)
     if (eval_context.current_frame) |frame| {
         gc_inst.markRecursive(frame, ctx);
+    }
+    // Phase 3: Mark in-flight exception so GC doesn't sweep it between throw and catch
+    if (current_exception) |ex| {
+        gc_inst.markRecursive(ex, ctx);
     }
 }
 
@@ -120,6 +146,8 @@ const special_forms = [_]struct { name: []const u8, fn_ptr: SpecialFormFn }{
     .{ .name = "cond->", .fn_ptr = evalCondThreadFirstForm },
     .{ .name = "cond->>", .fn_ptr = evalCondThreadLastForm },
     .{ .name = "case", .fn_ptr = evalCaseForm },
+    .{ .name = "throw", .fn_ptr = evalThrow },
+    .{ .name = "try", .fn_ptr = eval_try.evalTry },
 };
 
 /// Look up a special form handler by name. Returns null if not a special form.
@@ -162,6 +190,7 @@ pub const EvalError = error{
     RecursionLimit,
     ReplExit,
     Recur, // internal: used by recur to signal loop/fn tail call
+    Exception, // A Clojure exception was thrown and needs to propagate
 };
 
 const MAX_RECURSION = 1000000;
@@ -262,6 +291,66 @@ fn extractFnNameFromValue(val: *const Value) []const u8 {
     return "<anonymous>";
 }
 
+/// Format an uncaught Clojure exception for display.
+/// Phase 4: Used when throw propagates past all try/catch handlers.
+fn formatExceptionError(allocator: Allocator, ex: *vm.ExceptionData, file: []const u8) ![]const u8 {
+    var msg: std.ArrayList(u8) = .empty;
+    errdefer msg.deinit(allocator);
+
+    try msg.appendSlice(allocator, "Exception ");
+    try msg.appendSlice(allocator, ex.type_kw);
+    try msg.appendSlice(allocator, ": ");
+    if (ex.message.len > 0) {
+        try msg.appendSlice(allocator, ex.message);
+    }
+
+    // Add source location if available
+    if (file.len > 0) {
+        try msg.appendSlice(allocator, " (at ");
+        try msg.appendSlice(allocator, file);
+        try msg.appendSlice(allocator, ")");
+    }
+
+    // Add stack trace from Frame chain
+    if (eval_context.current_frame) |top_frame| {
+        var frames: std.ArrayListUnmanaged(*vm.Frame) = .empty;
+        errdefer frames.deinit(allocator);
+        var current: ?*vm.Frame = eval_context.root_frame;
+        while (current) |frame| : (current = frame.parent) {
+            if (frame.function_ref != null or frame.body_form != null) {
+                try frames.append(allocator, frame);
+            }
+        }
+        if (frames.items.len > 0) {
+            const last = frames.items[frames.items.len - 1];
+            if (last != top_frame) try frames.append(allocator, top_frame);
+        }
+        if (frames.items.len > 0) {
+            try msg.appendSlice(allocator, "\n\nStack trace:");
+            var i: usize = 0;
+            while (i < frames.items.len) : (i += 1) {
+                const frame = frames.items[i];
+                const fn_name = if (frame.function_ref) |ref| extractFnNameFromValue(&ref) else "<frame>";
+                const loc = frame.src_loc;
+                try msg.appendSlice(allocator, "\n  at ");
+                try msg.appendSlice(allocator, fn_name);
+                if (loc.line > 0) {
+                    var loc_buf: [20]u8 = undefined;
+                    try msg.appendSlice(allocator, " (at ");
+                    if (loc.file.len > 0) {
+                        try msg.appendSlice(allocator, loc.file);
+                        try msg.appendSlice(allocator, ":");
+                    }
+                    try msg.appendSlice(allocator, std.fmt.bufPrint(&loc_buf, "{d}", .{loc.line}) catch "?");
+                    try msg.appendSlice(allocator, ")");
+                }
+            }
+        }
+    }
+
+    return msg.toOwnedSlice(allocator);
+}
+
 /// Main entry point for evaluation.
 /// Uses trampolining: function body evaluations are pushed onto a heap stack
 /// instead of recursing on the C stack. This enables unlimited Clojure recursion depth.
@@ -288,6 +377,19 @@ pub fn evalWithFile(allocator: Allocator, form: Value, env: *Env, file: []const 
     var result: ?EvalResult = evalRec(allocator, &form, root_frame, 0) catch |err| {
         // Don't format internal control errors like ReplExit
         if (err == EvalError.ReplExit) return err;
+        // Phase 4: Handle uncaught Clojure exceptions
+        if (err == EvalError.Exception) {
+            if (current_exception) |ex| {
+                const ex_msg = formatExceptionError(allocator, ex, file) catch {
+                    clearException();
+                    return err;
+                };
+                defer allocator.free(ex_msg);
+                std.debug.print("{s}\n", .{ex_msg});
+                clearException();
+            }
+            return err;
+        }
         const msg = formatEvalError(allocator, err, file, &form) catch {
             return err;
         };
@@ -328,6 +430,23 @@ pub fn evalWithFile(allocator: Allocator, form: Value, env: *Env, file: []const 
                 eval_context.current_frame = child_frame.parent;
                 return err;
             }
+            // Phase 4: Handle uncaught Clojure exceptions
+            if (err == EvalError.Exception) {
+                if (current_exception) |ex| {
+                    const ex_msg = formatExceptionError(allocator, ex, file) catch {
+                        child_frame.detachFromParent();
+                        eval_context.current_frame = child_frame.parent;
+                        clearException();
+                        return err;
+                    };
+                    defer allocator.free(ex_msg);
+                    std.debug.print("{s}\n", .{ex_msg});
+                }
+                child_frame.detachFromParent();
+                eval_context.current_frame = child_frame.parent;
+                clearException();
+                return err;
+            }
             const msg = formatEvalError(allocator, err, file, &body_val) catch {
                 child_frame.detachFromParent();
                 eval_context.current_frame = child_frame.parent;
@@ -339,6 +458,13 @@ pub fn evalWithFile(allocator: Allocator, form: Value, env: *Env, file: []const 
             eval_context.current_frame = child_frame.parent;
             return err;
         };
+
+        // Phase 4: Check if an exception was thrown during evaluation (trampoline)
+        if (exception_thrown) {
+            child_frame.detachFromParent();
+            eval_context.current_frame = child_frame.parent;
+            return EvalError.Exception;
+        }
 
         // Clean up the frame based on result type.
         // If .trampoline: callFunction already set current_frame to the next child.
@@ -381,7 +507,7 @@ pub fn evalRec(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth
     switch (form.*) {
         // Literals: allocate a new *Value wrapper. Cannot return AST pointer directly
         // because valueDeinit would overwrite the shared AST Value with nil.
-        .nil, .bool, .integer, .float, .bigint, .ratio, .decimal, .string, .regex, .character, .keyword, .set, .queue, .chunk, .chunked_cons, .atom, .future, .promise, .reduced, .wrapped, .record => {
+        .nil, .bool, .integer, .float, .bigint, .ratio, .decimal, .string, .regex, .character, .keyword, .set, .queue, .chunk, .chunked_cons, .atom, .future, .promise, .reduced, .wrapped, .record, .exception => {
             return .{ .value = try allocValue(allocator, form.*) };
         },
         .symbol => {
@@ -1321,10 +1447,21 @@ fn bindArityParamsEnv(allocator: Allocator, arity: *const vm.Arity, args: *const
 }
 
 /// Call a built-in function registered with the VM.
-fn callBuiltinFn(_: Allocator, op: *const Value, args: *const list.List, env: *Env) anyerror!Value {
+/// Phase 9: Converts specific Zig errors to typed Clojure exceptions.
+fn callBuiltinFn(allocator: Allocator, op: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     // Use cast to avoid copying the large Value struct onto the stack
     const op_mut = @constCast(op);
-    return op_mut.builtin_fn(op_mut, args, env);
+    return op_mut.builtin_fn(op_mut, args, env) catch |err| {
+        // Phase 9: Convert division by zero to ArithmeticException
+        if (err == error.DivisionByZero) {
+            const empty_map = vm.cachedEmptyMap() orelse return err;
+            const ex = try vm.exceptionValue(allocator, "Divide by zero", empty_map.map, null, "clojure.lang/ArithmeticException");
+            current_exception = ex.exception;
+            exception_thrown = true;
+            return EvalError.Exception;
+        }
+        return err;
+    };
 }
 
 /// Call a set as a function: returns the element if found, nil otherwise.
@@ -2226,6 +2363,29 @@ fn evalDoall(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
     }
     // coll_ptr is already a *Value, return it directly without cloning
     return .{ .value = coll_ptr };
+}
+
+/// (throw expr) — evaluate expr and signal an exception.
+/// The expression must evaluate to an exception value.
+/// Sets thread-local exception state and returns EvalError.Exception.
+fn evalThrow(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
+    if (l.items.len != 2) return error.ArityError;
+
+    // Evaluate the expression to get the exception value
+    const ex_val = try evalRecV(allocator, &l.items[1], frame, depth + 1);
+    defer vm.valueDeinit(ex_val, allocator);
+
+    // The expression must evaluate to an exception value
+    if (std.meta.activeTag(ex_val.*) != .exception) {
+        return error.TypeError;
+    }
+
+    // Set thread-local exception state
+    current_exception = ex_val.*.exception;
+    exception_thrown = true;
+
+    // Return the sentinel error that signals "exception thrown"
+    return EvalError.Exception;
 }
 
 /// (extend atype protocol mmap & more...) — add protocol implementations
