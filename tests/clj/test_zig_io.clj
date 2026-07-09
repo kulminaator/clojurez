@@ -235,10 +235,29 @@
   "copy me")
 
 ;; ============================================================
-;; with-open macro (skipped — try/finally not yet implemented)
+;; with-open macro
 ;; ============================================================
-;; (check "with-open reads content" ...)
-;; NOTE: with-open requires try/finally which is not yet implemented
+(spit tmp-file "hello with-open\nsecond line")
+(check "with-open reads content"
+  (io/with-open [r (io/reader tmp-file)]
+    (first (io/line-seq r)))
+  "hello with-open")
+
+(check "with-open closes on normal completion"
+  (let [closed (atom false)]
+    (io/with-open [r (io/reader tmp-file)]
+      (reset! closed true)
+      (first (io/line-seq r)))
+    @closed)
+  true)
+
+(check "with-open with multiple bindings"
+  (io/with-open [r1 (io/reader tmp-file)
+                 r2 (io/reader tmp-file)]
+    (let [l1 (first (io/line-seq r1))
+          l2 (first (io/line-seq r2))]
+      (= l1 l2)))
+  true)
 
 ;; ============================================================
 ;; Symlink operations
