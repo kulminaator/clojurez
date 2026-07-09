@@ -59,6 +59,9 @@ Type `(quit)`, `(exit)`, or press `CTRL+D` to exit the REPL.
 - **Stream I/O** - buffered input/output streams, readers, writers via `zig.core/open-input-stream`, `open-output-stream`, `open-reader`, `open-writer`
 - **Process I/O** - synchronous subprocess execution via `(sh ...)`, async streaming subprocess I/O via `(sh-stream ...)` with `sh-in`, `sh-out`, `sh-err`, `sh-wait`, `sh-kill`
 - **`zig.io` namespace** - protocol-based I/O abstractions (`Closeable`, `IOFactory`, `Readable`, `Writable`), path utilities, `with-open`, `copy`, `line-seq`
+- **Exceptions** - `try`/`catch`/`finally`/`throw`, `ex-info`, `ex-data`, `ex-message`, `ex-cause`, exception hierarchy (`derive`, `parents`, `isa?`), built-in types (`ArithmeticException`, `RuntimeException`, `IOException`, `FileNotFoundException`, `NullPointerException`, `TimeoutException`)
+- **`clojure.math` namespace** - constants (`E`, `PI`), trigonometric (`sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`), hyperbolic (`sinh`, `cosh`, `tanh`), exponential/logarithmic (`exp`, `log`, `log10`, `sqrt`, `cbrt`, `pow`, `hypot`), rounding (`ceil`, `floor`, `rint`, `round`), IEEE operations (`IEEE-remainder`, `signum`, `copy-sign`, `ulp`, `scalb`, `next-after`, `next-up`, `next-down`), exact integer arithmetic (`add-exact`, `subtract-exact`, `multiply-exact`, `increment-exact`, `decrement-exact`, `negate-exact`), floor division/modulus (`floor-div`, `floor-mod`)
+- **Pre-cached values** - singleton caching for `nil`, booleans, small integers, latin characters, empty collections (`()`, `[]`, `{}`, `#{}`), and mathematical constants (`E`, `PI`)
 
 ## Documentation
 
@@ -67,6 +70,7 @@ Auto-generated API reference is available in the `doc/` directory:
 - [API Reference Index](doc/index.md) — overview of all namespaces
 - [clojure.core](doc/clojure-core.md) — core library functions and macros
 - [clojure.string](doc/clojure-string.md) — string manipulation functions
+- [clojure.math](doc/clojure-math.md) — mathematical functions and constants
 - [zig.core](doc/zig-core.md) — internal Zig builtins
 - [zig.io](doc/zig-io.md) — I/O abstractions and protocols
 - [Special Forms](doc/special-forms.md) — language special forms

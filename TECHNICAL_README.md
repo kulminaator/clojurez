@@ -9,13 +9,16 @@ src/
 ├── clj/               - Clojure source libraries (baked into binary at compile time)
 │   ├── core.clj       - clojure.core: bootstrapped functions, macros, threading helpers
 │   ├── string.clj     - clojure.string: string manipulation functions
+│   ├── math.clj       - clojure.math: trigonometric, exponential, rounding, IEEE operations
 │   └── io.clj         - zig.io: protocol-based I/O abstractions, subprocess, streams
 ├── zig/               - main.zig, eval*.zig etc. - entry point, essential zig code for the language implementation
 │   ├── bytecode.zig   - bytecode compiler and stack-based VM
 │   ├── eval.zig       - main evaluator (AST interpreter + bytecode dispatch)
+│   ├── eval_try.zig   - try/catch/finally special form implementation
 │   ├── eval_thread.zig - threading macros (->, ->>, cond->, cond->>)
 │   ├── eval_macro.zig - macro expansion
 │   ├── eval_ns.zig    - namespace evaluation
+│   ├── exception.zig   - exception types, hierarchy, and exception values
 │   ├── gc.zig         - mark-and-sweep garbage collector (thread-safe)
 │   ├── gc_scan.zig    - type-aware GC scanning
 │   ├── slab_allocator.zig - thread-safe slab allocator (per-slab spinlocks)
@@ -26,6 +29,7 @@ src/
 │           ├── io_fs.zig       - filesystem ops: stat, list-dir, walk-dir, make-dir, delete, rename, copy
 │           ├── io_shell.zig    - subprocess: sh-execute (sync), sh-execute-stream (async)
 │           ├── io_stream.zig   - stream I/O: input/output streams, readers, writers
+│           ├── math.zig        - clojure.math: trig, hyperbolic, exp/log, rounding, IEEE, exact arithmetic
 │           ├── threading.zig   - multithreading: sleep, future-call, promise, deliver, realized
 │           └── ...
 └── tests/
@@ -68,6 +72,7 @@ All values are represented by the `Value` tagged union in `value.zig`:
 | `future` | `(future ...)` | computation running in another thread |
 | `promise` | `(promise)` | one-time writable container |
 | `wrapped` | internal | raw pointer wrapper — streams, process handles, etc. |
+| `exception` | `(ex-info "msg" {})` | exception with type, message, data map, cause |
 
 ## Special Forms
 
@@ -100,6 +105,8 @@ Implemented in `eval.zig` and related modules via a dispatch table:
 | `extend` / `extend-type` / `extend-protocol` | implement protocols |
 | `defrecord` | define a record type |
 | `->` / `->>` / `cond->` / `cond->>` | threading macros |
+| `try` / `catch` / `finally` | exception handling (`try body* (catch Type sym body*)* (finally cleanup*)?`) |
+| `throw` | throw an exception |
 | `quit` / `exit` | exit the REPL |
 
 ## Namespace Architecture
@@ -108,8 +115,9 @@ Three namespace layers:
 
 1. **`user`** - default namespace. REPL, `-e`, and file execution start here. Inherits from `clojure.core`.
 2. **`clojure.core`** - public API namespace. Built-in functions and `core.clj` definitions live here.
-3. **`zig.core`** - internal implementation namespace. Raw Zig builtins live here. Clojure wrappers in `clojure.core` delegate to `zig.core/` internally.
-4. **`zig.io`** - protocol-based I/O namespace. Provides `Closeable`, `IOFactory`, `Readable`, `Writable` protocols, path utilities, `with-open`, `copy`, `line-seq`, and subprocess helpers (`sh`, `sh-stream`, etc.). Loaded via `(require '[zig.io :as io])`.
+3. **`clojure.math`** - mathematical functions and constants. Provides `E`, `PI`, trigonometric, hyperbolic, exponential/logarithmic, rounding, IEEE, and exact integer arithmetic functions. Loaded via `(require '[clojure.math :as math])`.
+4. **`zig.core`** - internal implementation namespace. Raw Zig builtins live here. Clojure wrappers in `clojure.core` delegate to `zig.core/` internally.
+5. **`zig.io`** - protocol-based I/O namespace. Provides `Closeable`, `IOFactory`, `Readable`, `Writable` protocols, path utilities, `with-open`, `copy`, `line-seq`, and subprocess helpers (`sh`, `sh-stream`, etc.). Loaded via `(require '[zig.io :as io])`.
 
 **Symbol resolution chain:**
 ```
@@ -197,6 +205,58 @@ The entire VM is designed for thread safety. Key mechanisms:
 2. `deliver` uses atomic `cmpxchg` to transition from `pending` to `delivered`. First deliver wins; subsequent delivers are no-ops.
 3. `deref-promise` blocks until state is `delivered`, then returns the stored value.
 
+## Exception Handling
+
+Implemented in `eval_try.zig` and `exception.zig`.
+
+### `try`/`catch`/`finally` Special Form
+
+```
+(try body* (catch Type sym body*)* (finally cleanup*)?)
+```
+
+- Evaluates body forms.
+- On exception, matches against `catch` clauses in order using the exception type hierarchy (`isa?` check).
+- The first matching `catch` binds the exception to `sym` and evaluates its body.
+- `finally` always runs, regardless of whether an exception was thrown or caught.
+- If no `catch` matches, the exception propagates up.
+
+### Exception Types
+
+Exception values are `Value` tagged unions with `.exception` type containing:
+- `type_kw` — exception type string (e.g. `"clojure.lang/ArithmeticException"`)
+- `message` — error message string
+- `data` — optional data map (for `ex-info`)
+- `cause` — optional cause exception
+
+### Built-in Hierarchy
+
+Defined in `exception.zig` with `derive` calls:
+
+```
+Throwable
+└── Exception
+    ├── RuntimeException
+    │   ├── ArithmeticException
+    │   ├── IllegalArgumentException
+    │   ├── IllegalStateException
+    │   ├── NullPointerException
+    │   └── IndexOutOfBoundsException
+    ├── IOException
+    │   └── FileNotFoundException
+    └── TimeoutException
+        └── SocketTimeoutException
+```
+
+### Automatic Exceptions
+
+- **Division by zero**: `( / 1 0 )` throws `ArithmeticException`
+- **Exact arithmetic overflow**: `(add-exact MOST_POSITIVE_INT 1)` throws `ArithmeticException`
+
+### Custom Hierarchy
+
+`derive`, `parents`, `isa?` allow defining custom type hierarchies for exception dispatch and (future) multimethod routing.
+
 ## Built-in Functions (zig.core)
 
 Built-in functions are registered in `src/zig/namespaces/core/` across domain-specific modules. They are exposed through `zig.core` and wrapped by `clojure.core` Clojure functions.
@@ -248,6 +308,12 @@ Plus type coercions: `char`, `int`, `integer`, `float`, `double`, `bigint`, `big
 ### Random (`random.zig`)
 `rand`, `rand-int`
 
+### Math (`math.zig`)
+`E`, `PI`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `to-radians`, `to-degrees`, `sinh`, `cosh`, `tanh`, `exp`, `log`, `log10`, `sqrt`, `cbrt`, `expm1`, `log1p`, `pow`, `hypot`, `ceil`, `floor`, `rint`, `round`, `IEEE-remainder`, `signum`, `copy-sign`, `add-exact`, `subtract-exact`, `multiply-exact`, `increment-exact`, `decrement-exact`, `negate-exact`, `floor-div`, `floor-mod`, `ulp`, `get-exponent`, `scalb`, `next-after`, `next-up`, `next-down`, `random`
+
+### Exception (`exception.zig`)
+`ex-info`, `ex-data`, `ex-message`, `ex-cause`, `exception?`, `derive`, `parents`, `isa?`
+
 ### Namespace (`namespace.zig`)
 `find-ns`, `create-ns`, `all-ns`, `the-ns`, `ns-resolve`, `resolve`, `refer`, `alias`, `ns-aliases`, `ns-unalias`, `require`, `loaded-libs`, `ns-publics`, `ns-interns`, `ns-refers`, `ns-map`, `ns-unmap`, `intern`, `load-string`
 
@@ -297,11 +363,68 @@ Functions implemented in Clojure (bootstrapped from `core.clj`, embedded at comp
 ### Multithreading
 `future` (macro), `future-call`, `future?`, `future-done?`, `promise`, `deliver`, `realized?`, `promise?`, `deref` (extended for futures/promises), `sleep`
 
+### Exception Support
+`ex-info`, `ex-data`, `ex-message`, `ex-cause`, `exception?`, `derive`, `parents`, `isa?`, `IExceptionInfo` protocol
+
+Built-in exception hierarchy:
+- `Throwable` (root)
+  - `Exception`
+    - `RuntimeException`
+      - `ArithmeticException` (division by zero, exact arithmetic overflow)
+      - `IllegalArgumentException`
+      - `IllegalStateException`
+      - `NullPointerException`
+      - `IndexOutOfBoundsException`
+    - `IOException`
+      - `FileNotFoundException`
+    - `TimeoutException`
+      - `SocketTimeoutException`
+
+### Hierarchy
+`derive`, `parents`, `isa?` — custom type hierarchy support for exception dispatch and multimethods
+
 ## Clojure String Library (`src/clj/string.clj`)
 
 Functions in `clojure.string` namespace (loaded via `:require`):
 
 `upper-case`, `lower-case`, `capitalize`, `trim`, `triml`, `trimr`, `trim-newline`, `blank?`, `starts-with?`, `ends-with?`, `includes?`, `reverse`, `join`, `escape`, `index-of`, `last-index-of`, `split`, `split-lines`, `re-quote-replacement`, `replace`, `replace-first`
+
+## Clojure Math Library (`src/clj/math.clj`)
+
+Functions in `clojure.math` namespace (loaded via `(require '[clojure.math :as math])`). All functions delegate to `zig.core` builtins:
+
+### Constants
+`E` — Euler's number (≈2.71828), `PI` — π (≈3.14159)
+
+### Trigonometric Functions
+`sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`
+
+### Angle Conversion
+`to-radians`, `to-degrees`
+
+### Hyperbolic Functions
+`sinh`, `cosh`, `tanh`
+
+### Exponential / Logarithmic Functions
+`exp`, `log`, `log10`, `sqrt`, `cbrt`, `expm1`, `log1p`, `pow`, `hypot`
+
+### Rounding Functions
+`ceil`, `floor`, `rint`, `round`
+
+### IEEE Remainder + Sign Functions
+`IEEE-remainder`, `signum`, `copy-sign`
+
+### Exact Integer Arithmetic (throw `ArithmeticException` on overflow)
+`add-exact`, `subtract-exact`, `multiply-exact`, `increment-exact`, `decrement-exact`, `negate-exact`
+
+### Floor Division / Modulus
+`floor-div`, `floor-mod`
+
+### Floating-Point Bit Operations
+`ulp`, `get-exponent`, `scalb`, `next-after`, `next-up`, `next-down`
+
+### Random
+`random` — pseudorandom double in [0.0, 1.0)
 
 ## Clojure I/O Library (`src/clj/io.clj`)
 
@@ -337,6 +460,7 @@ Mark-and-sweep GC in `gc.zig` with type-aware scanning in `gc_scan.zig`.
 - **Thread-safe**: block list protected by atomic spinlock (`block_mutex`); GC collection blocked while child threads are active via `gc_lock`; slab allocator uses per-slab spinlocks for concurrent alloc/free; `active_thread_count` tracks running detached threads
 
 **GC-tracked object types** (`GCObjectType`):
+- `value_cache` — pre-cached singleton values (nil, bool, small int, latin char, empty collections, E, PI)
 - `value_array`, `map_entries`, `set_items`, `queue_items` — collection data
 - `env`, `namespace_manager` — evaluation environment
 - `lazy_seq_thunk`, `atom_data`, `future_data`, `promise_data` — runtime objects
@@ -352,6 +476,19 @@ Mark-and-sweep GC in `gc.zig` with type-aware scanning in `gc_scan.zig`.
 - `CLJVM_GC_VERBOSE=1` - verbose GC logging
 - `CLJVM_MEM_TRACE=1` - trace allocations to stderr
 - `CLJVM_MEM_TRACE=/tmp/mem.log` - trace allocations to file
+
+## Pre-cached Values
+
+`value.zig` implements a `ValueCache` that provides singleton Value pointers for commonly used values, avoiding repeated allocations:
+
+- **`nil`** — single shared nil value
+- **Booleans** — single shared `true` and `false` values
+- **Small integers** — cached integer values for frequently used small numbers
+- **Latin characters** — cached character values for ASCII/latin code points
+- **Empty collections** — single shared empty list `()`, empty vector `[]`, empty map `{}`, empty set `#{}`
+- **Mathematical constants** — pre-computed `E` and `PI` float values
+
+The cache is scanned during GC marking (`GCObjectType.value_cache`) to ensure cached pointers are never collected. Functions like `cachedE()`, `cachedPI()`, `cachedEmptyList()`, etc. return the cached pointers when available.
 
 ## Persistent HashMap (HAMT)
 
@@ -385,6 +522,8 @@ Clojure test suites using the `check`/`check-true`/`check-false` helper. Run via
 
 Key test suites:
 - `test_bytecode.clj` — bytecode compiler and VM
+- `test_math.clj` — clojure.math functions (trig, hyperbolic, exp/log, rounding, IEEE, exact arithmetic)
+- `test_exceptions.clj` — try/catch/finally, throw, ex-info, exception hierarchy
 - `test_multithreading.clj` — futures, promises, sleep
 - `test_zig_io.clj` — filesystem, streams, subprocess, zig.io namespace
 - `test_thread_macros.clj` — `->`, `->>`, `cond->`, `cond->>`
@@ -444,7 +583,7 @@ zig build                          # all 3 variants
 zig build -Doptimize=ReleaseSmall  # specific optimize mode
 ```
 
-Build copies `src/clj/core.clj` → `src/zig/namespaces/core/clj/core.clj`, `src/clj/string.clj` → `src/zig/namespaces/core/clj/string.clj`, and `src/clj/io.clj` → `src/zig/namespaces/core/clj/io.clj` for `@embedFile`.
+Build copies `src/clj/core.clj` → `src/zig/namespaces/core/clj/core.clj`, `src/clj/string.clj` → `src/zig/namespaces/core/clj/string.clj`, `src/clj/math.clj` → `src/zig/namespaces/core/clj/math.clj`, and `src/clj/io.clj` → `src/zig/namespaces/core/clj/io.clj` for `@embedFile`.
 
 ## Debugging
 
