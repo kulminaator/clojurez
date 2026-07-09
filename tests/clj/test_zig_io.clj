@@ -237,22 +237,23 @@
 ;; ============================================================
 ;; with-open macro
 ;; ============================================================
-(check "with-open from user namespace"
-  (io/with-open [r (io/reader "/etc/hostname")]
+(spit tmp-file "hello with-open\nsecond line")
+(check "with-open reads content"
+  (io/with-open [r (io/reader tmp-file)]
     (first (io/line-seq r)))
-  (clojure.string/trim-newline (slurp "/etc/hostname")))
+  "hello with-open")
 
 (check "with-open closes on normal completion"
   (let [closed (atom false)]
-    (io/with-open [r (io/reader "/etc/hostname")]
+    (io/with-open [r (io/reader tmp-file)]
       (reset! closed true)
       (first (io/line-seq r)))
     @closed)
   true)
 
 (check "with-open with multiple bindings"
-  (io/with-open [r1 (io/reader "/etc/hostname")
-                 r2 (io/reader "/etc/hostname")]
+  (io/with-open [r1 (io/reader tmp-file)
+                 r2 (io/reader tmp-file)]
     (let [l1 (first (io/line-seq r1))
           l2 (first (io/line-seq r2))]
       (= l1 l2)))
