@@ -265,8 +265,8 @@
           (try
             ~body
             (finally
-              (if (satisfies? Closeable ~name)
-                (-close ~name)
+              (if (clojure.core/satisfies? zig.io/Closeable ~name)
+                (zig.io/-close ~name)
                 nil)))))
      `(do ~@body)
      (reverse pairs))))
