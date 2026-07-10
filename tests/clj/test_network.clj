@@ -1,5 +1,7 @@
 ;; Network socket tests for clojurez
 ;; Pure Clojure TCP server — no external binaries needed
+;;
+;; Synchronization uses promises and futures (no sleep-based polling).
 
 (load-file "tests/clj/clj_test_helper.clj")
 (require '[zig.io :as io])
@@ -9,48 +11,121 @@
 ;; ============================================================
 
 (defn- safe-close [s]
-  "Close a socket, ignoring errors."  
+  "Close a socket, ignoring errors."
   (try (zig.io/close-socket s) (catch Exception _ nil)))
 
 (defn- with-tcp-client
   "Run test-fn with a connected TCP client socket.
    Creates a server on ephemeral port, accepts connection, passes client to test-fn.
-   Cleans up both sockets."  
+   Uses promise-based synchronization — no sleep-based polling.
+   Cleans up both sockets."
   [test-fn]
-  (let [port-atom (atom nil)
-        result-atom (atom nil)
-        error-atom (atom nil)]
-    ;; Server thread
+  (let [port-promise (promise)]
+    ;; Server thread: bind, deliver port, accept, close
     (future
       (try
         (let [server (zig.io/listen-server-socket "127.0.0.1" 0)
               port (zig.io/get-local-port server)]
-          (reset! port-atom port)
+          (deliver port-promise port)
           (let [accepted (zig.io/accept-connection server)]
-            ;; Hold connection while test runs (poll result-atom)
-            (loop [_ 0]
-              (if (and (< _ 100) (nil? @result-atom))
-                (do (sleep 50) (recur (inc _)))
-                nil))
             (safe-close accepted)
             (safe-close server)))
         (catch Exception e
-          (reset! error-atom (ex-message e)))))
-    ;; Wait for server to bind
-    (loop [_ 0]
-      (if (and (< _ 50) (nil? @port-atom))
-        (do (sleep 100) (recur (inc _)))
-        nil))
-    ;; Connect client and run test
-    (when-let [port @port-atom]
-      (let [client (zig.io/open-client-socket "127.0.0.1" port)]
+          (deliver port-promise e))))
+    ;; Wait for server to be ready (blocks until promise is delivered)
+    (let [port @port-promise]
+      (if (string? port)
+        (throw (ex-info (str "Server failed to start: " port) {}))
+        (let [client (zig.io/open-client-socket "127.0.0.1" port)]
+          (try
+            (test-fn client)
+            (catch Exception e
+              (ex-message e))
+            (finally
+              (safe-close client))))))))
+
+(defn- with-accepted-server
+  "Run server-fn in a future that accepts a connection.
+   server-fn receives the accepted socket and returns a result.
+   host and port default to \"127.0.0.1\" and 0 (ephemeral).
+   Uses promise-based synchronization — no sleep-based polling."
+  ([server-fn]
+   (with-accepted-server server-fn "127.0.0.1" 0))
+  ([server-fn host port]
+   (let [port-promise (promise)]
+     (let [server-future (future
+                           (try
+                             (let [server (zig.io/listen-server-socket host port)
+                                   actual-port (zig.io/get-local-port server)]
+                               (deliver port-promise actual-port)
+                               (let [accepted (zig.io/accept-connection server)
+                                     result (server-fn accepted)]
+                                 (safe-close accepted)
+                                 (safe-close server)
+                                 result))
+                             (catch Exception e
+                               (ex-message e))))]
+       (let [actual-port @port-promise]
+         (if (string? actual-port)
+           (throw (ex-info (str "Server failed to start: " actual-port) {}))
+           (let [client (zig.io/open-client-socket host actual-port)]
+             (safe-close client)
+             @server-future)))))))
+
+(defn- with-io-accepted-server
+  "Run server-fn in a future that accepts a connection using io namespace.
+   server-fn receives the accepted socket and returns a result.
+   Uses promise-based synchronization — no sleep-based polling."
+  [server-fn]
+  (let [port-promise (promise)]
+    (let [server-future (future
+                          (try
+                            (let [server (io/server-socket "127.0.0.1" 0)
+                                  port (io/get-local-port server)]
+                              (deliver port-promise port)
+                              (let [accepted (io/accept server)
+                                    result (server-fn accepted)]
+                                (safe-close accepted)
+                                (safe-close server)
+                                result))
+                            (catch Exception e
+                              (ex-message e))))]
+      (let [port @port-promise]
+        (if (string? port)
+          (throw (ex-info (str "Server failed to start: " port) {}))
+          (let [client (io/socket "127.0.0.1" port)]
+            (safe-close client)
+            @server-future))))))
+
+(defn- with-shutdown-test
+  "Run socket-shutdown on an accepted server socket with a live client.
+   Server signals port-ready promise before accept, result promise after shutdown.
+   Client stays alive until server signals done via result promise.
+   Uses promise-based synchronization — no sleep-based polling."
+  [direction]
+  (let [port-promise (promise)
+        result-promise (promise)]
+    ;; Server thread: bind, deliver port, accept, shutdown, deliver result
+    (future
+      (try
+        (let [server (io/server-socket "127.0.0.1" 0)
+              port (io/get-local-port server)]
+          (deliver port-promise port)
+          (let [accepted (io/accept server)]
+            (io/socket-shutdown accepted direction)
+            (safe-close accepted)
+            (safe-close server)
+            (deliver result-promise :ok)))
+        (catch Exception e
+          (deliver result-promise (ex-message e)))))
+    ;; Wait for server to be ready
+    (let [port @port-promise]
+      (let [client (io/socket "127.0.0.1" port)]
         (try
-          (reset! result-atom (test-fn client))
-          (catch Exception e
-            (reset! result-atom (ex-message e))))
-        (sleep 50)
-        (safe-close client)))
-    @result-atom))
+          ;; Wait for server to finish (client stays open until then)
+          @result-promise
+          (finally
+            (safe-close client)))))))
 
 ;; ============================================================
 ;; Phase 2: TCP Client Tests
@@ -116,7 +191,7 @@
     (fn [client]
       (let [port (zig.io/get-remote-port client)]
         (zig.io/close-socket client)
-        (> port 0)))) ; ephemeral port, just check it's valid
+        (> port 0))))
   true)
 
 ;; --- shutdown-socket-input/output/both ---
@@ -150,17 +225,17 @@
 
 ;; --- listen-server-socket ---
 (check "tcp-server: listen-server-socket binds to ephemeral port"
-  (let [server (zig.io/listen-server-socket "127.0.0.1" 0)]
-    (let [port (zig.io/get-local-port server)]
-      (zig.io/close-socket server)
-      (> port 0)))
+  (let [server (zig.io/listen-server-socket "127.0.0.1" 0)
+        port (zig.io/get-local-port server)]
+    (zig.io/close-socket server)
+    (> port 0))
   true)
 
 (check "tcp-server: listen-server-socket binds to explicit port"
-  (let [server (zig.io/listen-server-socket "127.0.0.1" 19910)]
-    (let [port (zig.io/get-local-port server)]
-      (zig.io/close-socket server)
-      port))
+  (let [server (zig.io/listen-server-socket "127.0.0.1" 19910)
+        port (zig.io/get-local-port server)]
+    (zig.io/close-socket server)
+    port)
   19910)
 
 (check "tcp-server: get-bind-address returns string"
@@ -187,107 +262,36 @@
 
 ;; --- accept-connection (requires a client to connect) ---
 (check "tcp-server: accept-connection returns accepted socket"
-  (let [server (zig.io/listen-server-socket "127.0.0.1" 0)
-        port (zig.io/get-local-port server)
-        result (atom nil)]
-    ;; Server thread: accept and close
-    (future
-      (try
-        (let [accepted (zig.io/accept-connection server)]
-          (zig.io/close-socket accepted)
-          (zig.io/close-socket server)
-          (reset! result :accepted))
-        (catch Exception e
-          (reset! result (ex-message e)))))
-    ;; Client: connect and close
-    (sleep 200)
-    (let [client (zig.io/open-client-socket "127.0.0.1" port)]
-      (zig.io/close-socket client))
-    ;; Wait for server thread
-    (sleep 500)
-    @result)
+  (with-accepted-server
+    (fn [_accepted]
+      :accepted))
   :accepted)
 
 (check "tcp-server: accept-connection socket-kind returns tcp-accepted"
-  (let [server (zig.io/listen-server-socket "127.0.0.1" 0)
-        port (zig.io/get-local-port server)
-        result (atom nil)]
-    (future
-      (try
-        (let [accepted (zig.io/accept-connection server)]
-          (reset! result (zig.io/socket-kind accepted))
-          (zig.io/close-socket accepted)
-          (zig.io/close-socket server))
-        (catch Exception e
-          (reset! result (ex-message e)))))
-    (sleep 200)
-    (let [client (zig.io/open-client-socket "127.0.0.1" port)]
-      (zig.io/close-socket client))
-    (sleep 500)
-    @result)
+  (with-accepted-server
+    (fn [accepted]
+      (zig.io/socket-kind accepted)))
   :tcp-accepted)
 
 (check "tcp-server: accepted socket has remote address"
-  (let [server (zig.io/listen-server-socket "127.0.0.1" 0)
-        port (zig.io/get-local-port server)
-        result (atom nil)]
-    (future
-      (try
-        (let [accepted (zig.io/accept-connection server)]
-          (let [addr (zig.io/get-remote-address accepted)
-                rport (zig.io/get-remote-port accepted)]
-            (reset! result {:addr addr :port rport :ok (and (string? addr) (> rport 0))}))
-          (zig.io/close-socket accepted)
-          (zig.io/close-socket server))
-        (catch Exception e
-          (reset! result (ex-message e)))))
-    (sleep 200)
-    (let [client (zig.io/open-client-socket "127.0.0.1" port)]
-      (zig.io/close-socket client))
-    (sleep 500)
-    (:ok @result))
+  (with-accepted-server
+    (fn [accepted]
+      (let [addr (zig.io/get-remote-address accepted)
+            rport (zig.io/get-remote-port accepted)]
+        (and (string? addr) (> rport 0)))))
   true)
 
 (check "tcp-server: accepted socket has local port"
-  (let [server (zig.io/listen-server-socket "127.0.0.1" 19912)
-        port (zig.io/get-local-port server)
-        result (atom nil)]
-    (future
-      (try
-        (let [accepted (zig.io/accept-connection server)]
-          (let [lport (zig.io/get-local-port accepted)]
-            (reset! result {:lport lport :ok (= lport 19912)}))
-          (zig.io/close-socket accepted)
-          (zig.io/close-socket server))
-        (catch Exception e
-          (reset! result (ex-message e)))))
-    (sleep 200)
-    (let [client (zig.io/open-client-socket "127.0.0.1" port)]
-      (zig.io/close-socket client))
-    (sleep 500)
-    (:ok @result))
+  (with-accepted-server
+    (fn [accepted]
+      (= (zig.io/get-local-port accepted) 19912))
+    "127.0.0.1" 19912)
   true)
 
 (check "tcp-server: full client-server round-trip"
-  (let [server (zig.io/listen-server-socket "127.0.0.1" 0)
-        port (zig.io/get-local-port server)
-        result (atom nil)]
-    ;; Server thread: accept, close, signal done
-    (future
-      (try
-        (let [accepted (zig.io/accept-connection server)]
-          (zig.io/close-socket accepted)
-          (zig.io/close-socket server)
-          (reset! result :server-done))
-        (catch Exception e
-          (reset! result (ex-message e)))))
-    ;; Client: connect, close
-    (sleep 200)
-    (let [client (zig.io/open-client-socket "127.0.0.1" port)]
-      (zig.io/close-socket client))
-    ;; Wait for server thread
-    (sleep 500)
-    @result)
+  (with-accepted-server
+    (fn [_accepted]
+      :server-done))
   :server-done)
 
 (check "tcp-server: listen-server-socket with reuse-address option"
@@ -488,22 +492,9 @@
 
 ;; --- accept ---
 (check "api: accept returns accepted socket"
-  (let [server (io/server-socket "127.0.0.1" 0)
-        port (io/get-local-port server)
-        result (atom nil)]
-    (future
-      (try
-        (let [accepted (io/accept server)]
-          (io/close-socket accepted)
-          (io/close-socket server)
-          (reset! result :accepted))
-        (catch Exception e
-          (reset! result (ex-message e)))))
-    (sleep 200)
-    (let [client (io/socket "127.0.0.1" port)]
-      (io/close-socket client))
-    (sleep 500)
-    @result)
+  (with-io-accepted-server
+    (fn [_accepted]
+      :accepted))
   :accepted)
 
 ;; --- socket-address ---
@@ -517,26 +508,13 @@
   true)
 
 (check "api: socket-address for client returns map"
-  (let [server (io/server-socket "127.0.0.1" 0)
-        port (io/get-local-port server)
-        result (atom nil)]
-    (future
-      (try
-        (let [accepted (io/accept server)]
-          (reset! result (io/socket-address accepted))
-          (io/close-socket accepted)
-          (io/close-socket server))
-        (catch Exception e
-          (reset! result (ex-message e)))))
-    (sleep 200)
-    (let [client (io/socket "127.0.0.1" port)]
-      (io/close-socket client))
-    (sleep 500)
-    (let [addr @result]
-      (boolean (and (map? addr)
-                    (:remote-address addr)
-                    (:remote-port addr)
-                    (:local-port addr)))))
+  (let [addr (with-io-accepted-server
+                (fn [accepted]
+                  (io/socket-address accepted)))]
+    (boolean (and (map? addr)
+                  (:remote-address addr)
+                  (:remote-port addr)
+                  (:local-port addr))))
   true)
 
 ;; --- socket-kind ---
@@ -563,39 +541,6 @@
   :udp)
 
 ;; --- socket-shutdown ---
-(defn- with-shutdown-test
-  "Run socket-shutdown on an accepted server socket with a live client.
-   Server signals port-ready atom before accept, result atom after shutdown.
-   Client stays alive until server signals done."  
-  [direction]
-  (let [port-atom (atom nil)
-        result-atom (atom nil)]
-    ;; Server thread: listen → accept → shutdown → signal done
-    (future
-      (try
-        (let [server (io/server-socket "127.0.0.1" 0)
-              port (io/get-local-port server)]
-          (reset! port-atom port)
-          (let [accepted (io/accept server)]
-            (io/socket-shutdown accepted direction)
-            (io/close-socket accepted)
-            (io/close-socket server)
-            (reset! result-atom :ok)))
-        (catch Exception e
-          (reset! result-atom (ex-message e)))))
-    ;; Wait for server to be listening
-    (loop [_ 0]
-      (when (and (< _ 50) (nil? @port-atom))
-        (sleep 50) (recur (inc _))))
-    ;; Connect client and hold connection until server is done
-    (when-let [port @port-atom]
-      (let [client (io/socket "127.0.0.1" port)]
-        (loop [_ 0]
-          (if (and (< _ 100) (nil? @result-atom))
-            (do (sleep 50) (recur (inc _)))
-            (safe-close client))))
-        @result-atom)))
-
 (check "api: socket-shutdown :input"
   (with-shutdown-test :input)
   :ok)
@@ -644,43 +589,17 @@
 
 ;; --- IOFactory: reader on socket ---
 (check "api: reader on accepted socket"
-  (let [server (io/server-socket "127.0.0.1" 0)
-        port (io/get-local-port server)
-        result (atom nil)]
-    (future
-      (try
-        (let [accepted (io/accept server)]
-          (let [r (io/reader accepted)]
-            (reset! result "reader created")
-            (io/close-socket accepted))
-          (io/close-socket server))
-        (catch Exception e
-          (reset! result (ex-message e)))))
-    (sleep 200)
-    (let [client (io/socket "127.0.0.1" port)]
-      (io/close-socket client))
-    (sleep 500)
-    @result)
+  (with-io-accepted-server
+    (fn [accepted]
+      (let [r (io/reader accepted)]
+        "reader created")))
   "reader created")
 
 (check "api: writer on accepted socket"
-  (let [server (io/server-socket "127.0.0.1" 0)
-        port (io/get-local-port server)
-        result (atom nil)]
-    (future
-      (try
-        (let [accepted (io/accept server)]
-          (let [w (io/writer accepted)]
-            (reset! result "writer created")
-            (io/close-socket accepted))
-          (io/close-socket server))
-        (catch Exception e
-          (reset! result (ex-message e)))))
-    (sleep 200)
-    (let [client (io/socket "127.0.0.1" port)]
-      (io/close-socket client))
-    (sleep 500)
-    @result)
+  (with-io-accepted-server
+    (fn [accepted]
+      (let [w (io/writer accepted)]
+        "writer created")))
   "writer created")
 
 (check "api: reader on server socket throws"
