@@ -279,37 +279,14 @@ pub fn readBytesFromStream(
     max_bytes: usize,
     allocator: Allocator,
 ) anyerror!Value {
-    _ = io; // Io abstraction blocks on sockets; use raw syscall recvfrom instead
-    const fd: std.posix.fd_t = stream.socket.handle;
-
-    // Read up to max_bytes in a single recvfrom call.
-    // This matches Java InputStream.read() semantics: block until at least
-    // one byte is available, then return whatever was read (up to max_bytes).
-    // Do NOT loop trying to fill the entire buffer — that would block
-    // indefinitely on TCP sockets when fewer bytes are available than requested.
     const to_read: usize = if (buffer.len < max_bytes) buffer.len else max_bytes;
-
-    const rc: u64 = std.os.linux.syscall6(
-        std.os.linux.SYS.recvfrom,
-        @as(u64, @intCast(fd)),
-        @intFromPtr(buffer.ptr),
-        @as(u64, @intCast(to_read)),
-        0, // flags
-        0, // addr (null for connected sockets)
-        0, // addrlen
-    );
-    if (rc > (std.math.maxInt(u64) - 4096)) {
-        const err_code: u32 = @intCast(@as(isize, @intCast(rc)) * -1);
-        if (err_code == 104 or
-            err_code == 111)
-        {
-            return vm.nilValue();
-        }
-        return error.SocketError;
-    }
+    var reader = net.Stream.reader(stream.*, io, buffer);
+    var data: [1][]u8 = .{ buffer[0..to_read] };
+    const rc = Io.Reader.readVec(&reader.interface, &data) catch |err| {
+        return handleReadError(err);
+    };
     if (rc == 0) return vm.nilValue(); // EOF
-
-    return try vm.stringValue(allocator, buffer[0..@intCast(rc)]);
+    return try vm.stringValue(allocator, buffer[0..rc]);
 }
 
 // ============================================================
@@ -322,33 +299,31 @@ pub fn writeBytesToStream(
     buffer: []u8,
     data: []const u8,
 ) anyerror!void {
-    _ = io;
-    _ = buffer;
-    const fd: std.posix.fd_t = stream.socket.handle;
-    var sent: usize = 0;
-    while (sent < data.len) {
-        // sendto(fd, buf, len, flags, addr, addrlen) - addr=null for connected sockets
-        const rc: u64 = std.os.linux.syscall6(
-            std.os.linux.SYS.sendto,
-            @as(u64, @intCast(fd)),
-            @intFromPtr(data.ptr),
-            @as(u64, @intCast(data.len - sent)),
-            0, // flags
-            0, // addr (null for connected sockets)
-            0, // addrlen
-        );
-        if (rc > (std.math.maxInt(u64) - 4096)) {
-            const err_code: u32 = @intCast(@as(isize, @intCast(rc)) * -1);
-            if (err_code == 32 or
-                err_code == 104)
-            {
-                return;
-            }
-            return error.SocketError;
-        }
-        if (rc == 0) break;
-        sent += @as(usize, @intCast(rc));
-    }
+    var writer = net.Stream.writer(stream.*, io, buffer);
+    var fixed_reader = Io.Reader.fixed(data);
+    _ = Io.Reader.stream(&fixed_reader, &writer.interface, Io.Limit.unlimited) catch |err| {
+        if (err == error.ConnectionResetByPeer or err == error.SocketUnconnected) return;
+        return error.SocketError;
+    };
+    // Flush buffered data to the socket
+    writer.interface.flush() catch |err| {
+        if (err == error.ConnectionResetByPeer or err == error.SocketUnconnected) return;
+        return error.SocketError;
+    };
+}
+
+// ============================================================
+// Helper: handle read errors from Io.Reader
+// ============================================================
+
+fn handleReadError(err: anyerror) anyerror!Value {
+    // Connection reset or refused: return nil (not an error)
+    if (err == error.ConnectionResetByPeer or
+        err == error.ConnectionRefused or
+        err == error.SocketUnconnected) return vm.nilValue();
+    // EOF: return nil
+    if (err == error.EndOfStream) return vm.nilValue();
+    return error.SocketError;
 }
 
 // ============================================================
@@ -361,68 +336,17 @@ pub fn readLineFromStream(
     buffer: []u8,
     allocator: Allocator,
 ) anyerror!Value {
-    _ = io; // Io abstraction blocks on sockets; use raw syscall recvfrom instead
-    const fd: std.posix.fd_t = stream.socket.handle;
-    var line_buf: std.ArrayListUnmanaged(u8) = .empty;
-    defer allocator.free(line_buf.items);
-
-    while (true) {
-        const rc: u64 = std.os.linux.syscall6(
-            std.os.linux.SYS.recvfrom,
-            @as(u64, @intCast(fd)),
-            @intFromPtr(buffer.ptr),
-            @as(u64, @intCast(buffer.len)),
-            0, // flags
-            0, // addr
-            0, // addrlen
-        );
-        if (rc > (std.math.maxInt(u64) - 4096)) {
-            const err_code: u32 = @intCast(@as(isize, @intCast(rc)) * -1);
-            if (err_code == 104 or
-                err_code == 111)
-            {
-                if (line_buf.items.len > 0) return try vm.stringValue(allocator, line_buf.items);
-                return vm.nilValue();
-            }
-            return error.SocketError;
-        }
-        if (rc == 0) {
-            if (line_buf.items.len > 0) return try vm.stringValue(allocator, line_buf.items);
-            return vm.nilValue();
-        }
-
-        for (buffer[0..@intCast(rc)]) |c| {
-            if (c == '\n') {
-                return try vm.stringValue(allocator, line_buf.items);
-            } else if (c == '\r') {
-                // Check for \r\n
-                var crlf_buf: [1]u8 = undefined;
-                const peek_rc: u64 = std.os.linux.syscall6(
-                    std.os.linux.SYS.recvfrom,
-                    @as(u64, @intCast(fd)),
-                    @intFromPtr(&crlf_buf),
-                    1,
-                    0, 0, 0,
-                );
-                if (peek_rc == 1 and crlf_buf[0] == '\n') {
-                    // consumed \n
-                } else if (peek_rc == 1) {
-                    try line_buf.append(allocator, '\r');
-                    try line_buf.append(allocator, crlf_buf[0]);
-                } else if (peek_rc == 0) {
-                    // EOF after \r
-                }
-                return try vm.stringValue(allocator, line_buf.items);
-            } else {
-                try line_buf.append(allocator, c);
-            }
-        }
-
-        // Protect against extremely long lines
-        if (line_buf.items.len > buffer.len * 4) {
-            return try vm.stringValue(allocator, line_buf.items);
-        }
-    }
+    var reader = net.Stream.reader(stream.*, io, buffer);
+    // Read until newline, using Io abstraction (cross-platform)
+    const line = Io.Reader.takeSentinel(&reader.interface, '\n') catch |err| {
+        return handleReadError(err);
+    };
+    // Strip trailing \r if present (Windows-style \r\n)
+    const trimmed = if (line.len > 0 and line[line.len - 1] == '\r')
+        line[0 .. line.len - 1]
+    else
+        line;
+    return try vm.stringValue(allocator, trimmed);
 }
 
 // ============================================================
