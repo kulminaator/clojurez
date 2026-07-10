@@ -18,6 +18,7 @@ const records = @import("namespaces/core/records.zig");
 const gc_mod = @import("gc.zig");
 const threading = @import("namespaces/core/threading.zig");
 const bytecode_mod = @import("bytecode.zig");
+const timeout_mod = @import("timeout.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -402,6 +403,9 @@ pub fn evalWithFile(allocator: Allocator, form: Value, env: *Env, file: []const 
     // When callFunction creates a child Frame, it sets eval_context.current_frame.
     // We read current_frame to get the next frame to evaluate.
     while (true) {
+        // Timeout check: abort if the watchdog has fired.
+        if (timeout_mod.checkTimeout()) return timeout_mod.TimeoutExpired;
+
         const current = result orelse {
             return try allocValue(allocator, vm.nilValue());
         };
@@ -1458,6 +1462,12 @@ fn callBuiltinFn(allocator: Allocator, op: *const Value, args: *const list.List,
             const ex = try vm.exceptionValue(allocator, "Divide by zero", empty_map.map, null, "clojure.lang/ArithmeticException");
             current_exception = ex.exception;
             exception_thrown = true;
+            return EvalError.Exception;
+        }
+        // Phase 10: Convert socket errors to SocketException
+        // The socket module sets current_exception before returning this error.
+        const err_name = @errorName(err);
+        if (std.mem.eql(u8, err_name, "SocketException")) {
             return EvalError.Exception;
         }
         return err;

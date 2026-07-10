@@ -3,6 +3,7 @@
 
 ## Table of Contents
 
+- [accept](#accept)
 - [alength](#alength)
 - [as-relative-path](#as-relative-path)
 - [char-at](#char-at)
@@ -13,6 +14,8 @@
 - [output-stream](#output-stream)
 - [parse-sh-args](#parse-sh-args)
 - [reader](#reader)
+- [server-socket](#server-socket)
+- [set-socket-timeout!](#set-socket-timeout!)
 - [sh](#sh)
 - [sh-close-in](#sh-close-in)
 - [sh-err](#sh-err)
@@ -21,11 +24,27 @@
 - [sh-out](#sh-out)
 - [sh-stream](#sh-stream)
 - [sh-wait](#sh-wait)
+- [socket](#socket)
+- [socket-address](#socket-address)
+- [socket-shutdown](#socket-shutdown)
 - [split-path](#split-path)
+- [udp-receive](#udp-receive)
+- [udp-send!](#udp-send!)
+- [udp-socket](#udp-socket)
 - [with-open](#with-open)
 - [with-sh-dir](#with-sh-dir)
 - [with-sh-env](#with-sh-env)
 - [writer](#writer)
+
+---
+
+## accept
+
+[(server-socket)]
+
+Accept an incoming connection on a server socket.
+
+   Blocks until a client connects. Returns the accepted client socket.
 
 ---
 
@@ -139,6 +158,32 @@ Attempts to coerce its argument into an open reader handle.
 
 ---
 
+## server-socket
+
+[(host port & opts)]
+
+Create a TCP server socket listening on host:port.
+
+   Options:
+     :backlog         integer kernel backlog (default 128)
+     :reuse-address   boolean set SO_REUSEADDR (default false)
+     :buffer-size     integer buffer size in bytes (default 4096)
+
+---
+
+## set-socket-timeout!
+
+[(socket timeout-ms)]
+
+Set the I/O timeout on a socket in milliseconds.
+
+   timeout-ms must be a non-negative integer or nil.
+   nil removes the timeout (blocking mode).
+   Applies to TCP client, accepted, and UDP sockets.
+   Returns nil.
+
+---
+
 ## sh
 
 [(& args)]
@@ -246,11 +291,84 @@ Wait for a subprocess to finish and return its exit code.
 
 ---
 
+## socket
+
+[(host port & opts)]
+
+Create a TCP client socket connected to host:port.
+
+   Options:
+     :buffer-size      integer buffer size in bytes (default 4096)
+     :connect-timeout  integer milliseconds (not yet implemented)
+
+---
+
+## socket-address
+
+[(socket)]
+
+Return a map describing a socket's address information.
+
+   For TCP client sockets returns:
+     {:remote-address string :remote-port int :local-port int}
+
+   For TCP server sockets returns:
+     {:bind-address string :local-port int}
+
+   For other sockets returns:
+     {:local-port int}
+
+---
+
+## socket-shutdown
+
+[(socket direction)]
+
+Shutdown one or both directions of a socket.
+
+   direction must be :input, :output, or :both.
+
+---
+
 ## split-path
 
 [(path)]
 
 Split a path string into directory and name components.
+
+---
+
+## udp-receive
+
+[(socket & opts)]
+
+Receive a datagram from a UDP socket.
+
+   Returns a map:
+     {:from string :port int :data string}
+
+---
+
+## udp-send!
+
+[(socket host port data)]
+
+Send a datagram to a remote address.
+
+   Returns nil.
+
+---
+
+## udp-socket
+
+[(& opts)]
+
+Create a UDP datagram socket.
+
+   Options:
+     :bind-address  string bind address (default "0.0.0.0")
+     :bind-port     integer bind port (default 0 for ephemeral)
+     :buffer-size   integer buffer size in bytes (default 4096)
 
 ---
 

@@ -1,179 +1,80 @@
 #!/bin/bash
-# Test runner for Clojure VM
-# All tests must complete within 10 seconds each.
-#
-# Runs Clojure-based test suites first (fast, single-process),
-# then shell-based I/O tests (stdin, file execution, -cp -m, REPL).
-#
-# Usage:
-#   ./run_tests.sh              # Build + run all tests
-#   NOBUILD=1 ./run_tests.sh    # Run without rebuilding
-#   ./run_tests.sh test_arithmetics  # Run a specific Clojure test suite
-#
-# Clojure test files: tests/clj/test_*.clj
-# Shell test files:   tests/test_*.sh
+# ClojureZ test runner
+# Usage: ./run_tests.sh [test_name]  |  NOBUILD=1 ./run_tests.sh
+set -e; VM="./zig-out/bin/clojurez"; TO=15
+[ "$NOBUILD" != "1" ] && { echo "Building VM..."; zig build 2>&1; echo ""; }
 
-set -e
+# Use system temp for per-test logs (cleaned up by OS/runner)
+_TMP="${TMPDIR:-/tmp}"
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-VM="./zig-out/bin/clojurez"
-TIMEOUT_SECONDS=15
+run_clj() {
+    local f="$1" n=$(basename "$1" .clj) to=$TO s=$(date +%s) rc=0
+    [ "$n" = "test_clojure_string" ] && to=30
+    local logfile="$_TMP/clojurez_${n}.log"
 
-# Build the VM once (skip with NOBUILD=1)
-if [ "$NOBUILD" != "1" ]; then
-    echo "Building VM..."
-    zig build 2>&1
-    echo ""
-fi
+    # Pipe through cat for line-buffered output, capture VM exit via PIPESTATUS
+    "$VM" --timeout "$to" "$f" 2>&1 | cat >"$logfile"
+    rc=${PIPESTATUS[0]}
+    local out
+    out=$(cat "$logfile")
+    local d=$(( $(date +%s) - s ))
 
-# ============================================================
-# Clojure-based test suites (fast, single-process per suite)
-# ============================================================
-
-CLJ_TOTAL=0
-CLJ_PASSED=0
-CLJ_FAILED=0
-
-# Run a single Clojure test suite file
-run_clj_suite() {
-    local test_file="$1"
-    local suite_name
-    suite_name=$(basename "$test_file" .clj)
-
-    CLJ_TOTAL=$((CLJ_TOTAL + 1))
-
-    # Some test suites need more time (e.g. test_clojure_string on Windows)
-    local suite_timeout=$TIMEOUT_SECONDS
-    if [ "$suite_name" = "test_clojure_string" ]; then
-        suite_timeout=30
+    if [ "$rc" -eq 124 ]; then
+        echo "TIMEOUT: $n (${to}s) [${d}s]"
+        cat "$logfile"
+        return 1
     fi
-
-    local output
-    local exit_code=0
-    output=$(tests/timeout.sh "$suite_timeout" "$VM" "$test_file" 2>&1) || exit_code=$?
-
-    if [ "$exit_code" -eq 124 ]; then
-        echo "TIMEOUT: $suite_name (${suite_timeout}s)"
-        CLJ_FAILED=$((CLJ_FAILED + 1))
-        return
-    elif [ "$exit_code" -ne 0 ]; then
-        echo "CRASH: $suite_name (exit code $exit_code)"
-        echo "$output" | head -30
-        CLJ_FAILED=$((CLJ_FAILED + 1))
-        return
+    if [ "$rc" -ne 0 ]; then
+        echo "CRASH: $n (exit $rc) [${d}s]"
+        cat "$logfile"
+        return 1
     fi
-
-    local fail_count
-    fail_count=$(echo "$output" | grep -c "^FAIL:" || true)
-
-    echo "$output"
-
-    if [ "$fail_count" -gt 0 ]; then
-        CLJ_FAILED=$((CLJ_FAILED + 1))
-    else
-        CLJ_PASSED=$((CLJ_PASSED + 1))
+    local fc
+    fc=$(echo "$out" | grep -c "^FAIL:" || true)
+    if [ "$fc" -gt 0 ]; then
+        echo "FAIL: $n ($fc failure(s)) [${d}s]"
+        echo "$out" | grep "^FAIL:"
+        return 1
     fi
+    echo "PASS: $n [${d}s]"
+    return 0
 }
 
-echo "=== Clojure Test Suites ==="
-echo ""
-
+P=0; F=0; T=0; echo "=== Clojure Test Suites ==="
 if [ $# -gt 0 ]; then
-    # Run specific Clojure test(s)
     for name in "$@"; do
-        test_file="$SCRIPT_DIR/tests/clj/test_${name}.clj"
-        if [ ! -f "$test_file" ]; then
-            echo "Error: test file not found: $test_file"
-            exit 1
-        fi
-        run_clj_suite "$test_file"
-        echo ""
-    done
-else
-    # Run all Clojure test suites
-    # SMOKE TEST FIRST — runs fast, aborts if core features are broken
-    SMOKE_FILE="$SCRIPT_DIR/tests/clj/test_smoke.clj"
-    if [ -f "$SMOKE_FILE" ]; then
-        echo "--- SMOKE TEST (abort on failure) ---"
-        run_clj_suite "$SMOKE_FILE"
-        echo ""
-        if [ $CLJ_FAILED -gt 0 ]; then
-            echo "ABORT: Smoke test failed. Skipping remaining tests."
-            exit 1
-        fi
-        echo "Smoke test passed. Continuing with full test suite."
-        echo ""
-    fi
-
-    for test_file in "$SCRIPT_DIR/tests/clj/test_"*.clj; do
-        # Skip smoke test — already run above
-        if [ "$test_file" = "$SMOKE_FILE" ]; then
-            continue
-        fi
-        if [ -f "$test_file" ]; then
-            suite_name=$(basename "$test_file" .clj)
-            run_clj_suite "$test_file"
-            echo ""
-        fi
-    done
+        f="tests/clj/test_${name}.clj"; [ -f "$f" ] || { echo "Error: not found: $f"; exit 1; }
+        T=$((T+1)); run_clj "$f" && P=$((P+1)) || F=$((F+1))
+    done; echo "Clojure suites: $P passed, $F failed (out of $T)"
+    [ "$F" -eq 0 ] && exit 0 || exit 1
 fi
+f="tests/clj/test_smoke.clj"
+[ -f "$f" ] && { T=$((T+1)); run_clj "$f" && P=$((P+1)) || { F=$((F+1)); echo "ABORT: Smoke failed."; exit 1; }; }
+for f in tests/clj/test_*.clj; do
+    [ -f "$f" ] || continue; n=$(basename "$f" .clj)
+    case "$n" in test_smoke|test_runner|shell_*) continue ;; esac
+    T=$((T+1)); run_clj "$f" && P=$((P+1)) || F=$((F+1))
+done
+echo "Clojure suites: $P passed, $F failed (out of $T)"; echo ""
 
-echo "========================================"
-echo "Clojure suites: $CLJ_PASSED passed, $CLJ_FAILED failed (out of $CLJ_TOTAL)"
-echo "========================================"
+echo "=== Clojure Shell Test Suites ==="
+shell_log="$_TMP/clojurez_shell_suites.log"
+SRC=0
+"$VM" --timeout 120 tests/run_all.clj 2>&1 | cat >"$shell_log"
+SRC=${PIPESTATUS[0]}
+SO=$(cat "$shell_log")
+echo "$SO"; SF=$(echo "$SO"|grep "SUMMARY:"|awk '{s+=$4} END {print s+0}')
+T=$((T+1)); [ "${SRC:-0}" -eq 0 ] && [ "$SF" -eq 0 ] && P=$((P+1)) || { F=$((F+1));
+    echo "--- shell_suites raw output ---"
+    cat "$shell_log"
+    echo "--- end ---"
+}
 echo ""
 
-# If specific tests were requested, skip shell tests and exit
-if [ $# -gt 0 ]; then
-    if [ $CLJ_FAILED -gt 0 ]; then
-        exit 1
-    fi
-    exit 0
-fi
+echo "=== Bash Debug Tests ==="; BP=0; BF=0; BT=0
+source tests/test_debug.sh
+echo "Bash debug tests: $BP passed, $BF failed (out of $BT)"; echo ""
 
-# ============================================================
-# Shell-based I/O tests (stdin, file execution, -cp -m, REPL)
-# ============================================================
-
-source tests/helpers.sh
-
-echo "=== Shell Test Suites ==="
-echo ""
-
-source tests/test_io.sh
-source tests/test_zig_io.sh
-echo ""
-
-source tests/test_misc.sh
-echo ""
-
-source tests/test_namespaces.sh
-echo ""
-
-source tests/test_samples.sh
-echo ""
-
-source tests/test_core_library.sh
-
-echo ""
-echo "========================================"
-echo "Shell tests: $TEST_PASS passed, $TEST_FAIL failed (out of $TEST_TOTAL)"
-echo "========================================"
-echo ""
-
-# Combined summary
-TOTAL_TESTS=$((CLJ_TOTAL + TEST_TOTAL))
-TOTAL_PASSED=$((CLJ_PASSED + TEST_PASS))
-TOTAL_FAILED=$((CLJ_FAILED + TEST_FAIL))
-echo "========================================"
-if [ $TOTAL_FAILED -eq 0 ]; then
-    echo "ALL TESTS PASSED: $TOTAL_PASSED/$TOTAL_TESTS"
-else
-    echo "RESULT: $TOTAL_PASSED passed, $TOTAL_FAILED failed (out of $TOTAL_TESTS)"
-fi
-echo "========================================"
-
-# Combined exit
-if [ $CLJ_FAILED -gt 0 ] || [ $TEST_FAIL -gt 0 ]; then
-    exit 1
-fi
+GT=$((T+BT)); GP=$((P+BP)); GF=$((F+BF))
+[ "$GF" -eq 0 ] && echo "ALL TESTS PASSED: $GP/$GT" || echo "RESULT: $GP passed, $GF failed (out of $GT)"
+[ "$GF" -eq 0 ] && exit 0 || exit 1

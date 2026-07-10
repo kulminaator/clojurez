@@ -511,53 +511,68 @@ Three-layer allocator stack:
 
 ## Testing
 
-### Clojure-based tests (`tests/clj/test_*.clj`)
+### Test Structure
 
-Clojure test suites using the `check`/`check-true`/`check-false` helper. Run via the VM:
-
-```bash
-./run_tests.sh                    # all tests
-./run_tests.sh test_arithmetics   # specific suite
+```
+tests/
+├── run_all.clj              # Entry point for Clojure shell test suites
+├── test_debug.sh            # CLJVM_DEBUG env var tests (bash, cannot be in Clojure yet)
+├── README.md                # Test documentation
+├── complex-samples/         # End-to-end sample programs
+└── clj/
+    ├── clj_test_helper.clj  # check/check-true/check-false for in-VM tests
+    ├── test_runner.clj      # def-suite, test, check, run-all framework
+    ├── shell_test_runner.clj # run-cmd, test-cmd, test-repl, test-file, test-main
+    ├── test_smoke.clj       # Fast smoke test (runs first, aborts on failure)
+    ├── test_*.clj           # In-VM test suites (run directly in clojurez)
+    └── test_shell_*.clj     # Shell test suites (spawn subprocesses via io/sh)
 ```
 
-Key test suites:
-- `test_bytecode.clj` — bytecode compiler and VM
-- `test_math.clj` — clojure.math functions (trig, hyperbolic, exp/log, rounding, IEEE, exact arithmetic)
-- `test_exceptions.clj` — try/catch/finally, throw, ex-info, exception hierarchy
-- `test_multithreading.clj` — futures, promises, sleep
-- `test_zig_io.clj` — filesystem, streams, subprocess, zig.io namespace
-- `test_thread_macros.clj` — `->`, `->>`, `cond->`, `cond->>`
+### Test Categories
 
-### Shell-based tests (`tests/test_*.sh`)
-
-Integration tests for I/O, namespaces, samples, and REPL behavior.
-
-### Complex samples (`tests/complex-samples/`)
-
-End-to-end programs with expected output verification:
-- Fibonacci (lazy sequences)
-- Tower of Hanoi (recursion)
-- Namespaces (`-cp -m` usage)
-- GC stress test
-- Regex GC test
-
-### Zig unit tests (`src/zig/all_tests.zig`)
-
-Tests individual modules:
-
+**1. Zig Unit Tests** (`src/zig/all_tests.zig`) — ~470 tests
 ```bash
 zig test src/zig/all_tests.zig
 ```
 
-### Running all tests
+**2. Clojure In-VM Suites** (`tests/clj/test_*.clj`, excluding `shell_*`) — ~49 suites
+Run directly inside a single clojurez process. Use `check`/`check-true`/`check-false` from `clj_test_helper.clj`.
+
+Key suites: `test_bytecode.clj`, `test_math.clj`, `test_exceptions.clj`, `test_multithreading.clj`, `test_zig_io.clj`, `test_thread_macros.clj`, and many more.
+
+**3. Clojure Shell Suites** (`tests/clj/test_shell_*.clj`) — 7 suites, ~59 tests
+Spawn child clojurez processes to test features requiring process isolation: stdout capture, REPL interaction, file execution, `-cp`/`-m`, complex samples.
+
+Run all: `clojurez --timeout 120 tests/run_all.clj`
+
+**4. Bash Debug Tests** (`tests/test_debug.sh`) — 4 tests
+CLJVM_DEBUG environment variable tests. Cannot be migrated to Clojure because `io/sh` does not yet support the `:env` option.
+
+### Built-in `--timeout` Flag
+
+The clojurez VM has a built-in `--timeout N` flag (N in seconds) that:
+- Terminates execution after N seconds
+- Kills child threads and subprocesses (no zombie processes)
+- Exits with code 124 (GNU timeout convention)
+- Example: `clojurez --timeout 2 -e '(sleep 30000)'` exits within ~3 seconds
+
+### Running All Tests
 
 ```bash
+# Full test run (Zig unit tests + all Clojure tests)
 zig test src/zig/all_tests.zig && ./run_tests.sh
+
+# Clojure tests only (builds VM first)
+./run_tests.sh
+
+# Without rebuilding
+NOBUILD=1 ./run_tests.sh
+
+# Specific Clojure in-VM suite
+./run_tests.sh test_arithmetics
 ```
 
 ### Test Output Formats
-
-Clojure-based test suites (`tests/clj/test_*.clj`) can produce four distinct outcome types when run through `run_tests.sh`:
 
 | Outcome | Meaning |
 |---------|---------|
@@ -575,6 +590,19 @@ Individual `FAIL:` lines inside a suite output look like:
 ```
 FAIL: test description expected=X got=Y
 ```
+
+### Allowed Testing Methods
+
+All tests must be written in Clojure executed with clojurez or in Zig code. Absolutely forbidden is using perl, python3, JVM-based Clojure, or nodejs in test suites. For integration suite orchestration, bash is allowed.
+
+### Complex Samples (`tests/complex-samples/`)
+
+End-to-end programs with expected output verification:
+- Fibonacci (lazy sequences)
+- Tower of Hanoi (recursion)
+- Namespaces (`-cp -m` usage)
+- GC stress test
+- Regex GC test
 
 ## Build
 

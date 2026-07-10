@@ -38,6 +38,7 @@ const test_debug = @import("debug.zig");
 const test_stack_stats = @import("stack_stats.zig");
 const test_threading = @import("namespaces/core/threading.zig");
 const test_bytecode = @import("bytecode.zig");
+const test_io_socket = @import("namespaces/core/io_socket.zig");
 
 // Suppress unused import warnings
 comptime {
@@ -78,4 +79,5 @@ comptime {
     _ = test_stack_stats;
     _ = test_threading;
     _ = test_bytecode;
+    _ = test_io_socket;
 }

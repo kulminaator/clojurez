@@ -41,7 +41,8 @@ pub fn initExceptionHierarchy(allocator: Allocator) anyerror!void {
     try hierarchy.put(allocator, "clojure.lang/ExceptionInfo", "clojure.lang/RuntimeException");
     try hierarchy.put(allocator, "clojure.lang/IOException", "clojure.lang/Exception");
     try hierarchy.put(allocator, "clojure.lang/FileNotFoundException", "clojure.lang/IOException");
-    try hierarchy.put(allocator, "clojure.lang/SocketTimeoutException", "clojure.lang/IOException");
+    try hierarchy.put(allocator, "clojure.lang/SocketException", "clojure.lang/IOException");
+    try hierarchy.put(allocator, "clojure.lang/SocketTimeoutException", "clojure.lang/SocketException");
     try hierarchy.put(allocator, "clojure.lang/TimeoutException", "clojure.lang/Exception");
 }
 
