@@ -10,4 +10,3 @@ src/zig/namespaces/*.clj
 tmp/
 *.swp
 .idea
-.test_logs

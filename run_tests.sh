@@ -2,20 +2,17 @@
 # ClojureZ test runner
 # Usage: ./run_tests.sh [test_name]  |  NOBUILD=1 ./run_tests.sh
 set -e; VM="./zig-out/bin/clojurez"; TO=15
+[ "$NOBUILD" != "1" ] && { echo "Building VM..."; zig build 2>&1; echo ""; }
 
-# Directory for per-test log files (useful for CI debugging)
-LOG_DIR=".test_logs"
-rm -rf "$LOG_DIR"
-mkdir -p "$LOG_DIR"
+# Use system temp for per-test logs (cleaned up by OS/runner)
+_TMP="${TMPDIR:-/tmp}"
 
 run_clj() {
     local f="$1" n=$(basename "$1" .clj) to=$TO s=$(date +%s) rc=0
     [ "$n" = "test_clojure_string" ] && to=30
-    local logfile="$LOG_DIR/${n}.log"
+    local logfile="$_TMP/clojurez_${n}.log"
 
-    # Pipe through cat to force line-buffered stdout (direct file redirect
-    # causes block buffering which can garble output). Capture VM exit code
-    # via PIPESTATUS[0] (cat's exit is PIPESTATUS[1], always 0).
+    # Pipe through cat for line-buffered output, capture VM exit via PIPESTATUS
     "$VM" --timeout "$to" "$f" 2>&1 | cat >"$logfile"
     rc=${PIPESTATUS[0]}
     local out
@@ -24,25 +21,19 @@ run_clj() {
 
     if [ "$rc" -eq 124 ]; then
         echo "TIMEOUT: $n (${to}s) [${d}s]"
-        echo "  --- Last 60 lines of output (full log: $logfile) ---"
-        tail -60 "$logfile"
-        echo "  --- end of output ---"
+        cat "$logfile"
         return 1
     fi
     if [ "$rc" -ne 0 ]; then
         echo "CRASH: $n (exit $rc) [${d}s]"
-        echo "  --- Full output (log: $logfile) ---"
         cat "$logfile"
-        echo "  --- end of output ---"
         return 1
     fi
     local fc
     fc=$(echo "$out" | grep -c "^FAIL:" || true)
     if [ "$fc" -gt 0 ]; then
         echo "FAIL: $n ($fc failure(s)) [${d}s]"
-        echo "  --- FAIL lines (full log: $logfile) ---"
         echo "$out" | grep "^FAIL:"
-        echo "  --- end of FAIL lines ---"
         return 1
     fi
     echo "PASS: $n [${d}s]"
@@ -67,24 +58,16 @@ done
 echo "Clojure suites: $P passed, $F failed (out of $T)"; echo ""
 
 echo "=== Clojure Shell Test Suites ==="
-local_log="$LOG_DIR/shell_suites.log"
+shell_log="$_TMP/clojurez_shell_suites.log"
 SRC=0
-"$VM" --timeout 120 tests/run_all.clj 2>&1 | cat >"$local_log"
+"$VM" --timeout 120 tests/run_all.clj 2>&1 | cat >"$shell_log"
 SRC=${PIPESTATUS[0]}
-SO=$(cat "$local_log")
+SO=$(cat "$shell_log")
 echo "$SO"; SF=$(echo "$SO"|grep "SUMMARY:"|awk '{s+=$4} END {print s+0}')
 T=$((T+1)); [ "${SRC:-0}" -eq 0 ] && [ "$SF" -eq 0 ] && P=$((P+1)) || { F=$((F+1));
-    if [ "${SRC:-0}" -eq 124 ]; then
-        echo "TIMEOUT: shell_suites (120s)"
-        echo "  --- Last 60 lines of output (full log: $local_log) ---"
-        tail -60 "$local_log"
-        echo "  --- end of output ---"
-    elif [ "${SRC:-0}" -ne 0 ]; then
-        echo "CRASH: shell_suites (exit ${SRC:-0})"
-        echo "  --- Full output (log: $local_log) ---"
-        cat "$local_log"
-        echo "  --- end of output ---"
-    fi
+    echo "--- shell_suites raw output ---"
+    cat "$shell_log"
+    echo "--- end ---"
 }
 echo ""
 
