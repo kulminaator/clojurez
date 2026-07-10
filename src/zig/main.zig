@@ -16,6 +16,7 @@ const math_builtins = @import("namespaces/core/math.zig");
 const io_fs = @import("namespaces/core/io_fs.zig");
 const io_stream = @import("namespaces/core/io_stream.zig");
 const io_shell = @import("namespaces/core/io_shell.zig");
+const io_socket = @import("namespaces/core/io_socket.zig");
 const strings = @import("namespaces/core/strings.zig");
 const regexp_api = @import("namespaces/regexp/api.zig");
 const debug_allocator = @import("debug_allocator.zig");
@@ -230,11 +231,12 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     zio_env.parent = clojure_core_env;
     zio_env.ns_manager = ns_mgr;
 
-    // Register zig.io filesystem, stream, and shell built-in functions.
+    // Register zig.io filesystem, stream, shell, and socket built-in functions.
     // The Clojure wrappers in io.clj reference zig.io/file-stat etc.
     try io_fs.registerFsFunctions(zio_env);
     try io_stream.registerStreamFunctions(zio_env);
     try io_shell.registerShellFunctions(zio_env);
+    try io_socket.registerSocketFunctions(zio_env);
     try zio_env.markAllOwned();
 
     // Register colliding builtins in zig.core (copy, sh-wait, sh-kill)
@@ -258,6 +260,12 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
         "close-stream", "flush-stream",
         "sh-execute-stream", "sh-read-output", "sh-read-error",
         "sh-write-input", "sh-close-input",
+        "open-client-socket", "close-socket", "get-local-port",
+        "get-remote-address", "get-remote-port",
+        "shutdown-socket-input", "shutdown-socket-output", "shutdown-socket-both",
+        "listen-server-socket", "accept-connection", "get-bind-address",
+        "open-udp-socket", "udp-send", "core-udp-receive",
+        "socket-kind", "socket-reader", "socket-writer",
     });
     // Also copy the colliding builtins from zig.core to clojure.core
     try copyBuiltinsToNamespaceSelective(zc_env, clojure_core_env, &.{"copy", "sh-wait", "sh-kill"});

@@ -1460,6 +1460,12 @@ fn callBuiltinFn(allocator: Allocator, op: *const Value, args: *const list.List,
             exception_thrown = true;
             return EvalError.Exception;
         }
+        // Phase 10: Convert socket errors to SocketException
+        // The socket module sets current_exception before returning this error.
+        const err_name = @errorName(err);
+        if (std.mem.eql(u8, err_name, "SocketException")) {
+            return EvalError.Exception;
+        }
         return err;
     };
 }

@@ -8,16 +8,17 @@ TOOL_TIMEOUT="tests/timeout.sh"
 
 echo "=== Hanoi Sample ==="
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 hanoi_result=$($TOOL_TIMEOUT $TIMEOUT $VM tests/complex-samples/sample_2_hanoi/hanoi/core.clj 2>&1 | tr -d '\r') || {
-    echo "FAIL: hanoi sample (timeout or error)"
+    echo "FAIL: hanoi sample (timeout or error) [$( _elapsed)]"
     TEST_FAIL=$((TEST_FAIL + 1))
 }
 expected_hanoi=$(cat tests/complex-samples/sample_2_hanoi/expected_output.txt | tr -d '\r')
 if [ "$hanoi_result" = "$expected_hanoi" ]; then
-    echo "PASS: hanoi sample"
+    echo "PASS: hanoi sample [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: hanoi sample"
+    echo "FAIL: hanoi sample [$( _elapsed)]"
     echo "  Expected: $expected_hanoi"
     echo "  Got:      $hanoi_result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -26,16 +27,17 @@ fi
 echo ""
 echo "=== Fibonacci Sample ==="
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 fib_result=$($TOOL_TIMEOUT $TIMEOUT bash -c "$VM tests/complex-samples/sample_1_fibonacci/core.clj 2>&1 | tail -1 | tr -d '\r'") || {
-    echo "FAIL: fibonacci sample (timeout or error)"
+    echo "FAIL: fibonacci sample (timeout or error) [$( _elapsed)]"
     TEST_FAIL=$((TEST_FAIL + 1))
 }
 expected="(0 1 1 2 3 5 8 13 21 34)"
 if [ "$fib_result" = "$expected" ]; then
-    echo "PASS: fibonacci sample"
+    echo "PASS: fibonacci sample [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: fibonacci sample"
+    echo "FAIL: fibonacci sample [$( _elapsed)]"
     echo "  Expected: $expected"
     echo "  Got:      $fib_result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -44,16 +46,17 @@ fi
 echo ""
 echo "=== Namespace Sample ==="
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 ns_result=$($TOOL_TIMEOUT $TIMEOUT $VM -cp tests/complex-samples/sample_3_namespaces/src -m main 2>&1 | tr -d '\r') || {
-    echo "FAIL: namespace sample (timeout or error)"
+    echo "FAIL: namespace sample (timeout or error) [$( _elapsed)]"
     TEST_FAIL=$((TEST_FAIL + 1))
 }
 expected_ns=$(cat tests/complex-samples/sample_3_namespaces/expected_output.txt | tr -d '\r')
 if [ "$ns_result" = "$expected_ns" ]; then
-    echo "PASS: namespace sample"
+    echo "PASS: namespace sample [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: namespace sample"
+    echo "FAIL: namespace sample [$( _elapsed)]"
     echo "  Expected: $expected_ns"
     echo "  Got:      $ns_result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -62,16 +65,17 @@ fi
 echo ""
 echo "=== GC Stress Sample ==="
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 gc_result=$($TOOL_TIMEOUT $TIMEOUT bash -c "$VM tests/complex-samples/sample_4_gc_stress/core.clj 2>&1 | tail -1 | tr -d '\r'") || {
-    echo "FAIL: gc stress sample (timeout or error)"
+    echo "FAIL: gc stress sample (timeout or error) [$( _elapsed)]"
     TEST_FAIL=$((TEST_FAIL + 1))
 }
 expected_gc=$(cat tests/complex-samples/sample_4_gc_stress/expected_output.txt | tr -d '\r\n')
 if [ "$gc_result" = "$expected_gc" ]; then
-    echo "PASS: gc stress sample"
+    echo "PASS: gc stress sample [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: gc stress sample"
+    echo "FAIL: gc stress sample [$( _elapsed)]"
     echo "  Expected: $expected_gc"
     echo "  Got:      $gc_result"
     TEST_FAIL=$((TEST_FAIL + 1))

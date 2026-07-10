@@ -532,6 +532,12 @@ Key test suites:
 
 Integration tests for I/O, namespaces, samples, and REPL behavior.
 
+### Allowed testing methods
+
+All of our tests must be written in clojure executed with clojurez or in zig code. Absolutely forbidden is using perl,python3, jvm based clojure or nodejs in our test suites.
+Our github runners do not have these installed and neither can we expect that all developers have these installed, we can not use them.
+For the integration suite orchestration bash is allowed.
+
 ### Complex samples (`tests/complex-samples/`)
 
 End-to-end programs with expected output verification:

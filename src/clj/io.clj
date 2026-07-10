@@ -389,3 +389,160 @@
 
    Terminates the process and cleans up resources. Returns nil."  [handle]
   (zig.core/sh-kill handle))
+
+;; ============================================================
+;; TCP Client Socket
+;; ============================================================
+
+(defn socket
+  "Create a TCP client socket connected to host:port.
+
+   Options:
+     :buffer-size      integer buffer size in bytes (default 4096)
+     :connect-timeout  integer milliseconds (not yet implemented)"  [host port & opts]
+  (let [opts-map (if (and opts (map? (first opts)))
+                   (first opts)
+                   (when opts (apply hash-map opts)))]
+    (zig.io/open-client-socket host port opts-map)))
+
+;; ============================================================
+;; TCP Server Socket
+;; ============================================================
+
+(defn server-socket
+  "Create a TCP server socket listening on host:port.
+
+   Options:
+     :backlog         integer kernel backlog (default 128)
+     :reuse-address   boolean set SO_REUSEADDR (default false)
+     :buffer-size     integer buffer size in bytes (default 4096)"  [host port & opts]
+  (let [opts-map (if (and opts (map? (first opts)))
+                   (first opts)
+                   (when opts (apply hash-map opts)))]
+    (zig.io/listen-server-socket host port opts-map)))
+
+(defn accept
+  "Accept an incoming connection on a server socket.
+
+   Blocks until a client connects. Returns the accepted client socket."  [server-socket]
+  (zig.io/accept-connection server-socket))
+
+;; ============================================================
+;; Socket Address Information
+;; ============================================================
+
+(defn socket-address
+  "Return a map describing a socket's address information.
+
+   For TCP client sockets returns:
+     {:remote-address string :remote-port int :local-port int}
+
+   For TCP server sockets returns:
+     {:bind-address string :local-port int}
+
+   For other sockets returns:
+     {:local-port int}"  [socket]
+  (let [kind (zig.io/socket-kind socket)]
+    (cond
+      (= kind :tcp-client)
+      {:remote-address (zig.io/get-remote-address socket)
+       :remote-port (zig.io/get-remote-port socket)
+       :local-port (zig.io/get-local-port socket)}
+
+      (= kind :tcp-server)
+      {:bind-address (zig.io/get-bind-address socket)
+       :local-port (zig.io/get-local-port socket)}
+
+      (= kind :tcp-accepted)
+      {:remote-address (zig.io/get-remote-address socket)
+       :remote-port (zig.io/get-remote-port socket)
+       :local-port (zig.io/get-local-port socket)}
+
+      :else
+      {:local-port (zig.io/get-local-port socket)})))
+
+;; ============================================================
+;; Socket Shutdown
+;; ============================================================
+
+(defn socket-shutdown
+  "Shutdown one or both directions of a socket.
+
+   direction must be :input, :output, or :both."  [socket direction]
+  (case direction
+    :input  (zig.io/shutdown-socket-input socket)
+    :output (zig.io/shutdown-socket-output socket)
+    :both   (zig.io/shutdown-socket-both socket)
+    (throw (ex-info (str "Invalid shutdown direction: " direction) {}))))
+
+(defn set-socket-timeout!
+  "Set the I/O timeout on a socket in milliseconds.
+
+   timeout-ms must be a non-negative integer or nil.
+   nil removes the timeout (blocking mode).
+   Applies to TCP client, accepted, and UDP sockets.
+   Returns nil."  [socket timeout-ms]
+  (zig.io/set-socket-timeout socket timeout-ms))
+
+;; ============================================================
+;; UDP Datagram Sockets
+;; ============================================================
+
+(defn udp-socket
+  "Create a UDP datagram socket.
+
+   Options:
+     :bind-address  string bind address (default \"0.0.0.0\")
+     :bind-port     integer bind port (default 0 for ephemeral)
+     :buffer-size   integer buffer size in bytes (default 4096)"  [& opts]
+  (let [opts-map (if (and opts (map? (first opts)))
+                   (first opts)
+                   (when opts (apply hash-map opts)))]
+    (zig.io/open-udp-socket opts-map)))
+
+(defn udp-send!
+  "Send a datagram to a remote address.
+
+   Returns nil."  [socket host port data]
+  (zig.io/udp-send socket host port data))
+
+(defn udp-receive
+  "Receive a datagram from a UDP socket.
+
+   Returns a map:
+     {:from string :port int :data string}"  [socket & opts]
+  (let [opts-map (when opts (apply hash-map opts))]
+    (zig.io/core-udp-receive socket)))
+
+;; ============================================================
+;; IOFactory extensions for socket handles
+;; ============================================================
+
+;; Extend IOFactory for :wrapped handles (sockets and streams).
+;; For TCP sockets, reader/writer return the socket itself since
+;; read-line-stream and write-string already handle SocketHandle.
+(extend-protocol IOFactory
+  :wrapped
+  (make-reader [socket opts]
+    (let [kind (zig.io/socket-kind socket)]
+      (if (or (= kind :tcp-client) (= kind :tcp-accepted))
+        (zig.io/socket-reader socket opts)
+        (throw (ex-info (str "Cannot create reader on socket kind: " kind) {})))))
+
+  (make-writer [socket opts]
+    (let [kind (zig.io/socket-kind socket)]
+      (if (or (= kind :tcp-client) (= kind :tcp-accepted))
+        (zig.io/socket-writer socket opts)
+        (throw (ex-info (str "Cannot create writer on socket kind: " kind) {})))))
+
+  (make-input-stream [socket opts]
+    (let [kind (zig.io/socket-kind socket)]
+      (if (or (= kind :tcp-client) (= kind :tcp-accepted))
+        socket
+        (throw (ex-info (str "Cannot create input stream on socket kind: " kind) {})))))
+
+  (make-output-stream [socket opts]
+    (let [kind (zig.io/socket-kind socket)]
+      (if (or (= kind :tcp-client) (= kind :tcp-accepted))
+        socket
+        (throw (ex-info (str "Cannot create output stream on socket kind: " kind) {}))))))

@@ -10,15 +10,16 @@ echo "=== Namespace Tests ==="
 
 # -m with classpath (sample_3_namespaces)
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT $VM -cp tests/complex-samples/sample_3_namespaces/src -m main 2>&1) || {
-    echo "FAIL: namespace sample with -m (timeout or error)"
+    echo "FAIL: namespace sample with -m (timeout or error) [$( _elapsed)]"
     TEST_FAIL=$((TEST_FAIL + 1))
 }
 if [ "$result" = "Hello Clojure World" ]; then
-    echo "PASS: namespace sample with -m"
+    echo "PASS: namespace sample with -m [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: namespace sample with -m"
+    echo "FAIL: namespace sample with -m [$( _elapsed)]"
     echo "  Expected: Hello Clojure World"
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -26,15 +27,16 @@ fi
 
 # -cp flag error when -m used without -cp
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT $VM -m main 2>&1 | head -1) || {
-    echo "FAIL: -m without -cp gives error (timeout or error)"
+    echo "FAIL: -m without -cp gives error (timeout or error) [$( _elapsed)]"
     TEST_FAIL=$((TEST_FAIL + 1))
 }
 if [ "$result" = "Error: -m requires -cp to be set" ]; then
-    echo "PASS: -m without -cp gives error"
+    echo "PASS: -m without -cp gives error [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: -m without -cp gives error"
+    echo "FAIL: -m without -cp gives error [$( _elapsed)]"
     echo "  Expected: Error: -m requires -cp to be set"
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -42,15 +44,16 @@ fi
 
 # -cp with multiple directories (colon-separated)
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT $VM -cp tests/complex-samples/sample_3_namespaces/src:tests/complex-samples/sample_3_namespaces/src -m main 2>&1) || {
-    echo "FAIL: -cp with multiple dirs (timeout or error)"
+    echo "FAIL: -cp with multiple dirs (timeout or error) [$( _elapsed)]"
     TEST_FAIL=$((TEST_FAIL + 1))
 }
 if [ "$result" = "Hello Clojure World" ]; then
-    echo "PASS: -cp with multiple dirs"
+    echo "PASS: -cp with multiple dirs [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: -cp with multiple dirs"
+    echo "FAIL: -cp with multiple dirs [$( _elapsed)]"
     echo "  Expected: Hello Clojure World"
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -61,15 +64,16 @@ echo "=== REPL Namespace Tests ==="
 
 # REPL starts in user namespace (prompt shows user=>)
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT bash -c "echo '(exit)' | $VM --repl 2>&1 | grep 'user=>' | head -1 | tr -d '[:space:]'") || {
-    echo "FAIL: repl starts in user namespace (timeout or error)"
+    echo "FAIL: repl starts in user namespace (timeout or error) [$( _elapsed)]"
     TEST_FAIL=$((TEST_FAIL + 1))
 }
 if [ "$result" = "user=>" ]; then
-    echo "PASS: repl starts in user namespace"
+    echo "PASS: repl starts in user namespace [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: repl starts in user namespace"
+    echo "FAIL: repl starts in user namespace [$( _elapsed)]"
     echo "  Expected: user=>"
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -77,15 +81,16 @@ fi
 
 # REPL defn + function call (regression: used to crash)
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT bash -c "echo '(defn hello [] (println \"hello world\")) (hello) (exit)' | $VM --repl 2>&1 | grep 'hello world' | head -1 | tr -d '[:space:]'") || {
-    echo "FAIL: repl defn and call (timeout or error)"
+    echo "FAIL: repl defn and call (timeout or error) [$( _elapsed)]"
     TEST_FAIL=$((TEST_FAIL + 1))
 }
 if [ "$result" = "helloworld" ]; then
-    echo "PASS: repl defn and call"
+    echo "PASS: repl defn and call [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: repl defn and call"
+    echo "FAIL: repl defn and call [$( _elapsed)]"
     echo "  Expected: helloworld"
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -93,15 +98,16 @@ fi
 
 # REPL namespace switching with ns form
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT bash -c "printf '(ns city)\n(exit)\n' | $VM --repl 2>&1 | grep 'city=>' | head -1 | tr -d '[:space:]'") || {
-    echo "FAIL: repl ns switching changes prompt (timeout or error)"
+    echo "FAIL: repl ns switching changes prompt (timeout or error) [$( _elapsed)]"
     TEST_FAIL=$((TEST_FAIL + 1))
 }
 if [ "$result" = "city=>" ]; then
-    echo "PASS: repl ns switching changes prompt"
+    echo "PASS: repl ns switching changes prompt [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: repl ns switching changes prompt"
+    echo "FAIL: repl ns switching changes prompt [$( _elapsed)]"
     echo "  Expected: city=>"
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -109,15 +115,16 @@ fi
 
 # REPL def in user ns, access from another ns via qualified symbol
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT bash -c "printf '(def carrot 7)\n(ns city)\nuser/carrot\n(exit)\n' | $VM --repl 2>&1 | grep 'city=> 7' | head -1 | tr -d '[:space:]'") || {
-    echo "FAIL: repl qualified symbol cross-namespace (timeout or error)"
+    echo "FAIL: repl qualified symbol cross-namespace (timeout or error) [$( _elapsed)]"
     TEST_FAIL=$((TEST_FAIL + 1))
 }
 if [ "$result" = "city=>7" ]; then
-    echo "PASS: repl qualified symbol cross-namespace"
+    echo "PASS: repl qualified symbol cross-namespace [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: repl qualified symbol cross-namespace"
+    echo "FAIL: repl qualified symbol cross-namespace [$( _elapsed)]"
     echo "  Expected: city=>7"
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -125,15 +132,16 @@ fi
 
 # REPL defn in user ns, call from another ns via qualified symbol
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT bash -c "printf '(defn greet [n] (str \"Hello \" n))\n(ns other)\n(user/greet \"Bob\")\n(exit)\n' | $VM --repl 2>&1 | grep 'Hello' | head -1 | tr -d '[:space:]'") || {
-    echo "FAIL: repl qualified fn call cross-namespace (timeout or error)"
+    echo "FAIL: repl qualified fn call cross-namespace (timeout or error) [$( _elapsed)]"
     TEST_FAIL=$((TEST_FAIL + 1))
 }
 if [ "$result" = "other=>\"HelloBob\"" ]; then
-    echo "PASS: repl qualified fn call cross-namespace"
+    echo "PASS: repl qualified fn call cross-namespace [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: repl qualified fn call cross-namespace"
+    echo "FAIL: repl qualified fn call cross-namespace [$( _elapsed)]"
     echo "  Expected: other=>\"HelloBob\""
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -141,15 +149,16 @@ fi
 
 # REPL namespace isolation: def in one ns doesn't leak to another
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT bash -c "printf '(def x 100)\n(ns other)\n(def x 200)\n(ns user)\nx\n(exit)\n' | $VM --repl 2>&1 | grep 'user=> 100' | head -1 | tr -d '[:space:]'") || {
-    echo "FAIL: repl namespace isolation (timeout or error)"
+    echo "FAIL: repl namespace isolation (timeout or error) [$( _elapsed)]"
     TEST_FAIL=$((TEST_FAIL + 1))
 }
 if [ "$result" = "user=>100" ]; then
-    echo "PASS: repl namespace isolation"
+    echo "PASS: repl namespace isolation [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: repl namespace isolation"
+    echo "FAIL: repl namespace isolation [$( _elapsed)]"
     echo "  Expected: user=>100"
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -157,15 +166,16 @@ fi
 
 # Regression: REPL freeze after first expression (readSliceShort blocked on TTY)
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT bash -c "printf '(+ 1 2)\n(+ 3 4)\n(+ 5 6)\n(exit)\n' | $VM --repl 2>&1 | grep -c 'user=>'") || {
-    echo "FAIL: repl multiple expressions no freeze (timeout or error)"
+    echo "FAIL: repl multiple expressions no freeze (timeout or error) [$( _elapsed)]"
     TEST_FAIL=$((TEST_FAIL + 1))
 }
 if [ "$result" = "4" ]; then
-    echo "PASS: repl multiple expressions no freeze"
+    echo "PASS: repl multiple expressions no freeze [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: repl multiple expressions no freeze"
+    echo "FAIL: repl multiple expressions no freeze [$( _elapsed)]"
     echo "  Expected: 4"
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -173,15 +183,16 @@ fi
 
 # Regression: REPL with function definitions and calls across multiple lines
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT bash -c "printf '(defn double [n] (* n 2))\n(double 21)\n(exit)\n' | $VM --repl 2>&1 | grep '42' | head -1 | tr -d '[:space:]'") || {
-    echo "FAIL: repl defn then call no freeze (timeout or error)"
+    echo "FAIL: repl defn then call no freeze (timeout or error) [$( _elapsed)]"
     TEST_FAIL=$((TEST_FAIL + 1))
 }
 if [ "$result" = "user=>42" ]; then
-    echo "PASS: repl defn then call no freeze"
+    echo "PASS: repl defn then call no freeze [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: repl defn then call no freeze"
+    echo "FAIL: repl defn then call no freeze [$( _elapsed)]"
     echo "  Expected: user=>42"
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -189,15 +200,16 @@ fi
 
 # Regression: REPL handles EOF without explicit exit
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT bash -c "printf '(+ 1 2)\n(+ 3 4)' | $VM --repl 2>&1 | grep -c 'user=>'") || {
-    echo "FAIL: repl eof without exit (timeout or error)"
+    echo "FAIL: repl eof without exit (timeout or error) [$( _elapsed)]"
     TEST_FAIL=$((TEST_FAIL + 1))
 }
 if [ "$result" = "3" ]; then
-    echo "PASS: repl eof without exit"
+    echo "PASS: repl eof without exit [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: repl eof without exit"
+    echo "FAIL: repl eof without exit [$( _elapsed)]"
     echo "  Expected: 3"
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -205,15 +217,16 @@ fi
 
 # REPL multiline string literal
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT bash -c "printf '\"hello\nworld\"\n(exit)\n' | $VM --repl 2>&1 | grep -c 'hello'" ) || {
-    echo "FAIL: repl multiline string literal (timeout or error)"
+    echo "FAIL: repl multiline string literal (timeout or error) [$( _elapsed)]"
     TEST_FAIL=$((TEST_FAIL + 1))
 }
 if [ "$result" -ge "1" ]; then
-    echo "PASS: repl multiline string literal"
+    echo "PASS: repl multiline string literal [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: repl multiline string literal"
+    echo "FAIL: repl multiline string literal [$( _elapsed)]"
     echo "  Expected: output containing 'hello'"
     echo "  Got:      $result matches"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -221,15 +234,16 @@ fi
 
 # REPL def with multiline string value
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT bash -c "printf '(def msg \"line1\nline2\")\n(count msg)\n(exit)\n' | $VM --repl 2>&1 | grep '11' | head -1 | tr -d '[:space:]'" ) || {
-    echo "FAIL: repl def multiline string (timeout or error)"
+    echo "FAIL: repl def multiline string (timeout or error) [$( _elapsed)]"
     TEST_FAIL=$((TEST_FAIL + 1))
 }
 if [ "$result" = "user=>11" ]; then
-    echo "PASS: repl def multiline string"
+    echo "PASS: repl def multiline string [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: repl def multiline string"
+    echo "FAIL: repl def multiline string [$( _elapsed)]"
     echo "  Expected: user=>11"
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -237,15 +251,16 @@ fi
 
 # REPL defn with multiline docstring
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT bash -c "printf '(defn greet\n\"Say hello\nto everyone\"\n[name] (str \"Hi \" name))\n(greet \"Zig\")\n(exit)\n' | $VM --repl 2>&1 | grep 'Hi Zig' | head -1 | tr -d '[:space:]'" ) || {
-    echo "FAIL: repl defn multiline docstring (timeout or error)"
+    echo "FAIL: repl defn multiline docstring (timeout or error) [$( _elapsed)]"
     TEST_FAIL=$((TEST_FAIL + 1))
 }
 if [ "$result" = "user=>\"HiZig\"" ]; then
-    echo "PASS: repl defn multiline docstring"
+    echo "PASS: repl defn multiline docstring [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: repl defn multiline docstring"
+    echo "FAIL: repl defn multiline docstring [$( _elapsed)]"
     echo "  Expected: user=>\"HiZig\""
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -255,15 +270,16 @@ fi
 # Previously, returning a map from the REPL would crash with
 # "panic: switch on corrupt value" due to double-deinit of map entries.
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT bash -c "printf '{:a 1 :b 2}\n[1 2 3]\n#{:x :y}\n(exit)\n' | $VM --repl 2>&1 | grep -c 'user=>'" ) || {
-    echo "FAIL: repl map/vector/set no crash (timeout or error)"
+    echo "FAIL: repl map/vector/set no crash (timeout or error) [$( _elapsed)]"
     TEST_FAIL=$((TEST_FAIL + 1))
 }
 if [ "$result" = "4" ]; then
-    echo "PASS: repl map/vector/set no crash"
+    echo "PASS: repl map/vector/set no crash [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: repl map/vector/set no crash"
+    echo "FAIL: repl map/vector/set no crash [$( _elapsed)]"
     echo "  Expected: 4 prompts"
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -273,12 +289,13 @@ fi
 
 # find-ns returns nil for nonexistent namespace
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT $VM -e '(find-ns '\''nonexistent.ns.xyz)' 2>&1)
 if [ -z "$result" ]; then
-    echo "PASS: find-ns nonexistent returns nil"
+    echo "PASS: find-ns nonexistent returns nil [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: find-ns nonexistent returns nil"
+    echo "FAIL: find-ns nonexistent returns nil [$( _elapsed)]"
     echo "  Expected: (empty/nil)"
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -286,12 +303,13 @@ fi
 
 # find-ns clojure.core returns map with :name
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT $VM -e '(get (find-ns '\''clojure.core) :name)' 2>&1)
 if [ "$result" = "clojure.core" ]; then
-    echo "PASS: find-ns clojure.core :name"
+    echo "PASS: find-ns clojure.core :name [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: find-ns clojure.core :name"
+    echo "FAIL: find-ns clojure.core :name [$( _elapsed)]"
     echo "  Expected: clojure.core"
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -299,12 +317,13 @@ fi
 
 # create-ns creates new namespace
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT $VM -e '(get (create-ns '\''shell.test.ns) :name)' 2>&1)
 if [ "$result" = "shell.test.ns" ]; then
-    echo "PASS: create-ns returns correct name"
+    echo "PASS: create-ns returns correct name [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: create-ns returns correct name"
+    echo "FAIL: create-ns returns correct name [$( _elapsed)]"
     echo "  Expected: shell.test.ns"
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -312,12 +331,13 @@ fi
 
 # all-ns returns list with at least 2 namespaces
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT $VM -e '(count (all-ns))' 2>&1)
 if [ "$result" -ge 2 ] 2>/dev/null; then
-    echo "PASS: all-ns count >= 2"
+    echo "PASS: all-ns count >= 2 [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: all-ns count >= 2"
+    echo "FAIL: all-ns count >= 2 [$( _elapsed)]"
     echo "  Expected: >= 2"
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -325,13 +345,14 @@ fi
 
 # the-ns errors on nonexistent namespace
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 exit_code=0
 result=$($TOOL_TIMEOUT $TIMEOUT $VM -e '(the-ns '\''nonexistent.ns.xyz)' 2>&1) || exit_code=$?
 if [ $exit_code -ne 0 ] && echo "$result" | grep -q "UndefinedNamespace"; then
-    echo "PASS: the-ns nonexistent errors"
+    echo "PASS: the-ns nonexistent errors [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: the-ns nonexistent errors"
+    echo "FAIL: the-ns nonexistent errors [$( _elapsed)]"
     echo "  Expected: exit code != 0 with UndefinedNamespace"
     echo "  Got:      exit=$exit_code, output=$result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -339,12 +360,13 @@ fi
 
 # ns-name returns symbol
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT $VM -e '(ns-name '\''clojure.core)' 2>&1)
 if [ "$result" = "clojure.core" ]; then
-    echo "PASS: ns-name returns symbol"
+    echo "PASS: ns-name returns symbol [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: ns-name returns symbol"
+    echo "FAIL: ns-name returns symbol [$( _elapsed)]"
     echo "  Expected: clojure.core"
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -352,12 +374,13 @@ fi
 
 # ns-name with ns map argument
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT $VM -e '(ns-name (find-ns '\''user))' 2>&1)
 if [ "$result" = "user" ]; then
-    echo "PASS: ns-name with ns map arg"
+    echo "PASS: ns-name with ns map arg [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: ns-name with ns map arg"
+    echo "FAIL: ns-name with ns map arg [$( _elapsed)]"
     echo "  Expected: user"
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -365,12 +388,13 @@ fi
 
 # find-ns with ns map argument (idempotent)
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT $VM -e '(get (find-ns (find-ns '\''user)) :name)' 2>&1)
 if [ "$result" = "user" ]; then
-    echo "PASS: find-ns with ns map arg"
+    echo "PASS: find-ns with ns map arg [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: find-ns with ns map arg"
+    echo "FAIL: find-ns with ns map arg [$( _elapsed)]"
     echo "  Expected: user"
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -380,12 +404,13 @@ fi
 
 # requiring-resolve resolves a qualified symbol from a loaded namespace
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT $VM -e '((requiring-resolve '\''clojure.string/upper-case) "hello")' 2>&1)
 if [ "$result" = '"HELLO"' ]; then
-    echo "PASS: requiring-resolve resolves qualified symbol"
+    echo "PASS: requiring-resolve resolves qualified symbol [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: requiring-resolve resolves qualified symbol"
+    echo "FAIL: requiring-resolve resolves qualified symbol [$( _elapsed)]"
     echo "  Expected: \"HELLO\""
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -393,12 +418,13 @@ fi
 
 # requiring-resolve returns function for already-resolved symbol
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT $VM -e '(requiring-resolve '\''clojure.string/lower-case)' 2>&1)
 if [ "$result" = "#function" ]; then
-    echo "PASS: requiring-resolve already-resolved symbol"
+    echo "PASS: requiring-resolve already-resolved symbol [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: requiring-resolve already-resolved symbol"
+    echo "FAIL: requiring-resolve already-resolved symbol [$( _elapsed)]"
     echo "  Expected: #function"
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -406,12 +432,13 @@ fi
 
 # requiring-resolve with unqualified symbol that exists
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT $VM -e '(requiring-resolve '\''inc)' 2>&1)
 if [ "$result" = "#function" ]; then
-    echo "PASS: requiring-resolve unqualified existing symbol"
+    echo "PASS: requiring-resolve unqualified existing symbol [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: requiring-resolve unqualified existing symbol"
+    echo "FAIL: requiring-resolve unqualified existing symbol [$( _elapsed)]"
     echo "  Expected: #function"
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -421,12 +448,13 @@ fi
 
 # require with string loads namespace and tracks in loaded-libs
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT $VM -e '(require "clojure.string") (loaded-libs)' 2>&1)
 if echo "$result" | grep -q "clojure.string"; then
-    echo "PASS: require with string tracks in loaded-libs"
+    echo "PASS: require with string tracks in loaded-libs [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: require with string tracks in loaded-libs"
+    echo "FAIL: require with string tracks in loaded-libs [$( _elapsed)]"
     echo "  Expected: output containing clojure.string"
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))
@@ -435,12 +463,13 @@ fi
 # Regression: namespace loading with trampolining at top level (eval_ns.zig fix)
 # Previously crashed with "access of union field 'value' while field 'trampoline' is active"
 TEST_TOTAL=$((TEST_TOTAL + 1))
+_start_timer
 result=$($TOOL_TIMEOUT $TIMEOUT $VM -cp tests/complex-samples/sample_4_ns_trampoline/src -e "(require 'tramp.test) tramp.test/result" 2>&1)
 if [ "$result" = "1000" ]; then
-    echo "PASS: ns-loading with trampolining at top level"
+    echo "PASS: ns-loading with trampolining at top level [$( _elapsed)]"
     TEST_PASS=$((TEST_PASS + 1))
 else
-    echo "FAIL: ns-loading with trampolining at top level"
+    echo "FAIL: ns-loading with trampolining at top level [$( _elapsed)]"
     echo "  Expected: 1000"
     echo "  Got:      $result"
     TEST_FAIL=$((TEST_FAIL + 1))

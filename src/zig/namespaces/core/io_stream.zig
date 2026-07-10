@@ -11,6 +11,10 @@ const Allocator = std.mem.Allocator;
 const Io = std.Io;
 const Dir = Io.Dir;
 const File = Io.File;
+const net = Io.net;
+
+// Import socket module for SocketHandle type and stream helpers
+const io_socket = @import("io_socket.zig");
 
 // ============================================================
 // Stream handle types
@@ -298,11 +302,40 @@ pub fn core_read_bytes(self: *const Value, args: *const list.List, env_env: *Env
     if (std.meta.activeTag(handle_val) != .wrapped) return error.TypeError;
     if (std.meta.activeTag(max_bytes_val) != .integer) return error.TypeError;
 
-    const handle: *StreamHandle = vm.unwrapPtr(*StreamHandle, handle_val);
-    if (handle.closed) return error.ClosedStream;
-
     const max_bytes = @as(usize, @intCast(max_bytes_val.integer));
     const allocator = env_env.allocator;
+
+    // Try as SocketHandle first (check magic to distinguish from StreamHandle)
+    {
+        const socket_handle: *io_socket.SocketHandle = vm.unwrapPtr(*io_socket.SocketHandle, handle_val);
+        if (socket_handle.magic == io_socket.SOCKET_HANDLE_MAGIC and !socket_handle.closed) {
+            switch (socket_handle.kind) {
+                .tcp_client, .tcp_accepted => {
+                    var stream: *net.Stream = undefined;
+                    switch (socket_handle.kind) {
+                        .tcp_client => stream = &socket_handle.data.tcp_client.stream,
+                        .tcp_accepted => stream = &socket_handle.data.tcp_accepted.stream,
+                        else => unreachable,
+                    }
+                    const socket_io = io_socket.getIo(allocator);
+                    return io_socket.readBytesFromStream(
+                        stream, socket_io, socket_handle.buffer, max_bytes, allocator,
+                    ) catch |err| {
+                        return io_socket.throwSocketException(
+                            allocator, err, "Read bytes from socket",
+                        );
+                    };
+                },
+                else => {},
+            }
+        } else if (socket_handle.magic == io_socket.SOCKET_HANDLE_MAGIC and socket_handle.closed) {
+            return error.ClosedStream;
+        }
+    }
+
+    // Fall back to StreamHandle (file-based streams)
+    const handle: *StreamHandle = vm.unwrapPtr(*StreamHandle, handle_val);
+    if (handle.closed) return error.ClosedStream;
 
     var is_data: *InputStreamData = undefined;
     switch (handle.data) {
@@ -341,7 +374,6 @@ pub fn core_read_bytes(self: *const Value, args: *const list.List, env_env: *Env
 
 pub fn core_write_bytes(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
-    _ = env_env;
     if (args.items.len < 2) return error.ArityError;
     const handle_val = args.items[0];
     const data_val = args.items[1];
@@ -349,10 +381,42 @@ pub fn core_write_bytes(self: *const Value, args: *const list.List, env_env: *En
     if (std.meta.activeTag(handle_val) != .wrapped) return error.TypeError;
     if (std.meta.activeTag(data_val) != .string) return error.TypeError;
 
+    const allocator = env_env.allocator;
+    const io = std.Options.debug_io;
+
+    // Try as SocketHandle first (check magic to distinguish from StreamHandle)
+    {
+        const socket_handle: *io_socket.SocketHandle = vm.unwrapPtr(*io_socket.SocketHandle, handle_val);
+        if (socket_handle.magic == io_socket.SOCKET_HANDLE_MAGIC and !socket_handle.closed) {
+            switch (socket_handle.kind) {
+                .tcp_client, .tcp_accepted => {
+                    var stream: *net.Stream = undefined;
+                    switch (socket_handle.kind) {
+                        .tcp_client => stream = &socket_handle.data.tcp_client.stream,
+                        .tcp_accepted => stream = &socket_handle.data.tcp_accepted.stream,
+                        else => unreachable,
+                    }
+                    const socket_io = io_socket.getIo(allocator);
+                    io_socket.writeBytesToStream(
+                        stream, socket_io, socket_handle.buffer, data_val.string,
+                    ) catch |err| {
+                        return io_socket.throwSocketException(
+                            allocator, err, "Write bytes to socket",
+                        );
+                    };
+                    return vm.nilValue();
+                },
+                else => {},
+            }
+        } else if (socket_handle.magic == io_socket.SOCKET_HANDLE_MAGIC and socket_handle.closed) {
+            return error.ClosedStream;
+        }
+    }
+
+    // Fall back to StreamHandle (file-based streams)
     const handle: *StreamHandle = vm.unwrapPtr(*StreamHandle, handle_val);
     if (handle.closed) return error.ClosedStream;
 
-    const io = std.Options.debug_io;
     var os_data: *OutputStreamData = undefined;
     switch (handle.data) {
         .output_stream => |*os| {
@@ -463,6 +527,37 @@ pub fn core_read_line_stream(self: *const Value, args: *const list.List, env_env
 
     if (std.meta.activeTag(handle_val) != .wrapped) return error.TypeError;
 
+    const allocator = env_env.allocator;
+
+    // Try as SocketHandle first (check magic to distinguish from StreamHandle)
+    {
+        const socket_handle: *io_socket.SocketHandle = vm.unwrapPtr(*io_socket.SocketHandle, handle_val);
+        if (socket_handle.magic == io_socket.SOCKET_HANDLE_MAGIC and !socket_handle.closed) {
+            switch (socket_handle.kind) {
+                .tcp_client, .tcp_accepted => {
+                    var stream: *net.Stream = undefined;
+                    switch (socket_handle.kind) {
+                        .tcp_client => stream = &socket_handle.data.tcp_client.stream,
+                        .tcp_accepted => stream = &socket_handle.data.tcp_accepted.stream,
+                        else => unreachable,
+                    }
+                    const socket_io = io_socket.getIo(allocator);
+                    return io_socket.readLineFromStream(
+                        stream, socket_io, socket_handle.buffer, allocator,
+                    ) catch |err| {
+                        return io_socket.throwSocketException(
+                            allocator, err, "Read line from socket",
+                        );
+                    };
+                },
+                else => {},
+            }
+        } else if (socket_handle.magic == io_socket.SOCKET_HANDLE_MAGIC and socket_handle.closed) {
+            return error.ClosedStream;
+        }
+    }
+
+    // Fall back to StreamHandle (file-based streams)
     const handle: *StreamHandle = vm.unwrapPtr(*StreamHandle, handle_val);
     if (handle.closed) return error.ClosedStream;
 
@@ -477,7 +572,6 @@ pub fn core_read_line_stream(self: *const Value, args: *const list.List, env_env
         else => return error.TypeError,
     }
 
-    const allocator = env_env.allocator;
     var line_buf: std.ArrayListUnmanaged(u8) = .empty;
     defer allocator.free(line_buf.items);
 
@@ -522,7 +616,6 @@ pub fn core_read_line_stream(self: *const Value, args: *const list.List, env_env
 
 pub fn core_write_string(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
-    _ = env_env;
     if (args.items.len < 2) return error.ArityError;
     const handle_val = args.items[0];
     const text_val = args.items[1];
@@ -530,10 +623,42 @@ pub fn core_write_string(self: *const Value, args: *const list.List, env_env: *E
     if (std.meta.activeTag(handle_val) != .wrapped) return error.TypeError;
     if (std.meta.activeTag(text_val) != .string) return error.TypeError;
 
+    const allocator = env_env.allocator;
+    const io = std.Options.debug_io;
+
+    // Try as SocketHandle first (check magic to distinguish from StreamHandle)
+    {
+        const socket_handle: *io_socket.SocketHandle = vm.unwrapPtr(*io_socket.SocketHandle, handle_val);
+        if (socket_handle.magic == io_socket.SOCKET_HANDLE_MAGIC and !socket_handle.closed) {
+            switch (socket_handle.kind) {
+                .tcp_client, .tcp_accepted => {
+                    var stream: *net.Stream = undefined;
+                    switch (socket_handle.kind) {
+                        .tcp_client => stream = &socket_handle.data.tcp_client.stream,
+                        .tcp_accepted => stream = &socket_handle.data.tcp_accepted.stream,
+                        else => unreachable,
+                    }
+                    const socket_io = io_socket.getIo(allocator);
+                    io_socket.writeBytesToStream(
+                        stream, socket_io, socket_handle.buffer, text_val.string,
+                    ) catch |err| {
+                        return io_socket.throwSocketException(
+                            allocator, err, "Write string to socket",
+                        );
+                    };
+                    return vm.nilValue();
+                },
+                else => {},
+            }
+        } else if (socket_handle.magic == io_socket.SOCKET_HANDLE_MAGIC and socket_handle.closed) {
+            return error.ClosedStream;
+        }
+    }
+
+    // Fall back to StreamHandle (file-based streams)
     const handle: *StreamHandle = vm.unwrapPtr(*StreamHandle, handle_val);
     if (handle.closed) return error.ClosedStream;
 
-    const io = std.Options.debug_io;
     var os_data: *OutputStreamData = undefined;
     switch (handle.data) {
         .writer => |*wd| {
@@ -575,6 +700,18 @@ pub fn core_close_stream(self: *const Value, args: *const list.List, env_env: *E
 
     if (std.meta.activeTag(handle_val) != .wrapped) return error.TypeError;
 
+    // Try as SocketHandle first (check magic to distinguish from StreamHandle)
+    {
+        const socket_handle: *io_socket.SocketHandle = vm.unwrapPtr(*io_socket.SocketHandle, handle_val);
+        if (socket_handle.magic == io_socket.SOCKET_HANDLE_MAGIC) {
+            if (!socket_handle.closed) {
+                socket_handle.close();
+            }
+            return vm.nilValue();
+        }
+    }
+
+    // Fall back to StreamHandle (file-based streams)
     const handle: *StreamHandle = vm.unwrapPtr(*StreamHandle, handle_val);
     if (!handle.closed) {
         handle.close();
@@ -595,6 +732,22 @@ pub fn core_flush_stream(self: *const Value, args: *const list.List, env_env: *E
 
     if (std.meta.activeTag(handle_val) != .wrapped) return error.TypeError;
 
+    // Try as SocketHandle first (check magic to distinguish from StreamHandle)
+    {
+        const socket_handle: *io_socket.SocketHandle = vm.unwrapPtr(*io_socket.SocketHandle, handle_val);
+        if (socket_handle.magic == io_socket.SOCKET_HANDLE_MAGIC) {
+            if (socket_handle.closed) return error.ClosedStream;
+            // TCP is already buffered by the OS, flush is a no-op
+            switch (socket_handle.kind) {
+                .tcp_client, .tcp_accepted => {
+                    return vm.nilValue();
+                },
+                else => {},
+            }
+        }
+    }
+
+    // Fall back to StreamHandle (file-based streams)
     const handle: *StreamHandle = vm.unwrapPtr(*StreamHandle, handle_val);
     if (handle.closed) return error.ClosedStream;
 
