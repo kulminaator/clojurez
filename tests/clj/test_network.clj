@@ -563,64 +563,49 @@
   :udp)
 
 ;; --- socket-shutdown ---
-(check "api: socket-shutdown :input"
-  (let [server (io/server-socket "127.0.0.1" 0)
-        port (io/get-local-port server)
-        result (atom nil)]
+(defn- with-shutdown-test
+  "Run socket-shutdown on an accepted server socket with a live client.
+   Server signals port-ready atom before accept, result atom after shutdown.
+   Client stays alive until server signals done."  
+  [direction]
+  (let [port-atom (atom nil)
+        result-atom (atom nil)]
+    ;; Server thread: listen → accept → shutdown → signal done
     (future
       (try
-        (let [accepted (io/accept server)]
-          (io/socket-shutdown accepted :input)
-          (io/close-socket accepted)
-          (io/close-socket server)
-          (reset! result :ok))
+        (let [server (io/server-socket "127.0.0.1" 0)
+              port (io/get-local-port server)]
+          (reset! port-atom port)
+          (let [accepted (io/accept server)]
+            (io/socket-shutdown accepted direction)
+            (io/close-socket accepted)
+            (io/close-socket server)
+            (reset! result-atom :ok)))
         (catch Exception e
-          (reset! result (ex-message e)))))
-    (sleep 200)
-    (let [client (io/socket "127.0.0.1" port)]
-      (io/close-socket client))
-    (sleep 500)
-    @result)
+          (reset! result-atom (ex-message e)))))
+    ;; Wait for server to be listening
+    (loop [_ 0]
+      (when (and (< _ 50) (nil? @port-atom))
+        (sleep 50) (recur (inc _))))
+    ;; Connect client and hold connection until server is done
+    (when-let [port @port-atom]
+      (let [client (io/socket "127.0.0.1" port)]
+        (loop [_ 0]
+          (if (and (< _ 100) (nil? @result-atom))
+            (do (sleep 50) (recur (inc _)))
+            (safe-close client))))
+        @result-atom)))
+
+(check "api: socket-shutdown :input"
+  (with-shutdown-test :input)
   :ok)
 
 (check "api: socket-shutdown :output"
-  (let [server (io/server-socket "127.0.0.1" 0)
-        port (io/get-local-port server)
-        result (atom nil)]
-    (future
-      (try
-        (let [accepted (io/accept server)]
-          (io/socket-shutdown accepted :output)
-          (io/close-socket accepted)
-          (io/close-socket server)
-          (reset! result :ok))
-        (catch Exception e
-          (reset! result (ex-message e)))))
-    (sleep 200)
-    (let [client (io/socket "127.0.0.1" port)]
-      (io/close-socket client))
-    (sleep 500)
-    @result)
+  (with-shutdown-test :output)
   :ok)
 
 (check "api: socket-shutdown :both"
-  (let [server (io/server-socket "127.0.0.1" 0)
-        port (io/get-local-port server)
-        result (atom nil)]
-    (future
-      (try
-        (let [accepted (io/accept server)]
-          (io/socket-shutdown accepted :both)
-          (io/close-socket accepted)
-          (io/close-socket server)
-          (reset! result :ok))
-        (catch Exception e
-          (reset! result (ex-message e)))))
-    (sleep 200)
-    (let [client (io/socket "127.0.0.1" port)]
-      (io/close-socket client))
-    (sleep 500)
-    @result)
+  (with-shutdown-test :both)
   :ok)
 
 (check "api: socket-shutdown invalid direction throws"
