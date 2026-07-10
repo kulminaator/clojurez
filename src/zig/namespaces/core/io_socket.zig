@@ -479,7 +479,6 @@ fn socketError(allocator: Allocator, err: anyerror, context: []const u8) anyerro
     const err_name = @errorName(err);
     const msg = std.fmt.allocPrint(allocator, "{s}: {s}", .{ context, err_name }) catch return error.OutOfMemory;
     defer allocator.free(msg);
-    std.log.err("[socket] {s}", .{msg});
     return err;
 }
 
@@ -497,7 +496,6 @@ pub fn throwSocketException(allocator: Allocator, err: anyerror, context: []cons
         return alloc_err;
     };
     defer allocator.free(msg);
-    std.log.err("[socket] {s}", .{msg});
 
     // Create Clojure exception
     const empty_map = vm.cachedEmptyMap() orelse return error.OutOfMemory;
@@ -524,7 +522,6 @@ fn throwSocketExceptionFmt(allocator: Allocator, err: anyerror, comptime fmt: []
         return alloc_err;
     };
     defer allocator.free(msg);
-    std.log.err("[socket] {s}", .{msg});
 
     // Create Clojure exception
     const empty_map = vm.cachedEmptyMap() orelse return error.OutOfMemory;
