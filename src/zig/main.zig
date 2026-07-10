@@ -28,6 +28,7 @@ const stack_stats = @import("stack_stats.zig");
 const sequences = @import("namespaces/core/sequences.zig");
 const phm = @import("persistent_hash_map.zig");
 const exception = @import("exception.zig");
+const timeout_mod = @import("timeout.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -83,8 +84,10 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // Record the earliest possible stack pointer baseline.
     stack_stats.recordAppBaseline();
 
-    // --parse-debug: handle BEFORE any VM initialization.
-    // Needs only a simple allocator — no GC, no namespaces, no library loading.
+    // --parse-debug and --timeout: handle BEFORE any VM initialization.
+    // --parse-debug needs only a simple allocator — no GC, no namespaces, no library loading.
+    // --timeout is parsed early so we can start the watchdog before evaluation begins.
+    var timeout_secs: usize = 0;
     {
         var args_it = std.process.Args.Iterator.initAllocator(init.args, std.heap.page_allocator) catch unreachable;
         _ = args_it.next(); // skip program name
@@ -96,6 +99,19 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
                 };
                 _ = runParseDebug(std.heap.page_allocator, filename) catch {};
                 std.process.exit(0);
+            } else if (std.mem.eql(u8, arg, "--timeout")) {
+                const timeout_str = args_it.next() orelse {
+                    std.debug.print("Error: missing value after --timeout\n", .{});
+                    std.process.exit(1);
+                };
+                timeout_secs = std.fmt.parseUnsigned(usize, timeout_str, 10) catch {
+                    std.debug.print("Error: --timeout requires a positive integer (seconds)\n", .{});
+                    std.process.exit(1);
+                };
+                if (timeout_secs == 0) {
+                    std.debug.print("Error: --timeout requires a positive integer (seconds)\n", .{});
+                    std.process.exit(1);
+                }
             }
         }
     }
@@ -292,6 +308,10 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // (function definitions, vars, metadata) survive all GC cycles.
     registerPermanentRoots(&gc_instance, ns_mgr, clojure_core_env, zc_env, cs_env, cm_env, zr_env, zio_env);
 
+    // Start the timeout watchdog (if --timeout was specified).
+    // The watchdog thread will fire after timeout_secs and force-kill the process.
+    _ = timeout_mod.initTimeout(timeout_secs);
+
     // Count arguments
     const arg_count = countArgs(init.args, allocator);
 
@@ -342,6 +362,9 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
                 try writeStderr("Error: missing namespace after -m\n");
                 std.process.exit(1);
             };
+        } else if (std.mem.eql(u8, arg, "--timeout")) {
+            // Already parsed in early pass — skip the value argument
+            _ = it.next();
         } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
             printUsage() catch {};
             std.process.exit(0);
@@ -361,7 +384,10 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
             try writeStderr("Error: -m requires -cp to be set\n");
             std.process.exit(1);
         }
-        try runMain(allocator, user_env, ns_name);
+        runMain(allocator, user_env, ns_name) catch {
+            _handleEvalError();
+            unreachable;
+        };
         // Collect after function returns so local vars are out of scope
         if (gc_mod.current_gc) |gc| gc.collect(gc_scan.valueScanFn);
     }
@@ -519,10 +545,8 @@ fn runExpression(allocator: Allocator, expr: []const u8, env: *Env) anyerror!voi
     for (forms.items) |form| {
         // Use current namespace's env for evaluation
         const eval_env = getCurrentNsEnv(env) orelse env;
-        const result_ptr = eval.evalWithFile(allocator, form, eval_env, "<string>") catch |err| {
-            // Error already formatted with source location in evalWithFile
-            std.process.exit(1);
-            _ = err;
+        const result_ptr = eval.evalWithFile(allocator, form, eval_env, "<string>") catch {
+            _handleEvalError();
             unreachable;
         };
 
@@ -581,10 +605,8 @@ fn runFile(allocator: Allocator, filename: []const u8, env: *Env) anyerror!void 
     for (forms.items) |form| {
         // Get current namespace's env for each form (ns form may change it)
         const eval_env = getCurrentNsEnv(env) orelse env;
-        const result_ptr = eval.evalWithFile(allocator, form, eval_env, filename) catch |err| {
-            // Error already formatted with source location in evalWithFile
-            std.process.exit(1);
-            _ = err; // unreachable but silences unused warning
+        const result_ptr = eval.evalWithFile(allocator, form, eval_env, filename) catch {
+            _handleEvalError();
             unreachable;
         };
 
@@ -852,6 +874,7 @@ fn printUsage() anyerror!void {
         \\Options:
         \\  -e, --eval EXPR   Evaluate expression and exit
         \\  --repl            Start interactive REPL
+        \\  --timeout N       Terminate after N seconds (exit code 124)
         \\  -h, --help        Show this help message
         \\
         \\If no options are given, starts an interactive REPL.
@@ -865,6 +888,16 @@ fn writeStdout(data: []const u8) anyerror!void {
     var writer = std.Io.File.stdout().writer(std.Options.debug_io, &buf);
     try writer.interface.writeAll(data);
     writer.flush() catch {};
+}
+
+/// Handle evaluation errors: check for timeout, otherwise exit with code 1.
+/// This function avoids capturing module references in catch blocks.
+fn _handleEvalError() void {
+    if (timeout_mod.checkTimeout()) {
+        std.debug.print("Error: execution timed out after {d} seconds\n", .{timeout_mod.getTimeoutSeconds()});
+        std.process.exit(124);
+    }
+    std.process.exit(1);
 }
 
 fn writeStderr(data: []const u8) anyerror!void {

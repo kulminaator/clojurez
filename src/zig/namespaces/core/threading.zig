@@ -13,6 +13,7 @@ const Env = vm.Env;
 const eval = @import("../../eval.zig");
 const gc_mod = @import("../../gc.zig");
 const gc_scan = @import("../../gc_scan.zig");
+const timeout_mod = @import("../../timeout.zig");
 
 /// State values for FutureData.state atomic.
 const FutureState = struct {
@@ -213,6 +214,8 @@ pub fn core_deref_future(self: *const Value, args: *const list.List, env_env: *E
             if (timeout_val) |tv| return try vm.shallowClone(tv, allocator);
             return vm.nilValue();
         }
+        // Check VM-level timeout
+        if (timeout_mod.checkTimeout()) return timeout_mod.TimeoutExpired;
         // Sleep 1ms between polls
         const sleep_duration = std.Io.Duration.fromMilliseconds(1);
         std.Io.sleep(io, sleep_duration, std.Io.Clock.awake) catch {};
@@ -264,6 +267,7 @@ pub fn core_realized(self: *const Value, args: *const list.List, _: *Env) anyerr
 /// zig.core/sleep — sleep for N milliseconds.
 /// Args: (sleep milliseconds)
 /// milliseconds must be a non-negative integer.
+/// Checks for timeout expiry every 100ms during sleep.
 pub fn core_sleep(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 1) return error.ArityError;
@@ -275,8 +279,15 @@ pub fn core_sleep(self: *const Value, args: *const list.List, _: *Env) anyerror!
     if (ms < 0) return error.TypeError;
 
     const io = std.Io.Threaded.global_single_threaded.io();
-    const duration = std.Io.Duration.fromMilliseconds(ms);
-    std.Io.sleep(io, duration, std.Io.Clock.awake) catch {};
+    var remaining: i64 = ms;
+    while (remaining > 0) {
+        // Check timeout every 100ms
+        const slice = if (remaining < 100) remaining else @as(i64, 100);
+        const duration = std.Io.Duration.fromMilliseconds(slice);
+        std.Io.sleep(io, duration, std.Io.Clock.awake) catch {};
+        remaining -= slice;
+        if (timeout_mod.checkTimeout()) return timeout_mod.TimeoutExpired;
+    }
 
     return vm.nilValue();
 }
@@ -356,6 +367,8 @@ pub fn core_deref_promise(self: *const Value, args: *const list.List, env_env: *
             if (timeout_val) |tv| return try vm.shallowClone(tv, allocator);
             return vm.nilValue();
         }
+        // Check VM-level timeout
+        if (timeout_mod.checkTimeout()) return timeout_mod.TimeoutExpired;
         const sleep_duration = std.Io.Duration.fromMilliseconds(1);
         std.Io.sleep(io, sleep_duration, std.Io.Clock.awake) catch {};
         elapsed_ms += 1;

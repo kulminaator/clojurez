@@ -118,13 +118,18 @@ These are hard limits. When a file or function approaches its limit, it must be 
 
 ### Enforcement
 
-- **CLI tests**: Use `tests/timeout.sh` when spawning the VM process.
+- **CLI tests**: Use the built-in `--timeout` flag.
   ```bash
-  tests/timeout.sh 10 ./zig-out/bin/clojurez -e '(+ 1 2)'
+  ./zig-out/bin/clojurez --timeout 10 -e '(+ 1 2)'
   ```
 - **REPL tests**: Never pipe unbounded input into the REPL. Always provide finite input with an explicit exit command.
   ```bash
-  tests/timeout.sh 10 ./zig-out/bin/clojurez --repl < input.clj
+  ./zig-out/bin/clojurez --timeout 10 --repl < input.clj
+  ```
+- **Clojure shell tests**: Use the `:timeout` option in test helpers.
+  ```clojure
+  (test-cmd "my-test" ["-e" "..."] {:timeout 15})
+  (test-repl "my-repl" "..." {:timeout 10})
   ```
 - **Unit tests**: Use Zig's built-in test timeout or wrap long-running tests with explicit guards.
 - **Multithreading tests**: Tests involving `future` or `promise` must include explicit timeouts. Never rely on `deref` without a fallback. Use patterns like:
@@ -162,7 +167,7 @@ Acceptable exclusions (documented with `// coverage: excluded`):
 
 ## 4. Test Categories
 
-### 4.1 Unit Tests
+### 4.1 Unit Tests (Zig)
 
 Test individual functions in isolation. Place tests at the bottom of each source file using Zig's `test` blocks:
 
@@ -174,12 +179,14 @@ test "core::plus: returns integer for integer args" {
 }
 ```
 
+Run: `zig test src/zig/all_tests.zig`
+
 **Requirements:**
 - Each test must be self-contained (no shared mutable state between tests)
 - Tests must not depend on execution order
 - Use descriptive names: `test "<module>::<function>: <description>"`
 
-### 4.2 Clojure-based Tests (`tests/clj/test_*.clj`)
+### 4.2 Clojure In-VM Tests (`tests/clj/test_*.clj`, excluding `shell_*`)
 
 Test the full pipeline (lexer → parser → evaluator → runtime) through the VM. Use the `check`/`check-true`/`check-false` helper from `tests/clj/clj_test_helper.clj`:
 
@@ -189,9 +196,36 @@ Test the full pipeline (lexer → parser → evaluator → runtime) through the 
 (check-false "falsy" nil)
 ```
 
-### 4.3 Shell-based Tests (`tests/test_*.sh`)
+These run directly inside a single clojurez process. Create `tests/clj/test_my_feature.clj` and it will be picked up automatically.
 
-Integration tests for I/O, namespaces, file execution, `-cp -m`, REPL behavior, and complex samples.
+### 4.3 Clojure Shell Tests (`tests/clj/test_shell_*.clj`)
+
+Test features requiring process isolation (stdout capture, REPL interaction, file execution, `-cp`/`-m`). Use the test runner framework:
+
+```clojure
+(load-file "tests/clj/test_runner.clj")
+(load-file "tests/clj/shell_test_runner.clj")
+
+(def-suite shell-my-tests)
+
+(test "print hello" (fn []
+  (test-cmd "print-hello" ["-e" "(print \"hello\")"] {:expected-out "hello"})))
+
+(test "repl interaction" (fn []
+  (test-repl "repl-test" "(+ 1 2)\n(exit)\n" {:expected-out-contains "3"})))
+
+(run-all)
+```
+
+Register in `tests/run_all.clj` with `(load-file "tests/clj/test_shell_my_tests.clj")`.
+
+### 4.4 Bash Debug Tests (`tests/test_debug.sh`)
+
+Tests requiring environment variable manipulation (CLJVM_DEBUG). These cannot be migrated to Clojure because `io/sh` does not yet support the `:env` option. Minimal bash script sourced by `run_tests.sh`.
+
+### 4.5 Complex Samples (`tests/complex-samples/`)
+
+End-to-end programs with `expected_output.txt` verification. Each sample serves as a regression test for a specific feature area. Tested via `test_shell_samples.clj`.
 
 ### 4.4 Complex Samples (`tests/complex-samples/`)
 
@@ -212,16 +246,15 @@ Examples:
 - `test "parser::parse: handles nested lists"`
 - `test "eval::def: binds symbol in environment"`
 
-### Shell Tests
+### Clojure Tests
 
-```
-test_<feature>_<scenario>()
-```
+- **In-VM suites**: `tests/clj/test_<feature>.clj` (e.g., `test_arithmetics.clj`)
+- **Shell suites**: `tests/clj/test_shell_<category>.clj` (e.g., `test_shell_repl.clj`)
+- **Test names inside suites**: descriptive strings passed to `(test "name" ...)`
 
-Examples:
-- `test_cli_eval_simple_expression()`
-- `test_cli_file_execution()`
-- `test_repl_basic_interaction()`
+### Bash Debug Tests
+
+- `tests/test_debug.sh` — single file for CLJVM_DEBUG env var tests
 
 ---
 
@@ -253,17 +286,50 @@ test "regression: <bug_description_or_issue_number>"
 # Zig unit tests
 zig test src/zig/all_tests.zig
 
-# CLI/integration tests (builds + runs everything)
+# All tests (builds VM, runs Clojure suites + shell tests + debug tests)
 ./run_tests.sh
 
-# Specific Clojure test suite
+# Run without rebuilding
+NOBUILD=1 ./run_tests.sh
+
+# Specific Clojure in-VM test suite
 ./run_tests.sh test_arithmetics
+./run_tests.sh test_bytecode
 ```
 
 ### Running Both
 
 ```bash
 zig test src/zig/all_tests.zig && ./run_tests.sh
+```
+
+### Running Clojure Shell Tests Directly
+
+```bash
+# All shell test suites in one process
+./zig-out/bin/clojurez --timeout 120 tests/run_all.clj
+```
+
+### Test Output Format
+
+```
+=== Clojure Test Suites ===
+PASS: test_smoke [0s]
+PASS: test_arithmetics [0s]
+...FAIL: test_xyz (2 failure(s)) [1s]    ; suite had check failures
+TIMEOUT: test_abc (15s) [15s]             ; suite exceeded timeout
+CRASH: test_def (exit 11) [0s]            ; suite crashed (segfault, assertion)
+
+=== Clojure Shell Test Suites ===
+=== Suite: shell-print-io ===
+SUMMARY: 5 passed, 0 failed
+...
+
+=== Bash Debug Tests ===
+PASS: debug CLJVM_DEBUG=1 shows startup/shutdown [0s]
+...
+
+ALL TESTS PASSED: 54/54
 ```
 
 ### Sample Program Verification

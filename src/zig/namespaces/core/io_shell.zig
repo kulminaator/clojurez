@@ -6,6 +6,7 @@ const Value = vm.Value;
 const list = @import("../../list.zig");
 const Env = vm.Env;
 const gc_mod = @import("../../gc.zig");
+const timeout_mod = @import("../../timeout.zig");
 
 const Allocator = std.mem.Allocator;
 const Io = std.Io;
@@ -49,6 +50,21 @@ const ProcessHandle = struct {
         self.allocator.destroy(self);
     }
 };
+
+// ============================================================
+// Kill callback for timeout watchdog
+// ============================================================
+
+/// Kill a process handle (called by timeout watchdog).
+/// Receives an anyopaque pointer to a ProcessHandle.
+fn killProcessHandle(handle_ptr: *anyopaque) void {
+    const handle: *ProcessHandle = @ptrCast(@alignCast(handle_ptr));
+    if (handle.finished) return;
+    const io = std.Options.debug_io;
+    std.process.Child.kill(&handle.child, io);
+    handle.exit_code = -1;
+    handle.finish();
+}
 
 // ============================================================
 // Helper: parse opts map for a known key
@@ -131,6 +147,9 @@ pub fn core_sh_execute_stream(self: *const Value, args: *const list.List, env_en
     if (gc_mod.current_gc) |gc| {
         gc.setObjectType(@as(*anyopaque, @ptrCast(handle)), gc_mod.GCObjectType.unknown);
     }
+
+    // Register with timeout watchdog so it can kill the process on timeout.
+    timeout_mod.registerProcess(@as(*anyopaque, @ptrCast(handle)), killProcessHandle);
 
     return vm.wrapPtr(*ProcessHandle, handle);
 }
@@ -296,6 +315,8 @@ pub fn core_sh_wait(self: *const Value, args: *const list.List, env: *Env) anyer
     };
 
     handle.exit_code = exit_code;
+    // Unregister from timeout tracking before finishing (frees the handle).
+    timeout_mod.unregisterProcess(@as(*anyopaque, @ptrCast(handle)));
     handle.finish();
 
     return vm.intValue(exit_code);
@@ -324,6 +345,8 @@ pub fn core_sh_kill(self: *const Value, args: *const list.List, env_env: *Env) a
     std.process.Child.kill(&handle.child, io);
 
     handle.exit_code = -1;
+    // Unregister from timeout tracking before finishing.
+    timeout_mod.unregisterProcess(@as(*anyopaque, @ptrCast(handle)));
     handle.finish();
 
     return vm.nilValue();
