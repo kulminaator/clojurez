@@ -36,9 +36,9 @@ Type `(quit)`, `(exit)`, or press `CTRL+D` to exit the REPL.
 
 | Binary | Size | Use |
 |--------|------|-----|
-| `clojurez` | ~24MB | Debug (full safety checks) |
-| `clojurez-medium` | ~740KB | ReleaseSmall |
-| `clojurez-mini` | ~740KB | ReleaseSmall + stripped |
+| `clojurez` | ~30MB | Debug (full safety checks) |
+| `clojurez-medium` | ~1MB | ReleaseSmall |
+| `clojurez-mini` | ~1MB | ReleaseSmall + stripped |
 
 ## Key Features
 
