@@ -1384,6 +1384,17 @@ pub fn core_vec(self: *const Value, args: *const list.List, env_env: *Env) anyer
     return try vm.vectorValue(env_env.allocator, new_vec);
 }
 
+// vector - creates a new vector containing the args
+pub fn core_vector(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    var new_vec: vec.Vector = .empty;
+    errdefer new_vec.deinit(env_env.allocator);
+    for (args.items) |arg| {
+        try new_vec.append(env_env.allocator, try vm.shallowClone(&arg, env_env.allocator));
+    }
+    return try vm.vectorValue(env_env.allocator, new_vec);
+}
+
 // Global counter for gensym
 var gensym_counter: usize = 0;
 
@@ -1592,6 +1603,7 @@ pub fn registerSequenceFunctions(env: *Env) anyerror!void {
     try env.put("concat", vm.builtinFnValue(core_concat));
     try env.put("list", vm.builtinFnValue(core_list));
     try env.put("vec", vm.builtinFnValue(core_vec));
+    try env.put("vector", vm.builtinFnValue(core_vector));
     try env.put("gensym", vm.builtinFnValue(core_gensym));
     try env.put("take", vm.builtinFnValue(core_take));
     try env.put("seq", vm.builtinFnValue(core_seq));

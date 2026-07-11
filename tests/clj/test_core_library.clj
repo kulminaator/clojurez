@@ -23,7 +23,7 @@
 (check "comp two" (do (defn f2 [x] (+ x 1)) (defn g [x] (* x 2)) ((comp g f2) 5)) 12)
 (check "comp three" (do (defn f3 [x] (+ x 1)) (defn g2 [x] (* x 2)) (defn h [x] (- x 1)) ((comp h g2 f3) 5)) 11)
 
-(check "partial" (do (def add3 (partial + 3)) (add3 (list 5))) 8)
+(check "partial" (do (def add3 (partial + 3)) (add3 5)) 8)
 (check "fnil" (do (def ffnil (fnil / 0 1)) (ffnil 10 5)) 2)
 (check "fnil nil arg" (do (def ffnil2 (fnil / 0 1)) (ffnil2 nil 5)) 0)
 (check "fnil nil second" (do (def ffnil3 (fnil / 0 1)) (ffnil3 10 nil)) 10)
