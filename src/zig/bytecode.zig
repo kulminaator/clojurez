@@ -1716,7 +1716,8 @@ fn isSimpleBytecodeForm(form: Value) bool {
         .nil, .bool, .integer, .float, .string, .keyword, .symbol,
         .bigint, .ratio, .decimal, .regex, .character => true,
         .function, .builtin_fn, .atom, .lazy_seq, .cons, .reduced,
-        .future, .promise, .record, .chunk, .chunked_cons, .wrapped, .exception => true, // self-evaluating
+        .future, .promise, .record, .chunk, .chunked_cons, .wrapped, .exception,
+        .ref, .multimethod => true, // self-evaluating
         .list => false, // function call — not simple
         .vector => {
             for (form.vector.items.items) |item| {

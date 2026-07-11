@@ -77,6 +77,8 @@ pub fn valueScanFn(obj: *anyopaque, ctx: *gc.ScanContext) void {
         .frame => scanFrame(obj, ctx),
         .value_cache => scanValueCache(obj, ctx),
         .exception_data => scanExceptionData(obj, ctx),
+        .ref_data => scanRefData(obj, ctx),
+        .multimethod_data => scanMultimethodData(obj, ctx),
     }
 }
 
@@ -159,6 +161,7 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         .string, .regex, .character, .symbol, .keyword,
         .list, .vector, .map, .set, .queue, .function, .builtin_fn,
         .lazy_seq, .cons, .chunk, .chunked_cons, .atom, .future, .promise, .reduced, .wrapped, .record, .exception,
+        .ref, .multimethod,
     };
     var is_valid = false;
     for (valid_types) |vt| {
@@ -384,6 +387,20 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
             if (!isValidGCPtr(ed, ctx)) return;
             // Mark the ExceptionData block itself so it survives GC sweep
             ctx.gc.markRecursive(ed, ctx);
+        },
+
+        .ref => |data| {
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!isValidGCPtr(data, ctx)) return;
+            // Mark the RefData block itself so GC can scan value + validator
+            ctx.gc.markRecursive(data, ctx);
+        },
+
+        .multimethod => |data| {
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!isValidGCPtr(data, ctx)) return;
+            // Mark the MultimethodData block itself so GC can scan dispatch_fn + method_table
+            ctx.gc.markRecursive(data, ctx);
         },
     }
 }
@@ -877,5 +894,32 @@ fn scanValueCache(cache_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     // Mark all cached character values
     for (cache.char_cache) |ptr| {
         markPtr(ptr, ctx);
+    }
+}
+
+/// Scan RefData — STM reference.
+fn scanRefData(ref_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const rd: *vm.RefData = @ptrCast(@alignCast(ref_ptr));
+    // Mark the value
+    scanValueChildrenDirect(&rd.value, ctx);
+    // Mark validator if present
+    if (rd.validator) |v| {
+        scanValueChildrenDirect(&v, ctx);
+    }
+}
+
+/// Scan MultimethodData — multimethod dispatch.
+fn scanMultimethodData(mm_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const mm: *vm.MultimethodData = @ptrCast(@alignCast(mm_ptr));
+    // Mark dispatch function
+    scanValueChildrenDirect(&mm.dispatch_fn, ctx);
+    // Mark method table entries
+    for (mm.method_table.items) |*entry| {
+        scanValueChildrenDirect(&entry.key, ctx);
+        scanValueChildrenDirect(&entry.value, ctx);
+    }
+    // Mark default dispatch value if present
+    if (mm.default_dispatch) |v| {
+        scanValueChildrenDirect(&v, ctx);
     }
 }

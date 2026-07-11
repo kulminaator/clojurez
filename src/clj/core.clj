@@ -146,8 +146,8 @@
   (cond
     (string? x) x
     (symbol? x) (let [s (pr-str x)
-                      idx (index-of s "/")]
-                  (if (nil? idx) s (subs s (inc idx))))
+                      idx (zig.core/index-of s "/")]
+                  (if idx (subs s (inc idx)) s))
     :else (str x)))
 
 ;; ---- Basic predicates ----
@@ -1984,3 +1984,109 @@
       (catch Exception e nil))
     (throw (ex-info (str "Expected string, got " (if (nil? s) "nil" (type s)))
                     {}))))
+
+;; ---- Metadata functions ----
+
+(defn vary-meta
+  "Returns an object of the same type and value as obj, with
+   (apply f (meta obj) args) as its metadata."
+  [obj f & args]
+  (with-meta obj (apply f (meta obj) args)))
+
+;; ---- doto macro ----
+
+(defmacro doto
+  "Creates a form that will call each method/macro with the
+   accumulator as the first argument."
+  [x & forms]
+  (let [g (gensym)]
+    (let [expanded (into () (map (fn [f]
+                                   (if (list? f)
+                                     (cons (first f) (cons g (rest f)))
+                                     (list f g)))
+                                 forms))]
+      (cons `let (cons (vector g x) (concat (reverse expanded) (list g)))))))
+
+;; ---- prn ----
+
+(defn prn
+  "Prints the object(s), with whitespace, using pr-str. Returns nil."
+  [& args]
+  (doseq [arg args]
+    (print (pr-str arg))
+    (print " "))
+  (println))
+
+;; ---- merge-with ----
+
+(defn merge-with
+  "Returns a map that consists of the rest of the maps merged into the first.
+   If the keys overlap, it merges the values according to f."
+  [f & maps]
+  (reduce (fn [m1 m2]
+            (reduce (fn [m [k v]]
+                      (if (contains? m k)
+                        (assoc m k (f (get m k) v))
+                        (assoc m k v)))
+                    (or m1 {}) m2))
+          nil maps))
+
+;; ---- update-in ----
+
+(defn update-in
+  "Returns a new map with the values at the given key-path updated.
+   fn is called with the current value at key-path and any additional args."
+  [m ks f & args]
+  (if (next ks)
+    (assoc m (first ks) (apply update-in (get m (first ks)) (next ks) f args))
+    (assoc m (first ks) (apply f (get m (first ks)) args))))
+
+;; ---- namespace (for symbols) ----
+
+(defn namespace
+  "Returns the namespace string for the symbol, or nil if it has none."
+  [s]
+  (when (symbol? s)
+    (let [s-str (str s)
+          idx (zig.core/index-of s-str "/")]
+      (when idx (subs s-str 0 idx)))))
+
+;; ---- instance? (adapted for no-JVM) ----
+
+(defn instance?
+  "Returns true if x is an instance of the given type.
+   In ClojureZ, type should be a keyword like :integer, :string, etc."
+  [t x]
+  (if (keyword? t)
+    (= (type x) t)
+    (if (= t 'Exception) (= (type x) :exception)
+      (if (= t 'Throwable) (= (type x) :exception)
+        false))))
+
+;; ---- class (alias for type) ----
+
+(defn class
+  "Returns the class of x. In ClojureZ, returns the type keyword."
+  [x]
+  (type x))
+
+;; ---- long (alias for int, i64 coercion) ----
+
+(defn long
+  "Coerces x to a long (i64). Same as int in ClojureZ."
+  [x]
+  (int x))
+
+;; ---- find-var ----
+
+(defn find-var
+  "Finds and returns the var named by the symbol in the current namespace
+   or its parents. Returns nil if not found."
+  [sym]
+  (when (symbol? sym)
+    (let [ns-name (namespace sym)
+          var-name (name sym)]
+      (if ns-name
+        (when-let [ns (the-ns (symbol ns-name))]
+          (ns-resolve ns sym))
+        (resolve sym)))))

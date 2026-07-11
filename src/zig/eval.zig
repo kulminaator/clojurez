@@ -18,6 +18,9 @@ const records = @import("namespaces/core/records.zig");
 const gc_mod = @import("gc.zig");
 const threading = @import("namespaces/core/threading.zig");
 const bytecode_mod = @import("bytecode.zig");
+const eval_meta = @import("eval_meta.zig");
+const eval_multi = @import("eval_multi.zig");
+const ref_mod = @import("ref.zig");
 const timeout_mod = @import("timeout.zig");
 
 const Allocator = std.mem.Allocator;
@@ -142,6 +145,7 @@ const special_forms = [_]struct { name: []const u8, fn_ptr: SpecialFormFn }{
     .{ .name = "extend-type", .fn_ptr = evalExtendTypeForm },
     .{ .name = "extend-protocol", .fn_ptr = evalExtendProtocolForm },
     .{ .name = "defrecord", .fn_ptr = evalDefrecordForm },
+    .{ .name = "alter-meta!", .fn_ptr = eval_meta.evalAlterMetaBang },
     .{ .name = "->>", .fn_ptr = evalThreadLastForm },
     .{ .name = "->", .fn_ptr = evalThreadFirstForm },
     .{ .name = "cond->", .fn_ptr = evalCondThreadFirstForm },
@@ -149,6 +153,9 @@ const special_forms = [_]struct { name: []const u8, fn_ptr: SpecialFormFn }{
     .{ .name = "case", .fn_ptr = evalCaseForm },
     .{ .name = "throw", .fn_ptr = evalThrow },
     .{ .name = "try", .fn_ptr = eval_try.evalTry },
+    .{ .name = "dosync", .fn_ptr = ref_mod.evalDosync },
+    .{ .name = "defmulti", .fn_ptr = eval_multi.evalDefmulti },
+    .{ .name = "defmethod", .fn_ptr = eval_multi.evalDefmethod },
 };
 
 /// Look up a special form handler by name. Returns null if not a special form.
@@ -511,7 +518,7 @@ pub fn evalRec(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth
     switch (form.*) {
         // Literals: allocate a new *Value wrapper. Cannot return AST pointer directly
         // because valueDeinit would overwrite the shared AST Value with nil.
-        .nil, .bool, .integer, .float, .bigint, .ratio, .decimal, .string, .regex, .character, .keyword, .set, .queue, .chunk, .chunked_cons, .atom, .future, .promise, .reduced, .wrapped, .record, .exception => {
+        .nil, .bool, .integer, .float, .bigint, .ratio, .decimal, .string, .regex, .character, .keyword, .set, .queue, .chunk, .chunked_cons, .atom, .future, .promise, .reduced, .wrapped, .record, .exception, .ref, .multimethod => {
             return .{ .value = try allocValue(allocator, form.*) };
         },
         .symbol => {
@@ -1253,6 +1260,10 @@ pub fn callWithSrc(allocator: Allocator, op: *const Value, args_list: *const lis
     switch (std.meta.activeTag(op.*)) {
         .function => return callFunction(allocator, op, args_list, frame, depth, src_line),
         .builtin_fn => return .{ .value = try allocValue(allocator, try callBuiltinFn(allocator, op, args_list, frame.root_env)) },
+        .multimethod => {
+            const result = try eval_multi.invokeMultimethod(allocator, op.*, args_list, frame, depth);
+            return result;
+        },
         .set => return .{ .value = try allocValue(allocator, try callSet(allocator, op, args_list)) },
         .keyword => return .{ .value = try allocValue(allocator, try callKeyword(allocator, op, args_list)) },
         .map => return .{ .value = try allocValue(allocator, try callMap(allocator, op, args_list)) },
@@ -2126,6 +2137,16 @@ fn evalDeref(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
         const val = try vm.shallowClone(&data.value, allocator);
         vm.valueDeinit(&arg_ptr.*, allocator);
         return .{ .value = try allocValue(allocator, val) };
+    }
+    if (std.meta.activeTag(arg_ptr.*) == .ref) {
+        // Deref a ref — read current value
+        const ref_val = arg_ptr.*;
+        vm.valueDeinit(&arg_ptr.*, allocator);
+        var deref_args: list.List = .empty;
+        errdefer deref_args.deinit(allocator);
+        try deref_args.append(allocator, ref_val);
+        const result = try ref_mod.core_ref_deref(testSelf(), &deref_args, frame.root_env);
+        return .{ .value = try allocValue(allocator, result) };
     }
     if (std.meta.activeTag(arg_ptr.*) == .reduced) {
         const data = arg_ptr.*.reduced;

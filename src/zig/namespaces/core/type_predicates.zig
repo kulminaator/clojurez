@@ -527,6 +527,8 @@ pub fn core_type(self: *const Value, args: *const list.List, env_env: *Env) anye
         .wrapped => "wrapped",
         .record => args.items[0].record.type_name,
         .exception => "exception",
+        .ref => "ref",
+        .multimethod => "multimethod",
     };
     return try vm.keywordValue(env_env.allocator, type_name);
 }

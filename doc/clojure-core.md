@@ -36,6 +36,7 @@
 - [bounded-count](#bounded-count)
 - [byte](#byte)
 - [cat](#cat)
+- [class](#class)
 - [coll?](#coll?)
 - [comp](#comp)
 - [comparator](#comparator)
@@ -64,6 +65,7 @@
 - [distinct?](#distinct?)
 - [doall](#doall)
 - [doseq](#doseq)
+- [doto](#doto)
 - [double](#double)
 - [double?](#double?)
 - [drop](#drop)
@@ -87,6 +89,7 @@
 - [filter](#filter)
 - [filterv](#filterv)
 - [find](#find)
+- [find-var](#find-var)
 - [first](#first)
 - [flatten](#flatten)
 - [float](#float)
@@ -111,6 +114,7 @@
 - [if-not](#if-not)
 - [inc](#inc)
 - [infinite?](#infinite?)
+- [instance?](#instance?)
 - [int](#int)
 - [int?](#int?)
 - [integer?](#integer?)
@@ -133,6 +137,7 @@
 - [list](#list)
 - [list?](#list?)
 - [load-file](#load-file)
+- [long](#long)
 - [map](#map)
 - [map-indexed](#map-indexed)
 - [map?](#map?)
@@ -141,9 +146,11 @@
 - [max](#max)
 - [memoize](#memoize)
 - [merge](#merge)
+- [merge-with](#merge-with)
 - [min](#min)
 - [mod](#mod)
 - [name](#name)
+- [namespace](#namespace)
 - [nano-time](#nano-time)
 - [nat-int?](#nat-int?)
 - [neg-int?](#neg-int?)
@@ -178,6 +185,7 @@
 - [pr-str](#pr-str)
 - [print](#print)
 - [println](#println)
+- [prn](#prn)
 - [promise](#promise)
 - [promise?](#promise?)
 - [pvalues](#pvalues)
@@ -252,10 +260,12 @@
 - [unreduced](#unreduced)
 - [unsigned-bit-shift-right](#unsigned-bit-shift-right)
 - [update](#update)
+- [update-in](#update-in)
 - [use](#use)
 - [utf8-valid?](#utf8-valid?)
 - [val](#val)
 - [vals](#vals)
+- [vary-meta](#vary-meta)
 - [vec](#vec)
 - [vector](#vector)
 - [vector?](#vector?)
@@ -536,6 +546,14 @@ Concatenate the contents of each collection into one sequence.
 
 ---
 
+## class
+
+[(x)]
+
+Returns the class of x. In ClojureZ, returns the type keyword.
+
+---
+
 ## coll?
 
 [(x)]
@@ -777,6 +795,15 @@ Repeatedly executes body for side-effects. Returns nil.
 
 ---
 
+## doto
+
+[(x & forms)]
+
+Creates a form that will call each method/macro with the
+   accumulator as the first argument.
+
+---
+
 ## double
 
 [(x)]
@@ -968,6 +995,15 @@ Returns a vector of the items in coll for which (pred item) returns logical true
 
 Returns the map entry for key, or nil if the key is not in the map.
    The map entry is a map with :key and :val keys.
+
+---
+
+## find-var
+
+[(sym)]
+
+Finds and returns the var named by the symbol in the current namespace
+   or its parents. Returns nil if not found.
 
 ---
 
@@ -1176,6 +1212,15 @@ Returns true if x is positive or negative infinity.
 
 ---
 
+## instance?
+
+[(t x)]
+
+Returns true if x is an instance of the given type.
+   In ClojureZ, type should be a keyword like :integer, :string, etc.
+
+---
+
 ## int
 
 [(x)]
@@ -1353,6 +1398,14 @@ Loads and evaluates all forms in a file. Returns the value of the last form.
 
 ---
 
+## long
+
+[(x)]
+
+Coerces x to a long (i64). Same as int in ClojureZ.
+
+---
+
 ## map
 
 [(f coll)]
@@ -1421,6 +1474,15 @@ Merges multiple maps into one. Later maps override earlier ones for duplicate ke
 
 ---
 
+## merge-with
+
+[(f & maps)]
+
+Returns a map that consists of the rest of the maps merged into the first.
+   If the keys overlap, it merges the values according to f.
+
+---
+
 ## min
 
 [(x) (x y) (x y & more)]
@@ -1444,6 +1506,14 @@ Returns modulus of numerator and denominator.
 
 Returns the name String of a string or symbol.
    For symbols, returns the local name without namespace prefix.
+
+---
+
+## namespace
+
+[(s)]
+
+Returns the namespace string for the symbol, or nil if it has none.
 
 ---
 
@@ -1732,6 +1802,14 @@ Prints the string representation of the args to stdout.
 [(& args)]
 
 Prints the string representation of the args to stdout, followed by a newline.
+
+---
+
+## prn
+
+[(& args)]
+
+Prints the object(s), with whitespace, using pr-str. Returns nil.
 
 ---
 
@@ -2362,6 +2440,15 @@ Returns a map with the value at key updated by applying f to the current value.
 
 ---
 
+## update-in
+
+[(m ks f & args)]
+
+Returns a new map with the values at the given key-path updated.
+   fn is called with the current value at key-path and any additional args.
+
+---
+
 ## use
 
 [(& args)]
@@ -2391,6 +2478,15 @@ Returns the value of the map entry.
 [(m)]
 
 Returns a sequence of the values in the map.
+
+---
+
+## vary-meta
+
+[(obj f & args)]
+
+Returns an object of the same type and value as obj, with
+   (apply f (meta obj) args) as its metadata.
 
 ---
 

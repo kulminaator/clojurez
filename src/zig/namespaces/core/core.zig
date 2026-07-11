@@ -28,6 +28,8 @@ const eval_helpers = @import("eval_helpers.zig");
 const regexp_core = @import("regexp.zig");
 const records = @import("records.zig");
 const namespace = @import("namespace.zig");
+const ref = @import("../../ref.zig");
+const eval_multi = @import("../../eval_multi.zig");
 const threading = @import("threading.zig");
 
 // ---- Collection predicates (empty?, not-empty, seq) ----
@@ -406,6 +408,12 @@ pub fn registerCoreFunctions(env: *Env) anyerror!void {
 
     // Namespace functions (from namespace.zig)
     try namespace.registerNamespaceFunctions(env);
+
+    // STM functions (ref, dosync, alter, commute, ref-set, ensure)
+    try ref.registerRefFunctions(env);
+
+    // Multimethod introspection functions
+    try eval_multi.registerMultimethodFunctions(env);
 
     // defn is handled as a special form alias in the evaluator
 }

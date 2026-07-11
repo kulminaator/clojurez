@@ -68,6 +68,8 @@ pub const GCObjectType = enum(u8) {
     frame = 32,              // Frame — virtual stack frame (heap-allocated evaluation frame)
     value_cache = 33,        // ValueCache — pre-cached singleton values (nil, bool, small int, latin char)
     exception_data = 34,     // ExceptionData — runtime exception value
+    ref_data = 35,           // RefData — STM reference value
+    multimethod_data = 36,   // MultimethodData — multimethod dispatch
 };
 
 const Header = struct {

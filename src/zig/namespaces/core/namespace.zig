@@ -1093,6 +1093,28 @@ pub fn core_remove_ns(self: *const Value, args: *const list.List, env_env: *Env)
     return vm.nilValue();
 }
 
+/// (ns-get-meta sym) — Get metadata for a symbol in the current namespace.
+/// Returns the metadata map if found, nil otherwise.
+pub fn core_ns_get_meta(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
+    _ = self;
+    const allocator = env.allocator;
+    if (args.items.len != 1) return error.ArityError;
+    const sym = args.items[0];
+    if (std.meta.activeTag(sym) != .symbol) return error.TypeError;
+
+    // Look up metadata in the namespace chain
+    if (eval_mod.findNsManager(env)) |ns_mgr| {
+        const current_ns = ns_mgr.getCurrentNamespace();
+        const ns_env = ns_mgr.getNamespace(current_ns) orelse env;
+        if (ns_env.getMeta(sym.symbol)) |meta| {
+            return try vm.shallowClone(&meta, allocator);
+        }
+    } else if (env.getMeta(sym.symbol)) |meta| {
+        return try vm.shallowClone(&meta, allocator);
+    }
+    return vm.nilValue();
+}
+
 // ---- Registration ----
 
 pub fn registerNamespaceFunctions(env: *Env) anyerror!void {
@@ -1101,6 +1123,7 @@ pub fn registerNamespaceFunctions(env: *Env) anyerror!void {
     try env.put("create-ns", vm.builtinFnValue(core_create_ns));
     try env.put("all-ns", vm.builtinFnValue(core_all_ns));
     try env.put("the-ns", vm.builtinFnValue(core_the_ns));
+    try env.put("ns-get-meta", vm.builtinFnValue(core_ns_get_meta));
 
     // Namespace resolution (Phase 2)
     try env.put("ns-resolve", vm.builtinFnValue(core_ns_resolve));
