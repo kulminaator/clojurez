@@ -86,7 +86,7 @@ Documentation is regenerated automatically on every build. To regenerate manuall
 - No Java interop (not applicable for a standalone VM)
 - No JIT compilation (bytecode compilation is used for eligible function bodies)
 - Strings are UTF-8 (not UTF-16)
-- Simpler collection internals (no chunking)
+- Simpler collection internals (some chunking support)
 - Minimal runtime (< 1MB stripped)
 
 ## License
