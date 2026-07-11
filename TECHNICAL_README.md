@@ -285,7 +285,7 @@ Plus type coercions: `char`, `int`, `integer`, `float`, `double`, `bigint`, `big
 `conj`, `pop`, `last`, `reverse`, `peek`, `contains?`
 
 ### Sequence Functions (`sequences.zig`, `seq_ops.zig`, `seq_sort.zig`)
-`count`, `first`, `rest`, `nth`, `concat`, `list`, `vec`, `seq`, `range`, `subvec`, `cons`, `gensym`, `take`, `map`, `mapcat`, `reduce`, `flatten`, `filter`, `remove`, `every?`, `some`, `distinct?`, `next`, `nthnext`, `drop`, `iterate`, `cycle`, `reduced`, `reduced?`, `ensure-reduced`, `unreduced`, `sort`, `sort-by`, `reductions`, `map-indexed`, `keep-indexed`, `bounded-count`, `group-by`, `distinct`, `replace`
+`count`, `first`, `rest`, `nth`, `concat`, `list`, `vec`, `vector`, `seq`, `range`, `subvec`, `cons`, `gensym`, `take`, `map`, `mapcat`, `reduce`, `flatten`, `filter`, `remove`, `every?`, `some`, `distinct?`, `next`, `nthnext`, `drop`, `iterate`, `cycle`, `reduced`, `reduced?`, `ensure-reduced`, `unreduced`, `sort`, `sort-by`, `reductions`, `map-indexed`, `keep-indexed`, `bounded-count`, `group-by`, `distinct`, `replace`
 
 ### Basic I/O (`io.zig`)
 `print`, `println`, `read-line`, `spit`, `slurp`, `nano-time`, `read-string`, `eval`, `load-file`, `temp-dir`
@@ -320,6 +320,9 @@ Plus type coercions: `char`, `int`, `integer`, `float`, `double`, `bigint`, `big
 ### GC (`gc.zig`)
 `gc-sweep`, `gc-stats`
 
+### System (`cpu_stats.zig`)
+`cpu-stats`
+
 ### Protocols (`protocols.zig`)
 `defprotocol`, `extend`, `extend-type`, `extend-protocol`, `satisfies?`, `extends?`, `extenders`
 
@@ -330,7 +333,7 @@ Plus type coercions: `char`, `int`, `integer`, `float`, `double`, `bigint`, `big
 `re-matches`, `re-find`, `re-seq`, `re-pattern`, `re-groups`
 
 ### Core helpers (`core.zig`)
-`empty?`, `not-empty`, `apply`, `trampoline`, `partial`, `comp`, `fnil`, `juxt`, `constantly`, `complement`, `comparator`
+`empty?`, `not-empty`, `apply`, `trampoline`, `partial`, `comp`, `fnil`, `juxt`, `constantly`, `complement`, `comparator`, `if-not`
 
 ### Threading (`threading.zig`)
 `sleep`, `future-call`, `deref-future`, `deref-promise`, `promise`, `deliver`, `realized`, `future?`, `promise?`
@@ -357,11 +360,14 @@ Functions implemented in Clojure (bootstrapped from `core.clj`, embedded at comp
 ### Misc
 `memoize`, `constantly`, `complement`, `into-array`, `doall`
 
+### Parsing
+`parse-boolean`, `parse-long`, `parse-double`
+
 ### Macros
 `when-not`, `when-some`, `if-let`, `when-let`, `time`, `doseq`, `when-first`, `for`, `defonce`
 
 ### Multithreading
-`future` (macro), `future-call`, `future?`, `future-done?`, `promise`, `deliver`, `realized?`, `promise?`, `deref` (extended for futures/promises), `sleep`
+`future` (macro), `future-call`, `future?`, `future-done?`, `promise`, `deliver`, `realized?`, `promise?`, `deref` (extended for futures/promises), `sleep`, `pmap`, `pcalls`, `pvalues` (macro)
 
 ### Exception Support
 `ex-info`, `ex-data`, `ex-message`, `ex-cause`, `exception?`, `derive`, `parents`, `isa?`, `IExceptionInfo` protocol

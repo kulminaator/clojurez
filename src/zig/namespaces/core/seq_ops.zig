@@ -916,7 +916,6 @@ fn dropLazySeq(allocator: Allocator, n: i64, coll: Value, env: *Env) anyerror!Va
     const sym_dec = try vm.symValue(a, "dec");
     const sym_rest = try vm.symValue(a, "rest");
     const sym_zig_drop = try vm.symValue(a, "__zig_drop");
-    const sym_nil = vm.nilValue();
 
     // (pos? n)
     var pos_call: list.List = .empty;
@@ -961,12 +960,19 @@ fn dropLazySeq(allocator: Allocator, n: i64, coll: Value, env: *Env) anyerror!Va
     try inner_if.append(a, try vm.listValue(a, rest_call));
     try inner_if.append(a, try vm.listValue(a, drop_call));
 
-    // (if s (inner_if) nil)
+    // (if s (inner_if) (quote ()))
+    // Return empty list instead of nil when seq is exhausted before n reaches 0.
+    // This matches Clojure behavior where (drop 10 [1 2]) returns () not nil.
+    // We use (quote ()) because a bare () would be evaluated as a function call.
+    var empty_list_quote: list.List = .empty;
+    try empty_list_quote.append(a, try vm.symValue(a, "quote"));
+    try empty_list_quote.append(a, try vm.listValue(a, list.empty()));
+
     var s_check: list.List = .empty;
     try s_check.append(a, sym_if);
     try s_check.append(a, sym_s);
     try s_check.append(a, try vm.listValue(a, inner_if));
-    try s_check.append(a, sym_nil);
+    try s_check.append(a, try vm.listValue(a, empty_list_quote));
 
     // (let [s (seq coll)] (if s ... nil))
     var let_form: list.List = .empty;

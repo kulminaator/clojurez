@@ -150,9 +150,10 @@ pub fn core_if_not(self: *const Value, args: *const list.List, env_env: *Env) an
 }
 
 // partial - return a function that is a partial application of f
+// (partial f) with just a function is valid — returns f itself effectively.
 pub fn core_partial(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
-    if (args.items.len < 2) return error.ArityError;
+    if (args.items.len < 1) return error.ArityError;
     const f = args.items[0];
 
     var fn_env = try env_env.clone(env_env.allocator);
@@ -167,9 +168,10 @@ pub fn core_partial(self: *const Value, args: *const list.List, env_env: *Env) a
     }
     try fn_env.put("__partial_args", try vm.listValue(env_env.allocator, partial_args));
 
+    // Use empty params + rest_name="args" so the generated fn accepts variadic args:
+    // (fn [& args] (apply __partial_fn (concat __partial_args args)))
     var params_list: list.List = .empty;
     errdefer params_list.deinit(env_env.allocator);
-    try params_list.append(env_env.allocator, try vm.symValue(env_env.allocator, "args"));
 
     var body: list.List = .empty;
     errdefer body.deinit(env_env.allocator);
@@ -194,7 +196,7 @@ pub fn core_partial(self: *const Value, args: *const list.List, env_env: *Env) a
     }
     try final_env.put("__partial_args", try vm.listValue(env_env.allocator, stored_args));
 
-    return try vm.fnValueSingle(env_env.allocator, cloned_params, cloned_body, final_env, null, false);
+    return try vm.fnValueSingle(env_env.allocator, cloned_params, cloned_body, final_env, "args", false);
 }
 
 // comp - compose functions (right to left)

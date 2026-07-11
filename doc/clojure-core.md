@@ -162,11 +162,16 @@
 - [numerator](#numerator)
 - [odd?](#odd?)
 - [parents](#parents)
+- [parse-boolean](#parse-boolean)
+- [parse-double](#parse-double)
+- [parse-long](#parse-long)
 - [partial](#partial)
 - [partition](#partition)
 - [partition-all](#partition-all)
 - [partition-by](#partition-by)
+- [pcalls](#pcalls)
 - [peek](#peek)
+- [pmap](#pmap)
 - [pop](#pop)
 - [pos-int?](#pos-int?)
 - [pos?](#pos?)
@@ -175,6 +180,7 @@
 - [println](#println)
 - [promise](#promise)
 - [promise?](#promise?)
+- [pvalues](#pvalues)
 - [queue?](#queue?)
 - [quot](#quot)
 - [rand](#rand)
@@ -251,6 +257,7 @@
 - [val](#val)
 - [vals](#vals)
 - [vec](#vec)
+- [vector](#vector)
 - [vector?](#vector?)
 - [when-first](#when-first)
 - [when-let](#when-let)
@@ -1587,6 +1594,35 @@ Returns the set of direct parents of child in the hierarchy.
 
 ---
 
+## parse-boolean
+
+[(s)]
+
+Parse strings "true" or "false" and return a boolean, or nil if invalid.
+   Throws IllegalArgumentException if input is not a string.
+
+---
+
+## parse-double
+
+[(s)]
+
+Parse string with floating point components and return a Double value,
+   or nil if parse fails.
+   Throws IllegalArgumentException if input is not a string.
+
+---
+
+## parse-long
+
+[(s)]
+
+Parse string of decimal digits with optional leading -/+ and return a
+   Long value, or nil if parse fails.
+   Throws IllegalArgumentException if input is not a string.
+
+---
+
 ## partial
 
 [(f & args)]
@@ -1622,12 +1658,31 @@ Applies f to each value in coll, splitting it each time f returns a
 
 ---
 
+## pcalls
+
+[(& fns)]
+
+Executes the no-arg fns in parallel, returning a lazy sequence of
+   their values.
+
+---
+
 ## peek
 
 [(coll)]
 
 Returns the last item of a collection without removing it.
    For vectors, returns the last element. For lists/queues, returns the first.
+
+---
+
+## pmap
+
+[(f coll) (f coll & colls)]
+
+Like map, except f is applied in parallel. Semi-lazy in that the
+   parallel computation stays ahead of the consumption, but doesn't
+   realize the entire result unless required.
 
 ---
 
@@ -1693,6 +1748,15 @@ Returns a promise object that can be delivered to at most once.
 [(x)]
 
 Returns true if x is a promise.
+
+---
+
+## pvalues
+
+[(& exprs)]
+
+Returns a lazy sequence of the values of the exprs, which are
+   evaluated in parallel.
 
 ---
 
@@ -2335,6 +2399,14 @@ Returns a sequence of the values in the map.
 [(& args)]
 
 Returns a vector of the args, or converts a collection to a vector.
+
+---
+
+## vector
+
+[(& args)]
+
+Creates a new vector containing the args.
 
 ---
 

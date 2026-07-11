@@ -25,6 +25,7 @@ const debug = @import("debug.zig");
 const gc_mod = @import("gc.zig");
 const gc_scan = @import("gc_scan.zig");
 const stack_stats = @import("stack_stats.zig");
+const cpu_stats = @import("namespaces/core/cpu_stats.zig");
 const sequences = @import("namespaces/core/sequences.zig");
 const phm = @import("persistent_hash_map.zig");
 const exception = @import("exception.zig");
@@ -192,6 +193,7 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // No global builtins in root env — everything is namespaced.
     try core.registerCoreFunctions(zc_env);
     try stack_stats.registerStackStats(zc_env);
+    try cpu_stats.registerCpuStats(zc_env);
     try exception.registerExceptionFunctions(zc_env);
 
     // Copy builtins to clojure.core as well, so they are directly accessible.

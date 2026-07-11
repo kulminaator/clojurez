@@ -1297,6 +1297,11 @@
   [& args]
   (zig.core/apply zig.core/vec args))
 
+(defn vector
+  "Creates a new vector containing the args."
+  [& args]
+  (zig.core/apply zig.core/vector args))
+
 (defn subvec
   "Returns a persistent vector of the items in vector from
    start (inclusive) to end (exclusive). If end is not supplied,
@@ -1899,3 +1904,83 @@
   "Returns true if child is parent or derives from parent in the hierarchy."
   [child parent]
   (zig.core/isa? child parent))
+
+;; ---- Parallel mapping ----
+
+(defn pmap
+  "Like map, except f is applied in parallel. Semi-lazy in that the
+   parallel computation stays ahead of the consumption, but doesn't
+   realize the entire result unless required."
+  ([f coll]
+   (let [n (+ 2 (:core-count (zig.core/cpu-stats)))
+         rets (vec (map #(future (f %)) coll))
+         step (fn step [vs fs]
+                (lazy-seq
+                 (if-let [s (seq fs)]
+                   (cons (deref (first vs)) (step (rest vs) (rest s)))
+                   (map deref vs))))]
+     (step rets (drop n rets))))
+  ([f coll & colls]
+   (let [step (fn step [cs]
+                (lazy-seq
+                  (let [ss (vec (map seq (vec cs)))]
+                    (when (every? identity ss)
+                      (cons (vec (map first ss)) (step (vec (map rest ss))))))))]
+     (pmap #(apply f %) (step (into [coll] colls))))))
+
+(defn pcalls
+  "Executes the no-arg fns in parallel, returning a lazy sequence of
+   their values."
+  [& fns]
+  (pmap #(%) fns))
+
+(defmacro pvalues
+  "Returns a lazy sequence of the values of the exprs, which are
+   evaluated in parallel."
+  [& exprs]
+  (let [fns (map #(list `fn [] %) exprs)]
+    (cons `pcalls (into '() (reverse fns)))))
+
+;; ---- Parse functions ----
+
+(defn parse-boolean
+  "Parse strings \"true\" or \"false\" and return a boolean, or nil if invalid.
+   Throws IllegalArgumentException if input is not a string."
+  [s]
+  (if (string? s)
+    (case s
+      "true" true
+      "false" false
+      nil)
+    (throw (ex-info (str "Expected string, got " (if (nil? s) "nil" (type s)))
+                    {}))))
+
+(defn parse-long
+  "Parse string of decimal digits with optional leading -/+ and return a
+   Long value, or nil if parse fails.
+   Throws IllegalArgumentException if input is not a string."
+  [s]
+  (if (string? s)
+    (try
+      (let [v (read-string s)]
+        (if (int? v)
+          v
+          nil))
+      (catch Exception e nil))
+    (throw (ex-info (str "Expected string, got " (if (nil? s) "nil" (type s)))
+                    {}))))
+
+(defn parse-double
+  "Parse string with floating point components and return a Double value,
+   or nil if parse fails.
+   Throws IllegalArgumentException if input is not a string."
+  [s]
+  (if (string? s)
+    (try
+      (let [v (read-string s)]
+        (if (or (float? v) (integer? v))
+          (float v)
+          nil))
+      (catch Exception e nil))
+    (throw (ex-info (str "Expected string, got " (if (nil? s) "nil" (type s)))
+                    {}))))
