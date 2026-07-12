@@ -44,6 +44,26 @@ pub fn build(b: *std.Build) void {
     });
     copy_math.addFileInput(b.path("src/clj/math.clj"));
 
+    // Copy walk.clj into zig package for @embedFile
+    // Source of truth: src/clj/walk.clj
+    // Destination: src/zig/namespaces/core/clj/walk.clj (referenced by walk_clj.zig)
+    const copy_walk = b.addSystemCommand(&.{
+        "cp",
+        "src/clj/walk.clj",
+        "src/zig/namespaces/core/clj/walk.clj",
+    });
+    copy_walk.addFileInput(b.path("src/clj/walk.clj"));
+
+    // Copy template.clj into zig package for @embedFile
+    // Source of truth: src/clj/template.clj
+    // Destination: src/zig/namespaces/core/clj/template.clj (referenced by template_clj.zig)
+    const copy_template = b.addSystemCommand(&.{
+        "cp",
+        "src/clj/template.clj",
+        "src/zig/namespaces/core/clj/template.clj",
+    });
+    copy_template.addFileInput(b.path("src/clj/template.clj"));
+
     const src_path = b.path("src/zig/main.zig");
 
     // Build 3 variants into zig-out/bin/:
@@ -89,6 +109,8 @@ pub fn build(b: *std.Build) void {
         exe.step.dependOn(&copy_string.step);
         exe.step.dependOn(&copy_io.step);
         exe.step.dependOn(&copy_math.step);
+        exe.step.dependOn(&copy_walk.step);
+        exe.step.dependOn(&copy_template.step);
 
         const install = b.addInstallArtifact(exe, .{});
         b.getInstallStep().dependOn(&install.step);

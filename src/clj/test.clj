@@ -2,7 +2,8 @@
 ; Adapted from original Clojure test.clj
 
 (ns clojure.test
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [clojure.template :as template]))
 
 ;;; USER-MODIFIABLE GLOBALS
 
@@ -454,3 +455,17 @@
    Returns the summary map."
   [sym]
   `(run-test-var (var ~sym)))
+
+(defmacro are
+  "Checks multiple assertions with a template expression.
+   Example: (are [x y] (= x y)
+                2 (+ 1 1)
+                4 (* 2 2))"
+  [argv expr & args]
+  (let [c (count argv)
+        pairs (partition c args)
+        asserts (doall (map (fn [vals]
+                              (clojure.walk/postwalk-replace (zipmap argv vals) expr))
+                            pairs))
+        is-calls (doall (map (fn [a] (list 'is a)) asserts))]
+    (cons 'do is-calls)))

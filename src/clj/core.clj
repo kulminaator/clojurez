@@ -140,14 +140,17 @@
 ;; ---- Symbol utilities ----
 
 (defn name
-  "Returns the name String of a string or symbol.
-   For symbols, returns the local name without namespace prefix."
+  "Returns the name String of a string, symbol, or keyword.
+   For symbols and keywords, returns the local name without namespace prefix."
   [x]
   (cond
     (string? x) x
     (symbol? x) (let [s (pr-str x)
                       idx (zig.core/index-of s "/")]
                   (if idx (subs s (inc idx)) s))
+    (keyword? x) (let [s (pr-str x)
+                       idx (zig.core/index-of s "/")]
+                   (if idx (subs s (inc idx)) (subs s 1)))
     :else (str x)))
 
 ;; ---- Basic predicates ----

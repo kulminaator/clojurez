@@ -1505,8 +1505,8 @@ Returns modulus of numerator and denominator.
 
 [(x)]
 
-Returns the name String of a string or symbol.
-   For symbols, returns the local name without namespace prefix.
+Returns the name String of a string, symbol, or keyword.
+   For symbols and keywords, returns the local name without namespace prefix.
 
 ---
 

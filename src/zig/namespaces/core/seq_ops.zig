@@ -1004,137 +1004,11 @@ pub fn core_doall_star(self: *const Value, args: *const list.List, env_env: *Env
 }
 
 fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
-    const result = switch (std.meta.activeTag(val)) {
+    return switch (std.meta.activeTag(val)) {
         .lazy_seq => {
-            // Evaluate the thunk
-            if (val.lazy_seq) |thunk| {
-                const cloned_params = try list.clone(&thunk.params, allocator);
-                const cloned_body = try list.clone(&thunk.body, allocator);
-                var thunk_env = try thunk.env.clone(allocator);
-
-                const fn_val = try vm.fnValueSingle(allocator, cloned_params, cloned_body, thunk_env, null, false);
-                var empty_args: list.List = .empty;
-                const result_ptr = try eval_helpers.callBuiltin(
-                    allocator,
-                    &fn_val,
-                    &empty_args,
-                    &thunk_env,
-                );
-                var result = result_ptr.*;
-                allocator.destroy(result_ptr);
-
-                // Force each element of the result
-                switch (std.meta.activeTag(result)) {
-                    .list => {
-                        var forced_list: list.List = .empty;
-                        errdefer forced_list.deinit(allocator);
-                        // Handle cons cell pattern: [head, lazy_seq_tail]
-                        // forceLazySeqHelper returns at most 2 items from a cons
-                        if (result.list.items.items.len == 2 and std.meta.activeTag(result.list.items.items[1]) == .lazy_seq) {
-                            // Force the head if it's a lazy_seq, otherwise clone
-                            const head_item = result.list.items.items[0];
-                            if (std.meta.activeTag(head_item) == .lazy_seq) {
-                                const head_forced = try forceValue(allocator, head_item);
-                                // Append the forced head as a single element (don't flatten)
-                                try forced_list.append(allocator, head_forced);
-                            } else {
-                                try forced_list.append(allocator, try vm.shallowClone(&head_item, allocator));
-                            }
-                            // Force the tail lazy_seq recursively
-                            var tail_forced = try forceValue(allocator, result.list.items.items[1]);
-                            if (std.meta.activeTag(tail_forced) == .list) {
-                                for (tail_forced.list.items.items) |fi| {
-                                    try forced_list.append(allocator, try vm.shallowClone(&fi, allocator));
-                                }
-                            }
-                            vm.valueDeinit(&tail_forced, allocator);
-                        } else {
-                            for (result.list.items.items) |item| {
-                                // Only force lazy_seq items; clone everything else
-                                if (std.meta.activeTag(item) == .lazy_seq) {
-                                    var forced = try forceValue(allocator, item);
-                                    if (std.meta.activeTag(forced) == .list) {
-                                        for (forced.list.items.items) |fi| {
-                                            try forced_list.append(allocator, try vm.shallowClone(&fi, allocator));
-                                        }
-                                    } else {
-                                        try forced_list.append(allocator, forced);
-                                    }
-                                    vm.valueDeinit(&forced, allocator);
-                                } else {
-                                    try forced_list.append(allocator, try vm.shallowClone(&item, allocator));
-                                }
-                            }
-                        }
-                        vm.valueDeinit(&result, allocator);
-                        return try vm.listValue(allocator, forced_list);
-                    },
-                    .vector => {
-                        var forced_vec: vec.Vector = .empty;
-                        errdefer forced_vec.deinit(allocator);
-                        for (result.vector.items.items) |item| {
-                            // Only force lazy_seq items; clone everything else
-                            if (std.meta.activeTag(item) == .lazy_seq) {
-                                var forced = try forceValue(allocator, item);
-                                if (std.meta.activeTag(forced) == .list) {
-                                    for (forced.list.items.items) |fi| {
-                                        try forced_vec.append(allocator, try vm.shallowClone(&fi, allocator));
-                                    }
-                                } else {
-                                    try forced_vec.append(allocator, forced);
-                                }
-                                vm.valueDeinit(&forced, allocator);
-                            } else {
-                                try forced_vec.append(allocator, try vm.shallowClone(&item, allocator));
-                            }
-                        }
-                        vm.valueDeinit(&result, allocator);
-                        return try vm.vectorValue(allocator, forced_vec);
-                    },
-                    .nil => {
-                        // Thunk returned nil (empty sequence)
-                        vm.valueDeinit(&result, allocator);
-                        return try vm.listValue(allocator, list.empty());
-                    },
-                    .lazy_seq => {
-                        // Thunk returned a lazy_seq (e.g., from cons). Recursively force it.
-                        const forced = try forceValue(allocator, result);
-                        vm.valueDeinit(&result, allocator);
-                        return forced;
-                    },
-                    .cons => {
-                        // Thunk returned a cons cell. Convert to list and force nested lazy_seqs.
-                        // forceToConcreteList takes ownership of the cons value.
-                        var concrete = try forceToConcreteList(allocator, result);
-                        // Now force any lazy_seq elements in the list
-                        var forced_list: list.List = .empty;
-                        errdefer forced_list.deinit(allocator);
-                        for (concrete.items) |item| {
-                            if (std.meta.activeTag(item) == .lazy_seq) {
-                                var forced = try forceValue(allocator, item);
-                                if (std.meta.activeTag(forced) == .list) {
-                                    for (forced.list.items.items) |fi| {
-                                        try forced_list.append(allocator, try vm.shallowClone(&fi, allocator));
-                                    }
-                                } else {
-                                    try forced_list.append(allocator, forced);
-                                }
-                                vm.valueDeinit(&forced, allocator);
-                            } else {
-                                try forced_list.append(allocator, try vm.shallowClone(&item, allocator));
-                            }
-                        }
-                        concrete.deinit(allocator);
-                        return try vm.listValue(allocator, forced_list);
-                    },
-                    else => {
-                        const forced = try forceValue(allocator, result);
-                        vm.valueDeinit(&result, allocator);
-                        return forced;
-                    },
-                }
-            }
-            return try vm.listValue(allocator, list.empty());
+            // Use forceLazySeqHelper which handles custom handlers (map, range, filter)
+            // and also handles regular thunks via the evaluator
+            return try sequences_mod.forceLazySeqHelper(allocator, val);
         },
         .list => {
             // For standalone lists, just clone them (they're data, not thunk results)
@@ -1232,7 +1106,6 @@ fn forceValue(allocator: Allocator, val: Value) anyerror!Value {
         },
         else => try vm.shallowClone(&val, allocator),
     };
-    return result;
 }
 
 // iterate: repeatedly apply f to init, lazily

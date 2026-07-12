@@ -315,6 +315,50 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args_list: *const list
             }
             return try allocBuiltinResult(allocator, vm.nilValue());
         },
+        .map => {
+            // Map as function: looks up key in map, returns nil if not found
+            if (args_list.items.len < 1 or args_list.items.len > 2) return error.ArityError;
+            const key = &args_list.items[0];
+            for (f.map.entries.items) |entry| {
+                if (vm.equals(entry.key, key.*)) {
+                    return try allocBuiltinResult(allocator, try vm.shallowClone(&entry.value, allocator));
+                }
+            }
+            if (args_list.items.len == 2) {
+                return try allocBuiltinResult(allocator, try vm.shallowClone(&args_list.items[1], allocator));
+            }
+            return try allocBuiltinResult(allocator, vm.nilValue());
+        },
+        .set => {
+            // Set as function: returns the element if present, nil otherwise
+            if (args_list.items.len != 1) return error.ArityError;
+            const key = &args_list.items[0];
+            for (f.set.items.items) |item| {
+                if (vm.equals(item, key.*)) {
+                    return try allocBuiltinResult(allocator, try vm.shallowClone(&item, allocator));
+                }
+            }
+            return try allocBuiltinResult(allocator, vm.nilValue());
+        },
+        .record => {
+            // Record as function: looks up key in fields or extmap
+            if (args_list.items.len < 1 or args_list.items.len > 2) return error.ArityError;
+            const key = &args_list.items[0];
+            for (f.record.fields.items) |entry| {
+                if (vm.equals(entry.key, key.*)) {
+                    return try allocBuiltinResult(allocator, try vm.shallowClone(&entry.value, allocator));
+                }
+            }
+            for (f.record.extmap.items) |entry| {
+                if (vm.equals(entry.key, key.*)) {
+                    return try allocBuiltinResult(allocator, try vm.shallowClone(&entry.value, allocator));
+                }
+            }
+            if (args_list.items.len == 2) {
+                return try allocBuiltinResult(allocator, try vm.shallowClone(&args_list.items[1], allocator));
+            }
+            return try allocBuiltinResult(allocator, vm.nilValue());
+        },
         else => {
             std.debug.print("NotCallable in eval_helpers: type={s}\n", .{@tagName(std.meta.activeTag(f.*))});
             return error.NotCallable;

@@ -191,6 +191,17 @@ pub fn core_sequential_q(self: *const Value, args: *const list.List, _: *Env) an
     return vm.boolValue(std.meta.activeTag(coll) == .list or std.meta.activeTag(coll) == .vector);
 }
 
+// seq? - check if x is a sequence (list, vector, lazy_seq, cons, chunked_cons)
+pub fn core_seq_q(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 1) return error.ArityError;
+    const x = args.items[0];
+    return vm.boolValue(switch (std.meta.activeTag(x)) {
+        .list, .vector, .lazy_seq, .cons, .chunked_cons => true,
+        else => false,
+    });
+}
+
 // Type constructor
 pub fn core_keyword(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
@@ -827,6 +838,7 @@ pub fn registerTypePredicateFunctions(env: *Env) anyerror!void {
     try env.put("promise?", vm.builtinFnValue(core_promise_q));
     try env.put("coll?", vm.builtinFnValue(core_coll_q));
     try env.put("sequential?", vm.builtinFnValue(core_sequential_q));
+    try env.put("seq?", vm.builtinFnValue(core_seq_q));
     try env.put("boolean?", vm.builtinFnValue(core_boolean_q));
     // Character type predicate and coercion
     try env.put("char?", vm.builtinFnValue(core_char_q));
