@@ -91,4 +91,46 @@
 (check "re-matches complex alt" (re/re-matches "abc|def" "def") "def")
 (check "re-seq words" (re/re-seq "[a-z]+" "hello world") ["hello" "world"])
 
+;; ============================================================
+;; Anchors: ^ (beginning) and $ (end)
+;; ============================================================
+
+;; re-matches with anchors
+(check "re-matches ^a a" (re/re-matches "^a" "a") "a")
+(check "re-matches ^a ab" (re/re-matches "^a" "ab") nil)
+(check "re-matches ^ab ab" (re/re-matches "^ab" "ab") "ab")
+(check "re-matches ^ab abc" (re/re-matches "^ab" "abc") nil)
+(check "re-matches a$ a" (re/re-matches "a$" "a") "a")
+(check "re-matches a$ ba" (re/re-matches "a$" "ba") nil)
+(check "re-matches ab$ ab" (re/re-matches "ab$" "ab") "ab")
+(check "re-matches ab$ abc" (re/re-matches "ab$" "abc") nil)
+(check "re-matches ^ab$ ab" (re/re-matches "^ab$" "ab") "ab")
+(check "re-matches ^ab$ abc" (re/re-matches "^ab$" "abc") nil)
+(check "re-matches ^$ empty" (re/re-matches "^$" "") "")
+(check "re-matches ^$ a" (re/re-matches "^$" "a") nil)
+
+;; re-find with anchors
+(check "re-find ^hello hw" (re/re-find "^hello" "hello world") "hello")
+(check "re-find ^world hw" (re/re-find "^world" "hello world") nil)
+(check "re-find world$ hw" (re/re-find "world$" "hello world") "world")
+(check "re-find hello$ hw" (re/re-find "hello$" "hello world") nil)
+(check "re-find ^$ empty" (re/re-find "^$" "") "")
+(check "re-find ^$ a" (re/re-find "^$" "a") nil)
+(check "re-find ^a$ a" (re/re-find "^a$" "a") "a")
+(check "re-find ^a$ ab" (re/re-find "^a$" "ab") nil)
+(check "re-find $ ab" (re/re-find "$" "ab") "")
+(check "re-find ^ ab" (re/re-find "^" "ab") "")
+(check "re-find a$ ab" (re/re-find "a$" "ab") nil)
+(check "re-find a$ ba" (re/re-find "a$" "ba") "a")
+(check "re-find b$ ab" (re/re-find "b$" "ab") "b")
+
+;; re-seq with anchors
+(check "re-seq ^a aab" (re/re-seq "^a" "aab") ["a"])
+(check "re-seq a$ aab" (re/re-seq "a$" "aab") [])
+(check "re-seq b$ aab" (re/re-seq "b$" "aab") ["b"])
+(check "re-seq ^ aab" (re/re-seq "^" "aab") [""])
+(check "re-seq $ aab" (re/re-seq "$" "aab") [""])
+(check "re-seq ^$ empty" (re/re-seq "^$" "") [""])
+(check "re-seq ^$ aab" (re/re-seq "^$" "aab") [])
+
 (print-summary)
