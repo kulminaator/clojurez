@@ -437,6 +437,26 @@ pub const StackEntry = union(Tag) {
     }
 };
 
+/// Free all loop frames and their resources.
+fn cleanupLoopStack(allocator: Allocator, loop_stack: *std.ArrayListUnmanaged(*LoopFrame)) void {
+    for (loop_stack.items) |frame| {
+        // Free pointer entries in binding_values
+        var bi: usize = 0;
+        while (bi < frame.binding_count) : (bi += 1) {
+            switch (frame.binding_values[bi]) {
+                .integer, .float => {},
+                .pointer => |v| {
+                    vm.valueDeinit(v, allocator);
+                    allocator.destroy(v);
+                },
+            }
+        }
+        allocator.free(frame.binding_values);
+        allocator.destroy(frame);
+    }
+    loop_stack.deinit(allocator);
+}
+
 /// Free a StackEntry if it holds a pointer (no-op for integer/float).
 fn freeEntry(entry: StackEntry, allocator: Allocator) void {
     switch (entry) {
@@ -526,6 +546,10 @@ pub const LoopFrame = struct {
     body_pc: usize,       // PC of first body instruction (after bindings)
     binding_count: usize, // number of loop bindings
     binding_sym_indices: []usize, // indices into symbol pool for binding names
+    // Phase 5: Store loop binding values directly to avoid env.put/get (HAMT) overhead.
+    // Each entry corresponds to binding_sym_indices[i].
+    // Using StackEntry to store primitives inline (no allocation for int/float).
+    binding_values: []StackEntry,
 };
 
 /// Function metadata for make_fn support.
@@ -654,11 +678,8 @@ pub fn execute(
     errdefer stack.deinit();
 
     var loop_stack: std.ArrayListUnmanaged(*LoopFrame) = .empty;
-    errdefer {
-        for (loop_stack.items) |frame| {
-            allocator.destroy(frame);
-        }
-        loop_stack.deinit(allocator);
+    defer {
+        cleanupLoopStack(allocator, &loop_stack);
     }
 
     // fn_pool is passed via program metadata (set by compiler)
@@ -702,15 +723,42 @@ pub fn execute(
                 const sym_idx = inst.operand;
                 if (sym_idx >= program.symbols.items.len) return error.BytecodeError;
                 const sym_name = program.symbols.items[sym_idx];
-                const val = try resolveSymbol(env, sym_name);
-                // Store primitives directly, no allocation
-                switch (val) {
-                    .integer => try stack.pushInt(val.integer),
-                    .float => try stack.pushFloat(val.float),
-                    else => {
-                        const cloned = try vm.cloneGC(&val, allocator);
-                        try stack.pushPtr(cloned);
-                    },
+                // Phase 5: Check loop frames first (innermost to outermost).
+                // Loop binding values are stored directly in LoopFrame.binding_values,
+                // avoiding env.get (HAMT lookup) on every access.
+                const loop_val: ?StackEntry = blk: {
+                    var li: usize = loop_stack.items.len;
+                    while (li > 0) : (li -= 1) {
+                        const lf = loop_stack.items[li - 1];
+                        var bi: usize = 0;
+                        while (bi < lf.binding_count) : (bi += 1) {
+                            const loop_sym = program.symbols.items[lf.binding_sym_indices[bi]];
+                            if (std.mem.eql(u8, sym_name, loop_sym)) {
+                                break :blk lf.binding_values[bi];
+                            }
+                        }
+                    }
+                    break :blk null;
+                };
+                if (loop_val) |entry| {
+                    switch (entry) {
+                        .integer => try stack.pushInt(entry.integer),
+                        .float => try stack.pushFloat(entry.float),
+                        .pointer => {
+                            const cloned = try vm.cloneGC(entry.pointer, allocator);
+                            try stack.pushPtr(cloned);
+                        },
+                    }
+                } else {
+                    const val = try resolveSymbol(env, sym_name);
+                    switch (val) {
+                        .integer => try stack.pushInt(val.integer),
+                        .float => try stack.pushFloat(val.float),
+                        else => {
+                            const cloned = try vm.cloneGC(&val, allocator);
+                            try stack.pushPtr(cloned);
+                        },
+                    }
                 }
             },
             .load_cached => {
@@ -1158,13 +1206,30 @@ pub fn execute(
                 const loop_info_idx = inst.operand;
                 if (loop_info_idx >= program.loop_infos.items.len) return error.BytecodeError;
                 const info = program.loop_infos.items[loop_info_idx];
+                const binding_count = info.binding_sym_indices.len;
                 // Push a loop frame onto the loop stack
                 const frame = try allocator.create(LoopFrame);
+                // Allocate binding_values array — stores loop vars directly,
+                // avoiding env.put/get (HAMT) on every iteration.
+                const bvals = try allocator.alloc(StackEntry, binding_count);
+                // Initialize binding values from env (initial loop values were
+                // stored via store_var before loop_start was emitted).
+                var bi: usize = 0;
+                while (bi < binding_count) : (bi += 1) {
+                    const sym_name = program.symbols.items[info.binding_sym_indices[bi]];
+                    const val = try resolveSymbol(env, sym_name);
+                    bvals[bi] = switch (val) {
+                        .integer => StackEntry{ .integer = val.integer },
+                        .float => StackEntry{ .float = val.float },
+                        else => StackEntry{ .pointer = try vm.cloneGC(&val, allocator) },
+                    };
+                }
                 frame.* = .{
                     .loop_pc = pc - 1,
                     .body_pc = info.body_pc,
-                    .binding_count = info.binding_sym_indices.len,
+                    .binding_count = binding_count,
                     .binding_sym_indices = info.binding_sym_indices,
+                    .binding_values = bvals,
                 };
                 try loop_stack.append(allocator, frame);
             },
@@ -1181,13 +1246,23 @@ pub fn execute(
                     const val_entry = stack.pop() orelse return error.BytecodeError;
                     try temp_vals.append(allocator, val_entry);
                 }
-                // Rebind in reverse order (first binding gets first value)
+                // Update binding values directly in the LoopFrame.
+                // No env.put needed — load_var checks LoopFrame first.
+                // This avoids HAMT allocation on every iteration.
                 var j: usize = temp_vals.items.len;
                 while (j > 0) : (j -= 1) {
                     const val_entry = temp_vals.items[j - 1];
-                    const sym_name = program.symbols.items[frame.binding_sym_indices[j - 1]];
-                    const val = val_entry.toValueConst();
-                    try env.put(sym_name, try vm.shallowClone(&val, allocator));
+                    // Free old pointer entry if upgrading from primitive to pointer
+                    const old_entry = frame.binding_values[j - 1];
+                    const new_entry = val_entry;
+                    switch (old_entry) {
+                        .integer, .float => {},
+                        .pointer => |v| {
+                            vm.valueDeinit(v, allocator);
+                            allocator.destroy(v);
+                        },
+                    }
+                    frame.binding_values[j - 1] = new_entry;
                 }
                 for (temp_vals.items) |ae| freeEntry(ae, allocator);
                 temp_vals.deinit(allocator);
@@ -2062,17 +2137,29 @@ fn isSimpleBytecodeForm(form: Value) bool {
                     return self.compileArithmeticOp(items[1..], .rem);
                 }
 
-                // Comparison operators: =, !=, not=
-                // Only optimize equality comparisons (items.len == 3: op + 2 args).
+                // Comparison operators: =, !=, not=, <, >, <=, >=
+                // Only optimize 2-arg comparisons (items.len == 3: op + 2 args).
                 // Multi-arg comparisons need proper short-circuit logic.
-                // NOTE: We do NOT optimize <, >, <=, >= because they need numeric
-                // semantics (toNum conversion) which differs from vm.compare.
+                // vm.compare handles toNum conversion for numeric types,
+                // so <, >, <=, >= are safe to compile to direct opcodes.
                 if (items.len == 3) {
                     if (std.mem.eql(u8, op_name, "=")) {
                         return self.compileComparisonOp(items[1..], .eq);
                     }
                     if (std.mem.eql(u8, op_name, "!=") or std.mem.eql(u8, op_name, "not=")) {
                         return self.compileComparisonOp(items[1..], .ne);
+                    }
+                    if (std.mem.eql(u8, op_name, "<")) {
+                        return self.compileComparisonOp(items[1..], .lt);
+                    }
+                    if (std.mem.eql(u8, op_name, ">")) {
+                        return self.compileComparisonOp(items[1..], .gt);
+                    }
+                    if (std.mem.eql(u8, op_name, "<=")) {
+                        return self.compileComparisonOp(items[1..], .le);
+                    }
+                    if (std.mem.eql(u8, op_name, ">=")) {
+                        return self.compileComparisonOp(items[1..], .ge);
                     }
                 }
             }
@@ -2578,11 +2665,8 @@ fn isSimpleBytecodeForm(form: Value) bool {
             }
         }
 
-        // Record body_pc (PC after loop_start)
-        const body_pc = self.program.instructions.items.len;
-
-        // Add loop info and emit loop_start
-        const loop_info_idx = try self.program.addLoopInfo(self.allocator, body_pc, sym_indices);
+        // Emit loop_start first, then record body_pc (PC of first body instruction)
+        const loop_info_idx = try self.program.addLoopInfo(self.allocator, self.program.instructions.items.len + 1, sym_indices);
         _ = try self.program.emit(self.allocator, .loop_start, loop_info_idx);
 
         // Compile body forms
@@ -3635,10 +3719,9 @@ test "bytecode::loop_recur: simple counter" {
     _ = try program.emit(allocator, .store_var, sym_i);
 
     // loop_start (body starts at next instruction)
-    const body_pc = program.instructions.items.len;
     const sym_indices = try allocator.alloc(usize, 1);
     sym_indices[0] = sym_i;
-    const loop_idx = try program.addLoopInfo(allocator, body_pc, sym_indices);
+    const loop_idx = try program.addLoopInfo(allocator, program.instructions.items.len + 1, sym_indices);
     _ = try program.emit(allocator, .loop_start, loop_idx);
 
     // Body: (if (>= i 5) i (recur (inc i)))
@@ -3707,11 +3790,10 @@ test "bytecode::loop_recur: accumulator" {
     _ = try program.emit(allocator, .store_var, sym_s);
 
     // loop_start
-    const body_pc = program.instructions.items.len;
     const sym_indices = try allocator.alloc(usize, 2);
     sym_indices[0] = sym_i;
     sym_indices[1] = sym_s;
-    const loop_idx = try program.addLoopInfo(allocator, body_pc, sym_indices);
+    const loop_idx = try program.addLoopInfo(allocator, program.instructions.items.len + 1, sym_indices);
     _ = try program.emit(allocator, .loop_start, loop_idx);
 
     // Body: (if (<= i 0) s (recur (dec i) (+ s i)))
