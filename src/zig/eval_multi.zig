@@ -42,8 +42,28 @@ pub fn evalDefmulti(allocator: Allocator, l: *const list.List, frame: *vm.Frame,
     const dispatch_fn_ptr = try eval.evalRecV(allocator, &l.items[dispatch_idx], frame, depth + 1);
     defer vm.valueDeinit(dispatch_fn_ptr, allocator);
 
+    // If dispatch function is a keyword, wrap it in a function that looks it up in a map.
+    // In Clojure, keywords are callable: (:key {:key :val}) => :val
+    var dispatch_fn: Value = undefined;
+    if (std.meta.activeTag(dispatch_fn_ptr.*) == .keyword) {
+        const kw_name = dispatch_fn_ptr.*.keyword;
+        // Create a function: (fn [m] (get m keyword))
+        const kw_val = try vm.keywordValue(allocator, kw_name);
+        var fn_body: list.List = .empty;
+        errdefer fn_body.deinit(allocator);
+        try fn_body.append(allocator, try vm.symValue(allocator, "get"));
+        try fn_body.append(allocator, try vm.symValue(allocator, "m"));
+        try fn_body.append(allocator, kw_val);
+        var fn_params: list.List = .empty;
+        errdefer fn_params.deinit(allocator);
+        try fn_params.append(allocator, try vm.symValue(allocator, "m"));
+        dispatch_fn = try vm.fnValueSingle(allocator, fn_params, fn_body, try frame.root_env.clone(allocator), null, false);
+    } else {
+        dispatch_fn = try vm.clone(dispatch_fn_ptr, allocator);
+    }
+
     // Create multimethod value
-    var mm_val = try vm.multimethodValue(allocator, dispatch_fn_ptr.*);
+    var mm_val = try vm.multimethodValue(allocator, dispatch_fn);
 
     // Parse optional options (after dispatch function)
     var i: usize = dispatch_idx + 1;

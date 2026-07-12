@@ -295,9 +295,9 @@
    but must occur inside a test function (deftest)."
   [string & body]
   (cons (read-string "binding")
-        (cons (vector (ns-sym "*testing-contexts*")
+        (cons (vector (quote *testing-contexts*)
                       (list (read-string "conj")
-                            (ns-sym "*testing-contexts*")
+                            (quote *testing-contexts*)
                             string))
               body)))
 
@@ -500,5 +500,5 @@
         asserts (doall (map (fn [vals]
                               (clojure.walk/postwalk-replace (zipmap argv vals) expr))
                             pairs))
-        is-calls (doall (map (fn [a] (list 'is a)) asserts))]
+        is-calls (doall (map (fn [a] (list (quote is) a)) asserts))]
     (cons (read-string "do") is-calls)))

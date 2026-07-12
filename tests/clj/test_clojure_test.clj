@@ -56,10 +56,75 @@
 (swap! test-results conj (contains? *initial-report-counters* :fail))
 (swap! test-results conj (contains? *initial-report-counters* :error))
 
+;; Test are macro — tabular assertions
+(swap! test-results conj (= (are [x y] (= x y)
+  2 (+ 1 1)
+  4 (* 2 2)) true))
+
+(swap! test-results conj (= (are [a b c] (= (+ a b) c)
+  1 1 2
+  3 4 7
+  10 20 30) true))
+
+;; Test deftest creates a function with :test metadata
+(deftest sample-test
+  (is (= 1 1)))
+(swap! test-results conj (fn? sample-test))
+(swap! test-results conj (fn? (:test (meta sample-test))))
+
+;; Test testing macro binds *testing-contexts*
+(swap! test-results conj (= (testing "context" (count *testing-contexts*)) 1))
+
+;; Test testing macro is nestable
+(swap! test-results conj (= (testing "outer" (testing "inner" (count *testing-contexts*))) 2))
+
+;; Test ref? type predicate
+(swap! test-results conj (ref? (ref 42)))
+(swap! test-results conj (not (ref? 42)))
+(swap! test-results conj (not (ref? nil)))
+
+;; Test commutative? type predicate
+(def non-comm-ref (ref 1))
+(def comm-ref (ref 2 :commutative true))
+(swap! test-results conj (not (commutative? non-comm-ref)))
+(swap! test-results conj (commutative? comm-ref))
+(swap! test-results conj (not (commutative? 42)))
+
+;; Test prefer-method and preferences
+(defmulti test-mm :type)
+(defmethod test-mm :a [x] :a)
+(defmethod test-mm :b [x] :b)
+(defmethod test-mm :c [x] :c)
+(prefer-method test-mm :a :b)
+(prefer-method test-mm :a :c)
+(def test-prefs (preferences test-mm))
+(swap! test-results conj (map? test-prefs))
+(swap! test-results conj (contains? test-prefs :a))
+(swap! test-results conj (= (count (get test-prefs :a)) 2))
+
+;; Test successful? with a zero-failure summary
+(swap! test-results conj (successful? {:test 1 :pass 1 :fail 0 :error 0 :type :summary}))
+(swap! test-results conj (not (successful? {:test 1 :pass 0 :fail 1 :error 0 :type :summary})))
+(swap! test-results conj (not (successful? {:test 1 :pass 0 :fail 0 :error 1 :type :summary})))
+
+;; Test dosync/alter/commute with refs
+(def test-r (ref 0))
+(dosync (alter test-r + 10))
+(swap! test-results conj (= @test-r 10))
+(dosync (commute test-r + 5))
+(swap! test-results conj (= @test-r 15))
+(dosync (ref-set test-r 100))
+(swap! test-results conj (= @test-r 100))
+
+;; Test get-method and methods
+(swap! test-results conj (fn? (get-method test-mm :a)))
+(swap! test-results conj (map? (methods test-mm)))
+(swap! test-results conj (fn? (dispatch-fn test-mm)))
+
 ;; Go back to user namespace for check
 (in-ns 'user)
 
 ;; Check all results
-(check "clojure.test/all-assertions" (every? true? @clojure.test/test-results) true)
+(check "clojure.test/all-tests" (every? true? @clojure.test/test-results) true)
 
-(println "All clojure.test assertion tests passed!")
+(println "All clojure.test tests passed!")
