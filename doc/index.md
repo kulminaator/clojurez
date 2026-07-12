@@ -8,6 +8,7 @@ Auto-generated documentation.
 - [clojure.math](clojure-math.md)
 - [clojure.string](clojure-string.md)
 - [clojure.template](clojure-template.md)
+- [clojure.test](clojure-test.md)
 - [clojure.walk](clojure-walk.md)
 - [doc.gen-docs](doc-gen-docs.md)
 - [zig.core](zig-core.md)

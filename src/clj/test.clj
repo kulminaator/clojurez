@@ -5,6 +5,14 @@
   (:require [clojure.string :as str]
             [clojure.template :as template]))
 
+;;; INTERNAL HELPERS
+
+(defn- ns-sym
+  "Create a namespaced symbol for use in macro-generated code.
+   Ensures the symbol resolves to the clojure.test namespace."
+  [name]
+  (read-string (str "clojure.test/" name)))
+
 ;;; USER-MODIFIABLE GLOBALS
 
 (def *load-tests* true)
@@ -113,16 +121,16 @@
         pred (first form)
         values-sym (gensym "values")
         result-sym (gensym "result")]
-    (list 'let
-          (list values-sym (cons 'list args)
+    (list (read-string "let")
+          (list values-sym (cons (read-string "list") args)
                 result-sym (list 'apply pred values-sym))
-          (list 'if result-sym
-                (list 'do-report {:type :pass :message msg
-                                  :expected (list 'quote form)
-                                  :actual (list 'list (list 'quote pred) values-sym)})
-                (list 'do-report {:type :fail :message msg
-                                  :expected (list 'quote form)
-                                  :actual (list 'list (list 'quote 'not) (list 'cons (list 'quote pred) values-sym))}))
+          (list (read-string "if") result-sym
+                (list (read-string "clojure.test/do-report") {:type :pass :message msg
+                                  :expected (list (read-string "quote") form)
+                                  :actual (list (read-string "list") (list (read-string "quote") pred) values-sym)})
+                (list (read-string "clojure.test/do-report") {:type :fail :message msg
+                                  :expected (list (read-string "quote") form)
+                                  :actual (list (read-string "list") (list (read-string "quote") (read-string "not")) (list (read-string "cons") (list (read-string "quote") pred) values-sym))}))
           result-sym)))
 
 (defn assert-any
@@ -130,14 +138,14 @@
    including macros, method calls, or isolated symbols."
   [msg form]
   (let [value-sym (gensym "value")]
-    (list 'let
+    (list (read-string "let")
           (list value-sym form)
-          (list 'if value-sym
-                (list 'do-report {:type :pass :message msg
-                                  :expected (list 'quote form)
+          (list (read-string "if") value-sym
+                (list (read-string "clojure.test/do-report") {:type :pass :message msg
+                                  :expected (list (read-string "quote") form)
                                   :actual value-sym})
-                (list 'do-report {:type :fail :message msg
-                                  :expected (list 'quote form)
+                (list (read-string "clojure.test/do-report") {:type :fail :message msg
+                                  :expected (list (read-string "quote") form)
                                   :actual value-sym}))
           value-sym)))
 
@@ -157,7 +165,7 @@
 
 (defmethod assert-expr :always-fail [msg form]
   "Nil test: always fail."
-  (list 'do-report {:type :fail :message msg}))
+  (list (read-string "clojure.test/do-report") {:type :fail :message msg}))
 
 (defmethod assert-expr :default [msg form]
   "Generic assertion: predicate or any test."
@@ -172,17 +180,17 @@
         result-sym (gensym "result")
         klass-expr (nth form 1)
         object-expr (nth form 2)]
-    (list 'let
+    (list (read-string "let")
           (list klass-sym klass-expr
                 object-sym object-expr)
-          (list 'let
+          (list (read-string "let")
                 (list result-sym (list 'instance? klass-sym object-sym))
-                (list 'if result-sym
-                      (list 'do-report {:type :pass :message msg
-                                        :expected (list 'quote form)
+                (list (read-string "if") result-sym
+                      (list (read-string "clojure.test/do-report") {:type :pass :message msg
+                                        :expected (list (read-string "quote") form)
                                         :actual (list 'class object-sym)})
-                      (list 'do-report {:type :fail :message msg
-                                        :expected (list 'quote form)
+                      (list (read-string "clojure.test/do-report") {:type :fail :message msg
+                                        :expected (list (read-string "quote") form)
                                         :actual (list 'class object-sym)}))
                 result-sym))))
 
@@ -192,14 +200,14 @@
   (let [klass (second form)
         body (nthnext form 2)
         e-sym (gensym "e")]
-    (cons 'try
+    (cons (read-string "try")
           (concat body
-                  (list (list 'do-report {:type :fail :message msg
-                                         :expected (list 'quote form)
+                  (list (list (read-string "clojure.test/do-report") {:type :fail :message msg
+                                         :expected (list (read-string "quote") form)
                                          :actual nil})
-                        (list 'catch klass e-sym
-                              (list 'do-report {:type :pass :message msg
-                                                :expected (list 'quote form)
+                        (list (read-string "catch") klass e-sym
+                              (list (read-string "clojure.test/do-report") {:type :pass :message msg
+                                                :expected (list (read-string "quote") form)
                                                 :actual e-sym})
                               e-sym))))))
 
@@ -211,20 +219,20 @@
         body (nthnext form 3)
         e-sym (gensym "e")
         m-sym (gensym "m")]
-    (cons 'try
+    (cons (read-string "try")
           (concat body
-                  (list (list 'do-report {:type :fail :message msg
-                                         :expected (list 'quote form)
+                  (list (list (read-string "clojure.test/do-report") {:type :fail :message msg
+                                         :expected (list (read-string "quote") form)
                                          :actual nil})
-                        (list 'catch klass e-sym
-                              (list 'let
+                        (list (read-string "catch") klass e-sym
+                              (list (read-string "let")
                                     (list m-sym (list 'ex-message e-sym))
-                                    (list 'if (list 're-find re m-sym)
-                                          (list 'do-report {:type :pass :message msg
-                                                            :expected (list 'quote form)
+                                    (list (read-string "if") (list 're-find re m-sym)
+                                          (list (read-string "clojure.test/do-report") {:type :pass :message msg
+                                                            :expected (list (read-string "quote") form)
                                                             :actual e-sym})
-                                          (list 'do-report {:type :fail :message msg
-                                                            :expected (list 'quote form)
+                                          (list (read-string "clojure.test/do-report") {:type :fail :message msg
+                                                            :expected (list (read-string "quote") form)
                                                             :actual e-sym})))
                               e-sym))))))
 
@@ -234,13 +242,14 @@
   "Used by the 'is' macro to catch unexpected exceptions."
   [msg form]
   (let [t-sym (gensym "t")
-        inner (assert-expr msg form)]
-    (list 'try
+        inner (assert-expr msg form)
+        do-report-sym (ns-sym "do-report")]
+    (list (read-string "try")
           inner
-          (list 'catch 'Throwable t-sym
-                (list 'do-report {:type :error :message msg
-                                  :expected (list 'quote form)
-                                  :actual t-sym})))))
+          (list (read-string "catch") 'Throwable t-sym
+                (list do-report-sym {:type :error :message msg
+                                     :expected (list (read-string "quote") form)
+                                     :actual t-sym})))))
 
 (defmacro is
   "Generic assertion macro. 'form' is any predicate test.
@@ -256,8 +265,27 @@
    (is (thrown-with-msg? c re body)) checks that an instance of c is
    thrown AND that the message on the exception matches (with
    re-find) the regular expression re."
-  ([form] `(is ~form nil))
-  ([form msg] `(try-expr ~msg ~form)))
+  ([form]
+   (let [t-sym (gensym "t")
+         inner (assert-expr nil form)
+         do-report-sym (ns-sym "do-report")]
+     (list (read-string "try")
+           inner
+           (list (read-string "catch") 'Throwable t-sym
+                 (list do-report-sym {:type :error :message nil
+                                      :expected (list (read-string "quote") form)
+                                      :actual t-sym})))))
+  ([form msg]
+   (let [t-sym (gensym "t")
+         inner (assert-expr msg form)
+         do-report-sym (ns-sym "do-report")]
+     (list (read-string "try")
+           inner
+           (list (read-string "catch") 'Throwable t-sym
+                 (list do-report-sym {:type :error :message msg
+                                      :expected (list (read-string "quote") form)
+                                      :actual t-sym})))))
+)
 
 
 ;;; TESTING MACRO
@@ -266,8 +294,12 @@
   "Adds a new string to the list of testing contexts.  May be nested,
    but must occur inside a test function (deftest)."
   [string & body]
-  `(binding [*testing-contexts* (conj *testing-contexts* ~string)]
-     ~@body))
+  (cons (read-string "binding")
+        (cons (vector (ns-sym "*testing-contexts*")
+                      (list (read-string "conj")
+                            (ns-sym "*testing-contexts*")
+                            string))
+              body)))
 
 
 ;;; DEFINING TESTS
@@ -442,7 +474,8 @@
    the test, and summary output after."
   [v]
   (binding [*report-counters* (ref *initial-report-counters*)]
-    (let [ns-name (:ns (meta v))
+    (let [fn-val (resolve v)
+          ns-name (:ns (meta fn-val))
           ns-obj (the-ns ns-name)
           each-fixture-fn (join-fixtures (:clojure.test/each-fixtures (meta ns-obj)))]
       (each-fixture-fn (fn [] (test-var v)))
@@ -454,7 +487,7 @@
   "Runs the tests for a single test var, identified by symbol.
    Returns the summary map."
   [sym]
-  `(run-test-var (var ~sym)))
+  (list (ns-sym "run-test-var") (list (read-string "var") sym)))
 
 (defmacro are
   "Checks multiple assertions with a template expression.
@@ -468,4 +501,4 @@
                               (clojure.walk/postwalk-replace (zipmap argv vals) expr))
                             pairs))
         is-calls (doall (map (fn [a] (list 'is a)) asserts))]
-    (cons 'do is-calls)))
+    (cons (read-string "do") is-calls)))
