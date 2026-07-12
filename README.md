@@ -62,6 +62,12 @@ Type `(quit)`, `(exit)`, or press `CTRL+D` to exit the REPL.
 - **Network sockets** - TCP client/server sockets and UDP datagram sockets via `zig.io` (`socket`, `server-socket`, `accept`, `udp-socket`, `udp-send!`, `udp-receive`, `set-socket-timeout!`), integrated with stream/reader/writer protocols
 - **Exceptions** - `try`/`catch`/`finally`/`throw`, `ex-info`, `ex-data`, `ex-message`, `ex-cause`, exception hierarchy (`derive`, `parents`, `isa?`), built-in types (`ArithmeticException`, `RuntimeException`, `IOException`, `FileNotFoundException`, `NullPointerException`, `TimeoutException`)
 - **`clojure.math` namespace** - constants (`E`, `PI`), trigonometric (`sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`), hyperbolic (`sinh`, `cosh`, `tanh`), exponential/logarithmic (`exp`, `log`, `log10`, `sqrt`, `cbrt`, `pow`, `hypot`), rounding (`ceil`, `floor`, `rint`, `round`), IEEE operations (`IEEE-remainder`, `signum`, `copy-sign`, `ulp`, `scalb`, `next-after`, `next-up`, `next-down`), exact integer arithmetic (`add-exact`, `subtract-exact`, `multiply-exact`, `increment-exact`, `decrement-exact`, `negate-exact`), floor division/modulus (`floor-div`, `floor-mod`)
+- **`clojure.test` namespace** - testing framework with `deftest`, `is`, `testing`, `deftest-`, `with-test`, `use-fixtures`, `run-tests`, `run-all-tests`, `are`, `thrown?`, `thrown-with-msg?`, `test-var`, `test-ns`
+- **`clojure.walk` namespace** - tree walking utilities: `walk`, `postwalk`, `prewalk`, `postwalk-replace`, `prewalk-replace`, `keywordize-keys`, `stringify-keys`
+- **`clojure.template` namespace** - template utilities: `apply-template`, `do-template`
+- **Multimethods** - `defmulti`, `defmethod`, `prefer-method`, `preferences`, `get-method`, `methods`, `dispatch-fn`
+- **STM (Software Transactional Memory)** - `ref`, `dosync`, `alter`, `commute`, `ref-set`, `ensure`, `ref?`, `commutative?`
+- **`alter-meta!`** — modify var metadata in-place
 - **Pre-cached values** - singleton caching for `nil`, booleans, small integers, latin characters, empty collections (`()`, `[]`, `{}`, `#{}`), and mathematical constants (`E`, `PI`)
 
 ## Documentation
@@ -72,6 +78,9 @@ Auto-generated API reference is available in the `doc/` directory:
 - [clojure.core](doc/clojure-core.md) — core library functions and macros
 - [clojure.string](doc/clojure-string.md) — string manipulation functions
 - [clojure.math](doc/clojure-math.md) — mathematical functions and constants
+- [clojure.test](doc/clojure-test.md) — testing framework
+- [clojure.walk](doc/clojure-walk.md) — tree walking utilities
+- [clojure.template](doc/clojure-template.md) — template utilities
 - [zig.core](doc/zig-core.md) — internal Zig builtins
 - [zig.io](doc/zig-io.md) — I/O abstractions and protocols
 - [Special Forms](doc/special-forms.md) — language special forms
@@ -87,7 +96,17 @@ Documentation is regenerated automatically on every build. To regenerate manuall
 - No JIT compilation (bytecode compilation is used for eligible function bodies)
 - Strings are UTF-8 (not UTF-16)
 - Simpler collection internals (some chunking support)
+- STM is simplified — single-writer transactions without MVCC
 - Minimal runtime (< 1MB stripped)
+
+## Zig interop
+Developers coming from JVM Clojure might assume that you can call Zig functions directly from clojurez. Sadly it's not so simple. We do have very precise bindings from zig.core library to native zig functions (and some functions from other namespaces as well), but you can't just call any function in Zig std lib as you wish.
+
+Zig doesn’t include its standard library in your program the way Java includes a runtime. When Zig compiles your code, it only keeps the tiny pieces you actually use, and even those get heavily optimized into raw machine instructions. That means most Zig functions don’t exist in the final binary in any recognizable form. Because of this, your scripting language can only call the Zig functions you explicitly expose — not the entire Zig std library. Think of Zig as a compiler that builds exactly what you ask for, not a runtime that brings its whole toolbox along. We don't use majority of zig's std lib, therefor it is also not compiled into our binary. 
+
+I am considering adding dlopen style support to deal with dynamically linked libraries, this would open the doors not just to Zig but also C libraries.
+
+Since the project is open source - you can fork it and modify it to adjust to your needs (as long as you follow the license and copyrights).
 
 ## License
 

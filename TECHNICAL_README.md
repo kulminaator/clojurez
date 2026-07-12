@@ -10,7 +10,10 @@ src/
 │   ├── core.clj       - clojure.core: bootstrapped functions, macros, threading helpers
 │   ├── string.clj     - clojure.string: string manipulation functions
 │   ├── math.clj       - clojure.math: trigonometric, exponential, rounding, IEEE operations
-│   └── io.clj         - zig.io: protocol-based I/O abstractions, subprocess, streams
+│   ├── io.clj         - zig.io: protocol-based I/O abstractions, subprocess, streams
+│   ├── test.clj       - clojure.test: testing framework (deftest, is, testing, fixtures)
+│   ├── walk.clj       - clojure.walk: tree walking utilities (postwalk, prewalk, replace)
+│   └── template.clj   - clojure.template: template utilities (apply-template, do-template)
 ├── zig/               - main.zig, eval*.zig etc. - entry point, essential zig code for the language implementation
 │   ├── bytecode.zig   - bytecode compiler and stack-based VM
 │   ├── eval.zig       - main evaluator (AST interpreter + bytecode dispatch)
@@ -18,6 +21,9 @@ src/
 │   ├── eval_thread.zig - threading macros (->, ->>, cond->, cond->>)
 │   ├── eval_macro.zig - macro expansion
 │   ├── eval_ns.zig    - namespace evaluation
+│   ├── eval_meta.zig  - alter-meta! special form (metadata mutation)
+│   ├── eval_multi.zig - multimethod special forms (defmulti, defmethod)
+│   ├── ref.zig        - STM system (ref, dosync, alter, commute, ref-set)
 │   ├── exception.zig   - exception types, hierarchy, and exception values
 │   ├── gc.zig         - mark-and-sweep garbage collector (thread-safe)
 │   ├── gc_scan.zig    - type-aware GC scanning
@@ -32,7 +38,6 @@ src/
 │           ├── math.zig        - clojure.math: trig, hyperbolic, exp/log, rounding, IEEE, exact arithmetic
 │           ├── threading.zig   - multithreading: sleep, future-call, promise, deliver, realized
 │           └── ...
-└── tests/
     ├── clj/             - Clojure-based test suites (test_*.clj)
     ├── test_*.sh        - shell-based integration tests
     └── complex-samples/ - end-to-end sample programs
@@ -73,6 +78,8 @@ All values are represented by the `Value` tagged union in `value.zig`:
 | `promise` | `(promise)` | one-time writable container |
 | `wrapped` | internal | raw pointer wrapper — streams, process handles, etc. |
 | `exception` | `(ex-info "msg" {})` | exception with type, message, data map, cause |
+| `ref` | `(ref 42)` | STM reference with version counter |
+| `multimethod` | `(defmulti mm :type)` | multimethod dispatch with method table |
 
 ## Special Forms
 
@@ -107,6 +114,10 @@ Implemented in `eval.zig` and related modules via a dispatch table:
 | `->` / `->>` / `cond->` / `cond->>` | threading macros |
 | `try` / `catch` / `finally` | exception handling (`try body* (catch Type sym body*)* (finally cleanup*)?`) |
 | `throw` | throw an exception |
+| `alter-meta!` | modify var metadata in-place (`alter-meta! sym f & args`) |
+| `dosync` | transactional execution — retry loop for STM refs (`dosync body*`) |
+| `defmulti` | define a multimethod (`defmulti name docstring? dispatch-fn & options`) |
+| `defmethod` | add a method to a multimethod (`defmethod mm dispatch-val [params] body`) |
 | `quit` / `exit` | exit the REPL |
 
 ## Namespace Architecture
@@ -116,8 +127,11 @@ Three namespace layers:
 1. **`user`** - default namespace. REPL, `-e`, and file execution start here. Inherits from `clojure.core`.
 2. **`clojure.core`** - public API namespace. Built-in functions and `core.clj` definitions live here.
 3. **`clojure.math`** - mathematical functions and constants. Provides `E`, `PI`, trigonometric, hyperbolic, exponential/logarithmic, rounding, IEEE, and exact integer arithmetic functions. Loaded via `(require '[clojure.math :as math])`.
-4. **`zig.core`** - internal implementation namespace. Raw Zig builtins live here. Clojure wrappers in `clojure.core` delegate to `zig.core/` internally.
-5. **`zig.io`** - protocol-based I/O namespace. Provides `Closeable`, `IOFactory`, `Readable`, `Writable` protocols, path utilities, `with-open`, `copy`, `line-seq`, and subprocess helpers (`sh`, `sh-stream`, etc.). Loaded via `(require '[zig.io :as io])`.
+4. **`clojure.test`** - testing framework. Provides `deftest`, `is`, `testing`, `use-fixtures`, `run-tests`, `run-all-tests`, `are`, `thrown?`, `thrown-with-msg?`. Embedded at compile time.
+5. **`clojure.walk`** - tree walking utilities. Provides `walk`, `postwalk`, `prewalk`, `postwalk-replace`, `prewalk-replace`, `keywordize-keys`, `stringify-keys`. Loaded via `(require '[clojure.walk :as walk])`.
+6. **`clojure.template`** - template utilities. Provides `apply-template`, `do-template`. Loaded via `(require '[clojure.template :as template])`.
+7. **`zig.core`** - internal implementation namespace. Raw Zig builtins live here. Clojure wrappers in `clojure.core` delegate to `zig.core/` internally.
+8. **`zig.io`** - protocol-based I/O namespace. Provides `Closeable`, `IOFactory`, `Readable`, `Writable` protocols, path utilities, `with-open`, `copy`, `line-seq`, and subprocess helpers (`sh`, `sh-stream`, etc.). Loaded via `(require '[zig.io :as io])`.
 
 **Symbol resolution chain:**
 ```
@@ -255,7 +269,93 @@ Throwable
 
 ### Custom Hierarchy
 
-`derive`, `parents`, `isa?` allow defining custom type hierarchies for exception dispatch and (future) multimethod routing.
+`derive`, `parents`, `isa?` allow defining custom type hierarchies for exception dispatch and multimethod routing.
+
+## Multimethods
+
+Implemented in `eval_multi.zig` as special forms `defmulti` and `defmethod`.
+
+### `defmulti` / `defmethod`
+
+```clojure
+(defmulti report :type)        ; dispatch on :type key
+(defmethod report :pass [m]    ; method for :pass dispatch value
+  (println "PASS"))
+(defmethod report :fail [m]    ; method for :fail dispatch value
+  (println "FAIL"))
+(report {:type :pass})         ; → prints "PASS"
+```
+
+### Multimethod Value Type
+
+`MultimethodData` struct contains:
+- `dispatch_fn` — the dispatch function
+- `method_table` — ArrayList of MapEntry (dispatch-value → method-fn)
+- `pref_table` — preference pairs for dispatch resolution
+- `default_dispatch` — default dispatch value (from `:default` option)
+
+### Multimethod Invocation
+
+When a multimethod value is called as a function:
+1. Call `dispatch_fn` with the arguments to get the dispatch value
+2. Look up the dispatch value in `method_table`
+3. If found, invoke the matching method with the original arguments
+4. If not found, try the `:default` dispatch value, then `:default` keyword
+
+### Multimethod Functions
+
+| Function | Description |
+|----------|-------------|
+| `defmulti` | Define a multimethod (special form) |
+| `defmethod` | Add a method to a multimethod (special form) |
+| `prefer-method` | Add a preference pair (preferred dispatch > less preferred) |
+| `preferences` | Return preference map `{preferred -> #{less-preferred...}}` |
+| `get-method` | Get method function for a dispatch value |
+| `methods` | Return method table as a map |
+| `dispatch-fn` | Return the dispatch function |
+
+## STM (Software Transactional Memory)
+
+Implemented in `ref.zig` with `dosync` as a special form and `ref`, `alter`, `commute`, `ref-set`, `ensure` as builtins.
+
+### Design
+
+Simple optimistic STM with single-writer semantics:
+- `RefData` struct: `value`, `version` counter, optional `validator`, optional `meta` (for `:commutative`)
+- Transaction state: thread-local write-set (ref → new value)
+- `dosync`: retry loop — evaluate body, apply write-set, commit
+- No MVCC — simple version counter per ref
+
+### Usage
+
+```clojure
+(def r (ref 0))              ; Create a ref with initial value 0
+(dosync (alter r + 10))      ; Non-commutative update inside transaction
+(dosync (commute r + 5))     ; Commutative update inside transaction
+(dosync (ref-set r 100))     ; Set ref value inside transaction
+@r                           ; → 100 (deref)
+```
+
+### STM Functions
+
+| Function | Description |
+|----------|-------------|
+| `ref` | Create an STM reference (`ref initial-value & opts`) |
+| `dosync` | Transactional execution (special form) |
+| `alter` | Non-commutative ref update inside dosync |
+| `commute` | Commutative ref update inside dosync |
+| `ref-set` | Set ref value inside dosync |
+| `ensure` | Add ref to transaction read-set (no-op in simple STM) |
+| `ref?` | Check if value is a ref |
+| `commutative?` | Check if ref has `:commutative` metadata |
+
+### Ref Metadata
+
+Refs support optional metadata via `:commutative` option:
+```clojure
+(def r (ref 0 :commutative true))
+(commutative? r)  ; → true
+```
 
 ## Built-in Functions (zig.core)
 
@@ -363,6 +463,9 @@ Functions implemented in Clojure (bootstrapped from `core.clj`, embedded at comp
 ### Parsing
 `parse-boolean`, `parse-long`, `parse-double`
 
+### Metadata & Introspection
+`vary-meta`, `doto`, `prn`, `merge-with`, `update-in`, `namespace`, `instance?`, `class`, `long`, `find-var`
+
 ### Macros
 `when-not`, `when-some`, `if-let`, `when-let`, `time`, `doseq`, `when-first`, `for`, `defonce`
 
@@ -454,6 +557,46 @@ Functions in `zig.io` namespace (loaded via `(require '[zig.io :as io])`):
 ### Subprocess Execution
 `sh` (synchronous), `sh-stream` (async handle), `sh-in`, `sh-out`, `sh-err`, `sh-close-in`, `sh-wait`, `sh-kill`, `with-sh-dir`, `with-sh-env`
 
+## Clojure Test Library (`src/clj/test.clj`)
+
+Functions in `clojure.test` namespace (embedded at compile time, loaded via `(require '[clojure.test :as t])`):
+
+### Test Definition
+`deftest`, `deftest-`, `testing`, `with-test`, `set-test`
+
+### Assertions
+`is` (generic assertion macro), `assert-expr` (multimethod), `assert-predicate`, `assert-any`
+
+### Assertion Helpers
+`thrown?` (exception testing), `thrown-with-msg?` (exception + message regex testing), `instance?` (type checking)
+
+### Fixtures
+`use-fixtures` (`:each` and `:once`), `compose-fixtures`, `join-fixtures`
+
+### Test Execution
+`test-var`, `test-vars`, `test-all-vars`, `test-ns`, `run-tests`, `run-all-tests`, `run-test-var`, `run-test`, `successful?`
+
+### Reporting
+`report` (multimethod dispatched on `:type`), `do-report`, `inc-report-counter`
+
+### Dynamic Vars
+`*load-tests*`, `*report-counters*`, `*initial-report-counters*`, `*testing-vars*`, `*testing-contexts*`, `*test-out*`, `*stack-trace-depth*`
+
+### Tabular Testing
+`are` (tabular test data with template expression)
+
+## Clojure Walk Library (`src/clj/walk.clj`)
+
+Functions in `clojure.walk` namespace (loaded via `(require '[clojure.walk :as walk])`):
+
+`walk`, `postwalk`, `prewalk`, `postwalk-replace`, `prewalk-replace`, `keywordize-keys`, `stringify-keys`
+
+## Clojure Template Library (`src/clj/template.clj`)
+
+Functions in `clojure.template` namespace (loaded via `(require '[clojure.template :as template])`):
+
+`apply-template`, `do-template`
+
 ## Garbage Collection
 
 Mark-and-sweep GC in `gc.zig` with type-aware scanning in `gc_scan.zig`.
@@ -469,7 +612,7 @@ Mark-and-sweep GC in `gc.zig` with type-aware scanning in `gc_scan.zig`.
 - `value_cache` — pre-cached singleton values (nil, bool, small int, latin char, empty collections, E, PI)
 - `value_array`, `map_entries`, `set_items`, `queue_items` — collection data
 - `env`, `namespace_manager` — evaluation environment
-- `lazy_seq_thunk`, `atom_data`, `future_data`, `promise_data` — runtime objects
+- `lazy_seq_thunk`, `atom_data`, `future_data`, `promise_data`, `ref_data`, `multimethod_data` — runtime objects
 - `fn_data`, `fn_arities` — function definitions
 - `cons_data`, `hash_map_node`, `hash_map_kvp_array`, `hash_map_sub_nodes` — HAMT internals
 - `record_data`, `list_data`, `vector_data`, `map_data`, `set_data`, `queue_data` — collection structures
@@ -541,7 +684,7 @@ tests/
 zig test src/zig/all_tests.zig
 ```
 
-**2. Clojure In-VM Suites** (`tests/clj/test_*.clj`, excluding `shell_*`) — ~49 suites
+**2. Clojure In-VM Suites** (`tests/clj/test_*.clj`, excluding `shell_*`) — ~50 suites
 Run directly inside a single clojurez process. Use `check`/`check-true`/`check-false` from `clj_test_helper.clj`.
 
 Key suites: `test_bytecode.clj`, `test_math.clj`, `test_exceptions.clj`, `test_multithreading.clj`, `test_zig_io.clj`, `test_thread_macros.clj`, and many more.
@@ -617,7 +760,7 @@ zig build                          # all 3 variants
 zig build -Doptimize=ReleaseSmall  # specific optimize mode
 ```
 
-Build copies `src/clj/core.clj` → `src/zig/namespaces/core/clj/core.clj`, `src/clj/string.clj` → `src/zig/namespaces/core/clj/string.clj`, `src/clj/math.clj` → `src/zig/namespaces/core/clj/math.clj`, and `src/clj/io.clj` → `src/zig/namespaces/core/clj/io.clj` for `@embedFile`.
+Build copies `src/clj/core.clj` → `src/zig/namespaces/core/clj/core.clj`, `src/clj/string.clj` → `src/zig/namespaces/core/clj/string.clj`, `src/clj/math.clj` → `src/zig/namespaces/core/clj/math.clj`, `src/clj/io.clj` → `src/zig/namespaces/core/clj/io.clj`, `src/clj/test.clj` → `src/zig/namespaces/core/clj/test.clj`, `src/clj/walk.clj` → `src/zig/namespaces/core/clj/walk.clj`, and `src/clj/template.clj` → `src/zig/namespaces/core/clj/template.clj` for `@embedFile`.
 
 ## Debugging
 
@@ -685,7 +828,6 @@ Documentation is regenerated automatically on every `zig build`. To regenerate m
 ## What's Missing
 
 - **Transients** - mutable versions of persistent data structures
-- **Multimethods** - `defmulti`, `defmethod`
 - **Spec system** - no `clojure.spec`
 - **Java interop** - not applicable for a standalone VM
 - **JIT compilation** - we are an interpreting VM (bytecode compilation used for eligible functions)

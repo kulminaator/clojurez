@@ -77,6 +77,8 @@ pub fn valueScanFn(obj: *anyopaque, ctx: *gc.ScanContext) void {
         .frame => scanFrame(obj, ctx),
         .value_cache => scanValueCache(obj, ctx),
         .exception_data => scanExceptionData(obj, ctx),
+        .ref_data => scanRefData(obj, ctx),
+        .multimethod_data => scanMultimethodData(obj, ctx),
     }
 }
 
@@ -159,6 +161,7 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         .string, .regex, .character, .symbol, .keyword,
         .list, .vector, .map, .set, .queue, .function, .builtin_fn,
         .lazy_seq, .cons, .chunk, .chunked_cons, .atom, .future, .promise, .reduced, .wrapped, .record, .exception,
+        .ref, .multimethod,
     };
     var is_valid = false;
     for (valid_types) |vt| {
@@ -282,6 +285,10 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
             if (fn_data.docstring) |ds| {
                 if (ds.len > 0) markPtr(ds.ptr, ctx);
             }
+            // Mark the fn's namespace string (if GC-allocated)
+            if (fn_data.namespace) |ns| {
+                if (ns.len > 0) markPtr(ns.ptr, ctx);
+            }
             // Mark the arities array buffer itself
             if (fn_data.arities.items.len > 0) {
                 ctx.gc.markRecursive(fn_data.arities.items.ptr, ctx);
@@ -385,6 +392,20 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
             // Mark the ExceptionData block itself so it survives GC sweep
             ctx.gc.markRecursive(ed, ctx);
         },
+
+        .ref => |data| {
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!isValidGCPtr(data, ctx)) return;
+            // Mark the RefData block itself so GC can scan value + validator
+            ctx.gc.markRecursive(data, ctx);
+        },
+
+        .multimethod => |data| {
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!isValidGCPtr(data, ctx)) return;
+            // Mark the MultimethodData block itself so GC can scan dispatch_fn + method_table
+            ctx.gc.markRecursive(data, ctx);
+        },
     }
 }
 
@@ -465,6 +486,10 @@ fn scanFnData(fndata_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     // Mark the fn's docstring (if GC-allocated)
     if (fndata.docstring) |ds| {
         if (ds.len > 0) markPtr(ds.ptr, ctx);
+    }
+    // Mark the fn's namespace string (if GC-allocated)
+    if (fndata.namespace) |ns| {
+        if (ns.len > 0) markPtr(ns.ptr, ctx);
     }
     // Mark the fn's env struct itself (heap-allocated *Env)
     const fn_env = fndata.env;
@@ -551,6 +576,14 @@ fn scanEnv(env_ptr: *anyopaque, ctx: *gc.ScanContext) void {
 
     // Mark the HAMT root node (triggers recursive scanning of all nodes)
     if (env.entries.root) |root| {
+        ctx.gc.markRecursive(root, ctx);
+    }
+    // Mark metas HAMT
+    if (env.metas.root) |root| {
+        ctx.gc.markRecursive(root, ctx);
+    }
+    // Mark dynamic_vars HAMT
+    if (env.dynamic_vars.root) |root| {
         ctx.gc.markRecursive(root, ctx);
     }
     // Mark referred_names list buffer and strings
@@ -762,6 +795,10 @@ fn scanNamespaceManager(ns_mgr_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     if (ns_mgr.aliases.root) |root| {
         ctx.gc.markRecursive(root, ctx);
     }
+    // Mark dynamic_vars PersistentHashMap root node
+    if (ns_mgr.dynamic_vars.root) |root| {
+        ctx.gc.markRecursive(root, ctx);
+    }
     // Mark classpath buffer and strings
     if (ns_mgr.classpath.items.len > 0) {
         markPtr(ns_mgr.classpath.items.ptr, ctx);
@@ -877,5 +914,42 @@ fn scanValueCache(cache_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     // Mark all cached character values
     for (cache.char_cache) |ptr| {
         markPtr(ptr, ctx);
+    }
+}
+
+/// Scan RefData — STM reference.
+fn scanRefData(ref_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const rd: *vm.RefData = @ptrCast(@alignCast(ref_ptr));
+    // Mark the value
+    scanValueChildrenDirect(&rd.value, ctx);
+    // Mark validator if present
+    if (rd.validator) |v| {
+        scanValueChildrenDirect(&v, ctx);
+    }
+    // Mark metadata if present
+    if (rd.meta) |m| {
+        scanValueChildrenDirect(&m, ctx);
+    }
+}
+
+/// Scan MultimethodData — multimethod dispatch.
+fn scanMultimethodData(mm_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const mm: *vm.MultimethodData = @ptrCast(@alignCast(mm_ptr));
+    // Mark dispatch function
+    scanValueChildrenDirect(&mm.dispatch_fn, ctx);
+    // Mark method table entries
+    for (mm.method_table.items) |*entry| {
+        scanValueChildrenDirect(&entry.key, ctx);
+        scanValueChildrenDirect(&entry.value, ctx);
+    }
+    // Mark default dispatch value if present
+    if (mm.default_dispatch) |v| {
+        scanValueChildrenDirect(&v, ctx);
+    }
+    // Mark preference table entries
+    for (mm.pref_table.items) |pair| {
+        for (pair.items) |val| {
+            scanValueChildrenDirect(&val, ctx);
+        }
     }
 }

@@ -417,7 +417,17 @@ pub fn evalInNs(allocator: Allocator, l: list.List, env: *Env, depth: usize) any
     _ = depth;
     if (l.items.len < 2) return error.ArityError;
 
-    const ns_name_sym = l.items[1];
+    // Handle both raw symbols (in-ns my.ns) and quoted symbols (in-ns 'my.ns)
+    // Quoted symbols appear as (quote sym) lists since ' is parsed as quote
+    var ns_name_sym = l.items[1];
+    if (std.meta.activeTag(ns_name_sym) == .list) {
+        const qlist = &ns_name_sym.list.items;
+        if (qlist.items.len == 2 and std.meta.activeTag(qlist.items[0]) == .symbol and
+            std.mem.eql(u8, qlist.items[0].symbol, "quote") and
+            std.meta.activeTag(qlist.items[1]) == .symbol) {
+            ns_name_sym = qlist.items[1];
+        }
+    }
     if (std.meta.activeTag(ns_name_sym) != .symbol) return error.TypeError;
     const ns_name = ns_name_sym.symbol;
 

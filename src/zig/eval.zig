@@ -18,6 +18,9 @@ const records = @import("namespaces/core/records.zig");
 const gc_mod = @import("gc.zig");
 const threading = @import("namespaces/core/threading.zig");
 const bytecode_mod = @import("bytecode.zig");
+const eval_meta = @import("eval_meta.zig");
+const eval_multi = @import("eval_multi.zig");
+const ref_mod = @import("ref.zig");
 const timeout_mod = @import("timeout.zig");
 
 const Allocator = std.mem.Allocator;
@@ -142,6 +145,7 @@ const special_forms = [_]struct { name: []const u8, fn_ptr: SpecialFormFn }{
     .{ .name = "extend-type", .fn_ptr = evalExtendTypeForm },
     .{ .name = "extend-protocol", .fn_ptr = evalExtendProtocolForm },
     .{ .name = "defrecord", .fn_ptr = evalDefrecordForm },
+    .{ .name = "alter-meta!", .fn_ptr = eval_meta.evalAlterMetaBang },
     .{ .name = "->>", .fn_ptr = evalThreadLastForm },
     .{ .name = "->", .fn_ptr = evalThreadFirstForm },
     .{ .name = "cond->", .fn_ptr = evalCondThreadFirstForm },
@@ -149,6 +153,9 @@ const special_forms = [_]struct { name: []const u8, fn_ptr: SpecialFormFn }{
     .{ .name = "case", .fn_ptr = evalCaseForm },
     .{ .name = "throw", .fn_ptr = evalThrow },
     .{ .name = "try", .fn_ptr = eval_try.evalTry },
+    .{ .name = "dosync", .fn_ptr = ref_mod.evalDosync },
+    .{ .name = "defmulti", .fn_ptr = eval_multi.evalDefmulti },
+    .{ .name = "defmethod", .fn_ptr = eval_multi.evalDefmethod },
 };
 
 /// Look up a special form handler by name. Returns null if not a special form.
@@ -511,7 +518,7 @@ pub fn evalRec(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth
     switch (form.*) {
         // Literals: allocate a new *Value wrapper. Cannot return AST pointer directly
         // because valueDeinit would overwrite the shared AST Value with nil.
-        .nil, .bool, .integer, .float, .bigint, .ratio, .decimal, .string, .regex, .character, .keyword, .set, .queue, .chunk, .chunked_cons, .atom, .future, .promise, .reduced, .wrapped, .record, .exception => {
+        .nil, .bool, .integer, .float, .bigint, .ratio, .decimal, .string, .regex, .character, .keyword, .set, .queue, .chunk, .chunked_cons, .atom, .future, .promise, .reduced, .wrapped, .record, .exception, .ref, .multimethod => {
             return .{ .value = try allocValue(allocator, form.*) };
         },
         .symbol => {
@@ -1253,6 +1260,10 @@ pub fn callWithSrc(allocator: Allocator, op: *const Value, args_list: *const lis
     switch (std.meta.activeTag(op.*)) {
         .function => return callFunction(allocator, op, args_list, frame, depth, src_line),
         .builtin_fn => return .{ .value = try allocValue(allocator, try callBuiltinFn(allocator, op, args_list, frame.root_env)) },
+        .multimethod => {
+            const result = try eval_multi.invokeMultimethod(allocator, op.*, args_list, frame, depth);
+            return result;
+        },
         .set => return .{ .value = try allocValue(allocator, try callSet(allocator, op, args_list)) },
         .keyword => return .{ .value = try allocValue(allocator, try callKeyword(allocator, op, args_list)) },
         .map => return .{ .value = try allocValue(allocator, try callMap(allocator, op, args_list)) },
@@ -1978,7 +1989,7 @@ fn evalDefn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
         .allocator = allocator,
         .entries = phm.PersistentHashMap.empty(),
         .parent = ns_env_for_closure,
-        .ns_manager = null,
+        .ns_manager = frame.root_env.ns_manager,
     };
     var fn_val = try vm.fnValueNamedWithDoc(allocator, arities, fn_env, false, null, docstring);
     const persistent_fn = try vm.shallowClone(&fn_val, allocator);
@@ -2058,7 +2069,7 @@ fn evalDefmacro(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dep
         .allocator = allocator,
         .entries = phm.PersistentHashMap.empty(),
         .parent = ns_env_for_closure2,
-        .ns_manager = null,
+        .ns_manager = frame.root_env.ns_manager,
     };
     var macro_fn = try vm.fnValueNamedWithDoc(allocator, arities, fn_env, true, null, docstring);
     const persistent_macro = try vm.shallowClone(&macro_fn, allocator);
@@ -2126,6 +2137,16 @@ fn evalDeref(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
         const val = try vm.shallowClone(&data.value, allocator);
         vm.valueDeinit(&arg_ptr.*, allocator);
         return .{ .value = try allocValue(allocator, val) };
+    }
+    if (std.meta.activeTag(arg_ptr.*) == .ref) {
+        // Deref a ref — read current value
+        const ref_val = arg_ptr.*;
+        vm.valueDeinit(&arg_ptr.*, allocator);
+        var deref_args: list.List = .empty;
+        errdefer deref_args.deinit(allocator);
+        try deref_args.append(allocator, ref_val);
+        const result = try ref_mod.core_ref_deref(testSelf(), &deref_args, frame.root_env);
+        return .{ .value = try allocValue(allocator, result) };
     }
     if (std.meta.activeTag(arg_ptr.*) == .reduced) {
         const data = arg_ptr.*.reduced;
@@ -2221,18 +2242,63 @@ fn evalBinding(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dept
     if (l.items.len < 3) return error.ArityError;
     const bindings = l.items[1];
     if (std.meta.activeTag(bindings) != .vector) return error.TypeError;
+
+    // Find the namespace manager for dynamic var storage
+    const ns_mgr = findNsManager(frame.root_env) orelse return error.RuntimeError;
+
+    // Track saved state for each binding: (name, had_previous_value, saved_value?)
+    var saved_names: std.ArrayListUnmanaged([]const u8) = .empty;
+    var had_previous: std.ArrayListUnmanaged(bool) = .empty;
+    var saved_values: std.ArrayListUnmanaged(Value) = .empty;
+    errdefer {
+        for (saved_names.items) |name| allocator.free(name);
+        saved_names.deinit(allocator);
+        had_previous.deinit(allocator);
+        for (saved_values.items) |*val| vm.valueDeinit(val, allocator);
+        saved_values.deinit(allocator);
+    }
+
+    // Create child frame for scope
     const child_frame = try frame.createChild(allocator);
-    // Use detachFromParent instead of deinit: child frames on trampoline may reference this
     defer child_frame.releaseFromParent(allocator);
 
+    // Set dynamic bindings in namespace manager
     var i: usize = 0;
     while (i < bindings.vector.items.items.len) : (i += 2) {
         const sym = bindings.vector.items.items[i];
         if (std.meta.activeTag(sym) != .symbol) return error.TypeError;
-        // Binding values evaluated synchronously
+        const sym_name = sym.symbol;
+
+        // Save old value if exists
+        const old_val = ns_mgr.getDynamicVar(sym_name);
+        const saved_name = try allocator.dupe(u8, sym_name);
+        try saved_names.append(allocator, saved_name);
+        if (old_val) |ov| {
+            try had_previous.append(allocator, true);
+            try saved_values.append(allocator, try vm.clone(&ov, allocator));
+        } else {
+            try had_previous.append(allocator, false);
+            try saved_values.append(allocator, vm.nilValue());
+        }
+
+        // Evaluate binding value and store in dynamic vars
         const val_ptr = try evalRecV(allocator, &bindings.vector.items.items[i + 1], child_frame, depth + 1);
-        try child_frame.put(sym.symbol, val_ptr.*);
+        try ns_mgr.putDynamicVar(sym_name, val_ptr.*);
+        // Also store in child frame for local scope
+        try child_frame.put(sym_name, val_ptr.*);
     }
+
+    // Restore old dynamic var values after body
+    defer {
+        for (saved_names.items, had_previous.items, saved_values.items) |name, prev, val| {
+            if (prev) {
+                ns_mgr.putDynamicVar(name, val) catch {};
+            } else {
+                ns_mgr.removeDynamicVar(name) catch {};
+            }
+        }
+    }
+
     const body = l.items[2..];
     if (body.len == 0) {
         return .{ .value = try allocValue(allocator, vm.nilValue()) };
@@ -2284,7 +2350,7 @@ fn captureFrameEnv(allocator: Allocator, frame: *vm.Frame) anyerror!Env {
         .allocator = allocator,
         .entries = phm.PersistentHashMap.empty(),
         .parent = frame.root_env,
-        .ns_manager = null,
+        .ns_manager = frame.root_env.ns_manager,
     };
     // Collect frames from current to parent
     var frames: std.ArrayListUnmanaged(*vm.Frame) = .empty;

@@ -225,6 +225,8 @@ pub const Type = enum {
     wrapped, // Raw pointer wrapper — stores a usize pointer
     record,  // defrecord instance: named struct-like data with fields
     exception,  // ExceptionData — runtime exception value
+    ref,       // RefData — STM reference
+    multimethod, // MultimethodData — multimethod dispatch
 };
 
 // ============================================================
@@ -355,6 +357,26 @@ pub const ExceptionData = struct {
     allocator: Allocator,
 };
 
+/// RefData — STM reference with version counter for optimistic concurrency.
+/// Used by ref, dosync, alter, commute, ref-set.
+pub const RefData = struct {
+    value: Value,
+    version: u64 = 0,       // Monotonically increasing version counter
+    validator: ?Value = null, // Optional validator function
+    meta: ?Value = null,     // Optional metadata map (for :commutative, etc.)
+    allocator: Allocator,
+};
+
+/// MultimethodData — multimethod dispatch with method table.
+/// Used by defmulti/defmethod.
+pub const MultimethodData = struct {
+    dispatch_fn: Value,                // Dispatch function
+    method_table: Map = .empty,        // dispatch-value → method-fn
+    pref_table: std.ArrayListUnmanaged(std.ArrayListUnmanaged(Value)) = .empty, // preference pairs
+    default_dispatch: ?Value = null,   // Default dispatch value
+    allocator: Allocator,
+};
+
 /// Cons cell data: heap-allocated, contains head, tail, and the allocator used.
 pub const ConsData = struct {
     head: Value,
@@ -377,6 +399,7 @@ pub const FnData = struct {
     is_macro: bool = false,
     name: ?[]const u8 = null,
     docstring: ?[]const u8 = null,
+    namespace: ?[]const u8 = null, // Namespace where function was defined (for :ns in metadata)
     cached_meta: ?Value = null, // Cached metadata map (populated by meta)
 };
 
@@ -440,6 +463,8 @@ pub const Value = union(Type) {
     wrapped: usize,
     record: *RecordData,
     exception: *ExceptionData,
+    ref: *RefData,
+    multimethod: *MultimethodData,
 };
 
 // ============================================================
@@ -632,6 +657,43 @@ pub fn promiseValueShared(data: *PromiseData) Value {
     return .{ .promise = data };
 }
 
+/// Create a ref value (STM reference).
+pub fn refValue(allocator: Allocator, initial: Value) anyerror!Value {
+    return refValueWithMeta(allocator, initial, null);
+}
+
+/// Create a ref value with optional metadata.
+pub fn refValueWithMeta(allocator: Allocator, initial: Value, metadata: ?Value) anyerror!Value {
+    const data = try allocator.create(RefData);
+    data.* = .{
+        .value = try clone(&initial, allocator),
+        .version = 0,
+        .validator = null,
+        .meta = if (metadata) |m| try clone(&m, allocator) else null,
+        .allocator = allocator,
+    };
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(data)), gc_mod.GCObjectType.ref_data);
+    }
+    return .{ .ref = data };
+}
+
+/// Create a multimethod value.
+pub fn multimethodValue(allocator: Allocator, dispatch_fn: Value) anyerror!Value {
+    const data = try allocator.create(MultimethodData);
+    data.* = .{
+        .dispatch_fn = try clone(&dispatch_fn, allocator),
+        .method_table = .empty,
+        .pref_table = .empty,
+        .default_dispatch = null,
+        .allocator = allocator,
+    };
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(data)), gc_mod.GCObjectType.multimethod_data);
+    }
+    return .{ .multimethod = data };
+}
+
 /// Create a reduced wrapper for early reduction termination
 pub fn reducedValue(allocator: Allocator, val: Value) anyerror!Value {
     const data = try allocator.create(Value);
@@ -724,9 +786,23 @@ pub fn fnValueNamedWithDoc(allocator: Allocator, arities: std.ArrayListUnmanaged
     if (gc_mod.current_gc) |gc| {
         gc.setObjectType(@as(*anyopaque, @ptrCast(env_ptr)), gc_mod.GCObjectType.env);
     }
+    // Extract namespace name from the environment for :ns in function metadata
+    // Walk the env chain to find ns_manager (it may be on a parent env)
+    var ns_name: ?[]const u8 = null;
+    var search_env: ?*const Env = &env;
+    while (search_env) |e| : (search_env = e.parent) {
+        if (e.ns_manager) |ns_mgr| {
+            const current_ns = ns_mgr.getCurrentNamespace();
+            ns_name = try allocator.dupe(u8, current_ns);
+            break;
+        }
+    }
     const fn_data = try allocator.create(FnData);
-    errdefer allocator.destroy(fn_data);
-    fn_data.* = .{ .arities = arities, .env = env_ptr, .is_macro = is_macro, .name = name, .docstring = docstring };
+    errdefer {
+        if (ns_name) |n| allocator.free(n);
+        allocator.destroy(fn_data);
+    }
+    fn_data.* = .{ .arities = arities, .env = env_ptr, .is_macro = is_macro, .name = name, .docstring = docstring, .namespace = ns_name };
     if (gc_mod.current_gc) |gc_inst| {
         gc_inst.setObjectType(@as(*anyopaque, @ptrCast(fn_data)), gc_mod.GCObjectType.fn_data);
         if (arities.items.len > 0) {
@@ -982,6 +1058,55 @@ pub fn clone(val: *const Value, allocator: Allocator) anyerror!Value {
             // Exceptions are immutable — share the ExceptionData pointer
             return Value{ .exception = ed };
         },
+        .ref => |data| {
+            // Refs are shared (like atoms) — clone the data struct
+            const new_data = try allocator.create(RefData);
+            new_data.* = .{
+                .value = try clone(&data.value, allocator),
+                .version = data.version,
+                .validator = if (data.validator) |v| try clone(&v, allocator) else null,
+                .meta = if (data.meta) |m| try clone(&m, allocator) else null,
+                .allocator = allocator,
+            };
+            if (gc_mod.current_gc) |gc| {
+                gc.setObjectType(@as(*anyopaque, @ptrCast(new_data)), gc_mod.GCObjectType.ref_data);
+            }
+            return Value{ .ref = new_data };
+        },
+        .multimethod => |data| {
+            // Multimethods are shared — clone the data struct
+            var cloned_table: Map = .empty;
+            errdefer {
+                for (cloned_table.items) |*entry| {
+                    valueDeinit(&entry.key, allocator);
+                    valueDeinit(&entry.value, allocator);
+                }
+                allocator.free(cloned_table.items);
+            }
+            try cloned_table.ensureTotalCapacity(allocator, data.method_table.items.len);
+            for (data.method_table.items) |entry| {
+                try cloned_table.append(allocator, .{
+                    .key = try clone(&entry.key, allocator),
+                    .value = try clone(&entry.value, allocator),
+                });
+            }
+            const new_data = try allocator.create(MultimethodData);
+            var cloned_default: ?Value = null;
+            if (data.default_dispatch) |v| {
+                cloned_default = try clone(&v, allocator);
+            }
+            new_data.* = .{
+                .dispatch_fn = try clone(&data.dispatch_fn, allocator),
+                .method_table = cloned_table,
+                .pref_table = .empty,
+                .default_dispatch = cloned_default,
+                .allocator = allocator,
+            };
+            if (gc_mod.current_gc) |gc| {
+                gc.setObjectType(@as(*anyopaque, @ptrCast(new_data)), gc_mod.GCObjectType.multimethod_data);
+            }
+            return Value{ .multimethod = new_data };
+        },
     }
 }
 
@@ -1109,6 +1234,9 @@ pub fn equals(val: Value, other: Value) bool {
         .atom => return false,
         .future => return false,
         .promise => return false,
+        .ref => return false, // identity-based like atoms
+        .multimethod => return false, // identity-based
+        .function => |a| return a == other.function, // identity-based
         .reduced => |s_data| {
             return equals(s_data.*, other.reduced.*);
         },
@@ -1275,6 +1403,16 @@ pub fn fmt(val: Value, allocator: Allocator) anyerror![]const u8 {
         .wrapped => |w| try std.fmt.allocPrint(allocator, "#ptr({X})", .{w}),
         .record => |rd| return try recordFmt(rd, allocator),
         .exception => |ed| return try exceptionFmt(ed, allocator),
+        .ref => |data| {
+            const inner_str = try fmt(data.value, allocator);
+            defer allocator.free(inner_str);
+            return try std.fmt.allocPrint(allocator, "#ref({s})", .{inner_str});
+        },
+        .multimethod => |data| {
+            const fn_str = try fmt(data.dispatch_fn, allocator);
+            defer allocator.free(fn_str);
+            return try std.fmt.allocPrint(allocator, "#multimethod({s})", .{fn_str});
+        },
     };
 }
 
@@ -1694,6 +1832,14 @@ pub const Env = struct {
     // Used by ns-interns/ns-publics to distinguish owned vars from copied/referred ones.
     // Uses ArrayList instead of HashMap to avoid GC tracking issues with internal memory.
     owned_symbols: std.ArrayListUnmanaged([]const u8) = .empty,
+    // Metadata map: stores metadata maps for symbols defined in this namespace.
+    // Keys are symbols, values are metadata maps (Value maps).
+    // Used by alter-meta!, meta on vars, and def with metadata-bearing symbols.
+    metas: phm.PersistentHashMap = phm.PersistentHashMap.empty(),
+    // Dynamic variable bindings: stores symbol → value mappings for dynamic vars.
+    // Used by binding to make dynamic bindings visible across function calls.
+    // Checked before normal entries in Env.get().
+    dynamic_vars: phm.PersistentHashMap = phm.PersistentHashMap.empty(),
 
     pub fn init(allocator: Allocator) Env {
         return .{
@@ -1703,6 +1849,8 @@ pub const Env = struct {
             .ns_manager = null,
             .referred_names = .empty,
             .owned_symbols = .empty,
+            .metas = phm.PersistentHashMap.empty(),
+            .dynamic_vars = phm.PersistentHashMap.empty(),
         };
     }
 
@@ -1738,6 +1886,8 @@ pub const Env = struct {
             .ns_manager = self.ns_manager,
             .referred_names = .empty,
             .owned_symbols = .empty,
+            .metas = self.metas,
+            .dynamic_vars = self.dynamic_vars,
         };
     }
 
@@ -1787,6 +1937,18 @@ pub const Env = struct {
     }
 
     pub fn get(self: *Env, name: []const u8) ?Value {
+        // Check namespace manager dynamic vars first (visible across all function calls)
+        // Walk up parent chain to find ns_manager (function envs may have null ns_manager).
+        var dyn_cursor: ?*Env = self;
+        while (dyn_cursor) |e| : (dyn_cursor = e.parent) {
+            if (e.ns_manager) |ns_mgr| {
+                if (!ns_mgr.dynamic_vars.isEmpty()) {
+                    const found = ns_mgr.dynamic_vars.find(phm.sym(name));
+                    if (found) |val| return val;
+                }
+                break;
+            }
+        }
         var current: ?*Env = self;
         while (current) |env| {
             if (!env.entries.isEmpty()) {
@@ -1796,6 +1958,43 @@ pub const Env = struct {
             current = env.parent;
         }
         return null;
+    }
+
+    /// Store metadata map for a symbol in this namespace.
+    pub fn putMeta(self: *Env, name: []const u8, meta_map: Value) anyerror!void {
+        const allocator = self.allocator;
+        const key = phm.sym(name);
+        self.metas = try self.metas.mapAssoc(allocator, key, meta_map);
+    }
+
+    /// Get metadata map for a symbol from this namespace (no parent lookup).
+    pub fn getMeta(self: *Env, name: []const u8) ?Value {
+        if (!self.metas.isEmpty()) {
+            return self.metas.find(phm.sym(name));
+        }
+        return null;
+    }
+
+    /// Set a dynamic variable binding in this namespace.
+    pub fn putDynamicVar(self: *Env, name: []const u8, val: Value) anyerror!void {
+        const allocator = self.allocator;
+        const key = phm.sym(name);
+        self.dynamic_vars = try self.dynamic_vars.mapAssoc(allocator, key, val);
+    }
+
+    /// Get a dynamic variable binding from this namespace.
+    pub fn getDynamicVar(self: *Env, name: []const u8) ?Value {
+        if (!self.dynamic_vars.isEmpty()) {
+            return self.dynamic_vars.find(phm.sym(name));
+        }
+        return null;
+    }
+
+    /// Remove a dynamic variable binding from this namespace.
+    pub fn removeDynamicVar(self: *Env, name: []const u8) anyerror!void {
+        const allocator = self.allocator;
+        const key = phm.sym(name);
+        self.dynamic_vars = try self.dynamic_vars.mapWithout(allocator, key);
     }
 
     pub fn has(self: *Env, name: []const u8) bool {
@@ -1918,6 +2117,22 @@ pub const Frame = struct {
     /// Walks: overlay → parent.overlay → ... → root_env.
     /// Memoizes results from parent chain lookups (bounded by MEMO_CACHE_MAX).
     pub fn get(self: *Frame, name: []const u8) ?Value {
+        // 0. Check namespace manager dynamic vars first (always visible)
+        // Dynamic bindings must be checked before memo cache since they can
+        // change at runtime and the memo cache would return stale values.
+        // Walk up parent chain to find ns_manager (function frames may have null ns_manager).
+        {
+            var env_cursor: ?*Env = self.root_env;
+            while (env_cursor) |e| : (env_cursor = e.parent) {
+                if (e.ns_manager) |ns_mgr| {
+                    if (!ns_mgr.dynamic_vars.isEmpty()) {
+                        const dyn_found = ns_mgr.dynamic_vars.find(phm.sym(name));
+                        if (dyn_found) |val| return val;
+                    }
+                    break;
+                }
+            }
+        }
         // 1. Check memo cache first (fast path for repeated lookups)
         if (self.memo_cache.get(name)) |cached| {
             return cached;
@@ -2165,6 +2380,9 @@ pub const NamespaceManager = struct {
     aliases: phm.PersistentHashMap = phm.PersistentHashMap.empty(),
     classpath: std.ArrayListUnmanaged([]const u8) = .empty,
     loaded_libs: std.ArrayListUnmanaged([]const u8) = .empty,
+    // Dynamic variable bindings shared across all namespaces.
+    // Used by binding to make dynamic bindings visible across function calls.
+    dynamic_vars: phm.PersistentHashMap = phm.PersistentHashMap.empty(),
 
     pub fn init(allocator: Allocator) anyerror!*NamespaceManager {
         const mgr = try allocator.create(NamespaceManager);
@@ -2197,6 +2415,28 @@ pub const NamespaceManager = struct {
         self.loaded_libs.deinit(allocator);
         allocator.free(self.current_ns);
         allocator.destroy(self);
+    }
+
+    /// Set a dynamic variable binding in the namespace manager.
+    pub fn putDynamicVar(self: *NamespaceManager, name: []const u8, val: Value) anyerror!void {
+        const allocator = self.allocator;
+        const key = phm.sym(name);
+        self.dynamic_vars = try self.dynamic_vars.mapAssoc(allocator, key, val);
+    }
+
+    /// Get a dynamic variable binding from the namespace manager.
+    pub fn getDynamicVar(self: *NamespaceManager, name: []const u8) ?Value {
+        if (!self.dynamic_vars.isEmpty()) {
+            return self.dynamic_vars.find(phm.sym(name));
+        }
+        return null;
+    }
+
+    /// Remove a dynamic variable binding from the namespace manager.
+    pub fn removeDynamicVar(self: *NamespaceManager, name: []const u8) anyerror!void {
+        const allocator = self.allocator;
+        const key = phm.sym(name);
+        self.dynamic_vars = try self.dynamic_vars.mapWithout(allocator, key);
     }
 
     pub fn createNamespace(self: *NamespaceManager, name: []const u8) anyerror!*Env {

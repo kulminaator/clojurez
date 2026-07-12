@@ -127,6 +127,8 @@ pub fn valueHash(val: Value) i32 {
             return h;
         },
         .exception => hashIdentity(),
+        .ref => hashIdentity(),
+        .multimethod => hashIdentity(),
     };
 }
 
@@ -1558,12 +1560,17 @@ fn createCollisionNodeWithout(allocator: Allocator, src: *const HashCollisionNod
 // ============================================================
 
 var sym_cache: std.StringArrayHashMapUnmanaged(Value) = .empty;
+var sym_cache_mutex: std.atomic.Value(u8) = std.atomic.Value(u8).init(0);
 
 /// Create or retrieve a memoized Value(symbol) for the given string.
 /// The returned Value owns a duplicated copy of the string.
 /// Keys in sym_cache are duplicated via page_allocator to avoid
 /// dangling pointers when the original string is GC-allocated.
 pub fn sym(s: []const u8) Value {
+    // Acquire spinlock to protect sym_cache from concurrent access
+    while (sym_cache_mutex.cmpxchgStrong(0, 1, .acq_rel, .monotonic) != null) {}
+    defer sym_cache_mutex.store(0, .release);
+
     if (sym_cache.get(s)) |cached| {
         return cached;
     }

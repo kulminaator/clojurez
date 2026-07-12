@@ -27,7 +27,7 @@ fn tagStringData(ptr: *anyopaque) void {
 // ============================================================
 
 pub var hierarchy: std.StringArrayHashMapUnmanaged([]const u8) = .empty;
-pub var hierarchy_mutex: std.atomic.Value(u8) = std.atomic.Value(u8).init(0);
+var hierarchy_mutex: std.atomic.Value(u8) = std.atomic.Value(u8).init(0);
 
 /// Initialize the built-in exception hierarchy at VM startup.
 pub fn initExceptionHierarchy(allocator: Allocator) anyerror!void {
@@ -49,6 +49,8 @@ pub fn initExceptionHierarchy(allocator: Allocator) anyerror!void {
 /// Check if child is-a parent (following hierarchy chain).
 pub fn exceptionIsA(child: []const u8, parent: []const u8) bool {
     if (std.mem.eql(u8, child, parent)) return true;
+    while (hierarchy_mutex.cmpxchgStrong(0, 1, .acq_rel, .monotonic) != null) {}
+    defer hierarchy_mutex.store(0, .release);
     var current = child;
     var iterations: usize = 0;
     while (iterations < 64) : (iterations += 1) {
@@ -95,7 +97,6 @@ pub fn deriveBuiltin(self: *const Value, args: *const list.List, env: *Env) anye
     tagStringData(@as(*anyopaque, @ptrCast(@constCast(child_duped.ptr))));
     tagStringData(@as(*anyopaque, @ptrCast(@constCast(parent_duped.ptr))));
 
-    // Acquire spinlock
     while (hierarchy_mutex.cmpxchgStrong(0, 1, .acq_rel, .monotonic) != null) {}
     defer hierarchy_mutex.store(0, .release);
     try hierarchy.put(allocator, child_duped, parent_duped);
@@ -110,7 +111,10 @@ pub fn parentsBuiltin(self: *const Value, args: *const list.List, env: *Env) any
     const child = try typeToString(args.items[0], allocator) orelse return error.TypeError;
     defer allocator.free(child);
 
+    while (hierarchy_mutex.cmpxchgStrong(0, 1, .acq_rel, .monotonic) != null) {}
     const parent = hierarchy.get(child);
+    hierarchy_mutex.store(0, .release);
+
     if (parent) |p| {
         var items: std.ArrayListUnmanaged(Value) = .empty;
         errdefer {

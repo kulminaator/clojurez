@@ -116,7 +116,7 @@ fn buildNsMap(allocator: Allocator, ns_name: []const u8, ns_env: *Env, ns_mgr: *
 
 /// Build a Namespace record {:name sym, :interns map, :refers map, :aliases map}
 /// Returns a record with type_name "clojure.core.Namespace" so Object/toString dispatches correctly.
-fn buildNsRecord(allocator: Allocator, ns_name: []const u8, ns_env: *Env, ns_mgr: *vm.NamespaceManager) anyerror!Value {
+pub fn buildNsRecord(allocator: Allocator, ns_name: []const u8, ns_env: *Env, ns_mgr: *vm.NamespaceManager) anyerror!Value {
     // Build fields map
     var fields: vm.Map = .empty;
     errdefer {
@@ -1093,6 +1093,39 @@ pub fn core_remove_ns(self: *const Value, args: *const list.List, env_env: *Env)
     return vm.nilValue();
 }
 
+/// (ns-get-meta sym) — Get metadata for a symbol in the current namespace.
+/// Returns the metadata map if found, nil otherwise.
+pub fn core_ns_get_meta(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
+    _ = self;
+    const allocator = env.allocator;
+    if (args.items.len != 1) return error.ArityError;
+    const sym = args.items[0];
+    if (std.meta.activeTag(sym) != .symbol) return error.TypeError;
+
+    // Look up metadata in the namespace chain
+    if (eval_mod.findNsManager(env)) |ns_mgr| {
+        const current_ns = ns_mgr.getCurrentNamespace();
+        const ns_env = ns_mgr.getNamespace(current_ns) orelse env;
+        if (ns_env.getMeta(sym.symbol)) |meta| {
+            return try vm.shallowClone(&meta, allocator);
+        }
+    } else if (env.getMeta(sym.symbol)) |meta| {
+        return try vm.shallowClone(&meta, allocator);
+    }
+    return vm.nilValue();
+}
+
+/// *ns*: Returns the current namespace object.
+pub fn core_ns_star(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
+    _ = self;
+    _ = args;
+    const allocator = env_env.allocator;
+    const ns_mgr = eval_mod.findNsManager(env_env) orelse return vm.nilValue();
+    const current_ns = ns_mgr.getCurrentNamespace();
+    const ns_env = ns_mgr.getNamespace(current_ns) orelse return vm.nilValue();
+    return try buildNsRecord(allocator, current_ns, ns_env, ns_mgr);
+}
+
 // ---- Registration ----
 
 pub fn registerNamespaceFunctions(env: *Env) anyerror!void {
@@ -1101,6 +1134,10 @@ pub fn registerNamespaceFunctions(env: *Env) anyerror!void {
     try env.put("create-ns", vm.builtinFnValue(core_create_ns));
     try env.put("all-ns", vm.builtinFnValue(core_all_ns));
     try env.put("the-ns", vm.builtinFnValue(core_the_ns));
+    try env.put("ns-get-meta", vm.builtinFnValue(core_ns_get_meta));
+
+    // Current namespace
+    try env.put("*ns*", vm.builtinFnValue(core_ns_star));
 
     // Namespace resolution (Phase 2)
     try env.put("ns-resolve", vm.builtinFnValue(core_ns_resolve));
