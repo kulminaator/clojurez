@@ -13,6 +13,7 @@ const BI = @import("big_int.zig");
 const RatioMod = @import("ratio.zig");
 const BD = @import("big_decimal.zig");
 const arithmetic = @import("namespaces/core/arithmetic.zig");
+const helpers = @import("namespaces/core/helpers.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -1286,15 +1287,32 @@ pub fn execute(
 }
 
 /// Perform a comparison operation.
+/// For = and !=, uses vm.compare (handles nil properly).
+/// For <, >, <=, >=, uses toNum conversion to match core_less etc.
 fn compareOp(op: OpCode, a: Value, b: Value) anyerror!Value {
-    const cmp = vm.compare(a, b);
     return switch (op) {
-        .eq => vm.boolValue(cmp == 0),
-        .ne => vm.boolValue(cmp != 0),
-        .lt => vm.boolValue(cmp < 0),
-        .gt => vm.boolValue(cmp > 0),
-        .le => vm.boolValue(cmp <= 0),
-        .ge => vm.boolValue(cmp >= 0),
+        .eq => vm.boolValue(vm.compare(a, b) == 0),
+        .ne => vm.boolValue(vm.compare(a, b) != 0),
+        .lt => {
+            const an = helpers.toNum(a);
+            const bn = helpers.toNum(b);
+            return vm.boolValue(an < bn);
+        },
+        .gt => {
+            const an = helpers.toNum(a);
+            const bn = helpers.toNum(b);
+            return vm.boolValue(an > bn);
+        },
+        .le => {
+            const an = helpers.toNum(a);
+            const bn = helpers.toNum(b);
+            return vm.boolValue(an <= bn);
+        },
+        .ge => {
+            const an = helpers.toNum(a);
+            const bn = helpers.toNum(b);
+            return vm.boolValue(an >= bn);
+        },
         else => unreachable,
     };
 }
