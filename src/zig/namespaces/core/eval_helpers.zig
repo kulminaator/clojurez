@@ -465,13 +465,20 @@ fn allocBuiltinResult(allocator: Allocator, val: Value) anyerror!*Value {
 
 pub fn evalBody(allocator: Allocator, body: *const list.List, env: *vm.Env) anyerror!*Value {
     if (body.items.len == 0) return try allocBuiltinResult(allocator, vm.nilValue());
-    var cloned_body: list.List = .empty;
-    errdefer cloned_body.deinit(allocator);
-    try cloned_body.ensureTotalCapacity(allocator, body.items.len);
-    for (body.items) |item| {
-        try cloned_body.append(allocator, try vm.shallowClone(&item, allocator));
+    // Body is stored as (do body...) for user-defined functions (from evalFn).
+    // For partial/comp/fnil/juxt functions, body starts with the actual form.
+    if (body.items.len >= 1 and
+        std.meta.activeTag(body.items[0]) == .symbol and
+        std.mem.eql(u8, body.items[0].symbol, "do"))
+    {
+        // Common case: skip "do" and evaluate body forms directly.
+        // The body is part of the function definition (immutable, permanently rooted).
+        return evalDoSlice(allocator, body.items[1..], env);
     }
-    return try evalForm(allocator, &(try vm.listValue(allocator, cloned_body)), env);
+    // Rare case: body doesn't start with "do" (partial, comp, fnil, juxt).
+    // Clone and wrap in a list value for normal evaluation.
+    const list_val = try vm.listValue(allocator, try body.clone(allocator));
+    return try evalForm(allocator, &list_val, env);
 }
 
 /// Main evaluation dispatcher — routes to type-specific evaluators.
@@ -720,6 +727,10 @@ fn evalLet(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Val
     while (bi < bind_items.len) : (bi += 2) {
         const sym = &bind_items[bi];
         const val_ptr = try evalForm(allocator, &bind_items[bi + 1], &new_env);
+        defer {
+            vm.valueDeinit(&val_ptr.*, allocator);
+            allocator.destroy(val_ptr);
+        }
         // Use bindPattern to support destructuring: [a b], [a & rest], nested
         try bindPattern(allocator, sym.*, val_ptr.*, &new_env);
     }
@@ -758,6 +769,10 @@ fn evalLoop(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Va
     while (i < bind_items.len) : (i += 2) {
         const sym = &bind_items[i];
         const val_ptr = try evalForm(allocator, &bind_items[i + 1], &loop_env);
+        defer {
+            vm.valueDeinit(&val_ptr.*, allocator);
+            allocator.destroy(val_ptr);
+        }
         try loop_env.put(sym.symbol, val_ptr.*);
     }
 
@@ -800,6 +815,10 @@ fn evalRecur(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*V
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
         const val_ptr = try evalForm(allocator, &args[i], env);
+        defer {
+            vm.valueDeinit(&val_ptr.*, allocator);
+            allocator.destroy(val_ptr);
+        }
         try loop_env.put(ctx.bind_names[i], val_ptr.*);
     }
 
@@ -948,6 +967,10 @@ fn evalFunctionCall(allocator: Allocator, form: *const Value, env: *vm.Env) anye
     errdefer args.deinit(allocator);
     for (form.list.items.items[1..]) |arg| {
         const arg_ptr = try evalForm(allocator, &arg, env);
+        defer {
+            vm.valueDeinit(&arg_ptr.*, allocator);
+            allocator.destroy(arg_ptr);
+        }
         try args.append(allocator, arg_ptr.*);
     }
     return try callBuiltin(allocator, op_ptr, &args, env);
@@ -959,6 +982,10 @@ fn evalVector(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*
     errdefer new_vec.deinit(allocator);
     for (form.vector.items.items) |item| {
         const item_ptr = try evalForm(allocator, &item, env);
+        defer {
+            vm.valueDeinit(&item_ptr.*, allocator);
+            allocator.destroy(item_ptr);
+        }
         try new_vec.append(allocator, item_ptr.*);
     }
     return try allocBuiltinResult(allocator, try vm.vectorValue(allocator, new_vec));
@@ -1007,6 +1034,10 @@ fn evalCons(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Va
     errdefer args.deinit(allocator);
     for (cons_list.items[1..]) |arg| {
         const arg_ptr = try evalForm(allocator, &arg, env);
+        defer {
+            vm.valueDeinit(&arg_ptr.*, allocator);
+            allocator.destroy(arg_ptr);
+        }
         try args.append(allocator, arg_ptr.*);
     }
     return try callBuiltin(allocator, op_ptr, &args, env);
