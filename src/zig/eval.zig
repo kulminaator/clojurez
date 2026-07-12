@@ -2242,18 +2242,63 @@ fn evalBinding(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dept
     if (l.items.len < 3) return error.ArityError;
     const bindings = l.items[1];
     if (std.meta.activeTag(bindings) != .vector) return error.TypeError;
+
+    // Find the namespace manager for dynamic var storage
+    const ns_mgr = findNsManager(frame.root_env) orelse return error.RuntimeError;
+
+    // Track saved state for each binding: (name, had_previous_value, saved_value?)
+    var saved_names: std.ArrayListUnmanaged([]const u8) = .empty;
+    var had_previous: std.ArrayListUnmanaged(bool) = .empty;
+    var saved_values: std.ArrayListUnmanaged(Value) = .empty;
+    errdefer {
+        for (saved_names.items) |name| allocator.free(name);
+        saved_names.deinit(allocator);
+        had_previous.deinit(allocator);
+        for (saved_values.items) |*val| vm.valueDeinit(val, allocator);
+        saved_values.deinit(allocator);
+    }
+
+    // Create child frame for scope
     const child_frame = try frame.createChild(allocator);
-    // Use detachFromParent instead of deinit: child frames on trampoline may reference this
     defer child_frame.releaseFromParent(allocator);
 
+    // Set dynamic bindings in namespace manager
     var i: usize = 0;
     while (i < bindings.vector.items.items.len) : (i += 2) {
         const sym = bindings.vector.items.items[i];
         if (std.meta.activeTag(sym) != .symbol) return error.TypeError;
-        // Binding values evaluated synchronously
+        const sym_name = sym.symbol;
+
+        // Save old value if exists
+        const old_val = ns_mgr.getDynamicVar(sym_name);
+        const saved_name = try allocator.dupe(u8, sym_name);
+        try saved_names.append(allocator, saved_name);
+        if (old_val) |ov| {
+            try had_previous.append(allocator, true);
+            try saved_values.append(allocator, try vm.clone(&ov, allocator));
+        } else {
+            try had_previous.append(allocator, false);
+            try saved_values.append(allocator, vm.nilValue());
+        }
+
+        // Evaluate binding value and store in dynamic vars
         const val_ptr = try evalRecV(allocator, &bindings.vector.items.items[i + 1], child_frame, depth + 1);
-        try child_frame.put(sym.symbol, val_ptr.*);
+        try ns_mgr.putDynamicVar(sym_name, val_ptr.*);
+        // Also store in child frame for local scope
+        try child_frame.put(sym_name, val_ptr.*);
     }
+
+    // Restore old dynamic var values after body
+    defer {
+        for (saved_names.items, had_previous.items, saved_values.items) |name, prev, val| {
+            if (prev) {
+                ns_mgr.putDynamicVar(name, val) catch {};
+            } else {
+                ns_mgr.removeDynamicVar(name) catch {};
+            }
+        }
+    }
+
     const body = l.items[2..];
     if (body.len == 0) {
         return .{ .value = try allocValue(allocator, vm.nilValue()) };

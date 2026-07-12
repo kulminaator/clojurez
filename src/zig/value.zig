@@ -1812,6 +1812,10 @@ pub const Env = struct {
     // Keys are symbols, values are metadata maps (Value maps).
     // Used by alter-meta!, meta on vars, and def with metadata-bearing symbols.
     metas: phm.PersistentHashMap = phm.PersistentHashMap.empty(),
+    // Dynamic variable bindings: stores symbol → value mappings for dynamic vars.
+    // Used by binding to make dynamic bindings visible across function calls.
+    // Checked before normal entries in Env.get().
+    dynamic_vars: phm.PersistentHashMap = phm.PersistentHashMap.empty(),
 
     pub fn init(allocator: Allocator) Env {
         return .{
@@ -1822,6 +1826,7 @@ pub const Env = struct {
             .referred_names = .empty,
             .owned_symbols = .empty,
             .metas = phm.PersistentHashMap.empty(),
+            .dynamic_vars = phm.PersistentHashMap.empty(),
         };
     }
 
@@ -1857,6 +1862,8 @@ pub const Env = struct {
             .ns_manager = self.ns_manager,
             .referred_names = .empty,
             .owned_symbols = .empty,
+            .metas = self.metas,
+            .dynamic_vars = self.dynamic_vars,
         };
     }
 
@@ -1906,6 +1913,18 @@ pub const Env = struct {
     }
 
     pub fn get(self: *Env, name: []const u8) ?Value {
+        // Check namespace manager dynamic vars first (visible across all function calls)
+        // Walk up parent chain to find ns_manager (function envs may have null ns_manager).
+        var dyn_cursor: ?*Env = self;
+        while (dyn_cursor) |e| : (dyn_cursor = e.parent) {
+            if (e.ns_manager) |ns_mgr| {
+                if (!ns_mgr.dynamic_vars.isEmpty()) {
+                    const found = ns_mgr.dynamic_vars.find(phm.sym(name));
+                    if (found) |val| return val;
+                }
+                break;
+            }
+        }
         var current: ?*Env = self;
         while (current) |env| {
             if (!env.entries.isEmpty()) {
@@ -1930,6 +1949,28 @@ pub const Env = struct {
             return self.metas.find(phm.sym(name));
         }
         return null;
+    }
+
+    /// Set a dynamic variable binding in this namespace.
+    pub fn putDynamicVar(self: *Env, name: []const u8, val: Value) anyerror!void {
+        const allocator = self.allocator;
+        const key = phm.sym(name);
+        self.dynamic_vars = try self.dynamic_vars.mapAssoc(allocator, key, val);
+    }
+
+    /// Get a dynamic variable binding from this namespace.
+    pub fn getDynamicVar(self: *Env, name: []const u8) ?Value {
+        if (!self.dynamic_vars.isEmpty()) {
+            return self.dynamic_vars.find(phm.sym(name));
+        }
+        return null;
+    }
+
+    /// Remove a dynamic variable binding from this namespace.
+    pub fn removeDynamicVar(self: *Env, name: []const u8) anyerror!void {
+        const allocator = self.allocator;
+        const key = phm.sym(name);
+        self.dynamic_vars = try self.dynamic_vars.mapWithout(allocator, key);
     }
 
     pub fn has(self: *Env, name: []const u8) bool {
@@ -2052,6 +2093,22 @@ pub const Frame = struct {
     /// Walks: overlay → parent.overlay → ... → root_env.
     /// Memoizes results from parent chain lookups (bounded by MEMO_CACHE_MAX).
     pub fn get(self: *Frame, name: []const u8) ?Value {
+        // 0. Check namespace manager dynamic vars first (always visible)
+        // Dynamic bindings must be checked before memo cache since they can
+        // change at runtime and the memo cache would return stale values.
+        // Walk up parent chain to find ns_manager (function frames may have null ns_manager).
+        {
+            var env_cursor: ?*Env = self.root_env;
+            while (env_cursor) |e| : (env_cursor = e.parent) {
+                if (e.ns_manager) |ns_mgr| {
+                    if (!ns_mgr.dynamic_vars.isEmpty()) {
+                        const dyn_found = ns_mgr.dynamic_vars.find(phm.sym(name));
+                        if (dyn_found) |val| return val;
+                    }
+                    break;
+                }
+            }
+        }
         // 1. Check memo cache first (fast path for repeated lookups)
         if (self.memo_cache.get(name)) |cached| {
             return cached;
@@ -2299,6 +2356,9 @@ pub const NamespaceManager = struct {
     aliases: phm.PersistentHashMap = phm.PersistentHashMap.empty(),
     classpath: std.ArrayListUnmanaged([]const u8) = .empty,
     loaded_libs: std.ArrayListUnmanaged([]const u8) = .empty,
+    // Dynamic variable bindings shared across all namespaces.
+    // Used by binding to make dynamic bindings visible across function calls.
+    dynamic_vars: phm.PersistentHashMap = phm.PersistentHashMap.empty(),
 
     pub fn init(allocator: Allocator) anyerror!*NamespaceManager {
         const mgr = try allocator.create(NamespaceManager);
@@ -2331,6 +2391,28 @@ pub const NamespaceManager = struct {
         self.loaded_libs.deinit(allocator);
         allocator.free(self.current_ns);
         allocator.destroy(self);
+    }
+
+    /// Set a dynamic variable binding in the namespace manager.
+    pub fn putDynamicVar(self: *NamespaceManager, name: []const u8, val: Value) anyerror!void {
+        const allocator = self.allocator;
+        const key = phm.sym(name);
+        self.dynamic_vars = try self.dynamic_vars.mapAssoc(allocator, key, val);
+    }
+
+    /// Get a dynamic variable binding from the namespace manager.
+    pub fn getDynamicVar(self: *NamespaceManager, name: []const u8) ?Value {
+        if (!self.dynamic_vars.isEmpty()) {
+            return self.dynamic_vars.find(phm.sym(name));
+        }
+        return null;
+    }
+
+    /// Remove a dynamic variable binding from the namespace manager.
+    pub fn removeDynamicVar(self: *NamespaceManager, name: []const u8) anyerror!void {
+        const allocator = self.allocator;
+        const key = phm.sym(name);
+        self.dynamic_vars = try self.dynamic_vars.mapWithout(allocator, key);
     }
 
     pub fn createNamespace(self: *NamespaceManager, name: []const u8) anyerror!*Env {

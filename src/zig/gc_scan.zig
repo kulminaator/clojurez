@@ -570,6 +570,14 @@ fn scanEnv(env_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     if (env.entries.root) |root| {
         ctx.gc.markRecursive(root, ctx);
     }
+    // Mark metas HAMT
+    if (env.metas.root) |root| {
+        ctx.gc.markRecursive(root, ctx);
+    }
+    // Mark dynamic_vars HAMT
+    if (env.dynamic_vars.root) |root| {
+        ctx.gc.markRecursive(root, ctx);
+    }
     // Mark referred_names list buffer and strings
     if (env.referred_names.items.len > 0) {
         markPtr(env.referred_names.items.ptr, ctx);
@@ -777,6 +785,10 @@ fn scanNamespaceManager(ns_mgr_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     }
     // Mark aliases PersistentHashMap root node
     if (ns_mgr.aliases.root) |root| {
+        ctx.gc.markRecursive(root, ctx);
+    }
+    // Mark dynamic_vars PersistentHashMap root node
+    if (ns_mgr.dynamic_vars.root) |root| {
         ctx.gc.markRecursive(root, ctx);
     }
     // Mark classpath buffer and strings

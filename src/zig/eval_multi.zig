@@ -21,7 +21,7 @@ fn findMethod(table: vm.Map, key: Value) ?Value {
     return null;
 }
 
-/// (defmulti name dispatch-fn & options) — Create a multimethod.
+/// (defmulti name docstring? dispatch-fn & options) — Create a multimethod.
 /// Options: :default value (default dispatch value)
 pub fn evalDefmulti(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!eval.EvalResult {
     if (l.items.len < 3) return error.ArityError;
@@ -30,15 +30,23 @@ pub fn evalDefmulti(allocator: Allocator, l: *const list.List, frame: *vm.Frame,
     if (std.meta.activeTag(sym) != .symbol) return error.TypeError;
     const sym_name = sym.symbol;
 
+    // Determine if there's a docstring (string as second arg after name)
+    // Signature: (defmulti name docstring? dispatch-fn & options)
+    var dispatch_idx: usize = 2;
+    if (std.meta.activeTag(l.items[2]) == .string) {
+        dispatch_idx = 3;
+    }
+    if (dispatch_idx >= l.items.len) return error.ArityError;
+
     // Evaluate dispatch function
-    const dispatch_fn_ptr = try eval.evalRecV(allocator, &l.items[2], frame, depth + 1);
+    const dispatch_fn_ptr = try eval.evalRecV(allocator, &l.items[dispatch_idx], frame, depth + 1);
     defer vm.valueDeinit(dispatch_fn_ptr, allocator);
 
     // Create multimethod value
     var mm_val = try vm.multimethodValue(allocator, dispatch_fn_ptr.*);
 
-    // Parse optional options (starting from index 3)
-    var i: usize = 3;
+    // Parse optional options (after dispatch function)
+    var i: usize = dispatch_idx + 1;
     while (i < l.items.len) : (i += 1) {
         const opt_key = l.items[i];
         if (std.meta.activeTag(opt_key) != .keyword) continue;
@@ -114,19 +122,19 @@ pub fn invokeMultimethod(allocator: Allocator, mm_val: Value, args: *const list.
     if (std.meta.activeTag(mm_val) != .multimethod) return error.TypeError;
     const mm_data = mm_val.multimethod;
 
-    // Build call list: (dispatch-fn arg1 arg2 ...)
-    var dispatch_call: list.List = .empty;
-    defer dispatch_call.deinit(allocator);
-    try dispatch_call.append(allocator, try vm.clone(&mm_data.dispatch_fn, allocator));
-    for (args.items) |arg| {
-        try dispatch_call.append(allocator, try vm.clone(&arg, allocator));
-    }
+    // Call dispatch function directly with already-evaluated args
+    // (avoid evalFunctionCall which would re-evaluate list args as function calls)
+    const dispatch_fn = mm_data.dispatch_fn;
+    // Call dispatch function - disable trampolining so we get a value directly
+    const saved_trampoline = eval.trampoline_allowed;
+    eval.trampoline_allowed = false;
+    defer eval.trampoline_allowed = saved_trampoline;
 
-    const dispatch_call_list = try vm.listValue(allocator, dispatch_call);
-    const dispatch_call_ptr = try eval.allocValue(allocator, dispatch_call_list);
-    const dispatch_result_ptr = try eval.evalRecV(allocator, dispatch_call_ptr, frame, depth + 1);
-    const dispatch_val = try vm.clone(&dispatch_result_ptr.*, allocator);
-    vm.valueDeinit(dispatch_result_ptr, allocator);
+    const dispatch_result = try eval.callWithSrc(allocator, &dispatch_fn, args, frame, depth + 1, 0);
+    const dispatch_val = switch (dispatch_result) {
+        .value => |v| try vm.clone(v, allocator),
+        .trampoline => unreachable, // should not happen with trampoline_allowed = false
+    };
     defer vm.valueDeinit(@constCast(&dispatch_val), allocator);
 
     // Look up method in method table
