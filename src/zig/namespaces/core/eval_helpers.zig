@@ -202,12 +202,103 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args_list: *const list
                             std.mem.eql(u8, body_arg0.symbol, arity.params.items[0].symbol) and
                             std.mem.eql(u8, body_arg1.symbol, arity.params.items[1].symbol))
                         {
-                            const resolved_op_ptr = try evalForm(allocator, body_op, env);
+                            // Resolve operator from function's definition env (has ns_manager)
+                            const resolved_op_ptr = try evalForm(allocator, body_op, fn_data.env);
                             defer vm.valueDeinit(&resolved_op_ptr.*, allocator);
                             var call_args: list.List = .empty;
                             errdefer call_args.deinit(allocator);
                             try call_args.append(allocator, try vm.shallowClone(&args_list.items[0], allocator));
                             try call_args.append(allocator, try vm.shallowClone(&args_list.items[1], allocator));
+                            return try callBuiltin(allocator, resolved_op_ptr, &call_args, env);
+                        }
+                    }
+                }
+            }
+
+            // Fast path: 1-param, no-rest, body is a simple pattern.
+            // Covers: identity, not, inc, dec, zero?, pos?, neg?, etc.
+            // Avoids env creation, hash-map param binding, body cloning, and symbol resolution.
+            if (arity.params.items.len == 1 and arity.rest_name == null and arg_count == 1 and
+                std.meta.activeTag(arity.params.items[0]) == .symbol)
+            {
+                const param_name = arity.params.items[0].symbol;
+
+                // --- Pattern 1: body is bare param symbol → identity ---
+                if (arity.body.items.len == 1 and
+                    std.meta.activeTag(arity.body.items[0]) == .symbol and
+                    std.mem.eql(u8, arity.body.items[0].symbol, param_name))
+                {
+                    // identity: return the argument directly
+                    return try allocBuiltinResult(allocator, try vm.shallowClone(&args_list.items[0], allocator));
+                }
+
+                // --- Pattern 2 & 3: body is a single call ---
+                // Unwrap (do <call>) if present
+                var body_call: list.List = undefined;
+                if (arity.body.items.len >= 2 and
+                    std.meta.activeTag(arity.body.items[0]) == .symbol and
+                    std.mem.eql(u8, arity.body.items[0].symbol, "do") and
+                    std.meta.activeTag(arity.body.items[1]) == .list)
+                {
+                    body_call = arity.body.items[1].list.items;
+                } else if (arity.body.items.len == 1 and std.meta.activeTag(arity.body.items[0]) == .list) {
+                    body_call = arity.body.items[0].list.items;
+                } else {
+                    body_call = list.empty();
+                }
+
+                if (body_call.items.len == 2 or body_call.items.len == 3) {
+                    const body_op = &body_call.items[0];
+
+                    if (body_call.items.len == 2) {
+                        // --- Pattern 2: (op param) → e.g. not, boolean ---
+                        const body_arg0 = &body_call.items[1];
+                        if (std.meta.activeTag(body_arg0.*) == .symbol and
+                            std.mem.eql(u8, body_arg0.symbol, param_name))
+                        {
+                            // Resolve operator from function's definition env (has ns_manager)
+                            const resolved_op_ptr = try evalForm(allocator, body_op, fn_data.env);
+                            defer vm.valueDeinit(&resolved_op_ptr.*, allocator);
+                            var call_args: list.List = .empty;
+                            errdefer call_args.deinit(allocator);
+                            try call_args.append(allocator, try vm.shallowClone(&args_list.items[0], allocator));
+                            return try callBuiltin(allocator, resolved_op_ptr, &call_args, env);
+                        }
+                    } else if (body_call.items.len == 3) {
+                        // --- Pattern 3: (op param <literal>) or (op <literal> param) ---
+                        // Only match when exactly one arg is the param and the other is a LITERAL
+                        // (int, float, string, keyword, etc.) — NOT another symbol.
+                        // This avoids cases like (* x x) where both args are the param.
+                        const body_arg0 = &body_call.items[1];
+                        const body_arg1 = &body_call.items[2];
+                        const arg0_is_param = std.meta.activeTag(body_arg0.*) == .symbol and
+                            std.mem.eql(u8, body_arg0.symbol, param_name);
+                        const arg1_is_param = std.meta.activeTag(body_arg1.*) == .symbol and
+                            std.mem.eql(u8, body_arg1.symbol, param_name);
+                        const arg0_is_literal = std.meta.activeTag(body_arg0.*) != .symbol and
+                            std.meta.activeTag(body_arg0.*) != .list;
+                        const arg1_is_literal = std.meta.activeTag(body_arg1.*) != .symbol and
+                            std.meta.activeTag(body_arg1.*) != .list;
+
+                        if (arg0_is_param and arg1_is_literal) {
+                            // (op param <literal>) — e.g. (+ n 1), (= n 0)
+                            // Resolve operator from function's definition env (has ns_manager)
+                            const resolved_op_ptr = try evalForm(allocator, body_op, fn_data.env);
+                            defer vm.valueDeinit(&resolved_op_ptr.*, allocator);
+                            var call_args: list.List = .empty;
+                            errdefer call_args.deinit(allocator);
+                            try call_args.append(allocator, try vm.shallowClone(&args_list.items[0], allocator));
+                            try call_args.append(allocator, try vm.shallowClone(body_arg1, allocator));
+                            return try callBuiltin(allocator, resolved_op_ptr, &call_args, env);
+                        } else if (arg1_is_param and arg0_is_literal) {
+                            // (op <literal> param) — e.g. (- 0 n)
+                            // Resolve operator from function's definition env (has ns_manager)
+                            const resolved_op_ptr = try evalForm(allocator, body_op, fn_data.env);
+                            defer vm.valueDeinit(&resolved_op_ptr.*, allocator);
+                            var call_args: list.List = .empty;
+                            errdefer call_args.deinit(allocator);
+                            try call_args.append(allocator, try vm.shallowClone(body_arg0, allocator));
+                            try call_args.append(allocator, try vm.shallowClone(&args_list.items[0], allocator));
                             return try callBuiltin(allocator, resolved_op_ptr, &call_args, env);
                         }
                     }
