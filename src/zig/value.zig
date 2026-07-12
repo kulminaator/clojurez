@@ -303,6 +303,11 @@ pub const LazySeqThunk = struct {
     env: Env,
     custom_handler: ?LazySeqHandler = null,
     shared_coll: ?*const anyopaque = null,
+
+    // Direct field for map handler — stores the mapping function inline
+    // to avoid one env.put (HAMT allocation) per thunk step.
+    // Only map_fn is stored directly; coll/idx remain in env.
+    map_fn: ?Value = null,
 };
 
 pub const AtomData = struct {

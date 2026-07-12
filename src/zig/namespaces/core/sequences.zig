@@ -424,7 +424,8 @@ fn forceLazySeqCustomHandler(allocator: Allocator, handler: vm.LazySeqHandler, e
 ///   Uses shared_coll pointer — collection is never cloned.
 /// - Lazy collections (lazy_seq/cons): step-by-step, keeping the tail lazy.
 fn forceMapStep(allocator: Allocator, env: *Env, thunk: *const vm.LazySeqThunk) anyerror!Value {
-    const f = env.get("f") orelse return error.RuntimeError;
+    // Read function from direct field (avoids HAMT lookup)
+    const f: Value = if (thunk.map_fn) |fn_val| fn_val else env.get("f") orelse return error.RuntimeError;
 
     // Get collection: from shared_coll pointer if available, else from env
     var coll_ptr: *const Value = undefined;
@@ -481,6 +482,7 @@ fn forceMapStepConcrete(allocator: Allocator, f: Value, coll: *const Value, env:
     const chunk_val = try buf.seal();
 
     // Create next thunk — share the collection pointer, no clone!
+    // Store map_fn directly to avoid one env.put (HAMT allocation).
     const thunk = try allocator.create(vm.LazySeqThunk);
     thunk.* = .{
         .params = list.empty(),
@@ -494,11 +496,11 @@ fn forceMapStepConcrete(allocator: Allocator, f: Value, coll: *const Value, env:
         },
         .custom_handler = vm.LazySeqHandler.map,
         .shared_coll = coll, // shared pointer, no clone (*const Value → *const anyopaque)
+        .map_fn = try vm.shallowClone(&f, allocator),
     };
     if (gc_mod.current_gc) |gc| {
         gc.setObjectType(@as(*anyopaque, @ptrCast(thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
     }
-    try thunk.env.put("f", try vm.shallowClone(&f, allocator));
     try thunk.env.put("idx", vm.intValue(@as(i64, @intCast(end_idx))));
 
     const tail = vm.lazySeqValue(thunk);
@@ -545,7 +547,8 @@ fn forceMapStepLazy(allocator: Allocator, f: Value, coll: Value, env: *Env) anye
     // Get rest — this consumes s
     const rest_val = try getRestValue(allocator, s);
 
-    // Create next thunk with the remaining lazy tail
+    // Create next thunk with the remaining lazy tail.
+    // Store map_fn directly to avoid one env.put (HAMT allocation).
     const thunk = try allocator.create(vm.LazySeqThunk);
     thunk.* = .{
         .params = list.empty(),
@@ -558,11 +561,11 @@ fn forceMapStepLazy(allocator: Allocator, f: Value, coll: Value, env: *Env) anye
             .referred_names = .empty,
         },
         .custom_handler = vm.LazySeqHandler.map,
+        .map_fn = try vm.shallowClone(&f, allocator),
     };
     if (gc_mod.current_gc) |gc| {
         gc.setObjectType(@as(*anyopaque, @ptrCast(thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
     }
-    try thunk.env.put("f", try vm.shallowClone(&f, allocator));
     try thunk.env.put("coll", rest_val);
 
     const tail = vm.lazySeqValue(thunk);
@@ -597,7 +600,8 @@ fn forceMapStepChunkedFromLazy(allocator: Allocator, f: Value, s: Value, env: *E
     const tail = try vm.shallowClone(&ccd.tail, allocator);
     vm.valueDeinit(&seq, allocator);
 
-    // Create next thunk with the remaining tail
+    // Create next thunk with the remaining tail.
+    // Store map_fn directly to avoid one env.put (HAMT allocation).
     const thunk = try allocator.create(vm.LazySeqThunk);
     thunk.* = .{
         .params = list.empty(),
@@ -610,11 +614,11 @@ fn forceMapStepChunkedFromLazy(allocator: Allocator, f: Value, s: Value, env: *E
             .referred_names = .empty,
         },
         .custom_handler = vm.LazySeqHandler.map,
+        .map_fn = try vm.shallowClone(&f, allocator),
     };
     if (gc_mod.current_gc) |gc| {
         gc.setObjectType(@as(*anyopaque, @ptrCast(thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
     }
-    try thunk.env.put("f", try vm.shallowClone(&f, allocator));
     try thunk.env.put("coll", tail);
 
     const tail_lazy = vm.lazySeqValue(thunk);

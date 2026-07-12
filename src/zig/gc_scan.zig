@@ -437,6 +437,10 @@ fn scanLazySeqThunk(thunk_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     if (thunk.shared_coll) |sc| {
         markPtr(sc, ctx);
     }
+    // Mark map_fn (inline Value stored to avoid one env.put per thunk step).
+    if (thunk.map_fn) |fn_val| {
+        scanValueChildrenDirect(&fn_val, ctx);
+    }
 }
 
 /// Scan AtomData: { value: Value, ref_count: usize }.

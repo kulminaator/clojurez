@@ -120,6 +120,7 @@ pub fn core_map(self: *const Value, args: *const list.List, env_env: *Env) anyer
     // Create thunk with custom handler — bypasses the Clojure evaluator
     // for per-element processing.
     // Use a thin self-contained env — no parent chain, no cloning of namespace.
+    // Store map_fn directly to avoid one env.put (HAMT allocation).
     const thunk = try allocator.create(vm.LazySeqThunk);
     thunk.* = .{
         .params = list.empty(),
@@ -133,11 +134,11 @@ pub fn core_map(self: *const Value, args: *const list.List, env_env: *Env) anyer
         },
         .custom_handler = vm.LazySeqHandler.map,
         .shared_coll = null,
+        .map_fn = try vm.shallowClone(&f, allocator),
     };
     if (gc_mod.current_gc) |gc| {
         gc.setObjectType(@as(*anyopaque, @ptrCast(thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
     }
-    try thunk.env.put("f", try vm.shallowClone(&f, allocator));
 
     // For concrete collections (list/vector), allocate the collection as a
     // separate GC-tracked object so shared_coll points to stable memory that
@@ -155,7 +156,6 @@ pub fn core_map(self: *const Value, args: *const list.List, env_env: *Env) anyer
         // stable_coll owns the original cloned_coll now; no deinit needed here.
     } else {
         // Lazy collections: store in env, shared_coll stays null
-        // forceMapStepLazy clones from env on each step.
         try thunk.env.put("coll", cloned_coll);
     }
 
