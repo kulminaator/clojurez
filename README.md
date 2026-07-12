@@ -89,6 +89,15 @@ Documentation is regenerated automatically on every build. To regenerate manuall
 - Simpler collection internals (some chunking support)
 - Minimal runtime (< 1MB stripped)
 
+## Zig interop
+Developers coming from JVM Clojure might assume that you can call Zig functions directly from clojurez. Sadly it's not so simple. We do have very precise bindings from zig.core library to native zig functions (and some functions from other namespaces as well), but you can't just call any function in Zig std lib as you wish.
+
+Zig doesn’t include its standard library in your program the way Java includes a runtime. When Zig compiles your code, it only keeps the tiny pieces you actually use, and even those get heavily optimized into raw machine instructions. That means most Zig functions don’t exist in the final binary in any recognizable form. Because of this, your scripting language can only call the Zig functions you explicitly expose — not the entire Zig std library. Think of Zig as a compiler that builds exactly what you ask for, not a runtime that brings its whole toolbox along. We don't use majority of zig's std lib, therefor it is also not compiled into our binary. 
+
+I am considering adding dlopen style support to deal with dynamically linked libraries, this would open the doors not just to Zig but also C libraries.
+
+Since the project is open source - you can fork it and modify it to adjust to your needs (as long as you follow the license and copyrights).
+
 ## License
 
 Eclipse Public License 1.0
