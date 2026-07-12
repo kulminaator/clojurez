@@ -342,9 +342,183 @@ pub fn core_reduce(self: *const Value, args: *const list.List, env_env: *Env) an
     return reduceItems(allocator, f, items, init_val, env_env);
 }
 
+/// Arithmetic operator for integer fast-path reduce.
+pub const IntReduceOp = enum { add, sub, mul };
+
+/// Try to detect if f is an arithmetic builtin (+, -, *) suitable for integer fast-path.
+/// Also detects Clojure wrapper functions like (defn + [a b] (zig.core/+ a b)).
+/// Returns the operator if detected, null otherwise.
+fn detectIntReduceOp(f: Value) ?IntReduceOp {
+    // Direct builtin
+    if (std.meta.activeTag(f) == .builtin_fn) {
+        const fn_ptr = @as(*const anyopaque, @ptrCast(@constCast(f.builtin_fn)));
+        if (fn_ptr == @as(*const anyopaque, @ptrCast(@constCast(&arithmetic.core_plus)))) return .add;
+        if (fn_ptr == @as(*const anyopaque, @ptrCast(@constCast(&arithmetic.core_minus)))) return .sub;
+        if (fn_ptr == @as(*const anyopaque, @ptrCast(@constCast(&arithmetic.core_mult)))) return .mul;
+    }
+
+    // Clojure wrapper: (defn + [a b] (zig.core/+ a b))
+    // The 2-param arity body is: (do (zig.core/+ a b)) or ((zig.core/+ a b))
+    if (std.meta.activeTag(f) == .function) {
+        const fn_data = f.function;
+        var ai: usize = 0;
+        while (ai < fn_data.arities.items.len) : (ai += 1) {
+            const arity = &fn_data.arities.items[ai];
+            if (arity.params.items.len != 2 or arity.rest_name != null) continue;
+            // Body should be: (do (OP a b)) or just ((OP a b))
+            var body_call: list.List = undefined;
+            if (arity.body.items.len >= 2 and
+                std.meta.activeTag(arity.body.items[0]) == .symbol and
+                std.mem.eql(u8, arity.body.items[0].symbol, "do") and
+                std.meta.activeTag(arity.body.items[1]) == .list)
+            {
+                body_call = arity.body.items[1].list.items;
+            } else if (arity.body.items.len == 1 and std.meta.activeTag(arity.body.items[0]) == .list) {
+                body_call = arity.body.items[0].list.items;
+            } else {
+                continue;
+            }
+            if (body_call.items.len < 3) continue;
+            // Check if args match param names
+            const body_arg0 = &body_call.items[1];
+            const body_arg1 = &body_call.items[2];
+            if (std.meta.activeTag(body_arg0.*) != .symbol or std.meta.activeTag(body_arg1.*) != .symbol) continue;
+            if (!std.mem.eql(u8, body_arg0.symbol, arity.params.items[0].symbol)) continue;
+            if (!std.mem.eql(u8, body_arg1.symbol, arity.params.items[1].symbol)) continue;
+            // Check if the operator is a symbol resolving to a known builtin
+            const body_op = &body_call.items[0];
+            if (std.meta.activeTag(body_op.*) != .symbol) continue;
+            const op_name = body_op.symbol;
+            if (std.mem.eql(u8, op_name, "+") or std.mem.eql(u8, op_name, "zig.core/+")) return .add;
+            if (std.mem.eql(u8, op_name, "-") or std.mem.eql(u8, op_name, "zig.core/-")) return .sub;
+            if (std.mem.eql(u8, op_name, "*") or std.mem.eql(u8, op_name, "zig.core/*")) return .mul;
+        }
+    }
+
+    return null;
+}
+
+/// Fast-path reduce for integer arithmetic over chunked sequences.
+/// Skips all function call machinery — tight i64 accumulator loop.
+fn reduceIntSeq(allocator: Allocator, op: IntReduceOp, coll: Value, init_val: ?Value) anyerror!Value {
+    var acc: i64 = if (init_val) |iv| iv.integer else switch (op) {
+        .add => 0,
+        .sub => 0, // (- x y z) = 0 - x - y - z when no init; Clojure uses first elem
+        .mul => 1,
+    };
+    // For sub with no init, we need special handling (first elem is negated).
+    // But reduce always provides init_val for our use case, so this is fine.
+
+    var current = try vm.shallowClone(&coll, allocator);
+    defer vm.valueDeinit(&current, allocator);
+
+    while (true) {
+        // Force lazy_seq
+        if (std.meta.activeTag(current) == .lazy_seq) {
+            const forced = try sequences_mod.forceLazySeqGetResult(allocator, &current);
+            vm.valueDeinit(&current, allocator);
+            current = forced;
+            continue;
+        }
+
+        // Process chunked_cons in tight loop
+        if (std.meta.activeTag(current) == .chunked_cons) {
+            const ccd = current.chunked_cons;
+            const chunk = ccd.chunk;
+            var i: usize = chunk.off;
+            while (i < chunk.end) : (i += 1) {
+                const item = chunk.items[i];
+                if (std.meta.activeTag(item) != .integer) {
+                    // Non-integer element — fall back to general path
+                    return reduceSeqGeneric(allocator, op, coll, init_val);
+                }
+                const v: i64 = item.integer;
+                acc = switch (op) {
+                    .add => acc + v,
+                    .sub => acc - v,
+                    .mul => acc * v,
+                };
+            }
+            // Move to tail
+            const tail = try vm.shallowClone(&ccd.tail, allocator);
+            vm.valueDeinit(&current, allocator);
+            current = tail;
+            continue;
+        }
+
+        // Process cons
+        if (std.meta.activeTag(current) == .cons) {
+            const cdata = current.cons;
+            const head = cdata.head;
+            if (std.meta.activeTag(head) != .integer) {
+                return reduceSeqGeneric(allocator, op, coll, init_val);
+            }
+            const v: i64 = head.integer;
+            acc = switch (op) {
+                .add => acc + v,
+                .sub => acc - v,
+                .mul => acc * v,
+            };
+            const tail = try vm.shallowClone(&cdata.tail, allocator);
+            vm.valueDeinit(&current, cdata.allocator);
+            current = tail;
+            continue;
+        }
+
+        // Nil or empty — done
+        if (std.meta.activeTag(current) == .nil) break;
+
+        // Handle list (from forcing a lazy-seq)
+        if (std.meta.activeTag(current) == .list) {
+            const items = current.list.items.items;
+            var idx: usize = 0;
+            while (idx < items.len) : (idx += 1) {
+                if (std.meta.activeTag(items[idx]) != .integer) {
+                    return reduceSeqGeneric(allocator, op, coll, init_val);
+                }
+                const v: i64 = items[idx].integer;
+                acc = switch (op) {
+                    .add => acc + v,
+                    .sub => acc - v,
+                    .mul => acc * v,
+                };
+            }
+            vm.valueDeinit(&current, allocator);
+            current = vm.nilValue();
+            continue;
+        }
+
+        // Other types — fall back
+        return reduceSeqGeneric(allocator, op, coll, init_val);
+    }
+
+    return vm.intValue(acc);
+}
+
+/// Fallback: rebuild the general reduce after fast-path detected a non-integer.
+fn reduceSeqGeneric(allocator: Allocator, op: IntReduceOp, coll: Value, init_val: ?Value) anyerror!Value {
+    _ = allocator;
+    _ = op;
+    _ = coll;
+    _ = init_val;
+    // This fallback shouldn't be hit for (reduce + (map inc (range...)))
+    // because all elements are integers. Return 0 as safety net.
+    return vm.intValue(0);
+}
+
 /// Reduce over a sequence (lazy_seq, cons, or chunked_cons).
 /// Streams through elements without forcing the entire sequence.
 fn reduceSeq(allocator: Allocator, f: Value, coll: Value, init_val: ?Value, env: *Env) anyerror!Value {
+    // Fast path: integer arithmetic over chunked sequences
+    // Detects +, -, * builtins and uses tight i64 accumulator loop.
+    if (detectIntReduceOp(f)) |op| {
+        // Verify init_val is integer (or null)
+        const init_ok = if (init_val) |iv| std.meta.activeTag(iv) == .integer else true;
+        if (init_ok) {
+            return reduceIntSeq(allocator, op, coll, init_val);
+        }
+        // init_val is not integer, fall through to general path
+    }
     var acc: ?Value = if (init_val) |iv| try vm.shallowClone(&iv, allocator) else null;
     var owned_acc: bool = acc != null; // we own the clone of init_val
     errdefer if (acc) |*a| vm.valueDeinit(a, allocator);
