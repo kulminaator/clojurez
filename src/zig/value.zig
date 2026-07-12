@@ -363,6 +363,7 @@ pub const RefData = struct {
     value: Value,
     version: u64 = 0,       // Monotonically increasing version counter
     validator: ?Value = null, // Optional validator function
+    meta: ?Value = null,     // Optional metadata map (for :commutative, etc.)
     allocator: Allocator,
 };
 
@@ -658,11 +659,17 @@ pub fn promiseValueShared(data: *PromiseData) Value {
 
 /// Create a ref value (STM reference).
 pub fn refValue(allocator: Allocator, initial: Value) anyerror!Value {
+    return refValueWithMeta(allocator, initial, null);
+}
+
+/// Create a ref value with optional metadata.
+pub fn refValueWithMeta(allocator: Allocator, initial: Value, metadata: ?Value) anyerror!Value {
     const data = try allocator.create(RefData);
     data.* = .{
         .value = try clone(&initial, allocator),
         .version = 0,
         .validator = null,
+        .meta = if (metadata) |m| try clone(&m, allocator) else null,
         .allocator = allocator,
     };
     if (gc_mod.current_gc) |gc| {
@@ -1058,6 +1065,7 @@ pub fn clone(val: *const Value, allocator: Allocator) anyerror!Value {
                 .value = try clone(&data.value, allocator),
                 .version = data.version,
                 .validator = if (data.validator) |v| try clone(&v, allocator) else null,
+                .meta = if (data.meta) |m| try clone(&m, allocator) else null,
                 .allocator = allocator,
             };
             if (gc_mod.current_gc) |gc| {

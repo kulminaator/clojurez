@@ -57,8 +57,34 @@ const MAX_RETRIES: usize = 10;
 pub fn core_ref(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     _ = self;
     const allocator = env.allocator;
-    if (args.items.len != 1) return error.ArityError;
-    return try vm.refValue(allocator, args.items[0]);
+    if (args.items.len < 1) return error.ArityError;
+
+    // Parse optional keyword arguments: (:commutative bool)
+    var commutative = false;
+    var i: usize = 1;
+    while (i < args.items.len) : (i += 1) {
+        const arg = args.items[i];
+        if (std.meta.activeTag(arg) != .keyword) continue;
+        if (std.mem.eql(u8, arg.keyword, "commutative") and i + 1 < args.items.len) {
+            const val = args.items[i + 1];
+            if (std.meta.activeTag(val) == .bool) {
+                commutative = val.bool;
+            }
+            i += 1;
+        }
+    }
+
+    var meta: ?Value = null;
+    if (commutative) {
+        meta = try vm.mapValue(allocator, std.ArrayListUnmanaged(vm.MapEntry).empty);
+        if (meta) |m| {
+            const key = try vm.keywordValue(allocator, "commutative");
+            const val = vm.boolValue(true);
+            try m.map.entries.append(allocator, .{ .key = key, .value = val });
+        }
+    }
+
+    return try vm.refValueWithMeta(allocator, args.items[0], meta);
 }
 
 // ============================================================
@@ -333,6 +359,48 @@ pub fn evalDosync(allocator: Allocator, l: *const list.List, frame: *vm.Frame, d
 }
 
 // ============================================================
+// (ref? x) — Check if x is a ref.
+// ============================================================
+
+pub fn core_ref_q(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
+    _ = self;
+    _ = env;
+    if (args.items.len != 1) return error.ArityError;
+    return if (std.meta.activeTag(args.items[0]) == .ref)
+        vm.boolValue(true)
+    else
+        vm.boolValue(false);
+}
+
+// ============================================================
+// (commutative? x) — Check if x is a commutative ref.
+// Returns true if x has :commutative true in its metadata.
+// ============================================================
+
+pub fn core_commutative_q(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
+    _ = self;
+    _ = env;
+    if (args.items.len != 1) return error.ArityError;
+    const arg = args.items[0];
+    if (std.meta.activeTag(arg) != .ref) return vm.boolValue(false);
+    const ref_data = arg.ref;
+    if (ref_data.meta) |m| {
+        // Look up :commutative key in metadata map
+        for (m.map.entries.items) |entry| {
+            if (std.meta.activeTag(entry.key) == .keyword and
+                std.mem.eql(u8, entry.key.keyword, "commutative"))
+            {
+                return if (std.meta.activeTag(entry.value) == .bool)
+                    entry.value
+                else
+                    vm.boolValue(false);
+            }
+        }
+    }
+    return vm.boolValue(false);
+}
+
+// ============================================================
 // Registration
 // ============================================================
 
@@ -342,4 +410,6 @@ pub fn registerRefFunctions(env: *Env) anyerror!void {
     try env.put("alter", vm.builtinFnValue(core_alter));
     try env.put("commute", vm.builtinFnValue(core_commute));
     try env.put("ensure", vm.builtinFnValue(core_ensure));
+    try env.put("ref?", vm.builtinFnValue(core_ref_q));
+    try env.put("commutative?", vm.builtinFnValue(core_commutative_q));
 }

@@ -926,6 +926,10 @@ fn scanRefData(ref_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     if (rd.validator) |v| {
         scanValueChildrenDirect(&v, ctx);
     }
+    // Mark metadata if present
+    if (rd.meta) |m| {
+        scanValueChildrenDirect(&m, ctx);
+    }
 }
 
 /// Scan MultimethodData — multimethod dispatch.
@@ -941,5 +945,11 @@ fn scanMultimethodData(mm_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     // Mark default dispatch value if present
     if (mm.default_dispatch) |v| {
         scanValueChildrenDirect(&v, ctx);
+    }
+    // Mark preference table entries
+    for (mm.pref_table.items) |pair| {
+        for (pair.items) |val| {
+            scanValueChildrenDirect(&val, ctx);
+        }
     }
 }

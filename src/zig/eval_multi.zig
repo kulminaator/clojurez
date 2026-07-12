@@ -201,6 +201,100 @@ pub fn core_dispatch_fn(self: *const Value, args: *const list.List, env: *Env) a
     return try vm.clone(&mm.multimethod.dispatch_fn, allocator);
 }
 
+/// (prefer-method mm preferred dispatch-val) — Add a preference pair.
+pub fn core_prefer_method(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
+    _ = self;
+    const allocator = env.allocator;
+    if (args.items.len != 3) return error.ArityError;
+    const mm = args.items[0];
+    if (std.meta.activeTag(mm) != .multimethod) return error.TypeError;
+
+    const preferred = args.items[1];
+    const dispatch_val = args.items[2];
+
+    // Add preference pair to pref_table
+    var pair: std.ArrayListUnmanaged(Value) = .empty;
+    errdefer pair.deinit(allocator);
+    try pair.append(allocator, try vm.clone(&preferred, allocator));
+    try pair.append(allocator, try vm.clone(&dispatch_val, allocator));
+    try mm.multimethod.pref_table.append(allocator, pair);
+
+    return mm;
+}
+
+/// (preferences mm) — Return the preference map.
+pub fn core_preferences(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
+    _ = self;
+    const allocator = env.allocator;
+    if (args.items.len != 1) return error.ArityError;
+    const mm = args.items[0];
+    if (std.meta.activeTag(mm) != .multimethod) return error.TypeError;
+
+    // Group preference pairs by preferred dispatch value
+    var groups: std.ArrayListUnmanaged(std.ArrayListUnmanaged(Value)) = .empty;
+    defer {
+        for (groups.items) |*grp| grp.deinit(allocator);
+        groups.deinit(allocator);
+    }
+
+    for (mm.multimethod.pref_table.items) |pair| {
+        if (pair.items.len < 2) continue;
+        const preferred = pair.items[0];
+        const less_preferred = pair.items[1];
+
+        var found_idx: ?usize = null;
+        for (groups.items, 0..) |grp, idx| {
+            if (grp.items.len > 0 and vm.equals(grp.items[0], preferred)) {
+                found_idx = idx;
+                break;
+            }
+        }
+
+        if (found_idx) |idx| {
+            try groups.items[idx].append(allocator, try vm.clone(&less_preferred, allocator));
+        } else {
+            var grp: std.ArrayListUnmanaged(Value) = .empty;
+            errdefer grp.deinit(allocator);
+            try grp.append(allocator, try vm.clone(&preferred, allocator));
+            try grp.append(allocator, try vm.clone(&less_preferred, allocator));
+            try groups.append(allocator, grp);
+        }
+    }
+
+    // Build result map using cloneMap pattern (same as core_methods)
+    var result_entries: vm.Map = .empty;
+    errdefer {
+        for (result_entries.items) |*entry| {
+            vm.valueDeinit(&entry.key, allocator);
+            vm.valueDeinit(&entry.value, allocator);
+        }
+        allocator.free(result_entries.items);
+    }
+
+    for (groups.items) |grp| {
+        if (grp.items.len < 2) continue;
+        const preferred = grp.items[0];
+
+        // Build set from remaining items
+        var set_items: std.ArrayListUnmanaged(Value) = .empty;
+        errdefer set_items.deinit(allocator);
+        var i: usize = 1;
+        while (i < grp.items.len) : (i += 1) {
+            try set_items.append(allocator, try vm.clone(&grp.items[i], allocator));
+        }
+        const new_set = try vm.setValue(allocator, set_items);
+
+        // Clone the preferred value using clone (same as cloneMap does)
+        const cloned_key = try vm.clone(&preferred, allocator);
+        try result_entries.append(allocator, .{
+            .key = cloned_key,
+            .value = new_set,
+        });
+    }
+
+    return try vm.mapValue(allocator, result_entries);
+}
+
 // ============================================================
 // Registration
 // ============================================================
@@ -209,4 +303,6 @@ pub fn registerMultimethodFunctions(env: *Env) anyerror!void {
     try env.put("get-method", vm.builtinFnValue(core_get_method));
     try env.put("methods", vm.builtinFnValue(core_methods));
     try env.put("dispatch-fn", vm.builtinFnValue(core_dispatch_fn));
+    try env.put("prefer-method", vm.builtinFnValue(core_prefer_method));
+    try env.put("preferences", vm.builtinFnValue(core_preferences));
 }
