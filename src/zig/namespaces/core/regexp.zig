@@ -71,11 +71,12 @@ pub fn core_re_find(self: *const Value, args: *const list.List, env: *Env) anyer
     const n = vm.utf8CodepointCount(str);
 
     var start: usize = 0;
-    while (start < n) : (start += 1) {
+    while (start <= n) : (start += 1) {
         const remaining = regexp.substringFrom(str, start);
-        const match_len = try regexp.nfaMatchLen(&nfa, remaining, allocator);
-        if (match_len > 0) {
-            const match_str = remaining[0..match_len];
+        const match_len = try regexp.nfaMatchLenAt(&nfa, remaining, allocator, start);
+        if (match_len != null) {
+            const len = match_len.?;
+            const match_str = remaining[0..len];
             return try vm.stringValue(allocator, match_str);
         }
     }
@@ -105,14 +106,20 @@ pub fn core_re_seq(self: *const Value, args: *const list.List, env: *Env) anyerr
     }
 
     var start: usize = 0;
-    while (start < n) {
+    while (start <= n) {
         const remaining = regexp.substringFrom(str, start);
-        const match_len = try regexp.nfaMatchLen(&nfa, remaining, allocator);
-        if (match_len > 0) {
-            const match_str = remaining[0..match_len];
+        const match_len = try regexp.nfaMatchLenAt(&nfa, remaining, allocator, start);
+        if (match_len != null) {
+            const len = match_len.?;
+            const match_str = remaining[0..len];
             try matches.append(allocator, try vm.stringValue(allocator, match_str));
-            const cp_count = vm.utf8CodepointCount(match_str);
-            start += cp_count;
+            // For zero-length matches, advance by 1 to avoid infinite loop
+            if (len == 0) {
+                start += 1;
+            } else {
+                const cp_count = vm.utf8CodepointCount(match_str);
+                start += cp_count;
+            }
         } else {
             start += 1;
         }
@@ -145,11 +152,12 @@ pub fn core_re_find_with_index(self: *const Value, args: *const list.List, env: 
     const n = vm.utf8CodepointCount(str);
 
     var start: usize = 0;
-    while (start < n) : (start += 1) {
+    while (start <= n) : (start += 1) {
         const remaining = regexp.substringFrom(str, start);
-        const match_len = try regexp.nfaMatchLen(&nfa, remaining, allocator);
-        if (match_len > 0) {
-            const match_str = remaining[0..match_len];
+        const match_len = try regexp.nfaMatchLenAt(&nfa, remaining, allocator, start);
+        if (match_len != null) {
+            const len = match_len.?;
+            const match_str = remaining[0..len];
             const match_cp_count = vm.utf8CodepointCount(match_str);
             var result = vec.Vector.empty;
             errdefer result.deinit(allocator);
@@ -186,11 +194,12 @@ pub fn core_re_find_all(self: *const Value, args: *const list.List, env: *Env) a
     }
 
     var start: usize = 0;
-    while (start < n) {
+    while (start <= n) {
         const remaining = regexp.substringFrom(str, start);
-        const match_len = try regexp.nfaMatchLen(&nfa, remaining, allocator);
-        if (match_len > 0) {
-            const match_str = remaining[0..match_len];
+        const match_len = try regexp.nfaMatchLenAt(&nfa, remaining, allocator, start);
+        if (match_len != null) {
+            const len = match_len.?;
+            const match_str = remaining[0..len];
             const match_cp_count = vm.utf8CodepointCount(match_str);
             var entry = vec.Vector.empty;
             errdefer entry.deinit(allocator);
@@ -198,7 +207,11 @@ pub fn core_re_find_all(self: *const Value, args: *const list.List, env: *Env) a
             try entry.append(allocator, vm.intValue(@intCast(start)));
             try entry.append(allocator, vm.intValue(@intCast(start + match_cp_count)));
             try results.append(allocator, try vm.vectorValue(allocator, entry));
-            start += match_cp_count;
+            if (len == 0) {
+                start += 1;
+            } else {
+                start += match_cp_count;
+            }
         } else {
             start += 1;
         }
