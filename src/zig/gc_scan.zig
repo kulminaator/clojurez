@@ -285,6 +285,10 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
             if (fn_data.docstring) |ds| {
                 if (ds.len > 0) markPtr(ds.ptr, ctx);
             }
+            // Mark the fn's namespace string (if GC-allocated)
+            if (fn_data.namespace) |ns| {
+                if (ns.len > 0) markPtr(ns.ptr, ctx);
+            }
             // Mark the arities array buffer itself
             if (fn_data.arities.items.len > 0) {
                 ctx.gc.markRecursive(fn_data.arities.items.ptr, ctx);
@@ -482,6 +486,10 @@ fn scanFnData(fndata_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     // Mark the fn's docstring (if GC-allocated)
     if (fndata.docstring) |ds| {
         if (ds.len > 0) markPtr(ds.ptr, ctx);
+    }
+    // Mark the fn's namespace string (if GC-allocated)
+    if (fndata.namespace) |ns| {
+        if (ns.len > 0) markPtr(ns.ptr, ctx);
     }
     // Mark the fn's env struct itself (heap-allocated *Env)
     const fn_env = fndata.env;

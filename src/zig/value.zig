@@ -398,6 +398,7 @@ pub const FnData = struct {
     is_macro: bool = false,
     name: ?[]const u8 = null,
     docstring: ?[]const u8 = null,
+    namespace: ?[]const u8 = null, // Namespace where function was defined (for :ns in metadata)
     cached_meta: ?Value = null, // Cached metadata map (populated by meta)
 };
 
@@ -778,9 +779,23 @@ pub fn fnValueNamedWithDoc(allocator: Allocator, arities: std.ArrayListUnmanaged
     if (gc_mod.current_gc) |gc| {
         gc.setObjectType(@as(*anyopaque, @ptrCast(env_ptr)), gc_mod.GCObjectType.env);
     }
+    // Extract namespace name from the environment for :ns in function metadata
+    // Walk the env chain to find ns_manager (it may be on a parent env)
+    var ns_name: ?[]const u8 = null;
+    var search_env: ?*const Env = &env;
+    while (search_env) |e| : (search_env = e.parent) {
+        if (e.ns_manager) |ns_mgr| {
+            const current_ns = ns_mgr.getCurrentNamespace();
+            ns_name = try allocator.dupe(u8, current_ns);
+            break;
+        }
+    }
     const fn_data = try allocator.create(FnData);
-    errdefer allocator.destroy(fn_data);
-    fn_data.* = .{ .arities = arities, .env = env_ptr, .is_macro = is_macro, .name = name, .docstring = docstring };
+    errdefer {
+        if (ns_name) |n| allocator.free(n);
+        allocator.destroy(fn_data);
+    }
+    fn_data.* = .{ .arities = arities, .env = env_ptr, .is_macro = is_macro, .name = name, .docstring = docstring, .namespace = ns_name };
     if (gc_mod.current_gc) |gc_inst| {
         gc_inst.setObjectType(@as(*anyopaque, @ptrCast(fn_data)), gc_mod.GCObjectType.fn_data);
         if (arities.items.len > 0) {
@@ -1213,6 +1228,7 @@ pub fn equals(val: Value, other: Value) bool {
         .promise => return false,
         .ref => return false, // identity-based like atoms
         .multimethod => return false, // identity-based
+        .function => |a| return a == other.function, // identity-based
         .reduced => |s_data| {
             return equals(s_data.*, other.reduced.*);
         },

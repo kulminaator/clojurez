@@ -16,7 +16,11 @@ const Allocator = std.mem.Allocator;
 pub fn evalAlterMetaBang(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!eval.EvalResult {
     if (l.items.len < 3) return error.ArityError;
 
-    const sym = l.items[1];
+    // Evaluate the first argument (typically a quoted symbol like 'x)
+    const sym_eval = try eval.evalRecV(allocator, &l.items[1], frame, depth + 1);
+    defer vm.valueDeinit(sym_eval, allocator);
+
+    const sym = sym_eval.*;
     if (std.meta.activeTag(sym) != .symbol) return error.TypeError;
     const sym_name = sym.symbol;
 
@@ -28,16 +32,16 @@ pub fn evalAlterMetaBang(allocator: Allocator, l: *const list.List, frame: *vm.F
     var current_meta: Value = try vm.mapValue(allocator, std.ArrayListUnmanaged(vm.MapEntry).empty);
     errdefer vm.valueDeinit(&current_meta, allocator);
 
-    // Look up metadata in the namespace chain
-    if (findNsMeta(frame.root_env, sym_name)) |existing| {
+    // Look up metadata in the current namespace (same as putNsMeta)
+    if (findNsMetaInCurrentNs(frame.root_env, sym_name)) |existing| {
         vm.valueDeinit(&current_meta, allocator);
         current_meta = try vm.shallowClone(&existing, allocator);
     }
 
     // Apply f to current_meta with additional args
+    // Build args list (already evaluated, passed directly to call)
     var call_args: list.List = .empty;
     errdefer call_args.deinit(allocator);
-    try call_args.append(allocator, try vm.shallowClone(&fn_ptr.*, allocator));
     try call_args.append(allocator, try vm.shallowClone(&current_meta, allocator));
     var i: usize = 3;
     while (i < l.items.len) : (i += 1) {
@@ -46,11 +50,14 @@ pub fn evalAlterMetaBang(allocator: Allocator, l: *const list.List, frame: *vm.F
         vm.valueDeinit(arg_ptr, allocator);
     }
 
-    const call_list = try vm.listValue(allocator, call_args);
-    const call_list_ptr = try eval.allocValue(allocator, call_list);
-    const result_ptr = try eval.evalRecV(allocator, call_list_ptr, frame, depth + 1);
-    const new_meta = try vm.shallowClone(&result_ptr.*, allocator);
-    vm.valueDeinit(result_ptr, allocator);
+    // Call f with already-evaluated args (no re-evaluation)
+    // Disable trampolining so we get a direct result
+    const saved_trampoline = eval.trampoline_allowed;
+    eval.trampoline_allowed = false;
+    defer eval.trampoline_allowed = saved_trampoline;
+    const call_result = try eval.call(allocator, fn_ptr, &call_args, frame, depth + 1);
+    const new_meta = try vm.shallowClone(call_result.value, allocator);
+    vm.valueDeinit(call_result.value, allocator);
     vm.valueDeinit(&current_meta, allocator);
 
     // Store new metadata in the namespace
@@ -66,6 +73,16 @@ fn findNsMeta(env: *vm.Env, name: []const u8) ?Value {
     while (current) |e| {
         if (e.getMeta(name)) |m| return m;
         current = e.parent;
+    }
+    return null;
+}
+
+/// Find metadata for a symbol in the current namespace (not env chain).
+fn findNsMetaInCurrentNs(env: *vm.Env, name: []const u8) ?Value {
+    if (eval.findNsManager(env)) |ns_mgr| {
+        const current_ns = ns_mgr.getCurrentNamespace();
+        const ns_env = ns_mgr.getNamespace(current_ns) orelse return null;
+        return ns_env.getMeta(name);
     }
     return null;
 }

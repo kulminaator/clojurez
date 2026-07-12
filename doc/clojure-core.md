@@ -247,6 +247,7 @@
 - [subvec](#subvec)
 - [superset?](#superset?)
 - [swap!](#swap!)
+- [symbol](#symbol)
 - [symbol?](#symbol?)
 - [take](#take)
 - [take-last](#take-last)
@@ -2331,6 +2332,14 @@ Is set1 a superset of set2?
 [(& args)]
 
 Atomically swaps the value of the atom to be: (apply f current-value & args).
+
+---
+
+## symbol
+
+[(name) (namespace name)]
+
+Creates a symbol from a string. With two args, creates a namespaced symbol.
 
 ---
 

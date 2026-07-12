@@ -257,3 +257,200 @@
    re-find) the regular expression re."
   ([form] `(is ~form nil))
   ([form msg] `(try-expr ~msg ~form)))
+
+
+;;; TESTING MACRO
+
+(defmacro testing
+  "Adds a new string to the list of testing contexts.  May be nested,
+   but must occur inside a test function (deftest)."
+  [string & body]
+  `(binding [*testing-contexts* (conj *testing-contexts* ~string)]
+     ~@body))
+
+
+;;; DEFINING TESTS
+
+(defmacro deftest
+  "Defines a test function with no arguments.  Test functions may call
+   other tests, so tests may be composed.  If you compose tests, you
+   should also define a function named test-ns-hook; run-tests will
+   call test-ns-hook instead of testing all vars.
+
+   When *load-tests* is false, deftest is ignored."
+  [name & body]
+  (when *load-tests*
+    `(do
+       (def ~name (fn [] (test-var (var ~name))))
+       (alter-meta! '~name assoc :test (fn [] ~@body)))))
+
+(defmacro deftest-
+  "Like deftest but creates a private var."
+  [name & body]
+  (when *load-tests*
+    `(do
+       (def ~name (fn [] (test-var (var ~name))))
+       (alter-meta! '~name assoc :test (fn [] ~@body) :private true))))
+
+(defmacro with-test
+  "Takes any definition form (that returns a Var) as the first argument.
+   Remaining body goes in the :test metadata function for that Var.
+
+   When *load-tests* is false, only evaluates the definition, ignoring
+   the tests."
+  [definition & body]
+  (if *load-tests*
+    `(doto ~definition (alter-meta! assoc :test (fn [] ~@body)))
+    definition))
+
+(defmacro set-test
+  "Sets :test metadata of the named var to a fn with the given body.
+   The var must already exist.  Does not modify the value of the var.
+
+   When *load-tests* is false, set-test is ignored."
+  [name & body]
+  (when *load-tests*
+    `(alter-meta! '~name assoc :test (fn [] ~@body))))
+
+
+;;; DEFINING FIXTURES
+
+(defn- add-ns-meta
+  "Adds elements in coll to the current namespace metadata as the value of key."
+  [key coll]
+  (alter-meta! '*ns* assoc key coll))
+
+(defn use-fixtures
+  "Wrap test runs in a fixture function to perform setup and teardown.
+   Using a fixture-type of :each wraps every test individually,
+   while :once wraps the whole run in a single function."
+  [fixture-type & args]
+  (case fixture-type
+    :each (add-ns-meta :clojure.test/each-fixtures args)
+    :once (add-ns-meta :clojure.test/once-fixtures args)
+    (throw (ex-info (str "Unknown fixture type: " fixture-type) {}))))
+
+(defn- default-fixture
+  "The default, empty, fixture function. Just calls its argument."
+  [f]
+  (f))
+
+(defn compose-fixtures
+  "Composes two fixture functions, creating a new fixture function
+   that combines their behavior."
+  [f1 f2]
+  (fn [g] (f1 (fn [] (f2 g)))))
+
+(defn join-fixtures
+  "Composes a collection of fixtures, in order. Always returns a valid
+   fixture function, even if the collection is empty."
+  [fixtures]
+  (if (nil? fixtures)
+    default-fixture
+    (reduce compose-fixtures default-fixture fixtures)))
+
+
+;;; RUNNING TESTS: LOW-LEVEL FUNCTIONS
+
+(defn test-var
+  "If v has a function in its :test metadata, calls that function,
+   with *testing-vars* bound to (conj *testing-vars* v)."
+  [v]
+  (when-let [t (:test (meta v))]
+    (binding [*testing-vars* (conj *testing-vars* v)]
+      (do-report {:type :begin-test-var :var v})
+      (inc-report-counter :test)
+      (try (t)
+           (catch Throwable e
+             (do-report {:type :error
+                         :message "Uncaught exception, not in assertion."
+                         :expected nil
+                         :actual e})))
+      (do-report {:type :end-test-var :var v}))))
+
+(defn test-vars
+  "Groups vars by their namespace and runs test-var on them with
+   appropriate fixtures applied."
+  [vars ns-obj]
+  ;; Get each-test fixtures from namespace metadata
+  (let [each-fixture-fn (join-fixtures (:clojure.test/each-fixtures (meta ns-obj)))
+        test-fns (filter #(and (fn? %) (:test (meta %))) vars)]
+    (doseq [v test-fns]
+      (each-fixture-fn (fn [] (test-var v))))))
+
+(defn test-all-vars
+  "Calls test-vars on every var interned in the namespace, with fixtures."
+  [ns-obj]
+  ;; Get test vars from namespace interns
+  (test-vars (vals (ns-interns ns-obj)) ns-obj))
+
+(defn test-ns
+  "If the namespace defines a function named test-ns-hook, calls that.
+   Otherwise, calls test-all-vars on the namespace. 'ns' is a
+   namespace object or a symbol.
+
+   Internally binds *report-counters* to a ref initialized to
+   *initial-report-counters*. Returns the final, dereferenced state of
+   *report-counters*."
+  [ns]
+  (binding [*report-counters* (ref *initial-report-counters*)]
+    (let [ns-obj (the-ns ns)
+          once-fixture-fn (join-fixtures (:clojure.test/once-fixtures (meta ns-obj)))]
+      (do-report {:type :begin-test-ns :ns ns-obj})
+      (once-fixture-fn (fn []
+        (if-let [v (find-var (symbol (str (ns-name ns-obj)) "test-ns-hook"))]
+          ((resolve v))
+          (test-all-vars ns-obj))))
+      (do-report {:type :end-test-ns :ns ns-obj}))
+    @*report-counters*))
+
+
+;;; RUNNING TESTS: HIGH-LEVEL FUNCTIONS
+
+(defn run-tests
+  "Runs all tests in the given namespaces; prints results.
+   Returns a map summarizing test results."
+  [& namespaces]
+  ;; Use loop instead of map because test-ns uses binding (special form)
+  ;; and map's evaluation path doesn't support special forms
+  (let [results (loop [nss namespaces acc ()]
+                  (if (empty? nss)
+                    acc
+                    (recur (rest nss) (conj acc (test-ns (first nss))))))
+        summary (assoc (apply merge-with + results) :type :summary)]
+    (do-report summary)
+    summary))
+
+(defn run-all-tests
+  "Runs all tests in all namespaces; prints results.
+   Optional argument is a regular expression; only namespaces with
+   names matching the regular expression (with re-matches) will be
+   tested."
+  ([] (apply run-tests (all-ns)))
+  ([re] (apply run-tests (filter #(re-matches re (name (ns-name %))) (all-ns)))))
+
+(defn successful?
+  "Returns true if the given test summary indicates all tests
+   were successful, false otherwise."
+  [summary]
+  (and (zero? (get summary :fail 0))
+       (zero? (get summary :error 0))))
+
+(defn run-test-var
+  "Runs the tests for a single Var, with fixtures executed around
+   the test, and summary output after."
+  [v]
+  (binding [*report-counters* (ref *initial-report-counters*)]
+    (let [ns-name (:ns (meta v))
+          ns-obj (the-ns ns-name)
+          each-fixture-fn (join-fixtures (:clojure.test/each-fixtures (meta ns-obj)))]
+      (each-fixture-fn (fn [] (test-var v)))
+      (let [summary (assoc @*report-counters* :type :summary)]
+        (do-report summary)
+        summary))))
+
+(defmacro run-test
+  "Runs the tests for a single test var, identified by symbol.
+   Returns the summary map."
+  [sym]
+  `(run-test-var (var ~sym)))

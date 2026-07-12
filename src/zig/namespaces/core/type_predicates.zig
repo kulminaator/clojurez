@@ -12,6 +12,7 @@ const BI = @import("../../big_int.zig");
 const test_utils = @import("test_utils.zig");
 const BD = @import("../../big_decimal.zig");
 const RatioMod = @import("../../ratio.zig");
+const eval_mod = @import("../../eval.zig");
 const Allocator = std.mem.Allocator;
 
 // Type predicates
@@ -547,6 +548,30 @@ pub fn core_meta(self: *const Value, args: *const list.List, env_env: *Env) anye
             const cloned = try vm.cloneMap(allocator, m);
             return try vm.mapValue(allocator, cloned);
         }
+        // Special case: namespace records ("clojure.core.Namespace")
+        // Look up namespace metadata from the Env's metas HAMT
+        // Namespace metadata is stored under "*ns*" key (from alter-meta! '*ns*)
+        if (std.mem.eql(u8, val.record.type_name, "clojure.core.Namespace")) {
+            // Extract namespace name from :name field
+            for (val.record.fields.items) |entry| {
+                if (std.meta.activeTag(entry.key) == .keyword and
+                    std.mem.eql(u8, entry.key.keyword, "name"))
+                {
+                    if (std.meta.activeTag(entry.value) == .symbol) {
+                        const ns_name = entry.value.symbol;
+                        // Look up metadata for this namespace in the ns manager
+                        if (eval_mod.findNsManager(env_env)) |ns_mgr| {
+                            const ns_env = ns_mgr.getNamespace(ns_name) orelse return vm.nilValue();
+                            // Namespace metadata is stored under "*ns*" key
+                            if (ns_env.getMeta("*ns*")) |meta| {
+                                return try vm.shallowClone(&meta, allocator);
+                            }
+                        }
+                    }
+                    break;
+                }
+            }
+        }
         return vm.nilValue();
     }
 
@@ -557,15 +582,97 @@ pub fn core_meta(self: *const Value, args: *const list.List, env_env: *Env) anye
             return cached;  // Share — metadata is immutable, GC keeps it alive
         }
         // Build and cache the metadata
-        const meta_map = try buildFnMeta(allocator, fn_data);
+        var meta_map = try buildFnMeta(allocator, fn_data);
+        // Also check namespace-level metadata (from alter-meta!)
+        // Look up in the function's namespace (from :ns field)
+        if (fn_data.namespace) |ns_name| {
+            if (eval_mod.findNsManager(env_env)) |ns_mgr| {
+                const ns_env = ns_mgr.getNamespace(ns_name) orelse env_env;
+                // Search namespace interns to find the function's symbol name
+                var it = ns_env.entries.entryIterator();
+                while (it.next()) |entry| {
+                    if (vm.equals(entry.val, val)) {
+                        const sym_name = entry.key.symbol;
+                        if (ns_env.getMeta(sym_name)) |ns_meta| {
+                            // Merge namespace-level metadata into function metadata
+                            meta_map = try mergeMetaMaps(allocator, meta_map, ns_meta);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         // Store in cache (fn_data is *FnData, mutable)
         fn_data.cached_meta = meta_map;
         // Return shared reference — metadata is immutable
         return meta_map;
     }
 
+    // For symbols, look up namespace-level metadata (Var metadata)
+    if (std.meta.activeTag(val) == .symbol) {
+        const sym_name = val.symbol;
+        if (eval_mod.findNsManager(env_env)) |ns_mgr| {
+            const current_ns = ns_mgr.getCurrentNamespace();
+            const ns_env = ns_mgr.getNamespace(current_ns) orelse env_env;
+            if (ns_env.getMeta(sym_name)) |meta| {
+                return try vm.shallowClone(&meta, allocator);
+            }
+        } else if (env_env.getMeta(sym_name)) |meta| {
+            return try vm.shallowClone(&meta, allocator);
+        }
+        return vm.nilValue();
+    }
+
     // For other types, return nil
     return vm.nilValue();
+}
+
+/// Merge two metadata maps: base entries first, then overlay entries (overlay wins).
+fn mergeMetaMaps(allocator: Allocator, base: Value, overlay: Value) anyerror!Value {
+    var entries: vm.Map = .empty;
+    errdefer {
+        for (entries.items) |*entry| {
+            vm.valueDeinit(&entry.key, allocator);
+            vm.valueDeinit(&entry.value, allocator);
+        }
+        allocator.free(entries.items);
+    }
+    // Copy base entries
+    if (std.meta.activeTag(base) == .map) {
+        for (base.map.entries.items) |entry| {
+            try entries.append(allocator, .{
+                .key = try vm.clone(&entry.key, allocator),
+                .value = try vm.clone(&entry.value, allocator),
+            });
+        }
+    }
+    // Overlay entries (override base)
+    if (std.meta.activeTag(overlay) == .map) {
+        for (overlay.map.entries.items) |entry| {
+            // Remove existing entry with same key
+            var found: ?usize = null;
+            for (entries.items, 0..) |e, idx| {
+                if (vm.equals(e.key, entry.key)) {
+                    found = idx;
+                    break;
+                }
+            }
+            if (found) |idx| {
+                vm.valueDeinit(&entries.items[idx].key, allocator);
+                vm.valueDeinit(&entries.items[idx].value, allocator);
+                entries.items[idx] = .{
+                    .key = try vm.clone(&entry.key, allocator),
+                    .value = try vm.clone(&entry.value, allocator),
+                };
+            } else {
+                try entries.append(allocator, .{
+                    .key = try vm.clone(&entry.key, allocator),
+                    .value = try vm.clone(&entry.value, allocator),
+                });
+            }
+        }
+    }
+    return try vm.mapValue(allocator, entries);
 }
 
 /// Build metadata map for a function value: {:doc, :arglists, :name, :macro}
@@ -604,6 +711,13 @@ fn buildFnMeta(allocator: Allocator, fn_data: *const vm.FnData) anyerror!Value {
     const macro_key = try vm.keywordValue(allocator, "macro");
     const macro_val = vm.boolValue(fn_data.is_macro);
     try entries.append(allocator, .{ .key = macro_key, .value = macro_val });
+
+    // :ns — namespace where the function was defined
+    if (fn_data.namespace) |ns| {
+        const ns_key = try vm.keywordValue(allocator, "ns");
+        const ns_val = try vm.symValue(allocator, ns);
+        try entries.append(allocator, .{ .key = ns_key, .value = ns_val });
+    }
 
     return try vm.mapValue(allocator, entries);
 }

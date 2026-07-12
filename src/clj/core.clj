@@ -1477,6 +1477,14 @@
   [x]
   (zig.core/symbol? x))
 
+(defn symbol
+  "Creates a symbol from a string. With two args, creates a namespaced symbol."
+  ([name]
+   (if (symbol? name) name
+       (read-string (str "'" name))))
+  ([namespace name]
+   (read-string (str "'" namespace "/" name))))
+
 (defn keyword?
   "Returns true if x is a keyword."
   [x]

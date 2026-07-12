@@ -1989,7 +1989,7 @@ fn evalDefn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
         .allocator = allocator,
         .entries = phm.PersistentHashMap.empty(),
         .parent = ns_env_for_closure,
-        .ns_manager = null,
+        .ns_manager = frame.root_env.ns_manager,
     };
     var fn_val = try vm.fnValueNamedWithDoc(allocator, arities, fn_env, false, null, docstring);
     const persistent_fn = try vm.shallowClone(&fn_val, allocator);
@@ -2069,7 +2069,7 @@ fn evalDefmacro(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dep
         .allocator = allocator,
         .entries = phm.PersistentHashMap.empty(),
         .parent = ns_env_for_closure2,
-        .ns_manager = null,
+        .ns_manager = frame.root_env.ns_manager,
     };
     var macro_fn = try vm.fnValueNamedWithDoc(allocator, arities, fn_env, true, null, docstring);
     const persistent_macro = try vm.shallowClone(&macro_fn, allocator);
@@ -2350,7 +2350,7 @@ fn captureFrameEnv(allocator: Allocator, frame: *vm.Frame) anyerror!Env {
         .allocator = allocator,
         .entries = phm.PersistentHashMap.empty(),
         .parent = frame.root_env,
-        .ns_manager = null,
+        .ns_manager = frame.root_env.ns_manager,
     };
     // Collect frames from current to parent
     var frames: std.ArrayListUnmanaged(*vm.Frame) = .empty;
