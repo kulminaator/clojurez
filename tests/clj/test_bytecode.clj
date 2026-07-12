@@ -456,6 +456,59 @@
   100000000000000000000N)
 
 ;; ============================================================
+;; REGRESSION TESTS (Phase 0: correctness for bytecode optimizations)
+;; ============================================================
+
+;; Regression: nested fn calls with primitives — verifies that
+;; let bindings with arithmetic inside bytecode-compiled functions
+;; work correctly after stack optimization.
+(check "bytecode: nested fn calls with primitives"
+  ((fn [x] (let [y (+ x 1) z (* y 2)] (+ z 3))) 10)
+  25)
+
+;; Regression: multi-arity with bytecode — verifies that multi-arity
+;; functions with bytecode-compiled bodies dispatch correctly.
+(check "bytecode: multi-arity with bytecode"
+  ((fn ([x] x) ([x y] (+ x y))) 1 2)
+  3)
+
+;; Regression: loop with arithmetic — verifies loop/recur with
+;; bytecode-compiled arithmetic bodies works correctly.
+(check "bytecode: loop with arithmetic"
+  ((fn [n] (loop [i 0 s 0] (if (< i n) (recur (+ i 1) (+ s i)) s))) 10)
+  45)
+
+;; Regression: float arithmetic in bytecode
+(check "bytecode: float add"
+  ((fn [a b] (+ a b)) 1.5 2.5)
+  4.0)
+
+;; Regression: float arithmetic with integer
+(check "bytecode: float-int add"
+  ((fn [a b] (+ a b)) 3 1.5)
+  4.5)
+
+;; Regression: negative integer arithmetic
+(check "bytecode: negative integer add"
+  ((fn [a b] (+ a b)) -5 3)
+  -2)
+
+;; Regression: large integer arithmetic (near i64 boundary)
+(check "bytecode: large integer mul"
+  ((fn [a b] (* a b)) 1000000 1000000)
+  1000000000000)
+
+;; Regression: comparison with integers
+(check "bytecode: eq with integers"
+  ((fn [a b] (= a b)) 999999999 999999999)
+  true)
+
+;; Regression: boolean result from comparison used in if
+(check "bytecode: comparison in if"
+  ((fn [a b] (if (= a b) :same :diff)) 42 42)
+  :same)
+
+;; ============================================================
 ;; SUMMARY
 ;; ============================================================
 

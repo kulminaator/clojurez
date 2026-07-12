@@ -40,6 +40,7 @@ pub const OpCode = enum(u8) {
 
     // --- Variables ---
     load_var,       // operand = index into symbol pool; pushes env lookup result
+    load_cached,    // operand = index into resolved_values; pushes pre-resolved value
     store_var,      // operand = index into symbol pool; pops value, stores in env
 
     // --- Function calls ---
@@ -127,6 +128,7 @@ pub const BytecodeProgram = struct {
     instructions: std.ArrayListUnmanaged(Instruction),
     constants: std.ArrayListUnmanaged(Value),       // constant pool
     symbols: std.ArrayListUnmanaged([]const u8),     // symbol pool (for load_var/store_var)
+    resolved_values: std.ArrayListUnmanaged(Value) = .empty, // pre-resolved symbol values (for load_cached)
     source_markers: std.ArrayListUnmanaged(SourceMarker),
     fn_pool: ?[]*FnMetadata = null,                 // function metadata pool (for make_fn)
     loop_infos: std.ArrayListUnmanaged(LoopInfo) = .empty, // loop binding info (for loop/recur)
@@ -152,6 +154,10 @@ pub const BytecodeProgram = struct {
             allocator.free(s);
         }
         self.symbols.deinit(allocator);
+        for (self.resolved_values.items) |*v| {
+            vm.valueDeinit(v, allocator);
+        }
+        self.resolved_values.deinit(allocator);
         for (self.source_markers.items) |*m| {
             allocator.free(m.file);
         }
@@ -206,6 +212,14 @@ pub const BytecodeProgram = struct {
         return idx;
     }
 
+    /// Add a pre-resolved value to the resolved_values pool. Returns the index.
+    /// Used by load_cached to avoid runtime symbol lookup.
+    pub fn addResolvedValue(self: *BytecodeProgram, allocator: Allocator, val: Value) anyerror!usize {
+        const idx = self.resolved_values.items.len;
+        try self.resolved_values.append(allocator, try vm.shallowClone(&val, allocator));
+        return idx;
+    }
+
     /// Get a human-readable name for an opcode.
     pub fn opcodeName(op: OpCode) []const u8 {
         return switch (op) {
@@ -216,6 +230,7 @@ pub const BytecodeProgram = struct {
             .push_float => "PUSH_FLOAT",
             .push_const => "PUSH_CONST",
             .load_var => "LOAD_VAR",
+            .load_cached => "LOAD_CACHED",
             .store_var => "STORE_VAR",
             .call_n => "CALL_N",
             .jump => "JUMP",
@@ -272,8 +287,15 @@ pub const BytecodeProgram = struct {
             switch (inst.opcode) {
                 .push_int => std.debug.print("{}", .{inst.operand}),
                 .push_float => std.debug.print("{} (0x{x})", .{ inst.operand, inst.operand }),
-                .push_const, .load_var, .store_var, .quote, .make_fn => {
-                    if (inst.operand < self.constants.items.len) {
+                .push_const, .load_var, .load_cached, .store_var, .quote, .make_fn => {
+                    if (inst.opcode == .load_cached) {
+                        if (inst.operand < self.resolved_values.items.len) {
+                            std.debug.print("resolved[{}] = ", .{inst.operand});
+                            printValueShort(self.resolved_values.items[inst.operand]);
+                        } else {
+                            std.debug.print("resolved[{}]", .{inst.operand});
+                        }
+                    } else if (inst.operand < self.constants.items.len) {
                         std.debug.print("const[{}] = ", .{inst.operand});
                         printValueShort(self.constants.items[inst.operand]);
                     } else if (inst.opcode == .load_var or inst.opcode == .store_var) {
@@ -682,6 +704,20 @@ pub fn execute(
                 const sym_name = program.symbols.items[sym_idx];
                 const val = try resolveSymbol(env, sym_name);
                 // Store primitives directly, no allocation
+                switch (val) {
+                    .integer => try stack.pushInt(val.integer),
+                    .float => try stack.pushFloat(val.float),
+                    else => {
+                        const cloned = try vm.cloneGC(&val, allocator);
+                        try stack.pushPtr(cloned);
+                    },
+                }
+            },
+            .load_cached => {
+                const idx = inst.operand;
+                if (idx >= program.resolved_values.items.len) return error.BytecodeError;
+                const val = program.resolved_values.items[idx];
+                // Store primitives directly, clone non-primitive values
                 switch (val) {
                     .integer => try stack.pushInt(val.integer),
                     .float => try stack.pushFloat(val.float),
@@ -1727,6 +1763,47 @@ const Compiler = struct {
     program: *BytecodeProgram,
     env: ?*vm.Env, // for macro expansion
 
+    /// Try to resolve a symbol at compile time using the function's captured environment.
+    /// If successful, adds the resolved value to resolved_values and emits load_cached.
+    /// If not, falls back to load_var (runtime resolution).
+    /// Returns true if pre-resolution succeeded, false if fell back to load_var.
+    fn tryResolveAndEmitLoad(self: *Compiler, sym_name: []const u8) anyerror!bool {
+        // Need env to resolve
+        const e = self.env orelse return false;
+
+        // Check for qualified symbol: alias/name or namespace/name
+        if (std.mem.indexOfScalar(u8, sym_name, '/')) |slash_idx| {
+            const alias = sym_name[0..slash_idx];
+            const name = sym_name[slash_idx + 1 ..];
+
+            // Try to resolve through namespace manager
+            const ns_mgr = eval_mod.findNsManager(e) orelse return false;
+
+            // Resolve alias to namespace name
+            const current_ns = ns_mgr.getCurrentNamespace();
+            const target_ns = ns_mgr.resolveAlias(current_ns, alias) orelse alias;
+
+            // Get target namespace's env
+            const target_env = ns_mgr.getNamespace(target_ns) orelse return false;
+
+            // Look up name in target namespace
+            const val = target_env.get(name) orelse return false;
+
+            // Pre-resolve: add to resolved_values and emit load_cached
+            const idx = try self.program.addResolvedValue(self.allocator, val);
+            _ = try self.program.emit(self.allocator, .load_cached, idx);
+            return true;
+        }
+
+        // Unqualified symbol — simple environment lookup (traverses parent chain)
+        const val = e.get(sym_name) orelse return false;
+
+        // Pre-resolve: add to resolved_values and emit load_cached
+        const idx = try self.program.addResolvedValue(self.allocator, val);
+        _ = try self.program.emit(self.allocator, .load_cached, idx);
+        return true;
+    }
+
     /// Compile a form (any Clojure expression).
     fn compileForm(self: *Compiler, form: Value) anyerror!void {
         switch (form) {
@@ -1746,7 +1823,11 @@ const Compiler = struct {
                 _ = try self.program.emit(self.allocator, .push_const, idx);
             },
             .symbol => |s| {
-                // Symbol reference: look up in environment
+                // Symbol reference: look up in environment at runtime.
+                // We do NOT pre-resolve standalone symbols because they might
+                // be function parameters that shadow captured variables.
+                // Pre-resolution is only done for function call operators
+                // (in compileFunctionCall) where the operator is unlikely to be a param.
                 const sym_idx = try self.program.addSymbol(self.allocator, s);
                 _ = try self.program.emit(self.allocator, .load_var, sym_idx);
             },
@@ -2016,8 +2097,19 @@ fn isSimpleBytecodeForm(form: Value) bool {
             try self.compileForm(items[i]);
         }
 
-        // Compile the function (ends up on top of args)
-        try self.compileForm(items[0]);
+        // Compile the function (ends up on top of args).
+        // For symbol operators, try pre-resolution first to avoid runtime lookup.
+        if (std.meta.activeTag(items[0]) == .symbol) {
+            const op_name = items[0].symbol;
+            if (!try self.tryResolveAndEmitLoad(op_name)) {
+                // Pre-resolution failed (symbol not in env) — fall back to load_var
+                const sym_idx = try self.program.addSymbol(self.allocator, op_name);
+                _ = try self.program.emit(self.allocator, .load_var, sym_idx);
+            }
+        } else {
+            // Non-symbol operator (e.g., a list like ((fn [] ...) arg))
+            try self.compileForm(items[0]);
+        }
 
         // Call with n arguments
         _ = try self.program.emit(self.allocator, .call_n, n);

@@ -759,6 +759,11 @@ fn scanBytecodeProgram(bc_ptr: *anyopaque, ctx: *gc.ScanContext) void {
             }
         }
     }
+    // Mark resolved_values array and scan each Value in it
+    if (bc.resolved_values.items.len > 0) {
+        ctx.gc.setObjectType(bc.resolved_values.items.ptr, gc.GCObjectType.value_array);
+        ctx.gc.markRecursive(bc.resolved_values.items.ptr, ctx);
+    }
     // Mark source_markers array (backing memory + individual file strings)
     if (bc.source_markers.items.len > 0) {
         markPtr(bc.source_markers.items.ptr, ctx);
