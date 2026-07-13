@@ -93,7 +93,7 @@ pub fn core_apply(self: *const Value, args: *const list.List, env_env: *Env) any
         try call_args.append(env_env.allocator, try vm.shallowClone(&item, env_env.allocator));
     }
 
-    const result_ptr = try eval_helpers.callBuiltin(env_env.allocator, &f, &call_args, env_env);
+    const result_ptr = try eval_helpers.callBuiltin(env_env.allocator, &f, call_args.items, env_env);
     const result = result_ptr.*;
     env_env.allocator.destroy(result_ptr);
     return result;
@@ -114,7 +114,7 @@ pub fn core_trampoline(self: *const Value, args: *const list.List, env_env: *Env
         while (i < args.items.len) : (i += 1) {
             try call_args.append(allocator, try vm.shallowClone(&args.items[i], allocator));
         }
-        const result_ptr = try eval_helpers.callBuiltin(allocator, &current, &call_args, env_env);
+        const result_ptr = try eval_helpers.callBuiltin(allocator, &current, call_args.items, env_env);
         const new_current = result_ptr.*;
         allocator.destroy(result_ptr);
         vm.valueDeinit(&current, allocator);
@@ -127,7 +127,7 @@ pub fn core_trampoline(self: *const Value, args: *const list.List, env_env: *Env
             return current;
         }
         const empty_args: list.List = .empty;
-        const result_ptr = try eval_helpers.callBuiltin(allocator, &current, &empty_args, env_env);
+        const result_ptr = try eval_helpers.callBuiltin(allocator, &current, empty_args.items, env_env);
         const new_current = result_ptr.*;
         allocator.destroy(result_ptr);
         vm.valueDeinit(&current, allocator);

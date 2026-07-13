@@ -472,7 +472,7 @@ fn forceMapStepConcrete(allocator: Allocator, f: Value, coll: *const Value, env:
         var arg_list: list.List = .empty;
         defer arg_list.deinit(allocator);
         try arg_list.append(allocator, try vm.shallowClone(&items[i], allocator));
-        const mapped_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env);
+        const mapped_ptr = try eval_helpers.callBuiltin(allocator, &f, arg_list.items, env);
         const mapped = mapped_ptr.*;
         try buf.append(mapped);
         allocator.destroy(mapped_ptr);
@@ -540,7 +540,7 @@ fn forceMapStepLazy(allocator: Allocator, f: Value, coll: Value, env: *Env) anye
     var arg_list: list.List = .empty;
     defer arg_list.deinit(allocator);
     try arg_list.append(allocator, try vm.shallowClone(&first_val, allocator));
-    const mapped_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env);
+    const mapped_ptr = try eval_helpers.callBuiltin(allocator, &f, arg_list.items, env);
     const mapped = mapped_ptr.*;
     allocator.destroy(mapped_ptr);
 
@@ -588,7 +588,7 @@ fn forceMapStepChunkedFromLazy(allocator: Allocator, f: Value, s: Value, env: *E
         var arg_list: list.List = .empty;
         defer arg_list.deinit(allocator);
         try arg_list.append(allocator, try vm.shallowClone(&chunk.items[i], allocator));
-        const mapped_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env);
+        const mapped_ptr = try eval_helpers.callBuiltin(allocator, &f, arg_list.items, env);
         try buf.append(mapped_ptr.*);
         allocator.destroy(mapped_ptr);
     }
@@ -745,7 +745,7 @@ fn forceFilterStepChunked(allocator: Allocator, pred: Value, s: Value, env: *Env
         var arg_list: list.List = .empty;
         defer arg_list.deinit(allocator);
         try arg_list.append(allocator, try vm.shallowClone(&chunk.items[i], allocator));
-        const pred_result_ptr = try eval_helpers.callBuiltin(allocator, &pred, &arg_list, env);
+        const pred_result_ptr = try eval_helpers.callBuiltin(allocator, &pred, arg_list.items, env);
         if (vm.isTruthy(pred_result_ptr.*)) {
             // Append the element, not the predicate result
             vm.valueDeinit(&pred_result_ptr.*, allocator);
@@ -831,7 +831,7 @@ fn forceFilterStepLazy(allocator: Allocator, pred: Value, s: Value, env: *Env) a
     var arg_list: list.List = .empty;
     defer arg_list.deinit(allocator);
     try arg_list.append(allocator, try vm.shallowClone(&first_val, allocator));
-    const pred_result_ptr = try eval_helpers.callBuiltin(allocator, &pred, &arg_list, env);
+    const pred_result_ptr = try eval_helpers.callBuiltin(allocator, &pred, arg_list.items, env);
     const truthy = vm.isTruthy(pred_result_ptr.*);
 
     // Get rest (consumes s)

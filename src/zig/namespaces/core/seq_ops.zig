@@ -195,7 +195,7 @@ pub fn core_mapcat(self: *const Value, args: *const list.List, env_env: *Env) an
             var arg_list: list.List = .empty;
             errdefer arg_list.deinit(allocator);
             try arg_list.append(allocator, try vm.shallowClone(&item, allocator));
-            const mapped_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env_env);
+            const mapped_ptr = try eval_helpers.callBuiltin(allocator, &f, arg_list.items, env_env);
             const mapped = mapped_ptr.*;
             allocator.destroy(mapped_ptr);
             switch (std.meta.activeTag(mapped)) {
@@ -660,7 +660,7 @@ fn reduceStep(allocator: Allocator, f: Value, acc: ?Value, owned_acc: bool, elem
         try arg_list.append(allocator, try vm.shallowClone(&old_acc, allocator));
         try arg_list.append(allocator, try vm.shallowClone(&e, allocator));
         // Call the function - arg_list is only used during the call
-        const result_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env);
+        const result_ptr = try eval_helpers.callBuiltin(allocator, &f, arg_list.items, env);
         new_acc = result_ptr.*;
         allocator.destroy(result_ptr);
         // Explicitly deinit arg_list before continuing
@@ -707,7 +707,7 @@ fn reduceItems(allocator: Allocator, f: Value, items: []const Value, init_val: ?
         try arg_list.append(allocator, try vm.shallowClone(&acc, allocator));
         try arg_list.append(allocator, try vm.shallowClone(&items[i], allocator));
 
-        const new_acc_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env);
+        const new_acc_ptr = try eval_helpers.callBuiltin(allocator, &f, arg_list.items, env);
         const new_acc = new_acc_ptr.*;
         allocator.destroy(new_acc_ptr);
         vm.valueDeinit(&acc, allocator);
@@ -915,7 +915,7 @@ pub fn core_remove(self: *const Value, args: *const list.List, env_env: *Env) an
         var arg_list: list.List = .empty;
         defer arg_list.deinit(env_env.allocator);
         try arg_list.append(env_env.allocator, try vm.shallowClone(&item, env_env.allocator));
-        const pred_result_ptr = try eval_helpers.callBuiltin(env_env.allocator, &f, &arg_list, env_env);
+        const pred_result_ptr = try eval_helpers.callBuiltin(env_env.allocator, &f, arg_list.items, env_env);
         const pred_result = pred_result_ptr.*;
         const truthy = vm.isTruthy(pred_result);
         vm.valueDeinit(&pred_result_ptr.*, env_env.allocator);
@@ -945,7 +945,7 @@ pub fn core_every_q(self: *const Value, args: *const list.List, env_env: *Env) a
         var arg_list: list.List = .empty;
         defer arg_list.deinit(env_env.allocator);
         try arg_list.append(env_env.allocator, try vm.shallowClone(&item, env_env.allocator));
-        const pred_result_ptr = try eval_helpers.callBuiltin(env_env.allocator, &f, &arg_list, env_env);
+        const pred_result_ptr = try eval_helpers.callBuiltin(env_env.allocator, &f, arg_list.items, env_env);
         const pred_result = pred_result_ptr.*;
         const truthy = vm.isTruthy(pred_result);
         vm.valueDeinit(&pred_result_ptr.*, env_env.allocator);
@@ -973,7 +973,7 @@ pub fn core_some(self: *const Value, args: *const list.List, env_env: *Env) anye
         var arg_list: list.List = .empty;
         defer arg_list.deinit(env_env.allocator);
         try arg_list.append(env_env.allocator, try vm.shallowClone(&item, env_env.allocator));
-        const result_ptr = try eval_helpers.callBuiltin(env_env.allocator, &f, &arg_list, env_env);
+        const result_ptr = try eval_helpers.callBuiltin(env_env.allocator, &f, arg_list.items, env_env);
         if (vm.isTruthy(result_ptr.*)) {
             const result = result_ptr.*;
             env_env.allocator.destroy(result_ptr);

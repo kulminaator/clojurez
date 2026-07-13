@@ -42,7 +42,7 @@ pub fn core_swap_bang(self: *const Value, args: *const list.List, env_env: *Env)
         try call_args.append(env_env.allocator, try vm.shallowClone(&args.items[i], env_env.allocator));
     }
 
-    const new_val_ptr = try eval_helpers.callBuiltin(env_env.allocator, &f, &call_args, env_env);
+    const new_val_ptr = try eval_helpers.callBuiltin(env_env.allocator, &f, call_args.items, env_env);
     const new_val = new_val_ptr.*;
     env_env.allocator.destroy(new_val_ptr);
 

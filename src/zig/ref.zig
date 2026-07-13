@@ -188,7 +188,7 @@ pub fn core_alter(self: *const Value, args: *const list.List, env: *Env) anyerro
     }
 
     const fn_val = args.items[1];
-    const result_ptr = try eval_helpers.callBuiltin(allocator, &fn_val, &call_args, env);
+    const result_ptr = try eval_helpers.callBuiltin(allocator, &fn_val, call_args.items, env);
     const new_val = try vm.clone(&result_ptr.*, allocator);
     allocator.destroy(result_ptr);
     vm.valueDeinit(&current_val, allocator);
@@ -245,7 +245,7 @@ pub fn core_commute(self: *const Value, args: *const list.List, env: *Env) anyer
     }
 
     const fn_val = args.items[1];
-    const result_ptr = try eval_helpers.callBuiltin(allocator, &fn_val, &call_args, env);
+    const result_ptr = try eval_helpers.callBuiltin(allocator, &fn_val, call_args.items, env);
     const new_val = try vm.clone(&result_ptr.*, allocator);
     allocator.destroy(result_ptr);
     vm.valueDeinit(&current_val, allocator);

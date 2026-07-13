@@ -70,6 +70,7 @@ pub const GCObjectType = enum(u8) {
     exception_data = 34,     // ExceptionData — runtime exception value
     ref_data = 35,           // RefData — STM reference value
     multimethod_data = 36,   // MultimethodData — multimethod dispatch
+    small_map = 37,          // SmallMap — linear array for small PersistentHashMaps (≤8 entries)
 };
 
 const Header = struct {

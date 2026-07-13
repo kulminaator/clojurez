@@ -78,7 +78,7 @@ fn sortCallComparator(
     defer arg_list.deinit(allocator);
     try arg_list.append(allocator, try vm.shallowClone(a, allocator));
     try arg_list.append(allocator, try vm.shallowClone(b, allocator));
-    const result_ptr = try eval_helpers.callBuiltin(allocator, comp_fn, &arg_list, env);
+    const result_ptr = try eval_helpers.callBuiltin(allocator, comp_fn, arg_list.items, env);
     defer allocator.destroy(result_ptr);
 
     // If result is boolean, wrap like JVM Clojure's comparator:
@@ -90,7 +90,7 @@ fn sortCallComparator(
         defer rev_list.deinit(allocator);
         try rev_list.append(allocator, try vm.shallowClone(b, allocator));
         try rev_list.append(allocator, try vm.shallowClone(a, allocator));
-        const rev_ptr = try eval_helpers.callBuiltin(allocator, comp_fn, &rev_list, env);
+        const rev_ptr = try eval_helpers.callBuiltin(allocator, comp_fn, rev_list.items, env);
         defer allocator.destroy(rev_ptr);
         if (std.meta.activeTag(rev_ptr.*) == .bool and rev_ptr.bool) return 1;
         return 0;
@@ -119,7 +119,7 @@ pub fn core_sort_by(self: *const Value, args: *const list.List, env_env: *Env) a
         var arg_list: list.List = .empty;
         defer arg_list.deinit(allocator);
         try arg_list.append(allocator, try vm.shallowClone(&items.items[i], allocator));
-        const key_ptr = try eval_helpers.callBuiltin(allocator, &keyfn, &arg_list, env_env);
+        const key_ptr = try eval_helpers.callBuiltin(allocator, &keyfn, arg_list.items, env_env);
         keys[i] = key_ptr.*;
         allocator.destroy(key_ptr);
     }
@@ -179,7 +179,7 @@ pub fn core_reductions(self: *const Value, args: *const list.List, env_env: *Env
         if (tmp_items.len == 0) {
             // Empty collection: start with (f)
             const empty_args: list.List = .empty;
-            const init_ptr = try eval_helpers.callBuiltin(allocator, &f, &empty_args, env_env);
+            const init_ptr = try eval_helpers.callBuiltin(allocator, &f, empty_args.items, env_env);
             init_val = init_ptr.*;
             allocator.destroy(init_ptr);
         } else {
@@ -208,7 +208,7 @@ pub fn core_reductions(self: *const Value, args: *const list.List, env_env: *Env
         defer arg_list.deinit(allocator);
         try arg_list.append(allocator, try vm.shallowClone(&acc, allocator));
         try arg_list.append(allocator, try vm.shallowClone(&items[i], allocator));
-        const new_acc_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env_env);
+        const new_acc_ptr = try eval_helpers.callBuiltin(allocator, &f, arg_list.items, env_env);
         const new_acc = new_acc_ptr.*;
         allocator.destroy(new_acc_ptr);
         vm.valueDeinit(&acc, allocator);
@@ -244,7 +244,7 @@ pub fn core_map_indexed(self: *const Value, args: *const list.List, env_env: *En
         defer arg_list.deinit(allocator);
         try arg_list.append(allocator, vm.intValue(@as(i64, @intCast(i))));
         try arg_list.append(allocator, try vm.shallowClone(&items[i], allocator));
-        const mapped_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env_env);
+        const mapped_ptr = try eval_helpers.callBuiltin(allocator, &f, arg_list.items, env_env);
         const mapped = mapped_ptr.*;
         allocator.destroy(mapped_ptr);
         try result.append(allocator, mapped);
@@ -276,7 +276,7 @@ pub fn core_keep_indexed(self: *const Value, args: *const list.List, env_env: *E
         defer arg_list.deinit(allocator);
         try arg_list.append(allocator, vm.intValue(@as(i64, @intCast(i))));
         try arg_list.append(allocator, try vm.shallowClone(&items[i], allocator));
-        const kept_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env_env);
+        const kept_ptr = try eval_helpers.callBuiltin(allocator, &f, arg_list.items, env_env);
         const kept = kept_ptr.*;
         if (std.meta.activeTag(kept) != .nil) {
             try result.append(allocator, try vm.shallowClone(&kept, allocator));
@@ -342,7 +342,7 @@ pub fn core_group_by(self: *const Value, args: *const list.List, env_env: *Env) 
         var arg_list: list.List = .empty;
         defer arg_list.deinit(allocator);
         try arg_list.append(allocator, try vm.shallowClone(&item, allocator));
-        const key_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env_env);
+        const key_ptr = try eval_helpers.callBuiltin(allocator, &f, arg_list.items, env_env);
         var key = key_ptr.*;
         defer { vm.valueDeinit(&key_ptr.*, allocator); allocator.destroy(key_ptr); }
 
