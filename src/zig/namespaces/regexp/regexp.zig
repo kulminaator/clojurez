@@ -24,6 +24,8 @@ pub const AstNode = union(enum) {
     char_class: CharClass,
     group: *AstNode,
     empty: void,
+    bol: void,   // ^ - beginning of line/string anchor
+    eol: void,   // $ - end of line/string anchor
 
     pub fn deinit(self: *AstNode, allocator: Allocator) void {
         switch (self.*) {
@@ -60,7 +62,7 @@ pub const AstNode = union(enum) {
                 child.*.deinit(allocator);
                 allocator.destroy(child);
             },
-            .literal, .dot, .empty => {},
+            .literal, .dot, .empty, .bol, .eol => {},
         }
     }
 };
@@ -85,6 +87,8 @@ pub const NfaState = struct {
     eps: std.ArrayListUnmanaged(usize),
     dot: ?usize,
     cc: ?CharClassTransition,
+    bol: ?usize,  // beginning-of-line transition (fires only at position 0)
+    eol: ?usize,  // end-of-line transition (fires only at end of string)
 
     pub fn init() NfaState {
         return .{
@@ -92,6 +96,8 @@ pub const NfaState = struct {
             .eps = .empty,
             .dot = null,
             .cc = null,
+            .bol = null,
+            .eol = null,
         };
     }
 
@@ -101,6 +107,7 @@ pub const NfaState = struct {
         if (self.cc) |*cc| {
             allocator.free(cc.chars);
         }
+        // bol and eol are just usize pointers, no owned memory
     }
 };
 
@@ -276,6 +283,12 @@ fn parseRepeat(ctx: *ParseCtx, allocator: Allocator) anyerror!AstNode {
         const ec = ctx.peekChar() orelse return AstNode{ .empty = {} };
         ctx.consumeChar();
         return AstNode{ .literal = ec };
+    } else if (c == '^') {
+        ctx.consumeChar();
+        return AstNode{ .bol = {} };
+    } else if (c == '$') {
+        ctx.consumeChar();
+        return AstNode{ .eol = {} };
     } else {
         ctx.consumeChar();
         return AstNode{ .literal = c };
@@ -457,6 +470,18 @@ const NfaBuilder = struct {
             .group => |child| {
                 return self.buildNode(child.*);
             },
+            .bol => {
+                const s = try self.newState();
+                const a = try self.newState();
+                self.getState(s).bol = a;
+                return .{ s, a };
+            },
+            .eol => {
+                const s = try self.newState();
+                const a = try self.newState();
+                self.getState(s).eol = a;
+                return .{ s, a };
+            },
             .empty => {
                 const s = try self.newState();
                 return .{ s, s };
@@ -484,7 +509,7 @@ pub fn thompsonBuild(ast: AstNode, allocator: Allocator) anyerror!Nfa {
 // NFA Epsilon Closure
 // ============================================================
 
-fn epsilonClosure(states: *const std.AutoHashMapUnmanaged(usize, NfaState), current_states: []const usize, allocator: Allocator) anyerror!std.ArrayListUnmanaged(usize) {
+fn epsilonClosure(states: *const std.AutoHashMapUnmanaged(usize, NfaState), current_states: []const usize, allocator: Allocator, at_bol: bool, at_eol: bool) anyerror!std.ArrayListUnmanaged(usize) {
     var closure = std.ArrayListUnmanaged(usize).empty;
     errdefer closure.deinit(allocator);
     var in_closure = std.AutoHashMapUnmanaged(usize, void).empty;
@@ -506,6 +531,22 @@ fn epsilonClosure(states: *const std.AutoHashMapUnmanaged(usize, NfaState), curr
             for (state_data.eps.items) |ep| {
                 if (!in_closure.contains(ep)) {
                     try stack.append(allocator, ep);
+                }
+            }
+            // bol transition fires only at beginning of string
+            if (at_bol) {
+                if (state_data.bol) |bol_target| {
+                    if (!in_closure.contains(bol_target)) {
+                        try stack.append(allocator, bol_target);
+                    }
+                }
+            }
+            // eol transition fires only at end of string
+            if (at_eol) {
+                if (state_data.eol) |eol_target| {
+                    if (!in_closure.contains(eol_target)) {
+                        try stack.append(allocator, eol_target);
+                    }
                 }
             }
         }
@@ -557,7 +598,12 @@ fn nfaNextStates(states: *const std.AutoHashMapUnmanaged(usize, NfaState), curre
 // ============================================================
 
 pub fn nfaMatch(nfa: *const Nfa, s: []const u8, allocator: Allocator) anyerror!bool {
-    var closure = try epsilonClosure(&nfa.states, &[_]usize{nfa.start}, allocator);
+    return nfaMatchAt(nfa, s, allocator, 0);
+}
+
+pub fn nfaMatchAt(nfa: *const Nfa, s: []const u8, allocator: Allocator, start_pos: usize) anyerror!bool {
+    const at_bol = (start_pos == 0);
+    var closure = try epsilonClosure(&nfa.states, &[_]usize{nfa.start}, allocator, at_bol, false);
     defer closure.deinit(allocator);
 
     var i: usize = 0;
@@ -574,7 +620,7 @@ pub fn nfaMatch(nfa: *const Nfa, s: []const u8, allocator: Allocator) anyerror!b
 
             if (next_states.items.len == 0) return false;
 
-            var next_closure = try epsilonClosure(&nfa.states, next_states.items, allocator);
+            var next_closure = try epsilonClosure(&nfa.states, next_states.items, allocator, false, false);
             closure.deinit(allocator);
             closure = next_closure;
             next_closure = .empty;
@@ -583,19 +629,32 @@ pub fn nfaMatch(nfa: *const Nfa, s: []const u8, allocator: Allocator) anyerror!b
         i += byte_len;
     }
 
+    // Check end-of-string closure (for $ anchor)
+    var end_closure = try epsilonClosure(&nfa.states, closure.items, allocator, false, true);
+    defer end_closure.deinit(allocator);
+    for (end_closure.items) |c| {
+        if (c == nfa.accept) return true;
+    }
+    // Also check the regular closure (patterns without $)
     for (closure.items) |c| {
         if (c == nfa.accept) return true;
     }
     return false;
 }
 
-pub fn nfaMatchLen(nfa: *const Nfa, s: []const u8, allocator: Allocator) anyerror!usize {
+pub fn nfaMatchLen(nfa: *const Nfa, s: []const u8, allocator: Allocator) anyerror!?usize {
+    return nfaMatchLenAt(nfa, s, allocator, 0);
+}
+
+pub fn nfaMatchLenAt(nfa: *const Nfa, s: []const u8, allocator: Allocator, start_pos: usize) anyerror!?usize {
     // Single-pass NFA simulation: walk the string once, tracking the longest
     // byte offset where the accept state is reachable in the closure.
-    var closure = try epsilonClosure(&nfa.states, &[_]usize{nfa.start}, allocator);
+    // Returns null if no match, otherwise returns the byte length of the match.
+    const at_bol = (start_pos == 0);
+    var closure = try epsilonClosure(&nfa.states, &[_]usize{nfa.start}, allocator, at_bol, false);
     defer closure.deinit(allocator);
 
-    var best: usize = 0;
+    var best: ?usize = null;
 
     // If accept is reachable at position 0 (empty string match), record it
     for (closure.items) |c| {
@@ -606,6 +665,7 @@ pub fn nfaMatchLen(nfa: *const Nfa, s: []const u8, allocator: Allocator) anyerro
     }
 
     var i: usize = 0;
+    var reached_end = false;
     while (i < s.len) {
         // Decode next UTF-8 code point
         const first_byte = s[i];
@@ -619,7 +679,7 @@ pub fn nfaMatchLen(nfa: *const Nfa, s: []const u8, allocator: Allocator) anyerro
 
             if (next_states.items.len == 0) break;
 
-            var next_closure = try epsilonClosure(&nfa.states, next_states.items, allocator);
+            var next_closure = try epsilonClosure(&nfa.states, next_states.items, allocator, false, false);
             closure.deinit(allocator);
             closure = next_closure;
             next_closure = .empty;
@@ -634,6 +694,35 @@ pub fn nfaMatchLen(nfa: *const Nfa, s: []const u8, allocator: Allocator) anyerro
         }
 
         i += byte_len;
+    }
+
+    // Set reached_end if we consumed all characters (loop exited normally, not via break)
+    reached_end = (i >= s.len);
+
+    // $ anchor only fires when we consumed ALL characters (reached end of string)
+    if (reached_end) {
+        // Check end-of-string closure (for $ anchor)
+        // Only update best if accept is reachable through $ (eol) transitions
+        // that weren't reachable in the regular closure.
+        var accept_in_regular = false;
+        for (closure.items) |c| {
+            if (c == nfa.accept) {
+                accept_in_regular = true;
+                break;
+            }
+        }
+
+        if (!accept_in_regular) {
+            var end_closure = try epsilonClosure(&nfa.states, closure.items, allocator, false, true);
+            defer end_closure.deinit(allocator);
+            for (end_closure.items) |c| {
+                if (c == nfa.accept) {
+                    best = s.len;
+
+                    break;
+                }
+            }
+        }
     }
 
     return best;

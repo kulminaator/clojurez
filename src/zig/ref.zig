@@ -188,7 +188,7 @@ pub fn core_alter(self: *const Value, args: *const list.List, env: *Env) anyerro
     }
 
     const fn_val = args.items[1];
-    const result_ptr = try eval_helpers.callBuiltin(allocator, &fn_val, &call_args, env);
+    const result_ptr = try eval_helpers.callBuiltin(allocator, &fn_val, call_args.items, env);
     const new_val = try vm.clone(&result_ptr.*, allocator);
     allocator.destroy(result_ptr);
     vm.valueDeinit(&current_val, allocator);
@@ -245,7 +245,7 @@ pub fn core_commute(self: *const Value, args: *const list.List, env: *Env) anyer
     }
 
     const fn_val = args.items[1];
-    const result_ptr = try eval_helpers.callBuiltin(allocator, &fn_val, &call_args, env);
+    const result_ptr = try eval_helpers.callBuiltin(allocator, &fn_val, call_args.items, env);
     const new_val = try vm.clone(&result_ptr.*, allocator);
     allocator.destroy(result_ptr);
     vm.valueDeinit(&current_val, allocator);
@@ -307,13 +307,13 @@ pub fn evalDosync(allocator: Allocator, l: *const list.List, frame: *vm.Frame, d
         txUnlock();
 
         // Evaluate body forms
+        // Phase 3: Use evalRecDirect — Value by copy, no *Value allocation
         var i: usize = 1;
         while (i < l.items.len) : (i += 1) {
             const item = &l.items[i];
-            const val_ptr = try eval_mod.evalRecV(allocator, item, frame, depth + 1);
+            const val = try eval_mod.evalRecDirect(allocator, item, frame, depth + 1);
             vm.valueDeinit(&result, allocator);
-            result = try vm.clone(&val_ptr.*, allocator);
-            vm.valueDeinit(val_ptr, allocator);
+            result = try vm.clone(&val, allocator);
         }
 
         // Commit phase: apply write-set
@@ -355,7 +355,8 @@ pub fn evalDosync(allocator: Allocator, l: *const list.List, frame: *vm.Frame, d
         }
     }
 
-    return .{ .value = try eval_mod.allocValue(allocator, result) };
+    // Phase 1: result is already Value by copy, no allocValue wrapper needed
+    return .{ .value = result };
 }
 
 // ============================================================

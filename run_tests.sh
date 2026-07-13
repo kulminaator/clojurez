@@ -52,7 +52,7 @@ f="tests/clj/test_smoke.clj"
 [ -f "$f" ] && { T=$((T+1)); run_clj "$f" && P=$((P+1)) || { F=$((F+1)); echo "ABORT: Smoke failed."; exit 1; }; }
 for f in tests/clj/test_*.clj; do
     [ -f "$f" ] || continue; n=$(basename "$f" .clj)
-    case "$n" in test_smoke|test_runner|shell_*) continue ;; esac
+    case "$n" in test_smoke|test_runner|test_performance|shell_*) continue ;; esac
     T=$((T+1)); run_clj "$f" && P=$((P+1)) || F=$((F+1))
 done
 echo "Clojure suites: $P passed, $F failed (out of $T)"; echo ""

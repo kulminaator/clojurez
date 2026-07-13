@@ -141,8 +141,8 @@ pub fn core_record_ctor(self: *const Value, args: *const list.List, env: *Env) a
     }
     for (fields_map_val.map.entries.items) |entry| {
         try fields.append(allocator, .{
-            .key = try vm.shallowClone(&entry.key, allocator),
-            .value = try vm.shallowClone(&entry.value, allocator),
+            .key = entry.key,
+            .value = entry.value,
         });
     }
 
@@ -158,8 +158,8 @@ pub fn core_record_ctor(self: *const Value, args: *const list.List, env: *Env) a
     if (std.meta.activeTag(extmap_val) == .map) {
         for (extmap_val.map.entries.items) |entry| {
             try extmap.append(allocator, .{
-                .key = try vm.shallowClone(&entry.key, allocator),
-                .value = try vm.shallowClone(&entry.value, allocator),
+                .key = entry.key,
+                .value = entry.value,
             });
         }
     }
@@ -177,8 +177,8 @@ pub fn core_record_ctor(self: *const Value, args: *const list.List, env: *Env) a
         }
         for (meta_val.map.entries.items) |entry| {
             try m.append(allocator, .{
-                .key = try vm.shallowClone(&entry.key, allocator),
-                .value = try vm.shallowClone(&entry.value, allocator),
+                .key = entry.key,
+                .value = entry.value,
             });
         }
         meta = m;
@@ -360,13 +360,14 @@ fn processRecordProtocolSpec(
 
     // Evaluate the protocol symbol to get the protocol value
     const proto_ptr_r = try eval.evalRecWithEnv(allocator, &proto_sym, env, depth + 1);
+    // Phase 1: proto_ptr_r.value is now Value by copy (not *Value)
         const proto_ptr = proto_ptr_r.value;
-    defer vm.valueDeinit(&proto_ptr.*, allocator);
+    defer vm.valueDeinit(@constCast(&proto_ptr), allocator);
 
     // Validate it's a protocol (has :sigs key)
     var sigs_kw = try vm.keywordValue(allocator, "sigs");
     defer vm.valueDeinit(&sigs_kw, allocator);
-    if (getMapEntry(proto_ptr.*, sigs_kw) == null) {
+    if (getMapEntry(proto_ptr, sigs_kw) == null) {
         return makeErrorStr(allocator, "defrecord: {s} is not a protocol", .{proto_sym.symbol});
     }
 
@@ -430,7 +431,7 @@ fn processRecordProtocolSpec(
             defer arity_form.deinit(allocator);
             const def_items = mdef.list.items.items[1..];
             // params vector is def_items[0], body is def_items[1..]
-            try arity_form.append(allocator, try vm.shallowClone(&def_items[0], allocator));
+            try arity_form.append(allocator, def_items[0]);
 
             // Wrap body in let that binds field names to (get this :field_name)
             if (field_names.len > 0) {
@@ -458,14 +459,14 @@ fn processRecordProtocolSpec(
 
                 // Append body forms
                 for (def_items[1..]) |item| {
-                    try let_form.append(allocator, try vm.shallowClone(&item, allocator));
+                    try let_form.append(allocator, item);
                 }
                 try arity_form.append(allocator, try vm.listValue(allocator, let_form));
                 let_form = .empty;
             } else {
                 // No fields, just append body as-is
                 for (def_items[1..]) |item| {
-                    try arity_form.append(allocator, try vm.shallowClone(&item, allocator));
+                    try arity_form.append(allocator, item);
                 }
             }
             try fn_form.append(allocator, try vm.listValue(allocator, arity_form));
@@ -474,10 +475,11 @@ fn processRecordProtocolSpec(
 
         // Evaluate to get a function value
         const fn_ptr_r = try eval.evalRecWithEnv(allocator, &(try vm.listValue(allocator, fn_form)), env, depth + 1);
+        // Phase 1: fn_ptr_r.value is now Value by copy (not *Value)
         const fn_ptr = fn_ptr_r.value;
         fn_form = .empty;
-        const persistent_fn = try vm.shallowClone(&fn_ptr.*, allocator);
-        vm.valueDeinit(&fn_ptr.*, allocator);
+        const persistent_fn = fn_ptr;
+        vm.valueDeinit(@constCast(&fn_ptr), allocator);
 
         try mmap.append(allocator, .{
             .key = try vm.keywordValue(allocator, mname),
@@ -493,7 +495,8 @@ fn processRecordProtocolSpec(
     var extend_args: list.List = .empty;
     defer extend_args.deinit(allocator);
     try extend_args.append(allocator, atype);
-    try extend_args.append(allocator, proto_ptr.*);
+    // Phase 1: proto_ptr is now Value by copy (not *Value)
+    try extend_args.append(allocator, proto_ptr);
     try extend_args.append(allocator, try vm.mapValue(allocator, mmap));
     mmap = .empty;
 
@@ -595,14 +598,14 @@ pub fn evalDefRecord(
     // Build and bind factory functions
     // ->RecordName (positional factory)
     var pos_factory = try buildPositionalFactory(allocator, desc_ptr, env);
-    const persistent_pos = try vm.shallowClone(&pos_factory, allocator);
+    const persistent_pos = pos_factory;
     vm.valueDeinit(&pos_factory, allocator);
     const pos_fn_name = try std.fmt.allocPrint(allocator, "->{s}", .{record_name});
     try eval.bindInCurrentNamespace(env, pos_fn_name, persistent_pos);
 
     // map->RecordName (map factory)
     var map_factory = try buildMapFactory(allocator, desc_ptr, env);
-    const persistent_map = try vm.shallowClone(&map_factory, allocator);
+    const persistent_map = map_factory;
     vm.valueDeinit(&map_factory, allocator);
     const map_fn_name = try std.fmt.allocPrint(allocator, "map->{s}", .{record_name});
     try eval.bindInCurrentNamespace(env, map_fn_name, persistent_map);

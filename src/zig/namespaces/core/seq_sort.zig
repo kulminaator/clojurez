@@ -34,7 +34,7 @@ pub fn core_sort(self: *const Value, args: *const list.List, env_env: *Env) anye
     var sorted: []Value = try allocator.alloc(Value, items.items.len);
     var i: usize = 0;
     while (i < items.items.len) : (i += 1) {
-        sorted[i] = try vm.shallowClone(&items.items[i], allocator);
+        sorted[i] = items.items[i];
     }
 
     // Insertion sort
@@ -76,9 +76,9 @@ fn sortCallComparator(
 ) anyerror!i64 {
     var arg_list: list.List = .empty;
     defer arg_list.deinit(allocator);
-    try arg_list.append(allocator, try vm.shallowClone(a, allocator));
-    try arg_list.append(allocator, try vm.shallowClone(b, allocator));
-    const result_ptr = try eval_helpers.callBuiltin(allocator, comp_fn, &arg_list, env);
+    try arg_list.append(allocator, a.*);
+    try arg_list.append(allocator, b.*);
+    const result_ptr = try eval_helpers.callBuiltin(allocator, comp_fn, arg_list.items, env);
     defer allocator.destroy(result_ptr);
 
     // If result is boolean, wrap like JVM Clojure's comparator:
@@ -88,9 +88,9 @@ fn sortCallComparator(
         // Check reverse: (pred b a)
         var rev_list: list.List = .empty;
         defer rev_list.deinit(allocator);
-        try rev_list.append(allocator, try vm.shallowClone(b, allocator));
-        try rev_list.append(allocator, try vm.shallowClone(a, allocator));
-        const rev_ptr = try eval_helpers.callBuiltin(allocator, comp_fn, &rev_list, env);
+        try rev_list.append(allocator, b.*);
+        try rev_list.append(allocator, a.*);
+        const rev_ptr = try eval_helpers.callBuiltin(allocator, comp_fn, rev_list.items, env);
         defer allocator.destroy(rev_ptr);
         if (std.meta.activeTag(rev_ptr.*) == .bool and rev_ptr.bool) return 1;
         return 0;
@@ -115,11 +115,11 @@ pub fn core_sort_by(self: *const Value, args: *const list.List, env_env: *Env) a
     var sorted: []Value = try allocator.alloc(Value, items.items.len);
     var i: usize = 0;
     while (i < items.items.len) : (i += 1) {
-        sorted[i] = try vm.shallowClone(&items.items[i], allocator);
+        sorted[i] = items.items[i];
         var arg_list: list.List = .empty;
         defer arg_list.deinit(allocator);
-        try arg_list.append(allocator, try vm.shallowClone(&items.items[i], allocator));
-        const key_ptr = try eval_helpers.callBuiltin(allocator, &keyfn, &arg_list, env_env);
+        try arg_list.append(allocator, items.items[i]);
+        const key_ptr = try eval_helpers.callBuiltin(allocator, &keyfn, arg_list.items, env_env);
         keys[i] = key_ptr.*;
         allocator.destroy(key_ptr);
     }
@@ -163,7 +163,7 @@ pub fn core_reductions(self: *const Value, args: *const list.List, env_env: *Env
     var start_idx: usize = 0;
 
     if (args.items.len == 3) {
-        init_val = try vm.shallowClone(&args.items[1], allocator);
+        init_val = args.items[1];
         coll = args.items[2];
         start_idx = 0;
     } else {
@@ -179,12 +179,12 @@ pub fn core_reductions(self: *const Value, args: *const list.List, env_env: *Env
         if (tmp_items.len == 0) {
             // Empty collection: start with (f)
             const empty_args: list.List = .empty;
-            const init_ptr = try eval_helpers.callBuiltin(allocator, &f, &empty_args, env_env);
+            const init_ptr = try eval_helpers.callBuiltin(allocator, &f, empty_args.items, env_env);
             init_val = init_ptr.*;
             allocator.destroy(init_ptr);
         } else {
             // Non-empty: start with first element
-            init_val = try vm.shallowClone(&tmp_items[0], allocator);
+            init_val = tmp_items[0];
             start_idx = 1;
         }
     }
@@ -206,15 +206,15 @@ pub fn core_reductions(self: *const Value, args: *const list.List, env_env: *Env
     while (i < items.len) : (i += 1) {
         var arg_list: list.List = .empty;
         defer arg_list.deinit(allocator);
-        try arg_list.append(allocator, try vm.shallowClone(&acc, allocator));
-        try arg_list.append(allocator, try vm.shallowClone(&items[i], allocator));
-        const new_acc_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env_env);
+        try arg_list.append(allocator, acc);
+        try arg_list.append(allocator, items[i]);
+        const new_acc_ptr = try eval_helpers.callBuiltin(allocator, &f, arg_list.items, env_env);
         const new_acc = new_acc_ptr.*;
         allocator.destroy(new_acc_ptr);
         vm.valueDeinit(&acc, allocator);
         acc = new_acc;
         try result.append(allocator, acc);
-        acc = try vm.shallowClone(&acc, allocator);
+        acc = acc;
     }
     vm.valueDeinit(&acc, allocator);
     return try vm.listValue(allocator, result);
@@ -243,8 +243,8 @@ pub fn core_map_indexed(self: *const Value, args: *const list.List, env_env: *En
         var arg_list: list.List = .empty;
         defer arg_list.deinit(allocator);
         try arg_list.append(allocator, vm.intValue(@as(i64, @intCast(i))));
-        try arg_list.append(allocator, try vm.shallowClone(&items[i], allocator));
-        const mapped_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env_env);
+        try arg_list.append(allocator, items[i]);
+        const mapped_ptr = try eval_helpers.callBuiltin(allocator, &f, arg_list.items, env_env);
         const mapped = mapped_ptr.*;
         allocator.destroy(mapped_ptr);
         try result.append(allocator, mapped);
@@ -275,11 +275,11 @@ pub fn core_keep_indexed(self: *const Value, args: *const list.List, env_env: *E
         var arg_list: list.List = .empty;
         defer arg_list.deinit(allocator);
         try arg_list.append(allocator, vm.intValue(@as(i64, @intCast(i))));
-        try arg_list.append(allocator, try vm.shallowClone(&items[i], allocator));
-        const kept_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env_env);
+        try arg_list.append(allocator, items[i]);
+        const kept_ptr = try eval_helpers.callBuiltin(allocator, &f, arg_list.items, env_env);
         const kept = kept_ptr.*;
         if (std.meta.activeTag(kept) != .nil) {
-            try result.append(allocator, try vm.shallowClone(&kept, allocator));
+            try result.append(allocator, kept);
         }
         vm.valueDeinit(&kept_ptr.*, allocator);
         allocator.destroy(kept_ptr);
@@ -341,9 +341,9 @@ pub fn core_group_by(self: *const Value, args: *const list.List, env_env: *Env) 
     for (items) |item| {
         var arg_list: list.List = .empty;
         defer arg_list.deinit(allocator);
-        try arg_list.append(allocator, try vm.shallowClone(&item, allocator));
-        const key_ptr = try eval_helpers.callBuiltin(allocator, &f, &arg_list, env_env);
-        var key = key_ptr.*;
+        try arg_list.append(allocator, item);
+        const key_ptr = try eval_helpers.callBuiltin(allocator, &f, arg_list.items, env_env);
+        const key = key_ptr.*;
         defer { vm.valueDeinit(&key_ptr.*, allocator); allocator.destroy(key_ptr); }
 
         // Find existing group or create new one
@@ -363,9 +363,9 @@ pub fn core_group_by(self: *const Value, args: *const list.List, env_env: *Env) 
                 var new_vec: vec.Vector = .empty;
                 errdefer new_vec.deinit(allocator);
                 for (vec_val.vector.items.items) |vitem| {
-                    try new_vec.append(allocator, try vm.shallowClone(&vitem, allocator));
+                    try new_vec.append(allocator, vitem);
                 }
-                try new_vec.append(allocator, try vm.shallowClone(&item, allocator));
+                try new_vec.append(allocator, item);
                 vm.valueDeinit(&result_map.items[idx].value, allocator);
                 result_map.items[idx].value = try vm.vectorValue(allocator, new_vec);
             }
@@ -373,9 +373,9 @@ pub fn core_group_by(self: *const Value, args: *const list.List, env_env: *Env) 
             // Create new group
             var new_vec: vec.Vector = .empty;
             errdefer new_vec.deinit(allocator);
-            try new_vec.append(allocator, try vm.shallowClone(&item, allocator));
+            try new_vec.append(allocator, item);
             try result_map.append(allocator, .{
-                .key = try vm.shallowClone(&key, allocator),
+                .key = key,
                 .value = try vm.vectorValue(allocator, new_vec),
             });
         }
@@ -411,8 +411,8 @@ pub fn core_distinct(self: *const Value, args: *const list.List, env_env: *Env) 
             if (vm.equals(item, s)) { found = true; break; }
         }
         if (!found) {
-            try seen.append(allocator, try vm.shallowClone(&item, allocator));
-            try result.append(allocator, try vm.shallowClone(&item, allocator));
+            try seen.append(allocator, item);
+            try result.append(allocator, item);
         }
     }
     return try vm.listValue(allocator, result);
@@ -441,13 +441,13 @@ pub fn core_replace(self: *const Value, args: *const list.List, env_env: *Env) a
         var replaced = false;
         for (smap.map.entries.items) |entry| {
             if (vm.equals(item, entry.key)) {
-                try result.append(allocator, try vm.shallowClone(&entry.value, allocator));
+                try result.append(allocator, entry.value);
                 replaced = true;
                 break;
             }
         }
         if (!replaced) {
-            try result.append(allocator, try vm.shallowClone(&item, allocator));
+            try result.append(allocator, item);
         }
     }
     return try vm.listValue(allocator, result);

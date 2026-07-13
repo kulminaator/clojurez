@@ -56,15 +56,18 @@ pub fn evalAlterMetaBang(allocator: Allocator, l: *const list.List, frame: *vm.F
     eval.trampoline_allowed = false;
     defer eval.trampoline_allowed = saved_trampoline;
     const call_result = try eval.call(allocator, fn_ptr, &call_args, frame, depth + 1);
-    const new_meta = try vm.shallowClone(call_result.value, allocator);
-    vm.valueDeinit(call_result.value, allocator);
+    // Phase 1: call_result.value is now Value by copy (not *Value)
+    const new_meta = try vm.shallowClone(&call_result.value, allocator);
+    vm.valueDeinit(@constCast(&call_result.value), allocator);
     vm.valueDeinit(&current_meta, allocator);
 
     // Store new metadata in the namespace
     try putNsMeta(frame.root_env, sym_name, new_meta);
 
     // Return the symbol
-    return .{ .value = try vm.cloneGC(&sym, allocator) };
+    // Phase 1: cloneGC returns *Value, extract the Value
+    const ptr = try vm.cloneGC(&sym, allocator);
+    return .{ .value = ptr.* };
 }
 
 /// Find metadata for a symbol in the namespace chain.

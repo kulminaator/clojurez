@@ -80,9 +80,9 @@ pub fn getChunkPtr(val: Value) *vm.ChunkData {
 pub fn chunkCons(allocator: Allocator, chunk_val: Value, rest: Value) anyerror!Value {
     if (std.meta.activeTag(chunk_val) != .chunk) return error.TypeError;
     if (chunk_val.chunk.count() == 0) {
-        return try vm.shallowClone(&rest, allocator);
+        return rest;
     }
-    return vm.chunkedConsValue(allocator, chunk_val.chunk, try vm.shallowClone(&rest, allocator));
+    return vm.chunkedConsValue(allocator, chunk_val.chunk, rest);
 }
 
 /// chunk-first: get the chunk from a chunked_cons.
@@ -95,16 +95,18 @@ pub fn chunkFirst(allocator: Allocator, val: Value) anyerror!Value {
 /// chunk-rest: get the remaining sequence after consuming the full chunk.
 /// Returns the tail (may be nil, lazy_seq, or chunked_cons).
 pub fn chunkRest(allocator: Allocator, val: Value) anyerror!Value {
+    _ = allocator;
     if (std.meta.activeTag(val) != .chunked_cons) return error.TypeError;
-    return try vm.shallowClone(&val.chunked_cons.tail, allocator);
+    return val.chunked_cons.tail;
 }
 
 /// chunk-next: like chunk-rest but returns nil if tail is nil.
 pub fn chunkNext(allocator: Allocator, val: Value) anyerror!Value {
+    _ = allocator;
     if (std.meta.activeTag(val) != .chunked_cons) return error.TypeError;
     const tail = val.chunked_cons.tail;
     if (std.meta.activeTag(tail) == .nil) return vm.nilValue();
-    return try vm.shallowClone(&tail, allocator);
+    return tail;
 }
 
 // ===== Clojure-exposed wrapper functions =====
@@ -153,9 +155,9 @@ pub fn core_chunk_append(self: *const Value, args: *const list.List, env_env: *v
     var new_vec: vec_mod.Vector = .empty;
     errdefer new_vec.deinit(allocator);
     for (args.items[0].vector.items.items) |item| {
-        try new_vec.append(allocator, try vm.shallowClone(&item, allocator));
+        try new_vec.append(allocator, item);
     }
-    try new_vec.append(allocator, try vm.shallowClone(&args.items[1], allocator));
+    try new_vec.append(allocator, args.items[1]);
     return try vm.vectorValue(allocator, new_vec);
 }
 
@@ -171,7 +173,7 @@ pub fn core_chunk(self: *const Value, args: *const list.List, env_env: *vm.Env) 
     @memset(new_items, vm.nilValue());
     var i: usize = 0;
     while (i < items.len) : (i += 1) {
-        new_items[i] = try vm.shallowClone(&items[i], allocator);
+        new_items[i] = items[i];
     }
     return try vm.chunkValue(allocator, new_items, 0, items.len, true);
 }

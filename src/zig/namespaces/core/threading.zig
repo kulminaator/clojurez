@@ -82,7 +82,8 @@ fn futureThreadEntry(fn_val: Value, future_data: *vm.FutureData) void {
             child_env.deinit(allocator);
             break :errhandler;
         };
-        result = call_result.value.*;
+        // Phase 1: call_result.value is now Value by copy (not *Value)
+        result = call_result.value;
 
         // Store result and mark done
         future_data.result = result;
@@ -125,7 +126,7 @@ pub fn core_future_call(self: *const Value, args: *const list.List, env_env: *En
     // Clone the function value for the child thread.
     // This deep-clones the FnData and its captured Env, so the child thread
     // gets an independent copy of the closure environment.
-    const cloned_fn = try vm.shallowClone(&fn_val, allocator);
+    const cloned_fn = fn_val;
 
     // Create the FutureData and store the cloned function in it.
     // Storing fn_val in FutureData is critical: the GC scans FutureData.fn_val
@@ -187,6 +188,7 @@ pub fn core_deref_future(self: *const Value, args: *const list.List, env_env: *E
     // Cast away const for atomic operations — safe: we only read state, result is written once
     const data: *vm.FutureData = @ptrCast(@alignCast(@constCast(future_val.future)));
     const allocator = env_env.allocator;
+    _ = allocator;
 
     // Root the FutureData during the polling loop so the GC doesn't sweep it
     // (and its captured FnData, Env, and HAMT nodes) while the child thread
@@ -211,7 +213,7 @@ pub fn core_deref_future(self: *const Value, args: *const list.List, env_env: *E
     // Poll until done or timeout
     while (data.state.load(.acquire) == FutureState.running) {
         if (has_timeout and elapsed_ms >= timeout_ms) {
-            if (timeout_val) |tv| return try vm.shallowClone(tv, allocator);
+            if (timeout_val) |tv| return tv.*;
             return vm.nilValue();
         }
         // Check VM-level timeout
@@ -225,7 +227,7 @@ pub fn core_deref_future(self: *const Value, args: *const list.List, env_env: *E
     const state = data.state.load(.monotonic);
     return switch (state) {
         FutureState.done => {
-            if (data.result) |*r| return try vm.shallowClone(r, allocator);
+            if (data.result) |*r| return r.*;
             return vm.nilValue();
         },
         FutureState.error_state => {
@@ -312,9 +314,10 @@ pub fn core_deliver(self: *const Value, args: *const list.List, env_env: *Env) a
     if (std.meta.activeTag(promise_val) != .promise) return error.TypeError;
     const data: *vm.PromiseData = @ptrCast(@alignCast(@constCast(promise_val.promise)));
     const allocator = env_env.allocator;
+    _ = allocator;
 
     // Clone the value first.
-    const cloned = try vm.shallowClone(&args.items[1], allocator);
+    const cloned = args.items[1];
 
     // Atomically transition state from pending to delivered.
     // Only the first deliver succeeds; subsequent delivers are no-ops.
@@ -342,6 +345,7 @@ pub fn core_deref_promise(self: *const Value, args: *const list.List, env_env: *
     if (std.meta.activeTag(promise_val) != .promise) return error.TypeError;
     const data: *vm.PromiseData = @ptrCast(@alignCast(@constCast(promise_val.promise)));
     const allocator = env_env.allocator;
+    _ = allocator;
 
     // Root the PromiseData during the polling loop so the GC doesn't sweep it
     // while waiting for delivery. The promise Value is in a stack-allocated
@@ -364,7 +368,7 @@ pub fn core_deref_promise(self: *const Value, args: *const list.List, env_env: *
     // Poll until delivered or timeout
     while (data.state.load(.acquire) == PromiseState.pending) {
         if (has_timeout and elapsed_ms >= timeout_ms) {
-            if (timeout_val) |tv| return try vm.shallowClone(tv, allocator);
+            if (timeout_val) |tv| return tv.*;
             return vm.nilValue();
         }
         // Check VM-level timeout
@@ -375,7 +379,7 @@ pub fn core_deref_promise(self: *const Value, args: *const list.List, env_env: *
     }
 
     // Delivered — return the value
-    if (data.value) |*v| return try vm.shallowClone(v, allocator);
+    if (data.value) |*v| return v.*;
     return vm.nilValue();
 }
 

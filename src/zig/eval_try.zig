@@ -157,44 +157,36 @@ fn resolveCatchType(allocator: Allocator, type_form: Value) anyerror![]const u8 
 }
 
 /// Evaluate finally forms. Returns the last value or nil.
+/// Phase 3: Returns Value by copy — no *Value allocation.
 /// Exceptions during finally evaluation are swallowed (finally always runs).
-fn evalTryFinally(allocator: Allocator, forms: []const Value, frame: *vm.Frame, depth: usize) anyerror!*Value {
-    var last: ?*Value = null;
-    errdefer {
-        if (last) |v| {
-            vm.valueDeinit(v, allocator);
-            allocator.destroy(v);
-        }
-    }
+fn evalTryFinally(allocator: Allocator, forms: []const Value, frame: *vm.Frame, depth: usize) anyerror!Value {
+    var last: Value = vm.nilValue();
     for (forms) |form| {
-        if (last) |v| {
-            vm.valueDeinit(v, allocator);
-            allocator.destroy(v);
-        }
-        last = try eval.evalRecV(allocator, &form, frame, depth);
+        last = try eval.evalRecDirect(allocator, &form, frame, depth);
     }
-    return last orelse try eval.allocValue(allocator, vm.nilValue());
+    return last;
 }
 
 /// Evaluate try body forms. Returns the last body value on success.
+/// Phase 3: Returns ?Value by copy — no *Value allocation.
 /// On exception, returns null and sets had_exception via exception state.
 /// On other errors, propagates the error.
-fn evalTryBody(allocator: Allocator, forms: []const Value, frame: *vm.Frame, depth: usize) anyerror!?*Value {
+fn evalTryBody(allocator: Allocator, forms: []const Value, frame: *vm.Frame, depth: usize) anyerror!?Value {
     if (forms.len == 0) return null;
 
     // Evaluate all but last form (discard results)
+    // Phase 3: Use evalRecDirect — Value by copy, no *Value allocation
     var idx: usize = 0;
     while (idx < forms.len - 1) : (idx += 1) {
-        const v = eval.evalRecV(allocator, &forms[idx], frame, depth) catch |err| {
+        _ = eval.evalRecDirect(allocator, &forms[idx], frame, depth) catch |err| {
             if (err == eval.EvalError.Exception) return null;
             return err;
         };
-        vm.valueDeinit(v, allocator);
-        allocator.destroy(v);
     }
 
     // Evaluate last body form — keep the result
-    const last_val = eval.evalRecV(allocator, &forms[forms.len - 1], frame, depth) catch |err| {
+    // Phase 3: Use evalRecDirect — Value by copy, no *Value allocation
+    const last_val = eval.evalRecDirect(allocator, &forms[forms.len - 1], frame, depth) catch |err| {
         if (err == eval.EvalError.Exception) return null;
         return err;
     };
@@ -270,8 +262,6 @@ pub fn evalTry(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dept
     }
 
     // Return the last body value, or nil if no body
-    if (body_result) |v| {
-        return .{ .value = v };
-    }
-    return .{ .value = try eval.allocValue(allocator, vm.nilValue()) };
+    // Phase 3: body_result is ?Value by copy, no *Value extraction needed
+    return .{ .value = body_result orelse vm.nilValue() };
 }

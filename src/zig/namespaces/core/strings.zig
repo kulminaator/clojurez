@@ -39,7 +39,7 @@ fn tryToString(allocator: Allocator, val: *const Value, env: *Env) anyerror!?[]c
     // Build args: (toString this)
     var args: list.List = .empty;
     defer args.deinit(allocator);
-    try args.append(allocator, try vm.shallowClone(val, allocator));
+    try args.append(allocator, val.*);
 
     // Call the implementation directly
     const eval_mod = @import("../../eval.zig");
@@ -56,7 +56,7 @@ fn tryToString(allocator: Allocator, val: *const Value, env: *Env) anyerror!?[]c
 pub fn core_str(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
     const allocator = env_env.allocator;
-    var buf: std.ArrayList(u8) = .empty;
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
     errdefer buf.deinit(allocator);
 
     for (args.items) |arg| {
@@ -68,21 +68,20 @@ pub fn core_str(self: *const Value, args: *const list.List, env_env: *Env) anyer
                 continue;
             }
         }
-        // Handle character type: convert code point to UTF-8 string
+        // Handle character type: convert code point to UTF-8 string (no formatting)
         if (std.meta.activeTag(arg) == .character) {
             var utf8_buf: [4]u8 = undefined;
             const utf8_len = std.unicode.utf8Encode(arg.character, &utf8_buf) catch return error.InvalidUnicode;
-            try buf.appendSlice(env_env.allocator, utf8_buf[0..utf8_len]);
+            try buf.appendSlice(allocator, utf8_buf[0..utf8_len]);
             continue;
         }
-        const s = try vm.fmt(arg, env_env.allocator);
-        defer env_env.allocator.free(s);
-        // Strip quotes from string values
-        if (std.meta.activeTag(arg) == .string and s.len >= 2 and s[0] == '"' and s[s.len - 1] == '"') {
-            try buf.appendSlice(env_env.allocator, s[1 .. s.len - 1]);
-        } else {
-            try buf.appendSlice(env_env.allocator, s);
+        // Handle string type: strip quotes (write directly to buffer)
+        if (std.meta.activeTag(arg) == .string) {
+            try buf.appendSlice(allocator, arg.string);
+            continue;
         }
+        // All other types: use fmtToBuffer (writes directly to buffer, no intermediate allocation)
+        try vm.fmtToBuffer(arg, &buf, allocator);
     }
     return vm.stringValue(env_env.allocator, try buf.toOwnedSlice(env_env.allocator));
 }

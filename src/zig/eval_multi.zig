@@ -38,15 +38,14 @@ pub fn evalDefmulti(allocator: Allocator, l: *const list.List, frame: *vm.Frame,
     }
     if (dispatch_idx >= l.items.len) return error.ArityError;
 
-    // Evaluate dispatch function
-    const dispatch_fn_ptr = try eval.evalRecV(allocator, &l.items[dispatch_idx], frame, depth + 1);
-    defer vm.valueDeinit(dispatch_fn_ptr, allocator);
+    // Phase 3: Use evalRecDirect — Value by copy, no *Value allocation
+    const dispatch_fn_val = try eval.evalRecDirect(allocator, &l.items[dispatch_idx], frame, depth + 1);
 
     // If dispatch function is a keyword, wrap it in a function that looks it up in a map.
     // In Clojure, keywords are callable: (:key {:key :val}) => :val
     var dispatch_fn: Value = undefined;
-    if (std.meta.activeTag(dispatch_fn_ptr.*) == .keyword) {
-        const kw_name = dispatch_fn_ptr.*.keyword;
+    if (std.meta.activeTag(dispatch_fn_val) == .keyword) {
+        const kw_name = dispatch_fn_val.keyword;
         // Create a function: (fn [m] (get m keyword))
         const kw_val = try vm.keywordValue(allocator, kw_name);
         var fn_body: list.List = .empty;
@@ -59,7 +58,7 @@ pub fn evalDefmulti(allocator: Allocator, l: *const list.List, frame: *vm.Frame,
         try fn_params.append(allocator, try vm.symValue(allocator, "m"));
         dispatch_fn = try vm.fnValueSingle(allocator, fn_params, fn_body, try frame.root_env.clone(allocator), null, false);
     } else {
-        dispatch_fn = try vm.clone(dispatch_fn_ptr, allocator);
+        dispatch_fn = try vm.clone(&dispatch_fn_val, allocator);
     }
 
     // Create multimethod value
@@ -71,9 +70,9 @@ pub fn evalDefmulti(allocator: Allocator, l: *const list.List, frame: *vm.Frame,
         const opt_key = l.items[i];
         if (std.meta.activeTag(opt_key) != .keyword) continue;
         if (std.mem.eql(u8, opt_key.keyword, "default") and i + 1 < l.items.len) {
-            const default_val_ptr = try eval.evalRecV(allocator, &l.items[i + 1], frame, depth + 1);
-            mm_val.multimethod.default_dispatch = try vm.clone(&default_val_ptr.*, allocator);
-            vm.valueDeinit(default_val_ptr, allocator);
+            // Phase 3: Use evalRecDirect — Value by copy, no *Value allocation
+            const default_val = try eval.evalRecDirect(allocator, &l.items[i + 1], frame, depth + 1);
+            mm_val.multimethod.default_dispatch = try vm.clone(&default_val, allocator);
             i += 1;
         }
     }
@@ -81,7 +80,9 @@ pub fn evalDefmulti(allocator: Allocator, l: *const list.List, frame: *vm.Frame,
     // Bind in current namespace
     try eval.bindInCurrentNamespace(frame.root_env, sym_name, mm_val);
 
-    return .{ .value = try vm.cloneGC(&sym, allocator) };
+    // Phase 1: cloneGC returns *Value, extract the Value
+    const ptr = try vm.cloneGC(&sym, allocator);
+    return .{ .value = ptr.* };
 }
 
 /// (defmethod mm dispatch-val [params] body) — Add a method to a multimethod.
@@ -92,15 +93,14 @@ pub fn evalDefmethod(allocator: Allocator, l: *const list.List, frame: *vm.Frame
     if (std.meta.activeTag(mm_sym) != .symbol) return error.TypeError;
 
     // Look up the multimethod (evaluate the symbol)
-    const mm_sym_ptr = try eval.allocValue(allocator, mm_sym);
-    const mm_val_ptr = try eval.evalRecV(allocator, mm_sym_ptr, frame, depth + 1);
-    defer vm.valueDeinit(mm_val_ptr, allocator);
-    if (std.meta.activeTag(mm_val_ptr.*) != .multimethod) return error.TypeError;
-    const mm_data = mm_val_ptr.*.multimethod;
+    // Phase 3: Use evalRecDirect — Value by copy, no *Value allocation
+    const mm_val = try eval.evalRecDirect(allocator, &mm_sym, frame, depth + 1);
+    if (std.meta.activeTag(mm_val) != .multimethod) return error.TypeError;
+    const mm_data = mm_val.multimethod;
 
     // Evaluate dispatch value
-    const dispatch_val_ptr = try eval.evalRecV(allocator, &l.items[2], frame, depth + 1);
-    defer vm.valueDeinit(dispatch_val_ptr, allocator);
+    // Phase 3: Use evalRecDirect — Value by copy, no *Value allocation
+    const dispatch_val = try eval.evalRecDirect(allocator, &l.items[2], frame, depth + 1);
 
     // Parse parameters (should be a vector/list)
     const params_form = l.items[3];
@@ -130,10 +130,12 @@ pub fn evalDefmethod(allocator: Allocator, l: *const list.List, frame: *vm.Frame
     const method_fn = try vm.fnValueSingle(allocator, params, body, try frame.root_env.clone(allocator), null, false);
 
     // Add to method table
-    const dispatch_key = try vm.clone(dispatch_val_ptr, allocator);
+    const dispatch_key = try vm.clone(&dispatch_val, allocator);
     try mm_data.method_table.append(allocator, .{ .key = dispatch_key, .value = method_fn });
 
-    return .{ .value = try vm.cloneGC(&mm_sym, allocator) };
+    // Phase 1: cloneGC returns *Value, extract the Value
+    const ptr = try vm.cloneGC(&mm_sym, allocator);
+    return .{ .value = ptr.* };
 }
 
 /// Invoke a multimethod with the given arguments.
@@ -152,7 +154,8 @@ pub fn invokeMultimethod(allocator: Allocator, mm_val: Value, args: *const list.
 
     const dispatch_result = try eval.callWithSrc(allocator, &dispatch_fn, args, frame, depth + 1, 0);
     const dispatch_val = switch (dispatch_result) {
-        .value => |v| try vm.clone(v, allocator),
+        // Phase 1: .value is now Value by copy, pass &v to clone
+        .value => |v| try vm.clone(&v, allocator),
         .trampoline => unreachable, // should not happen with trampoline_allowed = false
     };
     defer vm.valueDeinit(@constCast(&dispatch_val), allocator);

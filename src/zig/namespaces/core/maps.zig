@@ -11,6 +11,7 @@ const Allocator = std.mem.Allocator;
 
 pub fn core_get(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
+    _ = env_env;
     if (args.items.len < 1) return error.ArityError;
     const val = args.items[0];
     if (std.meta.activeTag(val) != .map and std.meta.activeTag(val) != .record) return error.TypeError;
@@ -21,25 +22,25 @@ pub fn core_get(self: *const Value, args: *const list.List, env_env: *Env) anyer
         // Look up in fields map first
         for (val.record.fields.items) |entry| {
             if (vm.equals(entry.key, key)) {
-                return try vm.shallowClone(&entry.value, env_env.allocator);
+                return entry.value;
             }
         }
         // Then in extmap
         for (val.record.extmap.items) |entry| {
             if (vm.equals(entry.key, key)) {
-                return try vm.shallowClone(&entry.value, env_env.allocator);
+                return entry.value;
             }
         }
     } else {
         for (val.map.entries.items) |entry| {
             if (vm.equals(entry.key, key)) {
-                return try vm.shallowClone(&entry.value, env_env.allocator);
+                return entry.value;
             }
         }
     }
     // Return default value if provided, otherwise nil
     if (args.items.len >= 3) {
-        return try vm.shallowClone(&args.items[2], env_env.allocator);
+        return args.items[2];
     }
     return vm.nilValue();
 }
@@ -81,7 +82,7 @@ fn assocVector(orig: *const Value, args: *const list.List, env: *Env) anyerror!V
 
     // Clone the original vector
     for (orig.vector.items.items) |item| {
-        try new_vec.append(allocator, try vm.shallowClone(&item, allocator));
+        try new_vec.append(allocator, item);
     }
 
     // Process key-value pairs: key is an integer index
@@ -98,11 +99,11 @@ fn assocVector(orig: *const Value, args: *const list.List, env: *Env) anyerror!V
 
         // Grow vector if index == count (append)
         if (idx == new_vec.items.len) {
-            try new_vec.append(allocator, try vm.shallowClone(&value, allocator));
+            try new_vec.append(allocator, value);
         } else {
             // Replace existing element
             vm.valueDeinit(&new_vec.items[idx], allocator);
-            new_vec.items[idx] = try vm.shallowClone(&value, allocator);
+            new_vec.items[idx] = value;
         }
     }
 
@@ -122,8 +123,8 @@ fn assocMap(map_val: *const Value, args: *const list.List, env: *Env) anyerror!V
 
     for (map_val.map.entries.items) |entry| {
         try new_map.append(allocator, .{
-            .key = try vm.shallowClone(&entry.key, allocator),
-            .value = try vm.shallowClone(&entry.value, allocator),
+            .key = entry.key,
+            .value = entry.value,
         });
     }
 
@@ -136,15 +137,15 @@ fn assocMap(map_val: *const Value, args: *const list.List, env: *Env) anyerror!V
         while (j < new_map.items.len) : (j += 1) {
             if (vm.equals(new_map.items[j].key, key)) {
                 vm.valueDeinit(&new_map.items[j].value, allocator);
-                new_map.items[j].value = try vm.shallowClone(&value, allocator);
+                new_map.items[j].value = value;
                 found = true;
                 break;
             }
         }
         if (!found) {
             try new_map.append(allocator, .{
-                .key = try vm.shallowClone(&key, allocator),
-                .value = try vm.shallowClone(&value, allocator),
+                .key = key,
+                .value = value,
             });
         }
     }
@@ -162,14 +163,14 @@ pub fn core_keys(self: *const Value, args: *const list.List, env_env: *Env) anye
     errdefer result.deinit(env_env.allocator);
     if (std.meta.activeTag(val) == .record) {
         for (val.record.fields.items) |entry| {
-            try result.append(env_env.allocator, try vm.shallowClone(&entry.key, env_env.allocator));
+            try result.append(env_env.allocator, entry.key);
         }
         for (val.record.extmap.items) |entry| {
-            try result.append(env_env.allocator, try vm.shallowClone(&entry.key, env_env.allocator));
+            try result.append(env_env.allocator, entry.key);
         }
     } else {
         for (val.map.entries.items) |entry| {
-            try result.append(env_env.allocator, try vm.shallowClone(&entry.key, env_env.allocator));
+            try result.append(env_env.allocator, entry.key);
         }
     }
     return try vm.listValue(env_env.allocator, result);
@@ -185,14 +186,14 @@ pub fn core_vals(self: *const Value, args: *const list.List, env_env: *Env) anye
     errdefer result.deinit(env_env.allocator);
     if (std.meta.activeTag(val) == .record) {
         for (val.record.fields.items) |entry| {
-            try result.append(env_env.allocator, try vm.shallowClone(&entry.value, env_env.allocator));
+            try result.append(env_env.allocator, entry.value);
         }
         for (val.record.extmap.items) |entry| {
-            try result.append(env_env.allocator, try vm.shallowClone(&entry.value, env_env.allocator));
+            try result.append(env_env.allocator, entry.value);
         }
     } else {
         for (val.map.entries.items) |entry| {
-            try result.append(env_env.allocator, try vm.shallowClone(&entry.value, env_env.allocator));
+            try result.append(env_env.allocator, entry.value);
         }
     }
     return try vm.listValue(env_env.allocator, result);
@@ -228,8 +229,8 @@ pub fn core_dissoc(self: *const Value, args: *const list.List, env_env: *Env) an
         }
         if (should_keep) {
             try new_map.append(env_env.allocator, .{
-                .key = try vm.shallowClone(&entry.key, env_env.allocator),
-                .value = try vm.shallowClone(&entry.value, env_env.allocator),
+                .key = entry.key,
+                .value = entry.value,
             });
         }
     }
@@ -258,15 +259,15 @@ pub fn core_hash_map(self: *const Value, args: *const list.List, env_env: *Env) 
         while (j < new_map.items.len) : (j += 1) {
             if (vm.equals(new_map.items[j].key, key)) {
                 vm.valueDeinit(&new_map.items[j].value, env_env.allocator);
-                new_map.items[j].value = try vm.shallowClone(&value, env_env.allocator);
+                new_map.items[j].value = value;
                 found = true;
                 break;
             }
         }
         if (!found) {
             try new_map.append(env_env.allocator, .{
-                .key = try vm.shallowClone(&key, env_env.allocator),
-                .value = try vm.shallowClone(&value, env_env.allocator),
+                .key = key,
+                .value = value,
             });
         }
     }
@@ -298,15 +299,15 @@ pub fn core_merge(self: *const Value, args: *const list.List, env_env: *Env) any
                     while (j < base_map.items.len) : (j += 1) {
                         if (vm.equals(base_map.items[j].key, entry.key)) {
                             vm.valueDeinit(&base_map.items[j].value, allocator);
-                            base_map.items[j].value = try vm.shallowClone(&entry.value, allocator);
+                            base_map.items[j].value = entry.value;
                             found = true;
                             break;
                         }
                     }
                     if (!found) {
                         try base_map.append(allocator, .{
-                            .key = try vm.shallowClone(&entry.key, allocator),
-                            .value = try vm.shallowClone(&entry.value, allocator),
+                            .key = entry.key,
+                            .value = entry.value,
                         });
                     }
                 }
@@ -318,15 +319,15 @@ pub fn core_merge(self: *const Value, args: *const list.List, env_env: *Env) any
                     while (j < base_map.items.len) : (j += 1) {
                         if (vm.equals(base_map.items[j].key, entry.key)) {
                             vm.valueDeinit(&base_map.items[j].value, allocator);
-                            base_map.items[j].value = try vm.shallowClone(&entry.value, allocator);
+                            base_map.items[j].value = entry.value;
                             found = true;
                             break;
                         }
                     }
                     if (!found) {
                         try base_map.append(allocator, .{
-                            .key = try vm.shallowClone(&entry.key, allocator),
-                            .value = try vm.shallowClone(&entry.value, allocator),
+                            .key = entry.key,
+                            .value = entry.value,
                         });
                     }
                 }
@@ -336,15 +337,15 @@ pub fn core_merge(self: *const Value, args: *const list.List, env_env: *Env) any
                     while (j < base_map.items.len) : (j += 1) {
                         if (vm.equals(base_map.items[j].key, entry.key)) {
                             vm.valueDeinit(&base_map.items[j].value, allocator);
-                            base_map.items[j].value = try vm.shallowClone(&entry.value, allocator);
+                            base_map.items[j].value = entry.value;
                             found = true;
                             break;
                         }
                     }
                     if (!found) {
                         try base_map.append(allocator, .{
-                            .key = try vm.shallowClone(&entry.key, allocator),
-                            .value = try vm.shallowClone(&entry.value, allocator),
+                            .key = entry.key,
+                            .value = entry.value,
                         });
                     }
                 }
@@ -383,14 +384,14 @@ fn recordToMap(record: *const Value, allocator: Allocator) anyerror!Value {
     }
     for (record.record.fields.items) |entry| {
         try new_map.append(allocator, .{
-            .key = try vm.shallowClone(&entry.key, allocator),
-            .value = try vm.shallowClone(&entry.value, allocator),
+            .key = entry.key,
+            .value = entry.value,
         });
     }
     for (record.record.extmap.items) |entry| {
         try new_map.append(allocator, .{
-            .key = try vm.shallowClone(&entry.key, allocator),
-            .value = try vm.shallowClone(&entry.value, allocator),
+            .key = entry.key,
+            .value = entry.value,
         });
     }
     return try vm.mapValue(allocator, new_map);
@@ -399,7 +400,7 @@ fn recordToMap(record: *const Value, allocator: Allocator) anyerror!Value {
 /// Assoc on a record. Returns a new record (assoc never demotes a record).
 fn assocRecord(record: *const Value, args: *const list.List, env: *Env) anyerror!Value {
     const allocator = env.allocator;
-    var current = try vm.shallowClone(record, allocator);
+    var current = record.*;
     defer vm.valueDeinit(&current, allocator);
 
     var i: usize = 1;
@@ -421,13 +422,13 @@ fn assocRecord(record: *const Value, args: *const list.List, env: *Env) anyerror
             for (rd.fields.items) |entry| {
                 if (vm.equals(entry.key, key)) {
                     try new_fields.append(allocator, .{
-                        .key = try vm.shallowClone(&entry.key, allocator),
-                        .value = try vm.shallowClone(&value, allocator),
+                        .key = entry.key,
+                        .value = value,
                     });
                 } else {
                     try new_fields.append(allocator, .{
-                        .key = try vm.shallowClone(&entry.key, allocator),
-                        .value = try vm.shallowClone(&entry.value, allocator),
+                        .key = entry.key,
+                        .value = entry.value,
                     });
                 }
             }
@@ -470,21 +471,21 @@ fn assocRecord(record: *const Value, args: *const list.List, env: *Env) anyerror
             for (rd.extmap.items) |entry| {
                 if (vm.equals(entry.key, key)) {
                     try new_extmap.append(allocator, .{
-                        .key = try vm.shallowClone(&entry.key, allocator),
-                        .value = try vm.shallowClone(&value, allocator),
+                        .key = entry.key,
+                        .value = value,
                     });
                     found_in_extmap = true;
                 } else {
                     try new_extmap.append(allocator, .{
-                        .key = try vm.shallowClone(&entry.key, allocator),
-                        .value = try vm.shallowClone(&entry.value, allocator),
+                        .key = entry.key,
+                        .value = entry.value,
                     });
                 }
             }
             if (!found_in_extmap) {
                 try new_extmap.append(allocator, .{
-                    .key = try vm.shallowClone(&key, allocator),
-                    .value = try vm.shallowClone(&value, allocator),
+                    .key = key,
+                    .value = value,
                 });
             }
             const cloned_fields = try vm.cloneMap(allocator, rd.fields);
@@ -556,8 +557,8 @@ fn dissocRecord(record: *const Value, args: *const list.List, env: *Env) anyerro
         }
         if (should_keep) {
             try new_extmap.append(allocator, .{
-                .key = try vm.shallowClone(&entry.key, allocator),
-                .value = try vm.shallowClone(&entry.value, allocator),
+                .key = entry.key,
+                .value = entry.value,
             });
         }
     }
@@ -610,8 +611,8 @@ fn core_dissocMap(map_val: *const Value, args: *const list.List, env: *Env) anye
         }
         if (should_keep) {
             try new_map.append(allocator, .{
-                .key = try vm.shallowClone(&entry.key, allocator),
-                .value = try vm.shallowClone(&entry.value, allocator),
+                .key = entry.key,
+                .value = entry.value,
             });
         }
     }
@@ -648,8 +649,8 @@ fn mergeToRecord(original_record: *const Value, merged_map: vm.Map, allocator: A
         for (merged_map.items) |m_entry| {
             if (vm.equals(m_entry.key, entry.key)) {
                 try new_fields.append(allocator, .{
-                    .key = try vm.shallowClone(&entry.key, allocator),
-                    .value = try vm.shallowClone(&m_entry.value, allocator),
+                    .key = entry.key,
+                    .value = m_entry.value,
                 });
                 break;
             }
@@ -667,8 +668,8 @@ fn mergeToRecord(original_record: *const Value, merged_map: vm.Map, allocator: A
         }
         if (!is_defined) {
             try new_extmap.append(allocator, .{
-                .key = try vm.shallowClone(&m_entry.key, allocator),
-                .value = try vm.shallowClone(&m_entry.value, allocator),
+                .key = m_entry.key,
+                .value = m_entry.value,
             });
         }
     }

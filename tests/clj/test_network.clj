@@ -18,16 +18,20 @@
   "Run test-fn with a connected TCP client socket.
    Creates a server on ephemeral port, accepts connection, passes client to test-fn.
    Uses promise-based synchronization — no sleep-based polling.
+   Server waits for client to finish before closing its accepted socket.
    Cleans up both sockets."
   [test-fn]
-  (let [port-promise (promise)]
-    ;; Server thread: bind, deliver port, accept, close
+  (let [port-promise (promise)
+        done-promise (promise)]
+    ;; Server thread: bind, deliver port, accept, wait for client done, close
     (future
       (try
         (let [server (zig.io/listen-server-socket "127.0.0.1" 0)
               port (zig.io/get-local-port server)]
           (deliver port-promise port)
           (let [accepted (zig.io/accept-connection server)]
+            ;; Wait for client to finish before closing server side
+            @done-promise
             (safe-close accepted)
             (safe-close server)))
         (catch Exception e
@@ -42,7 +46,9 @@
             (catch Exception e
               (ex-message e))
             (finally
-              (safe-close client))))))))
+              (safe-close client)
+              ;; Signal server that client is done
+              (deliver done-promise true))))))))
 
 (defn- with-accepted-server
   "Run server-fn in a future that accepts a connection.

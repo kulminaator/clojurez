@@ -13,6 +13,7 @@ const BI = @import("big_int.zig");
 const RatioMod = @import("ratio.zig");
 const BD = @import("big_decimal.zig");
 const arithmetic = @import("namespaces/core/arithmetic.zig");
+const helpers = @import("namespaces/core/helpers.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -40,6 +41,7 @@ pub const OpCode = enum(u8) {
 
     // --- Variables ---
     load_var,       // operand = index into symbol pool; pushes env lookup result
+    load_cached,    // operand = index into resolved_values; pushes pre-resolved value
     store_var,      // operand = index into symbol pool; pops value, stores in env
 
     // --- Function calls ---
@@ -127,6 +129,7 @@ pub const BytecodeProgram = struct {
     instructions: std.ArrayListUnmanaged(Instruction),
     constants: std.ArrayListUnmanaged(Value),       // constant pool
     symbols: std.ArrayListUnmanaged([]const u8),     // symbol pool (for load_var/store_var)
+    resolved_values: std.ArrayListUnmanaged(Value) = .empty, // pre-resolved symbol values (for load_cached)
     source_markers: std.ArrayListUnmanaged(SourceMarker),
     fn_pool: ?[]*FnMetadata = null,                 // function metadata pool (for make_fn)
     loop_infos: std.ArrayListUnmanaged(LoopInfo) = .empty, // loop binding info (for loop/recur)
@@ -152,6 +155,10 @@ pub const BytecodeProgram = struct {
             allocator.free(s);
         }
         self.symbols.deinit(allocator);
+        for (self.resolved_values.items) |*v| {
+            vm.valueDeinit(v, allocator);
+        }
+        self.resolved_values.deinit(allocator);
         for (self.source_markers.items) |*m| {
             allocator.free(m.file);
         }
@@ -206,6 +213,14 @@ pub const BytecodeProgram = struct {
         return idx;
     }
 
+    /// Add a pre-resolved value to the resolved_values pool. Returns the index.
+    /// Used by load_cached to avoid runtime symbol lookup.
+    pub fn addResolvedValue(self: *BytecodeProgram, allocator: Allocator, val: Value) anyerror!usize {
+        const idx = self.resolved_values.items.len;
+        try self.resolved_values.append(allocator, try vm.shallowClone(&val, allocator));
+        return idx;
+    }
+
     /// Get a human-readable name for an opcode.
     pub fn opcodeName(op: OpCode) []const u8 {
         return switch (op) {
@@ -216,6 +231,7 @@ pub const BytecodeProgram = struct {
             .push_float => "PUSH_FLOAT",
             .push_const => "PUSH_CONST",
             .load_var => "LOAD_VAR",
+            .load_cached => "LOAD_CACHED",
             .store_var => "STORE_VAR",
             .call_n => "CALL_N",
             .jump => "JUMP",
@@ -272,8 +288,15 @@ pub const BytecodeProgram = struct {
             switch (inst.opcode) {
                 .push_int => std.debug.print("{}", .{inst.operand}),
                 .push_float => std.debug.print("{} (0x{x})", .{ inst.operand, inst.operand }),
-                .push_const, .load_var, .store_var, .quote, .make_fn => {
-                    if (inst.operand < self.constants.items.len) {
+                .push_const, .load_var, .load_cached, .store_var, .quote, .make_fn => {
+                    if (inst.opcode == .load_cached) {
+                        if (inst.operand < self.resolved_values.items.len) {
+                            std.debug.print("resolved[{}] = ", .{inst.operand});
+                            printValueShort(self.resolved_values.items[inst.operand]);
+                        } else {
+                            std.debug.print("resolved[{}]", .{inst.operand});
+                        }
+                    } else if (inst.operand < self.constants.items.len) {
                         std.debug.print("const[{}] = ", .{inst.operand});
                         printValueShort(self.constants.items[inst.operand]);
                     } else if (inst.opcode == .load_var or inst.opcode == .store_var) {
@@ -325,38 +348,190 @@ pub const BytecodeProgram = struct {
 // VM execution state
 // ============================================================
 
-/// The VM operand stack.
-const OperandStack = struct {
-    items: std.ArrayListUnmanaged(*Value) = .empty,
-    allocator: Allocator,
+/// Maximum depth of the bytecode operand stack.
+/// Bytecode programs have bounded stack depth determined at compile time.
+/// 64 is sufficient for all current bytecode functions.
+pub const MAX_STACK_DEPTH: usize = 64;
 
-    pub fn init(allocator: Allocator) OperandStack {
-        return .{ .items = .empty, .allocator = allocator };
+/// A single entry on the bytecode operand stack.
+/// Stores primitives inline to avoid GC allocation for arithmetic (Phase 2).
+pub const StackEntry = union(Tag) {
+    integer: i64,
+    float: f64,
+    pointer: *Value,
+
+    pub const Tag = enum(u2) {
+        integer = 0,
+        float = 1,
+        pointer = 2,
+    };
+
+    /// Convert this entry to a *Value (allocating if needed).
+    pub fn toValue(self: StackEntry, allocator: Allocator) anyerror!*Value {
+        return switch (self) {
+            .integer => |v| eval_mod.allocValue(allocator, vm.intValue(v)),
+            .float => |v| eval_mod.allocValue(allocator, vm.floatValue(v)),
+            .pointer => |v| v,
+        };
+    }
+
+    /// Extract integer, converting float if needed.
+    pub fn toInteger(self: StackEntry) anyerror!i64 {
+        return switch (self) {
+            .integer => |v| v,
+            .float => |v| @as(i64, @intFromFloat(v)),
+            .pointer => |v| switch (v.*) {
+                .integer => v.integer,
+                .float => |fv| @as(i64, @intFromFloat(fv)),
+                else => return error.TypeError,
+            },
+        };
+    }
+
+    /// Extract float, converting integer if needed.
+    pub fn toFloat(self: StackEntry) anyerror!f64 {
+        return switch (self) {
+            .integer => |v| @as(f64, @floatFromInt(v)),
+            .float => |v| v,
+            .pointer => |v| switch (v.*) {
+                .integer => |iv| @as(f64, @floatFromInt(iv)),
+                .float => v.float,
+                else => return error.TypeError,
+            },
+        };
+    }
+
+    /// Check if this entry is nil (only possible via pointer).
+    pub fn isNil(self: StackEntry) bool {
+        return switch (self) {
+            .integer => false,
+            .float => false,
+            .pointer => |v| std.meta.activeTag(v.*) == .nil,
+        };
+    }
+
+    /// Check if this entry is truthy (nil/false are falsy).
+    pub fn isTruthy(self: StackEntry) bool {
+        return switch (self) {
+            .integer => true,
+            .float => true,
+            .pointer => |v| vm.isTruthy(v.*),
+        };
+    }
+
+    /// Determine the effective numeric tag for arithmetic dispatch.
+    pub fn numericTag(self: StackEntry) std.meta.Tag(Value) {
+        return switch (self) {
+            .integer => .integer,
+            .float => .float,
+            .pointer => |v| std.meta.activeTag(v.*),
+        };
+    }
+
+    /// Get the Value for comparison/delegation (for pointer entries).
+    pub fn toValueConst(self: StackEntry) Value {
+        return switch (self) {
+            .integer => |v| vm.intValue(v),
+            .float => |v| vm.floatValue(v),
+            .pointer => |v| v.*,
+        };
+    }
+};
+
+/// Free all loop frames and their resources.
+fn cleanupLoopStack(allocator: Allocator, loop_stack: *std.ArrayListUnmanaged(*LoopFrame)) void {
+    for (loop_stack.items) |frame| {
+        // Free pointer entries in binding_values
+        var bi: usize = 0;
+        while (bi < frame.binding_count) : (bi += 1) {
+            switch (frame.binding_values[bi]) {
+                .integer, .float => {},
+                .pointer => |v| {
+                    vm.valueDeinit(v, allocator);
+                    allocator.destroy(v);
+                },
+            }
+        }
+        allocator.free(frame.binding_values);
+        allocator.destroy(frame);
+    }
+    loop_stack.deinit(allocator);
+}
+
+/// Free a StackEntry if it holds a pointer (no-op for integer/float).
+fn freeEntry(entry: StackEntry, allocator: Allocator) void {
+    switch (entry) {
+        .integer, .float => {},
+        .pointer => |v| {
+            vm.valueDeinit(v, allocator);
+            allocator.destroy(v);
+        },
+    }
+}
+
+/// The VM operand stack.
+/// Uses a fixed-size array of StackEntry to avoid GC allocation on every push
+/// (Phase 1: fixed-size, Phase 2: primitive values).
+const OperandStack = struct {
+    items: [MAX_STACK_DEPTH]StackEntry = undefined,
+    top: usize = 0,
+
+    pub fn init(_: Allocator) OperandStack {
+        return .{ .items = undefined, .top = 0 };
     }
 
     pub fn deinit(self: *OperandStack) void {
-        // Don't free the *Value pointers — they're owned by the caller/GC.
-        self.items.deinit(self.allocator);
+        // No allocation to free — items are owned by caller/GC.
+        self.top = 0;
     }
 
+    /// Push a pointer entry (for complex types: strings, lists, functions, etc.)
+    pub fn pushPtr(self: *OperandStack, val: *Value) anyerror!void {
+        if (self.top >= MAX_STACK_DEPTH) return error.StackOverflow;
+        self.items[self.top] = StackEntry{ .pointer = val };
+        self.top += 1;
+    }
+
+    /// Push an integer directly (no allocation)
+    pub fn pushInt(self: *OperandStack, val: i64) anyerror!void {
+        if (self.top >= MAX_STACK_DEPTH) return error.StackOverflow;
+        self.items[self.top] = StackEntry{ .integer = val };
+        self.top += 1;
+    }
+
+    /// Push a float directly (no allocation)
+    pub fn pushFloat(self: *OperandStack, val: f64) anyerror!void {
+        if (self.top >= MAX_STACK_DEPTH) return error.StackOverflow;
+        self.items[self.top] = StackEntry{ .float = val };
+        self.top += 1;
+    }
+
+    /// Push a *Value (legacy compatibility — stores as pointer)
     pub fn push(self: *OperandStack, val: *Value) anyerror!void {
-        try self.items.append(self.allocator, val);
+        return self.pushPtr(val);
     }
 
-    pub fn pop(self: *OperandStack) ?*Value {
-        if (self.items.items.len == 0) return null;
-        const item = self.items.items[self.items.items.len - 1];
-        self.items.items.len -= 1;
-        return item;
+    /// Pop a StackEntry.
+    pub fn pop(self: *OperandStack) ?StackEntry {
+        if (self.top == 0) return null;
+        self.top -= 1;
+        return self.items[self.top];
     }
 
-    pub fn peek(self: *const OperandStack) ?*Value {
-        if (self.items.items.len == 0) return null;
-        return self.items.items[self.items.items.len - 1];
+    /// Pop and convert to *Value (allocating if needed).
+    pub fn popValue(self: *OperandStack, allocator: Allocator) anyerror!*Value {
+        const entry = self.pop() orelse return error.StackUnderflow;
+        return entry.toValue(allocator);
+    }
+
+    /// Peek at the top StackEntry.
+    pub fn peek(self: *const OperandStack) ?StackEntry {
+        if (self.top == 0) return null;
+        return self.items[self.top - 1];
     }
 
     pub fn len(self: *const OperandStack) usize {
-        return self.items.items.len;
+        return self.top;
     }
 };
 
@@ -372,6 +547,10 @@ pub const LoopFrame = struct {
     body_pc: usize,       // PC of first body instruction (after bindings)
     binding_count: usize, // number of loop bindings
     binding_sym_indices: []usize, // indices into symbol pool for binding names
+    // Phase 5: Store loop binding values directly to avoid env.put/get (HAMT) overhead.
+    // Each entry corresponds to binding_sym_indices[i].
+    // Using StackEntry to store primitives inline (no allocation for int/float).
+    binding_values: []StackEntry,
 };
 
 /// Function metadata for make_fn support.
@@ -500,11 +679,8 @@ pub fn execute(
     errdefer stack.deinit();
 
     var loop_stack: std.ArrayListUnmanaged(*LoopFrame) = .empty;
-    errdefer {
-        for (loop_stack.items) |frame| {
-            allocator.destroy(frame);
-        }
-        loop_stack.deinit(allocator);
+    defer {
+        cleanupLoopStack(allocator, &loop_stack);
     }
 
     // fn_pool is passed via program metadata (set by compiler)
@@ -520,106 +696,141 @@ pub fn execute(
         switch (inst.opcode) {
             .push_nil => {
                 const nil_val = try eval_mod.allocValue(allocator, vm.nilValue());
-                try stack.push(nil_val);
+                try stack.pushPtr(nil_val);
             },
             .push_true => {
                 const val = try eval_mod.allocValue(allocator, vm.boolValue(true));
-                try stack.push(val);
+                try stack.pushPtr(val);
             },
             .push_false => {
                 const val = try eval_mod.allocValue(allocator, vm.boolValue(false));
-                try stack.push(val);
+                try stack.pushPtr(val);
             },
             .push_int => {
-                const val = try eval_mod.allocValue(allocator, vm.intValue(@as(i64, @intCast(inst.operand))));
-                try stack.push(val);
+                try stack.pushInt(@as(i64, @intCast(inst.operand)));
             },
             .push_float => {
                 const f = @as(f64, @bitCast(inst.operand));
-                const val = try eval_mod.allocValue(allocator, vm.floatValue(f));
-                try stack.push(val);
+                try stack.pushFloat(f);
             },
             .push_const => {
                 const idx = inst.operand;
                 if (idx >= program.constants.items.len) return error.BytecodeError;
                 const val = try vm.cloneGC(&program.constants.items[idx], allocator);
-                try stack.push(val);
+                try stack.pushPtr(val);
             },
 
             .load_var => {
                 const sym_idx = inst.operand;
                 if (sym_idx >= program.symbols.items.len) return error.BytecodeError;
                 const sym_name = program.symbols.items[sym_idx];
-                const val = try resolveSymbol(env, sym_name);
-                const cloned = try vm.cloneGC(&val, allocator);
-                try stack.push(cloned);
+                // Phase 5: Check loop frames first (innermost to outermost).
+                // Loop binding values are stored directly in LoopFrame.binding_values,
+                // avoiding env.get (HAMT lookup) on every access.
+                const loop_val: ?StackEntry = blk: {
+                    var li: usize = loop_stack.items.len;
+                    while (li > 0) : (li -= 1) {
+                        const lf = loop_stack.items[li - 1];
+                        var bi: usize = 0;
+                        while (bi < lf.binding_count) : (bi += 1) {
+                            const loop_sym = program.symbols.items[lf.binding_sym_indices[bi]];
+                            if (std.mem.eql(u8, sym_name, loop_sym)) {
+                                break :blk lf.binding_values[bi];
+                            }
+                        }
+                    }
+                    break :blk null;
+                };
+                if (loop_val) |entry| {
+                    switch (entry) {
+                        .integer => try stack.pushInt(entry.integer),
+                        .float => try stack.pushFloat(entry.float),
+                        .pointer => {
+                            const cloned = try vm.cloneGC(entry.pointer, allocator);
+                            try stack.pushPtr(cloned);
+                        },
+                    }
+                } else {
+                    const val = try resolveSymbol(env, sym_name);
+                    switch (val) {
+                        .integer => try stack.pushInt(val.integer),
+                        .float => try stack.pushFloat(val.float),
+                        else => {
+                            const cloned = try vm.cloneGC(&val, allocator);
+                            try stack.pushPtr(cloned);
+                        },
+                    }
+                }
+            },
+            .load_cached => {
+                const idx = inst.operand;
+                if (idx >= program.resolved_values.items.len) return error.BytecodeError;
+                const val = program.resolved_values.items[idx];
+                // Store primitives directly, clone non-primitive values
+                switch (val) {
+                    .integer => try stack.pushInt(val.integer),
+                    .float => try stack.pushFloat(val.float),
+                    else => {
+                        const cloned = try vm.cloneGC(&val, allocator);
+                        try stack.pushPtr(cloned);
+                    },
+                }
             },
             .store_var => {
                 const sym_idx = inst.operand;
                 if (sym_idx >= program.symbols.items.len) return error.BytecodeError;
                 const sym_name = program.symbols.items[sym_idx];
-                const val_ptr = stack.pop() orelse return error.BytecodeError;
-                const val = try vm.shallowClone(val_ptr, allocator);
-                vm.valueDeinit(val_ptr, allocator);
-                allocator.destroy(val_ptr);
-                try env.put(sym_name, val);
+                const entry = stack.pop() orelse return error.BytecodeError;
+                const val = entry.toValueConst();
+                try env.put(sym_name, try vm.shallowClone(&val, allocator));
             },
 
             .call_n => {
                 const n = inst.operand;
                 // Stack: arg1, arg2, ..., argN, fn  (fn on top)
                 // Pop fn, then args in reverse order
-                const fn_ptr = stack.pop() orelse return error.BytecodeError;
+                const fn_entry = stack.pop() orelse return error.BytecodeError;
 
                 // Collect args in reverse, then build list in correct order
-                var temp_args: std.ArrayListUnmanaged(*Value) = .empty;
+                var temp_args: std.ArrayListUnmanaged(StackEntry) = .empty;
                 var i: usize = 0;
                 while (i < n) : (i += 1) {
-                    const arg_ptr = stack.pop() orelse {
+                    const arg_entry = stack.pop() orelse {
                         // Clean up any args collected so far
-                        for (temp_args.items) |ap| {
-                            vm.valueDeinit(ap, allocator);
-                            allocator.destroy(ap);
-                        }
+                        for (temp_args.items) |ae| freeEntry(ae, allocator);
                         allocator.free(temp_args.items);
                         return error.BytecodeError;
                     };
-                    try temp_args.append(allocator, arg_ptr);
+                    try temp_args.append(allocator, arg_entry);
                 }
 
                 var args: list.List = .empty;
                 var remaining_count: usize = temp_args.items.len;
                 errdefer {
-                    // Clean up args
                     args.deinit(allocator);
-                    // Clean up remaining temp_args (those not yet processed)
-                    for (temp_args.items[0..remaining_count]) |ap| {
-                        vm.valueDeinit(ap, allocator);
-                        allocator.destroy(ap);
-                    }
+                    for (temp_args.items[0..remaining_count]) |ae| freeEntry(ae, allocator);
                     allocator.free(temp_args.items);
                 }
                 // temp_args has args in reverse order (argN, argN-1, ..., arg1)
                 var j: usize = temp_args.items.len;
                 while (j > 0) : (j -= 1) {
                     remaining_count -= 1;
-                    const arg_ptr = temp_args.items[j - 1];
-                    // Deep clone to avoid sharing internal pointers with the original
-                    const cloned = try vm.shallowClone(arg_ptr, allocator);
+                    const arg_entry = temp_args.items[j - 1];
+                    const arg_val = arg_entry.toValueConst();
+                    const cloned = try vm.shallowClone(&arg_val, allocator);
                     try args.append(allocator, cloned);
-                    vm.valueDeinit(arg_ptr, allocator);
-                    allocator.destroy(arg_ptr);
                 }
                 allocator.free(temp_args.items);
 
-                const call_result = try eval_mod.callWithEnv(allocator, fn_ptr, &args, env, 0);
-
-                // Clean up fn_ptr
-                vm.valueDeinit(fn_ptr, allocator);
-                allocator.destroy(fn_ptr);
+                const fn_val = fn_entry.toValueConst();
+                const call_result = try eval_mod.callWithEnv(allocator, &fn_val, &args, env, 0);
 
                 switch (call_result) {
-                    .value => |v| try stack.push(v),
+                    // Phase 1: .value is now Value by copy, need *Value for bytecode stack
+                    .value => |v| {
+                        const ptr = try eval_mod.allocValue(allocator, v);
+                        try stack.pushPtr(ptr);
+                    },
                     .trampoline => return .trampoline,
                 }
             },
@@ -628,158 +839,243 @@ pub fn execute(
                 pc = inst.operand;
             },
             .jump_if_nil => {
-                const top = stack.pop() orelse return error.BytecodeError;
-                // Both nil and false are falsy in Clojure
-                if (std.meta.activeTag(top.*) == .nil or
-                    (std.meta.activeTag(top.*) == .bool and top.*.bool == false))
-                {
+                const entry = stack.pop() orelse return error.BytecodeError;
+                if (!entry.isTruthy()) {
                     pc = inst.operand;
                 }
-                vm.valueDeinit(top, allocator);
-                allocator.destroy(top);
+                // Free pointer entries only
+                switch (entry) {
+                    .integer, .float => {},
+                    .pointer => |v| {
+                        vm.valueDeinit(v, allocator);
+                        allocator.destroy(v);
+                    },
+                }
             },
             .jump_if_not_nil => {
-                const top = stack.pop() orelse return error.BytecodeError;
-                const tag = std.meta.activeTag(top.*);
-                // Both nil and false are falsy in Clojure; jump only if truthy
-                const is_false = if (tag == .bool) top.*.bool == false else false;
-                if (tag != .nil and !is_false) {
+                const entry = stack.pop() orelse return error.BytecodeError;
+                if (entry.isTruthy()) {
                     pc = inst.operand;
                 }
-                vm.valueDeinit(top, allocator);
-                allocator.destroy(top);
+                // Free pointer entries only
+                switch (entry) {
+                    .integer, .float => {},
+                    .pointer => |v| {
+                        vm.valueDeinit(v, allocator);
+                        allocator.destroy(v);
+                    },
+                }
             },
 
             .eq, .ne, .lt, .gt, .le, .ge => {
-                const b = stack.pop() orelse return error.BytecodeError;
-                const a = stack.pop() orelse return error.BytecodeError;
-                const result = try compareOp(inst.opcode, a.*, b.*);
+                const b_entry = stack.pop() orelse return error.BytecodeError;
+                const a_entry = stack.pop() orelse return error.BytecodeError;
+                const a_val = a_entry.toValueConst();
+                const b_val = b_entry.toValueConst();
+                const result = try compareOp(inst.opcode, a_val, b_val);
                 const result_ptr = try eval_mod.allocValue(allocator, result);
-                vm.valueDeinit(a, allocator);
-                allocator.destroy(a);
-                vm.valueDeinit(b, allocator);
-                allocator.destroy(b);
-                try stack.push(result_ptr);
+                // Free pointer entries only
+                for ([_]StackEntry{ a_entry, b_entry }) |entry| {
+                    switch (entry) {
+                        .integer, .float => {},
+                        .pointer => |v| {
+                            vm.valueDeinit(v, allocator);
+                            allocator.destroy(v);
+                        },
+                    }
+                }
+                try stack.pushPtr(result_ptr);
             },
 
             .add, .sub, .mul, .div, .rem => {
-                const b = stack.pop() orelse return error.BytecodeError;
-                const a = stack.pop() orelse return error.BytecodeError;
-                const result = try arithmeticOp(inst.opcode, a.*, b.*, allocator, env);
-                const result_ptr = try eval_mod.allocValue(allocator, result);
-                vm.valueDeinit(a, allocator);
-                allocator.destroy(a);
-                vm.valueDeinit(b, allocator);
-                allocator.destroy(b);
-                try stack.push(result_ptr);
+                const b_entry = stack.pop() orelse return error.BytecodeError;
+                const a_entry = stack.pop() orelse return error.BytecodeError;
+
+                // Fast path: both are integers — compute directly, no allocation
+                if (a_entry.numericTag() == .integer and b_entry.numericTag() == .integer) {
+                    const ai = try a_entry.toInteger();
+                    const bi = try b_entry.toInteger();
+                    const result: i64 = switch (inst.opcode) {
+                        .add => ai + bi,
+                        .sub => ai - bi,
+                        .mul => ai * bi,
+                        .div => if (bi == 0) return error.DivisionByZero else @divTrunc(ai, bi),
+                        .rem => if (bi == 0) return error.DivisionByZero else ai - @divTrunc(ai, bi) * bi,
+                        else => unreachable,
+                    };
+                    try stack.pushInt(result);
+                } else if (a_entry.numericTag() == .float or b_entry.numericTag() == .float) {
+                    // Fast path: at least one float — compute with f64, no allocation
+                    const af = try a_entry.toFloat();
+                    const bf = try b_entry.toFloat();
+                    const result: f64 = switch (inst.opcode) {
+                        .add => af + bf,
+                        .sub => af - bf,
+                        .mul => af * bf,
+                        .div => if (bf == 0) return error.DivisionByZero else af / bf,
+                        .rem => if (bf == 0) return error.DivisionByZero else @rem(af, bf),
+                        else => unreachable,
+                    };
+                    try stack.pushFloat(result);
+                } else {
+                    // Delegation path: bigint/ratio/decimal — need to call zig.core builtin
+                    const a_val = a_entry.toValueConst();
+                    const b_val = b_entry.toValueConst();
+                    const result = try arithmeticOp(inst.opcode, a_val, b_val, allocator, env);
+                    const result_ptr = try eval_mod.allocValue(allocator, result);
+                    // Free pointer entries only
+                    for ([_]StackEntry{ a_entry, b_entry }) |entry| {
+                        switch (entry) {
+                            .integer, .float => {},
+                            .pointer => |v| {
+                                vm.valueDeinit(v, allocator);
+                                allocator.destroy(v);
+                            },
+                        }
+                    }
+                    try stack.pushPtr(result_ptr);
+                }
             },
 
             .neg => {
-                const a = stack.pop() orelse return error.BytecodeError;
-                const result = try negateOp(a.*, allocator);
-                const result_ptr = try eval_mod.allocValue(allocator, result);
-                vm.valueDeinit(a, allocator);
-                allocator.destroy(a);
-                try stack.push(result_ptr);
+                const entry = stack.pop() orelse return error.BytecodeError;
+                // Fast path: integer — negate directly, no allocation
+                if (entry.numericTag() == .integer) {
+                    const v = try entry.toInteger();
+                    try stack.pushInt(-v);
+                } else if (entry.numericTag() == .float) {
+                    const v = try entry.toFloat();
+                    try stack.pushFloat(-v);
+                } else {
+                    // Delegation path: bigint/ratio/decimal
+                    const val = entry.toValueConst();
+                    const result = try negateOp(val, allocator);
+                    const result_ptr = try eval_mod.allocValue(allocator, result);
+                    switch (entry) {
+                        .integer, .float => {},
+                        .pointer => |v| {
+                            vm.valueDeinit(v, allocator);
+                            allocator.destroy(v);
+                        },
+                    }
+                    try stack.pushPtr(result_ptr);
+                }
             },
 
             .is_nil => {
-                const a = stack.pop() orelse return error.BytecodeError;
-                const is_nil = std.meta.activeTag(a.*) == .nil;
+                const entry = stack.pop() orelse return error.BytecodeError;
+                const is_nil = entry.isNil();
                 const result = try eval_mod.allocValue(allocator, vm.boolValue(is_nil));
-                vm.valueDeinit(a, allocator);
-                allocator.destroy(a);
-                try stack.push(result);
+                switch (entry) {
+                    .integer, .float => {},
+                    .pointer => |v| {
+                        vm.valueDeinit(v, allocator);
+                        allocator.destroy(v);
+                    },
+                }
+                try stack.pushPtr(result);
             },
             .is_truthy => {
-                const a = stack.pop() orelse return error.BytecodeError;
-                const truthy = vm.isTruthy(a.*);
+                const entry = stack.pop() orelse return error.BytecodeError;
+                const truthy = entry.isTruthy();
                 const result = try eval_mod.allocValue(allocator, vm.boolValue(truthy));
-                vm.valueDeinit(a, allocator);
-                allocator.destroy(a);
-                try stack.push(result);
+                switch (entry) {
+                    .integer, .float => {},
+                    .pointer => |v| {
+                        vm.valueDeinit(v, allocator);
+                        allocator.destroy(v);
+                    },
+                }
+                try stack.pushPtr(result);
             },
             .not => {
-                const a = stack.pop() orelse return error.BytecodeError;
-                const truthy = vm.isTruthy(a.*);
+                const entry = stack.pop() orelse return error.BytecodeError;
+                const truthy = entry.isTruthy();
                 const result = try eval_mod.allocValue(allocator, vm.boolValue(!truthy));
-                vm.valueDeinit(a, allocator);
-                allocator.destroy(a);
-                try stack.push(result);
+                switch (entry) {
+                    .integer, .float => {},
+                    .pointer => |v| {
+                        vm.valueDeinit(v, allocator);
+                        allocator.destroy(v);
+                    },
+                }
+                try stack.pushPtr(result);
             },
 
             .cons => {
-                const tail = stack.pop() orelse return error.BytecodeError;
-                const head = stack.pop() orelse return error.BytecodeError;
-                const cons_val = try vm.consValue(allocator, head.*, tail.*);
+                const tail_entry = stack.pop() orelse return error.BytecodeError;
+                const head_entry = stack.pop() orelse return error.BytecodeError;
+                const tail_val = tail_entry.toValueConst();
+                const head_val = head_entry.toValueConst();
+                const cons_val = try vm.consValue(allocator, head_val, tail_val);
                 const cons_ptr = try eval_mod.allocValue(allocator, cons_val);
-                vm.valueDeinit(head, allocator);
-                allocator.destroy(head);
-                vm.valueDeinit(tail, allocator);
-                allocator.destroy(tail);
-                try stack.push(cons_ptr);
+                freeEntry(head_entry, allocator);
+                freeEntry(tail_entry, allocator);
+                try stack.pushPtr(cons_ptr);
             },
 
             .list_n => {
                 const n = inst.operand;
-                var temp_items: std.ArrayListUnmanaged(*Value) = .empty;
-                errdefer temp_items.deinit(allocator);
+                var temp_items: std.ArrayListUnmanaged(StackEntry) = .empty;
+                errdefer { for (temp_items.items) |ae| freeEntry(ae, allocator); allocator.free(temp_items.items); }
                 var i: usize = 0;
                 while (i < n) : (i += 1) {
-                    const item_ptr = stack.pop() orelse return error.BytecodeError;
-                    try temp_items.append(allocator, item_ptr);
+                    const item_entry = stack.pop() orelse return error.BytecodeError;
+                    try temp_items.append(allocator, item_entry);
                 }
                 var l: list.List = .empty;
+                errdefer l.deinit(allocator);
                 var j: usize = temp_items.items.len;
                 while (j > 0) : (j -= 1) {
-                    const item_ptr = temp_items.items[j - 1];
-                    try l.append(allocator, try vm.shallowClone(item_ptr, allocator));
-                    vm.valueDeinit(item_ptr, allocator);
-                    allocator.destroy(item_ptr);
+                    const item_entry = temp_items.items[j - 1];
+                    const item_val = item_entry.toValueConst();
+                    try l.append(allocator, try vm.shallowClone(&item_val, allocator));
                 }
-                temp_items.deinit(allocator);
+                for (temp_items.items) |ae| freeEntry(ae, allocator);
+                allocator.free(temp_items.items);
                 const list_val = try vm.listValue(allocator, l);
-                // l is now owned by list_val's ListData — don't deinit
                 const list_ptr = try eval_mod.allocValue(allocator, list_val);
-                try stack.push(list_ptr);
+                try stack.pushPtr(list_ptr);
             },
 
             .vector_n => {
                 const n = inst.operand;
-                var temp_items: std.ArrayListUnmanaged(*Value) = .empty;
-                errdefer temp_items.deinit(allocator);
+                var temp_items: std.ArrayListUnmanaged(StackEntry) = .empty;
+                errdefer { for (temp_items.items) |ae| freeEntry(ae, allocator); allocator.free(temp_items.items); }
                 var i: usize = 0;
                 while (i < n) : (i += 1) {
-                    const item_ptr = stack.pop() orelse return error.BytecodeError;
-                    try temp_items.append(allocator, item_ptr);
+                    const item_entry = stack.pop() orelse return error.BytecodeError;
+                    try temp_items.append(allocator, item_entry);
                 }
                 var v: vec.Vector = .empty;
+                errdefer v.deinit(allocator);
                 var j: usize = temp_items.items.len;
                 while (j > 0) : (j -= 1) {
-                    const item_ptr = temp_items.items[j - 1];
-                    try v.append(allocator, try vm.shallowClone(item_ptr, allocator));
-                    vm.valueDeinit(item_ptr, allocator);
-                    allocator.destroy(item_ptr);
+                    const item_entry = temp_items.items[j - 1];
+                    const item_val = item_entry.toValueConst();
+                    try v.append(allocator, try vm.shallowClone(&item_val, allocator));
                 }
-                temp_items.deinit(allocator);
+                for (temp_items.items) |ae| freeEntry(ae, allocator);
+                allocator.free(temp_items.items);
                 const vec_val = try vm.vectorValue(allocator, v);
-                // v is now owned by vec_val's VectorData — don't deinit
                 const vec_ptr = try eval_mod.allocValue(allocator, vec_val);
-                try stack.push(vec_ptr);
+                try stack.pushPtr(vec_ptr);
             },
 
             .ret => {
-                const result = stack.pop() orelse return error.BytecodeError;
+                const entry = stack.pop() orelse return error.BytecodeError;
                 stack.deinit();
+                const result = try entry.toValue(allocator);
                 return .{ .value = result };
             },
             .stop => {
                 // Return the top of the stack if available, otherwise nil
-                const result = stack.pop() orelse {
+                const entry = stack.pop() orelse {
                     stack.deinit();
                     return .{ .value = try eval_mod.allocValue(allocator, vm.nilValue()) };
                 };
                 stack.deinit();
+                const result = try entry.toValue(allocator);
                 return .{ .value = result };
             },
 
@@ -788,134 +1084,119 @@ pub fn execute(
             },
 
             .first => {
-                const a = stack.pop() orelse return error.BytecodeError;
-                const result = try vmFirst(allocator, a.*);
+                const entry = stack.pop() orelse return error.BytecodeError;
+                const result = try vmFirst(allocator, entry.toValueConst());
                 const result_ptr = try eval_mod.allocValue(allocator, result);
-                vm.valueDeinit(a, allocator);
-                allocator.destroy(a);
-                try stack.push(result_ptr);
+                freeEntry(entry, allocator);
+                try stack.pushPtr(result_ptr);
             },
             .rest => {
-                const a = stack.pop() orelse return error.BytecodeError;
-                const result = try vmRest(allocator, a.*);
+                const entry = stack.pop() orelse return error.BytecodeError;
+                const result = try vmRest(allocator, entry.toValueConst());
                 const result_ptr = try eval_mod.allocValue(allocator, result);
-                vm.valueDeinit(a, allocator);
-                allocator.destroy(a);
-                try stack.push(result_ptr);
+                freeEntry(entry, allocator);
+                try stack.pushPtr(result_ptr);
             },
             .count => {
-                const a = stack.pop() orelse return error.BytecodeError;
-                const result = try vmCount(allocator, a.*);
+                const entry = stack.pop() orelse return error.BytecodeError;
+                const result = try vmCount(allocator, entry.toValueConst());
                 const result_ptr = try eval_mod.allocValue(allocator, result);
-                vm.valueDeinit(a, allocator);
-                allocator.destroy(a);
-                try stack.push(result_ptr);
+                freeEntry(entry, allocator);
+                try stack.pushPtr(result_ptr);
             },
 
             .map_n => {
                 const n = inst.operand;
-                var temp_entries: std.ArrayListUnmanaged(*Value) = .empty;
-                errdefer temp_entries.deinit(allocator);
+                var temp_entries: std.ArrayListUnmanaged(StackEntry) = .empty;
+                errdefer { for (temp_entries.items) |ae| freeEntry(ae, allocator); allocator.free(temp_entries.items); }
                 var i: usize = 0;
                 while (i < n * 2) : (i += 1) {
-                    const entry_ptr = stack.pop() orelse return error.BytecodeError;
-                    try temp_entries.append(allocator, entry_ptr);
+                    const entry_val = stack.pop() orelse return error.BytecodeError;
+                    try temp_entries.append(allocator, entry_val);
                 }
                 var m: vm.Map = .empty;
                 errdefer {
-                    for (m.items) |*entry| {
-                        vm.valueDeinit(&entry.key, allocator);
-                        vm.valueDeinit(&entry.value, allocator);
+                    for (m.items) |*me| {
+                        vm.valueDeinit(&me.key, allocator);
+                        vm.valueDeinit(&me.value, allocator);
                     }
                     allocator.free(m.items);
                 }
                 // temp_entries has entries in reverse order: vN, kN, ..., v1, k1
                 var j: usize = temp_entries.items.len;
                 while (j > 1) : (j -= 2) {
-                    const key_ptr = temp_entries.items[j - 1];
-                    const val_ptr = temp_entries.items[j - 2];
+                    const key_entry = temp_entries.items[j - 1];
+                    const val_entry = temp_entries.items[j - 2];
+                    const key_val = key_entry.toValueConst();
+                    const val_val = val_entry.toValueConst();
                     try m.append(allocator, .{
-                        .key = try vm.shallowClone(key_ptr, allocator),
-                        .value = try vm.shallowClone(val_ptr, allocator),
+                        .key = try vm.shallowClone(&key_val, allocator),
+                        .value = try vm.shallowClone(&val_val, allocator),
                     });
-                    vm.valueDeinit(key_ptr, allocator);
-                    allocator.destroy(key_ptr);
-                    vm.valueDeinit(val_ptr, allocator);
-                    allocator.destroy(val_ptr);
                 }
-                temp_entries.deinit(allocator);
+                for (temp_entries.items) |ae| freeEntry(ae, allocator);
+                allocator.free(temp_entries.items);
                 const map_val = try vm.mapValue(allocator, m);
                 const map_ptr = try eval_mod.allocValue(allocator, map_val);
-                try stack.push(map_ptr);
+                try stack.pushPtr(map_ptr);
             },
 
             .get => {
-                const key = stack.pop() orelse return error.BytecodeError;
-                const coll = stack.pop() orelse return error.BytecodeError;
-                const result = try vmGet(allocator, coll.*, key.*);
+                const key_entry = stack.pop() orelse return error.BytecodeError;
+                const coll_entry = stack.pop() orelse return error.BytecodeError;
+                const result = try vmGet(allocator, coll_entry.toValueConst(), key_entry.toValueConst());
                 const result_ptr = try eval_mod.allocValue(allocator, result);
-                vm.valueDeinit(key, allocator);
-                allocator.destroy(key);
-                vm.valueDeinit(coll, allocator);
-                allocator.destroy(coll);
-                try stack.push(result_ptr);
+                freeEntry(key_entry, allocator);
+                freeEntry(coll_entry, allocator);
+                try stack.pushPtr(result_ptr);
             },
 
             .assoc => {
-                const val = stack.pop() orelse return error.BytecodeError;
-                const key = stack.pop() orelse return error.BytecodeError;
-                const map = stack.pop() orelse return error.BytecodeError;
-                const result = try vmAssoc(allocator, map.*, key.*, val.*);
+                const val_entry = stack.pop() orelse return error.BytecodeError;
+                const key_entry = stack.pop() orelse return error.BytecodeError;
+                const map_entry = stack.pop() orelse return error.BytecodeError;
+                const result = try vmAssoc(allocator, map_entry.toValueConst(), key_entry.toValueConst(), val_entry.toValueConst());
                 const result_ptr = try eval_mod.allocValue(allocator, result);
-                vm.valueDeinit(val, allocator);
-                allocator.destroy(val);
-                vm.valueDeinit(key, allocator);
-                allocator.destroy(key);
-                vm.valueDeinit(map, allocator);
-                allocator.destroy(map);
-                try stack.push(result_ptr);
+                freeEntry(val_entry, allocator);
+                freeEntry(key_entry, allocator);
+                freeEntry(map_entry, allocator);
+                try stack.pushPtr(result_ptr);
             },
 
             .conj => {
-                const item = stack.pop() orelse return error.BytecodeError;
-                const coll = stack.pop() orelse return error.BytecodeError;
-                const result = try vmConj(allocator, coll.*, item.*);
+                const item_entry = stack.pop() orelse return error.BytecodeError;
+                const coll_entry = stack.pop() orelse return error.BytecodeError;
+                const result = try vmConj(allocator, coll_entry.toValueConst(), item_entry.toValueConst());
                 const result_ptr = try eval_mod.allocValue(allocator, result);
-                vm.valueDeinit(item, allocator);
-                allocator.destroy(item);
-                vm.valueDeinit(coll, allocator);
-                allocator.destroy(coll);
-                try stack.push(result_ptr);
+                freeEntry(item_entry, allocator);
+                freeEntry(coll_entry, allocator);
+                try stack.pushPtr(result_ptr);
             },
 
             .nth => {
-                const idx = stack.pop() orelse return error.BytecodeError;
-                const coll = stack.pop() orelse return error.BytecodeError;
-                const result = try vmNth(allocator, coll.*, idx.*);
+                const idx_entry = stack.pop() orelse return error.BytecodeError;
+                const coll_entry = stack.pop() orelse return error.BytecodeError;
+                const result = try vmNth(allocator, coll_entry.toValueConst(), idx_entry.toValueConst());
                 const result_ptr = try eval_mod.allocValue(allocator, result);
-                vm.valueDeinit(idx, allocator);
-                allocator.destroy(idx);
-                vm.valueDeinit(coll, allocator);
-                allocator.destroy(coll);
-                try stack.push(result_ptr);
+                freeEntry(idx_entry, allocator);
+                freeEntry(coll_entry, allocator);
+                try stack.pushPtr(result_ptr);
             },
 
             .seq => {
-                const a = stack.pop() orelse return error.BytecodeError;
-                const result = try vmSeq(allocator, a.*);
+                const entry = stack.pop() orelse return error.BytecodeError;
+                const result = try vmSeq(allocator, entry.toValueConst());
                 const result_ptr = try eval_mod.allocValue(allocator, result);
-                vm.valueDeinit(a, allocator);
-                allocator.destroy(a);
-                try stack.push(result_ptr);
+                freeEntry(entry, allocator);
+                try stack.pushPtr(result_ptr);
             },
 
             .deref => {
-                const a = stack.pop() orelse return error.BytecodeError;
-                const result = try vmDeref(allocator, a.*);
+                const entry = stack.pop() orelse return error.BytecodeError;
+                const result = try vmDeref(allocator, entry.toValueConst());
                 const result_ptr = try eval_mod.allocValue(allocator, result);
-                vm.valueDeinit(a, allocator);
-                allocator.destroy(a);
-                try stack.push(result_ptr);
+                freeEntry(entry, allocator);
+                try stack.pushPtr(result_ptr);
             },
 
             .quote => {
@@ -923,20 +1204,37 @@ pub fn execute(
                 const idx = inst.operand;
                 if (idx >= program.constants.items.len) return error.BytecodeError;
                 const val = try vm.cloneGC(&program.constants.items[idx], allocator);
-                try stack.push(val);
+                try stack.pushPtr(val);
             },
 
             .loop_start => {
                 const loop_info_idx = inst.operand;
                 if (loop_info_idx >= program.loop_infos.items.len) return error.BytecodeError;
                 const info = program.loop_infos.items[loop_info_idx];
+                const binding_count = info.binding_sym_indices.len;
                 // Push a loop frame onto the loop stack
                 const frame = try allocator.create(LoopFrame);
+                // Allocate binding_values array — stores loop vars directly,
+                // avoiding env.put/get (HAMT) on every iteration.
+                const bvals = try allocator.alloc(StackEntry, binding_count);
+                // Initialize binding values from env (initial loop values were
+                // stored via store_var before loop_start was emitted).
+                var bi: usize = 0;
+                while (bi < binding_count) : (bi += 1) {
+                    const sym_name = program.symbols.items[info.binding_sym_indices[bi]];
+                    const val = try resolveSymbol(env, sym_name);
+                    bvals[bi] = switch (val) {
+                        .integer => StackEntry{ .integer = val.integer },
+                        .float => StackEntry{ .float = val.float },
+                        else => StackEntry{ .pointer = try vm.cloneGC(&val, allocator) },
+                    };
+                }
                 frame.* = .{
                     .loop_pc = pc - 1,
                     .body_pc = info.body_pc,
-                    .binding_count = info.binding_sym_indices.len,
+                    .binding_count = binding_count,
                     .binding_sym_indices = info.binding_sym_indices,
+                    .binding_values = bvals,
                 };
                 try loop_stack.append(allocator, frame);
             },
@@ -946,20 +1244,32 @@ pub fn execute(
                 const frame = loop_stack.items[loop_stack.items.len - 1];
                 const count = frame.binding_count;
                 // Pop count values from stack (in reverse order)
-                var temp_vals: std.ArrayListUnmanaged(*Value) = .empty;
-                errdefer temp_vals.deinit(allocator);
+                var temp_vals: std.ArrayListUnmanaged(StackEntry) = .empty;
+                errdefer { for (temp_vals.items) |ae| freeEntry(ae, allocator); temp_vals.deinit(allocator); }
                 var i: usize = 0;
                 while (i < count) : (i += 1) {
-                    const val_ptr = stack.pop() orelse return error.BytecodeError;
-                    try temp_vals.append(allocator, val_ptr);
+                    const val_entry = stack.pop() orelse return error.BytecodeError;
+                    try temp_vals.append(allocator, val_entry);
                 }
-                // Rebind in reverse order (first binding gets first value)
+                // Update binding values directly in the LoopFrame.
+                // No env.put needed — load_var checks LoopFrame first.
+                // This avoids HAMT allocation on every iteration.
                 var j: usize = temp_vals.items.len;
                 while (j > 0) : (j -= 1) {
-                    const val_ptr = temp_vals.items[j - 1];
-                    const sym_name = program.symbols.items[frame.binding_sym_indices[j - 1]];
-                    try env.put(sym_name, val_ptr.*);
+                    const val_entry = temp_vals.items[j - 1];
+                    // Free old pointer entry if upgrading from primitive to pointer
+                    const old_entry = frame.binding_values[j - 1];
+                    const new_entry = val_entry;
+                    switch (old_entry) {
+                        .integer, .float => {},
+                        .pointer => |v| {
+                            vm.valueDeinit(v, allocator);
+                            allocator.destroy(v);
+                        },
+                    }
+                    frame.binding_values[j - 1] = new_entry;
                 }
+                for (temp_vals.items) |ae| freeEntry(ae, allocator);
                 temp_vals.deinit(allocator);
                 // Jump to body
                 pc = frame.body_pc;
@@ -970,7 +1280,7 @@ pub fn execute(
                 const fn_meta = fn_pool.?[idx];
                 const fn_val = try vmMakeFn(allocator, fn_meta, env);
                 const fn_ptr = try eval_mod.allocValue(allocator, fn_val);
-                try stack.push(fn_ptr);
+                try stack.pushPtr(fn_ptr);
             },
         }
     }
@@ -981,15 +1291,32 @@ pub fn execute(
 }
 
 /// Perform a comparison operation.
+/// For = and !=, uses vm.compare (handles nil properly).
+/// For <, >, <=, >=, uses toNum conversion to match core_less etc.
 fn compareOp(op: OpCode, a: Value, b: Value) anyerror!Value {
-    const cmp = vm.compare(a, b);
     return switch (op) {
-        .eq => vm.boolValue(cmp == 0),
-        .ne => vm.boolValue(cmp != 0),
-        .lt => vm.boolValue(cmp < 0),
-        .gt => vm.boolValue(cmp > 0),
-        .le => vm.boolValue(cmp <= 0),
-        .ge => vm.boolValue(cmp >= 0),
+        .eq => vm.boolValue(vm.compare(a, b) == 0),
+        .ne => vm.boolValue(vm.compare(a, b) != 0),
+        .lt => {
+            const an = helpers.toNum(a);
+            const bn = helpers.toNum(b);
+            return vm.boolValue(an < bn);
+        },
+        .gt => {
+            const an = helpers.toNum(a);
+            const bn = helpers.toNum(b);
+            return vm.boolValue(an > bn);
+        },
+        .le => {
+            const an = helpers.toNum(a);
+            const bn = helpers.toNum(b);
+            return vm.boolValue(an <= bn);
+        },
+        .ge => {
+            const an = helpers.toNum(a);
+            const bn = helpers.toNum(b);
+            return vm.boolValue(an >= bn);
+        },
         else => unreachable,
     };
 }
@@ -1075,7 +1402,8 @@ fn delegateArithmetic(op: OpCode, a: Value, b: Value, allocator: Allocator, env:
     const call_result = try eval_mod.callWithEnv(allocator, &fn_val, &args, env, 0);
 
     switch (call_result) {
-        .value => |v| return try vm.shallowClone(v, allocator),
+        // Phase 1: .value is now Value by copy, pass &v to shallowClone
+        .value => |v| return try vm.shallowClone(&v, allocator),
         .trampoline => return error.NotImplemented,
     }
 }
@@ -1533,6 +1861,47 @@ const Compiler = struct {
     program: *BytecodeProgram,
     env: ?*vm.Env, // for macro expansion
 
+    /// Try to resolve a symbol at compile time using the function's captured environment.
+    /// If successful, adds the resolved value to resolved_values and emits load_cached.
+    /// If not, falls back to load_var (runtime resolution).
+    /// Returns true if pre-resolution succeeded, false if fell back to load_var.
+    fn tryResolveAndEmitLoad(self: *Compiler, sym_name: []const u8) anyerror!bool {
+        // Need env to resolve
+        const e = self.env orelse return false;
+
+        // Check for qualified symbol: alias/name or namespace/name
+        if (std.mem.indexOfScalar(u8, sym_name, '/')) |slash_idx| {
+            const alias = sym_name[0..slash_idx];
+            const name = sym_name[slash_idx + 1 ..];
+
+            // Try to resolve through namespace manager
+            const ns_mgr = eval_mod.findNsManager(e) orelse return false;
+
+            // Resolve alias to namespace name
+            const current_ns = ns_mgr.getCurrentNamespace();
+            const target_ns = ns_mgr.resolveAlias(current_ns, alias) orelse alias;
+
+            // Get target namespace's env
+            const target_env = ns_mgr.getNamespace(target_ns) orelse return false;
+
+            // Look up name in target namespace
+            const val = target_env.get(name) orelse return false;
+
+            // Pre-resolve: add to resolved_values and emit load_cached
+            const idx = try self.program.addResolvedValue(self.allocator, val);
+            _ = try self.program.emit(self.allocator, .load_cached, idx);
+            return true;
+        }
+
+        // Unqualified symbol — simple environment lookup (traverses parent chain)
+        const val = e.get(sym_name) orelse return false;
+
+        // Pre-resolve: add to resolved_values and emit load_cached
+        const idx = try self.program.addResolvedValue(self.allocator, val);
+        _ = try self.program.emit(self.allocator, .load_cached, idx);
+        return true;
+    }
+
     /// Compile a form (any Clojure expression).
     fn compileForm(self: *Compiler, form: Value) anyerror!void {
         switch (form) {
@@ -1552,7 +1921,11 @@ const Compiler = struct {
                 _ = try self.program.emit(self.allocator, .push_const, idx);
             },
             .symbol => |s| {
-                // Symbol reference: look up in environment
+                // Symbol reference: look up in environment at runtime.
+                // We do NOT pre-resolve standalone symbols because they might
+                // be function parameters that shadow captured variables.
+                // Pre-resolution is only done for function call operators
+                // (in compileFunctionCall) where the operator is unlikely to be a param.
                 const sym_idx = try self.program.addSymbol(self.allocator, s);
                 _ = try self.program.emit(self.allocator, .load_var, sym_idx);
             },
@@ -1787,17 +2160,29 @@ fn isSimpleBytecodeForm(form: Value) bool {
                     return self.compileArithmeticOp(items[1..], .rem);
                 }
 
-                // Comparison operators: =, !=, not=
-                // Only optimize equality comparisons (items.len == 3: op + 2 args).
+                // Comparison operators: =, !=, not=, <, >, <=, >=
+                // Only optimize 2-arg comparisons (items.len == 3: op + 2 args).
                 // Multi-arg comparisons need proper short-circuit logic.
-                // NOTE: We do NOT optimize <, >, <=, >= because they need numeric
-                // semantics (toNum conversion) which differs from vm.compare.
+                // vm.compare handles toNum conversion for numeric types,
+                // so <, >, <=, >= are safe to compile to direct opcodes.
                 if (items.len == 3) {
                     if (std.mem.eql(u8, op_name, "=")) {
                         return self.compileComparisonOp(items[1..], .eq);
                     }
                     if (std.mem.eql(u8, op_name, "!=") or std.mem.eql(u8, op_name, "not=")) {
                         return self.compileComparisonOp(items[1..], .ne);
+                    }
+                    if (std.mem.eql(u8, op_name, "<")) {
+                        return self.compileComparisonOp(items[1..], .lt);
+                    }
+                    if (std.mem.eql(u8, op_name, ">")) {
+                        return self.compileComparisonOp(items[1..], .gt);
+                    }
+                    if (std.mem.eql(u8, op_name, "<=")) {
+                        return self.compileComparisonOp(items[1..], .le);
+                    }
+                    if (std.mem.eql(u8, op_name, ">=")) {
+                        return self.compileComparisonOp(items[1..], .ge);
                     }
                 }
             }
@@ -1822,8 +2207,19 @@ fn isSimpleBytecodeForm(form: Value) bool {
             try self.compileForm(items[i]);
         }
 
-        // Compile the function (ends up on top of args)
-        try self.compileForm(items[0]);
+        // Compile the function (ends up on top of args).
+        // For symbol operators, try pre-resolution first to avoid runtime lookup.
+        if (std.meta.activeTag(items[0]) == .symbol) {
+            const op_name = items[0].symbol;
+            if (!try self.tryResolveAndEmitLoad(op_name)) {
+                // Pre-resolution failed (symbol not in env) — fall back to load_var
+                const sym_idx = try self.program.addSymbol(self.allocator, op_name);
+                _ = try self.program.emit(self.allocator, .load_var, sym_idx);
+            }
+        } else {
+            // Non-symbol operator (e.g., a list like ((fn [] ...) arg))
+            try self.compileForm(items[0]);
+        }
 
         // Call with n arguments
         _ = try self.program.emit(self.allocator, .call_n, n);
@@ -2292,11 +2688,8 @@ fn isSimpleBytecodeForm(form: Value) bool {
             }
         }
 
-        // Record body_pc (PC after loop_start)
-        const body_pc = self.program.instructions.items.len;
-
-        // Add loop info and emit loop_start
-        const loop_info_idx = try self.program.addLoopInfo(self.allocator, body_pc, sym_indices);
+        // Emit loop_start first, then record body_pc (PC of first body instruction)
+        const loop_info_idx = try self.program.addLoopInfo(self.allocator, self.program.instructions.items.len + 1, sym_indices);
         _ = try self.program.emit(self.allocator, .loop_start, loop_info_idx);
 
         // Compile body forms
@@ -3349,10 +3742,9 @@ test "bytecode::loop_recur: simple counter" {
     _ = try program.emit(allocator, .store_var, sym_i);
 
     // loop_start (body starts at next instruction)
-    const body_pc = program.instructions.items.len;
     const sym_indices = try allocator.alloc(usize, 1);
     sym_indices[0] = sym_i;
-    const loop_idx = try program.addLoopInfo(allocator, body_pc, sym_indices);
+    const loop_idx = try program.addLoopInfo(allocator, program.instructions.items.len + 1, sym_indices);
     _ = try program.emit(allocator, .loop_start, loop_idx);
 
     // Body: (if (>= i 5) i (recur (inc i)))
@@ -3421,11 +3813,10 @@ test "bytecode::loop_recur: accumulator" {
     _ = try program.emit(allocator, .store_var, sym_s);
 
     // loop_start
-    const body_pc = program.instructions.items.len;
     const sym_indices = try allocator.alloc(usize, 2);
     sym_indices[0] = sym_i;
     sym_indices[1] = sym_s;
-    const loop_idx = try program.addLoopInfo(allocator, body_pc, sym_indices);
+    const loop_idx = try program.addLoopInfo(allocator, program.instructions.items.len + 1, sym_indices);
     _ = try program.emit(allocator, .loop_start, loop_idx);
 
     // Body: (if (<= i 0) s (recur (dec i) (+ s i)))

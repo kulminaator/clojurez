@@ -303,6 +303,11 @@ pub const LazySeqThunk = struct {
     env: Env,
     custom_handler: ?LazySeqHandler = null,
     shared_coll: ?*const anyopaque = null,
+
+    // Direct field for map handler — stores the mapping function inline
+    // to avoid one env.put (HAMT allocation) per thunk step.
+    // Only map_fn is stored directly; coll/idx remain in env.
+    map_fn: ?Value = null,
 };
 
 pub const AtomData = struct {
@@ -1416,6 +1421,130 @@ pub fn fmt(val: Value, allocator: Allocator) anyerror![]const u8 {
     };
 }
 
+/// Format a value directly into an existing buffer (no intermediate string allocation).
+/// Used by core_str to avoid allocating per-argument formatted strings.
+pub fn fmtToBuffer(val: Value, buf: *std.ArrayListUnmanaged(u8), allocator: Allocator) anyerror!void {
+    return switch (val) {
+        .nil => buf.appendSlice(allocator, "nil"),
+        .bool => |b| if (b) buf.appendSlice(allocator, "true") else buf.appendSlice(allocator, "false"),
+        .integer => |i| {
+            var tmp: [32]u8 = undefined;
+            const s = std.fmt.bufPrint(&tmp, "{d}", .{i}) catch unreachable;
+            try buf.appendSlice(allocator, s);
+        },
+        .float => |f| {
+            var tmp: [64]u8 = undefined;
+            const s = std.fmt.bufPrint(&tmp, "{d}", .{f}) catch unreachable;
+            try buf.appendSlice(allocator, s);
+        },
+        .bigint => |ptr| {
+            const s = try ptr.toString(allocator);
+            defer allocator.free(s);
+            try buf.appendSlice(allocator, s);
+        },
+        .ratio => |ptr| {
+            const s = try ptr.toString(allocator);
+            defer allocator.free(s);
+            try buf.appendSlice(allocator, s);
+        },
+        .decimal => |ptr| {
+            const s = try ptr.toString(allocator);
+            defer allocator.free(s);
+            try buf.appendSlice(allocator, s);
+        },
+        .string => |s| {
+            try buf.append(allocator, '"');
+            try buf.appendSlice(allocator, s);
+            try buf.append(allocator, '"');
+        },
+        .regex => |s| {
+            try buf.appendSlice(allocator, "#\"");
+            try buf.appendSlice(allocator, s);
+            try buf.append(allocator, '"');
+        },
+        .character => |c| return try charFmtToBuffer(c, buf, allocator),
+        .symbol => |s| try buf.appendSlice(allocator, s),
+        .keyword => |s| {
+            try buf.append(allocator, ':');
+            try buf.appendSlice(allocator, s);
+        },
+        .list => |data| return try listFmtToBuffer(data.items, buf, allocator),
+        .vector => |data| return try vecFmtToBuffer(data.items, buf, allocator),
+        .map => |data| return try mapFmtToBuffer(data.entries, buf, allocator),
+        .set => |data| return try setFmtToBuffer(data.items, buf, allocator),
+        .queue => |data| return try queueFmtToBuffer(data.items, buf, allocator),
+        .function => buf.appendSlice(allocator, "#function"),
+        .builtin_fn => buf.appendSlice(allocator, "#builtin"),
+        .lazy_seq => buf.appendSlice(allocator, "#lazy-seq"),
+        .cons => |data| return try consFmtToBuffer(data, buf, allocator),
+        .chunk => |data| return try chunkFmtToBuffer(data, buf, allocator),
+        .chunked_cons => |data| return try chunkedConsFmtToBuffer(data, buf, allocator),
+        .atom => |data| {
+            try buf.appendSlice(allocator, "#atom(");
+            try fmtToBuffer(data.value, buf, allocator);
+            try buf.append(allocator, ')');
+        },
+        .future => |data| {
+            const state = data.state.load(.monotonic);
+            return switch (state) {
+                0 => buf.appendSlice(allocator, "#future(running)"),
+                1 => blk: {
+                    if (data.result) |*r| {
+                        try buf.appendSlice(allocator, "#future(");
+                        try fmtToBuffer(r.*, buf, allocator);
+                        try buf.append(allocator, ')');
+                        break :blk {};
+                    }
+                    break :blk buf.appendSlice(allocator, "#future(done)");
+                },
+                2 => blk: {
+                    if (data.error_msg) |msg| {
+                        try buf.appendSlice(allocator, "#future(error: ");
+                        try buf.appendSlice(allocator, msg);
+                        try buf.append(allocator, ')');
+                        break :blk {};
+                    }
+                    break :blk buf.appendSlice(allocator, "#future(error)");
+                },
+                else => buf.appendSlice(allocator, "#future(unknown)"),
+            };
+        },
+        .promise => |data| {
+            const state = data.state.load(.monotonic);
+            if (state == 0) return buf.appendSlice(allocator, "#promise(pending)");
+            if (data.value) |*v| {
+                try buf.appendSlice(allocator, "#promise(");
+                try fmtToBuffer(v.*, buf, allocator);
+                try buf.append(allocator, ')');
+                return;
+            }
+            return buf.appendSlice(allocator, "#promise(delivered)");
+        },
+        .reduced => |data| {
+            try buf.appendSlice(allocator, "#reduced(");
+            try fmtToBuffer(data.*, buf, allocator);
+            try buf.append(allocator, ')');
+        },
+        .wrapped => |w| {
+            var tmp: [32]u8 = undefined;
+            const s = std.fmt.bufPrint(&tmp, "#ptr({X})", .{w}) catch unreachable;
+            try buf.appendSlice(allocator, s);
+        },
+        .record => |rd| return try recordFmtToBuffer(rd, buf, allocator),
+        .exception => |ed| return try exceptionFmtToBuffer(ed, buf, allocator),
+        .ref => |data| {
+            try buf.appendSlice(allocator, "#ref(");
+            try fmtToBuffer(data.value, buf, allocator);
+            try buf.append(allocator, ')');
+        },
+        .multimethod => |data| {
+            try buf.appendSlice(allocator, "#multimethod(");
+            try fmtToBuffer(data.dispatch_fn, buf, allocator);
+            try buf.append(allocator, ')');
+        },
+    };
+}
+
 // ============================================================
 // Deep-clone a vm.Map
 // ============================================================
@@ -1424,6 +1553,15 @@ pub fn fmt(val: Value, allocator: Allocator) anyerror![]const u8 {
 fn exceptionFmt(ed: *const ExceptionData, allocator: Allocator) anyerror![]const u8 {
     return try std.fmt.allocPrint(allocator,
         "#error({s}: \"{s}\")", .{ ed.type_kw, ed.message });
+}
+
+/// Format an ExceptionData directly into a buffer.
+fn exceptionFmtToBuffer(ed: *const ExceptionData, buf: *std.ArrayListUnmanaged(u8), allocator: Allocator) anyerror!void {
+    try buf.appendSlice(allocator, "#error(");
+    try buf.appendSlice(allocator, ed.type_kw);
+    try buf.appendSlice(allocator, ": \"");
+    try buf.appendSlice(allocator, ed.message);
+    try buf.appendSlice(allocator, "\")");
 }
 
 /// Compare two cause chains for equality.
@@ -1709,6 +1847,177 @@ fn charFmt(c: u21, allocator: Allocator) anyerror![]const u8 {
     const utf8_len = std.unicode.utf8Encode(c, &utf8_buf) catch return error.InvalidUnicode;
     try buf.appendSlice(allocator, utf8_buf[0..utf8_len]);
     return buf.toOwnedSlice(allocator);
+}
+
+/// Format a character value directly into a buffer.
+fn charFmtToBuffer(c: u21, buf: *std.ArrayListUnmanaged(u8), allocator: Allocator) anyerror!void {
+    if (c == 9) return buf.appendSlice(allocator, "\\tab");
+    if (c == 10) return buf.appendSlice(allocator, "\\newline");
+    if (c == 13) return buf.appendSlice(allocator, "\\return");
+    if (c == 32) return buf.appendSlice(allocator, "\\space");
+    if (c == 12) return buf.appendSlice(allocator, "\\formfeed");
+
+    if (c < 128) {
+        const ch = @as(u8, @intCast(c));
+        var tmp: [4]u8 = undefined;
+        const s = std.fmt.bufPrint(&tmp, "\\{c}", .{ch}) catch unreachable;
+        return buf.appendSlice(allocator, s);
+    }
+
+    try buf.append(allocator, '\\');
+    var utf8_buf: [4]u8 = undefined;
+    const utf8_len = std.unicode.utf8Encode(c, &utf8_buf) catch return error.InvalidUnicode;
+    try buf.appendSlice(allocator, utf8_buf[0..utf8_len]);
+}
+
+// ============================================================
+// Buffer-based formatting helpers (no intermediate string allocation)
+// ============================================================
+
+/// Format a list directly into a buffer.
+fn listFmtToBuffer(items: list.List, buf: *std.ArrayListUnmanaged(u8), allocator: Allocator) anyerror!void {
+    try buf.append(allocator, '(');
+    for (items.items, 0..) |item, i| {
+        if (i > 0) try buf.append(allocator, ' ');
+        try fmtToBuffer(item, buf, allocator);
+    }
+    try buf.append(allocator, ')');
+}
+
+/// Format a vector directly into a buffer.
+fn vecFmtToBuffer(items: vec.Vector, buf: *std.ArrayListUnmanaged(u8), allocator: Allocator) anyerror!void {
+    try buf.append(allocator, '[');
+    for (items.items, 0..) |item, i| {
+        if (i > 0) try buf.append(allocator, ' ');
+        try fmtToBuffer(item, buf, allocator);
+    }
+    try buf.append(allocator, ']');
+}
+
+/// Format a set directly into a buffer.
+fn setFmtToBuffer(s: Set, buf: *std.ArrayListUnmanaged(u8), allocator: Allocator) anyerror!void {
+    try buf.appendSlice(allocator, "#{");
+    for (s.items, 0..) |item, i| {
+        if (i > 0) try buf.append(allocator, ' ');
+        try fmtToBuffer(item, buf, allocator);
+    }
+    try buf.append(allocator, '}');
+}
+
+/// Format a queue directly into a buffer.
+fn queueFmtToBuffer(q: Queue, buf: *std.ArrayListUnmanaged(u8), allocator: Allocator) anyerror!void {
+    try buf.appendSlice(allocator, "#queue(");
+    for (q.items, 0..) |item, i| {
+        if (i > 0) try buf.append(allocator, ' ');
+        try fmtToBuffer(item, buf, allocator);
+    }
+    try buf.append(allocator, ')');
+}
+
+/// Format a map directly into a buffer.
+fn mapFmtToBuffer(m: Map, buf: *std.ArrayListUnmanaged(u8), allocator: Allocator) anyerror!void {
+    try buf.append(allocator, '{');
+    for (m.items, 0..) |entry, i| {
+        if (i > 0) try buf.append(allocator, ' ');
+        try fmtToBuffer(entry.key, buf, allocator);
+        try buf.append(allocator, ' ');
+        try fmtToBuffer(entry.value, buf, allocator);
+    }
+    try buf.append(allocator, '}');
+}
+
+/// Format a cons cell directly into a buffer.
+fn consFmtToBuffer(data: *const ConsData, buf: *std.ArrayListUnmanaged(u8), allocator: Allocator) anyerror!void {
+    try buf.append(allocator, '(');
+
+    var head_ref: *const Value = &data.head;
+    var tail_ref: *const Value = &data.tail;
+    var first = true;
+
+    while (true) {
+        if (!first) try buf.append(allocator, ' ');
+        try fmtToBuffer(head_ref.*, buf, allocator);
+        first = false;
+
+        switch (tail_ref.*) {
+            .cons => {
+                const tail_data = tail_ref.cons;
+                head_ref = &tail_data.head;
+                tail_ref = &tail_data.tail;
+            },
+            .list => {
+                for (tail_ref.list.items.items) |item| {
+                    try buf.append(allocator, ' ');
+                    try fmtToBuffer(item, buf, allocator);
+                }
+                break;
+            },
+            .nil => break,
+            .lazy_seq => {
+                try buf.append(allocator, ' ');
+                try buf.appendSlice(allocator, "#lazy-seq");
+                break;
+            },
+            else => {
+                try buf.append(allocator, ' ');
+                try buf.append(allocator, '.');
+                try buf.append(allocator, ' ');
+                try fmtToBuffer(tail_ref.*, buf, allocator);
+                break;
+            },
+        }
+    }
+
+    try buf.append(allocator, ')');
+}
+
+/// Format a ChunkData directly into a buffer.
+fn chunkFmtToBuffer(data: *const ChunkData, buf: *std.ArrayListUnmanaged(u8), allocator: Allocator) anyerror!void {
+    try buf.append(allocator, '(');
+    var i: usize = data.off;
+    while (i < data.end) : (i += 1) {
+        if (i > data.off) try buf.append(allocator, ' ');
+        try fmtToBuffer(data.items[i], buf, allocator);
+    }
+    try buf.append(allocator, ')');
+}
+
+/// Format a ChunkedConsData directly into a buffer.
+fn chunkedConsFmtToBuffer(data: *const ChunkedConsData, buf: *std.ArrayListUnmanaged(u8), allocator: Allocator) anyerror!void {
+    try buf.append(allocator, '(');
+    var i: usize = data.chunk.off;
+    while (i < data.chunk.end) : (i += 1) {
+        if (i > data.chunk.off) try buf.append(allocator, ' ');
+        try fmtToBuffer(data.chunk.items[i], buf, allocator);
+    }
+    if (std.meta.activeTag(data.tail) != .nil) {
+        try buf.append(allocator, ' ');
+        try fmtToBuffer(data.tail, buf, allocator);
+    }
+    try buf.append(allocator, ')');
+}
+
+/// Format a RecordData directly into a buffer.
+fn recordFmtToBuffer(rd: *const RecordData, buf: *std.ArrayListUnmanaged(u8), allocator: Allocator) anyerror!void {
+    try buf.append(allocator, '#');
+    try buf.appendSlice(allocator, rd.type_name);
+    try buf.append(allocator, '{');
+
+    for (rd.fields.items, 0..) |entry, i| {
+        if (i > 0) try buf.append(allocator, ' ');
+        try fmtToBuffer(entry.key, buf, allocator);
+        try buf.append(allocator, ' ');
+        try fmtToBuffer(entry.value, buf, allocator);
+    }
+
+    for (rd.extmap.items, 0..) |entry, i| {
+        if (rd.fields.items.len > 0 or i > 0) try buf.append(allocator, ' ');
+        try fmtToBuffer(entry.key, buf, allocator);
+        try buf.append(allocator, ' ');
+        try fmtToBuffer(entry.value, buf, allocator);
+    }
+
+    try buf.append(allocator, '}');
 }
 
 // ============================================================
@@ -2080,10 +2389,14 @@ pub const Frame = struct {
     // True if any child frame is still alive.
     // Used for parent immutability enforcement (Phase 7).
     has_active_children: bool = false,
-    // The function body to evaluate (for trampoline frames).
-    // Only set for frames created by callFunction (Phase 9).
+    // The function body items to evaluate (for trampoline frames).
+    // Phase 2: stores a slice reference into arity.body.items instead of
+    // cloning into a temporary list Value. The body is part of the function
+    // definition (immutable, permanently rooted) — no clone needed.
     // null for scope frames (let, loop, binding).
-    body_form: ?Value = null,
+    body_form_items: ?[]const Value = null,
+    // Source line number for the body (for error reporting).
+    body_form_src_line: usize = 0,
     // True for frames created by callFunction (function call frames).
     // When true, symbol lookup skips the parent chain and goes directly
     // to root_env (the function's captured closure environment).
@@ -2281,11 +2594,8 @@ pub const Frame = struct {
             parent.has_active_children = parent.children.items.len > 0;
         }
         // Clean up this frame's resources
-        if (self.body_form) |bf_val| {
-            var bf = bf_val;
-            valueDeinit(&bf, allocator);
-        }
-        self.body_form = null;
+        self.body_form_items = null;
+        self.body_form_src_line = 0;
         self.overlay.root = null;
         self.overlay.count = 0;
         self.overlay.has_null = false;
@@ -2319,12 +2629,9 @@ pub const Frame = struct {
         // Clear memo cache (not needed after frame is done)
         self.memo_cache.deinit(allocator);
         self.memo_cache = .{};
-        // Clear body_form (body was already evaluated, no longer needed)
-        if (self.body_form) |bf_val| {
-            var bf = bf_val;
-            valueDeinit(&bf, allocator);
-        }
-        self.body_form = null;
+        // Clear body_form_items (body was already evaluated, no longer needed)
+        self.body_form_items = null;
+        self.body_form_src_line = 0;
         // Do NOT clear overlay — child frames on trampoline may still walk through us.
         // Do NOT null parent — child frames need the parent chain.
     }
@@ -2564,3 +2871,75 @@ pub const NamespaceManager = struct {
         return null;
     }
 };
+
+// ============================================================
+// Cached Keywords for Stats Functions
+// ============================================================
+// Keywords used in gc-stats and stack-stats are constant strings
+// that are created fresh on every call. This wastes allocations:
+//   - keywordValue() does allocator.dupe(u8, name) + tagStringData
+//   - gc-stats has 7 keywords = 7 string allocs per call
+//   - stack-stats has 4 keywords = 4 string allocs per call
+//
+// Solution: cache the keyword string data as singletons. The cached
+// strings are allocated once from the GC heap and reused forever.
+// This eliminates all keyword allocations in the hot stats path.
+// ============================================================
+
+const StatsKeywords = struct {
+    // gc-stats keywords
+    current_allocated: ?[]const u8 = null,
+    peak_allocated: ?[]const u8 = null,
+    total_allocated: ?[]const u8 = null,
+    total_freed: ?[]const u8 = null,
+    sweep_count: ?[]const u8 = null,
+    alloc_count: ?[]const u8 = null,
+    block_count: ?[]const u8 = null,
+    // stack-stats keywords
+    app_baseline: ?[]const u8 = null,
+    vm_baseline: ?[]const u8 = null,
+    current: ?[]const u8 = null,
+    usage: ?[]const u8 = null,
+};
+
+var stats_keywords: StatsKeywords = .{};
+
+/// Lazily initialize and return the cached keyword string for a given name.
+/// Returns the cached string on subsequent calls. Uses the GC allocator.
+pub fn getCachedKeyword(name: []const u8) anyerror![]const u8 {
+    // Resolve the cache slot for known keywords
+    const slot: ?*?[]const u8 = if (std.mem.eql(u8, name, "current-allocated")) &stats_keywords.current_allocated
+    else if (std.mem.eql(u8, name, "peak-allocated")) &stats_keywords.peak_allocated
+    else if (std.mem.eql(u8, name, "total-allocated")) &stats_keywords.total_allocated
+    else if (std.mem.eql(u8, name, "total-freed")) &stats_keywords.total_freed
+    else if (std.mem.eql(u8, name, "sweep-count")) &stats_keywords.sweep_count
+    else if (std.mem.eql(u8, name, "alloc-count")) &stats_keywords.alloc_count
+    else if (std.mem.eql(u8, name, "block-count")) &stats_keywords.block_count
+    else if (std.mem.eql(u8, name, "app-baseline")) &stats_keywords.app_baseline
+    else if (std.mem.eql(u8, name, "vm-baseline")) &stats_keywords.vm_baseline
+    else if (std.mem.eql(u8, name, "current")) &stats_keywords.current
+    else if (std.mem.eql(u8, name, "usage")) &stats_keywords.usage
+    else null;
+
+    if (slot) |s| {
+        if (s.*) |cached| return cached;
+
+        var allocator: Allocator = std.heap.page_allocator;
+        if (gc_mod.current_gc) |gc| allocator = gc.allocator();
+        const duped = try allocator.dupe(u8, name);
+        tagStringData(@as(*anyopaque, @ptrCast(@constCast(duped.ptr))));
+        s.* = duped;
+        return duped;
+    }
+
+    // Unknown keyword — allocate without caching
+    var allocator: Allocator = std.heap.page_allocator;
+    if (gc_mod.current_gc) |gc| allocator = gc.allocator();
+    return try allocator.dupe(u8, name);
+}
+
+/// Return a keyword Value using a cached string.
+/// Caller does NOT own the string — it is a global singleton.
+pub fn getCachedKeywordValue(name: []const u8) anyerror!Value {
+    return .{ .keyword = try getCachedKeyword(name) };
+}

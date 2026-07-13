@@ -99,7 +99,7 @@ pub fn core_stack_stats(self: *const Value, args: *const list.List, env: *Env) a
     };
 
     for (fields) |f| {
-        const key = try vm.keywordValue(allocator, f.key);
+        const key = try vm.getCachedKeywordValue(f.key);
         const val = vm.intValue(@as(i64, @intCast(f.val)));
         try entries.append(allocator, .{ .key = key, .value = val });
     }

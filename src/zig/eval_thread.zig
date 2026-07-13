@@ -147,9 +147,9 @@ pub fn evalCondThreadFirst(allocator: Allocator, forms: []const Value, frame: *v
                     try args.append(allocator, arg_ptr.*);
                 }
                 const call_result = try eval.call(allocator, op_ptr, &args, frame, depth);
-                const next_ptr = call_result.value;
+                // Phase 1: call_result.value is now Value by copy (not *Value)
                 vm.valueDeinit(&current, allocator);
-                current = next_ptr.*;
+                current = call_result.value;
             } else {
                 var new_call: list.List = .empty;
                 errdefer new_call.deinit(allocator);
@@ -197,9 +197,9 @@ pub fn evalCondThreadLast(allocator: Allocator, forms: []const Value, frame: *vm
                 }
                 try args.append(allocator, try vm.shallowClone(&current, allocator));
                 const call_result = try eval.call(allocator, op_ptr, &args, frame, depth);
-                const next_ptr = call_result.value;
+                // Phase 1: call_result.value is now Value by copy (not *Value)
                 vm.valueDeinit(&current, allocator);
-                current = next_ptr.*;
+                current = call_result.value;
             } else {
                 var new_call: list.List = .empty;
                 errdefer new_call.deinit(allocator);

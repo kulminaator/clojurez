@@ -94,11 +94,12 @@ pub fn core_re_find(self: *const Value, args: *const list.List, env: *Env) anyer
     const n = vm.utf8CodepointCount(str);
 
     var start: usize = 0;
-    while (start < n) : (start += 1) {
+    while (start <= n) : (start += 1) {
         const remaining = regexp.substringFrom(str, start);
-        const match_len = try regexp.nfaMatchLen(&nfa, remaining, allocator);
-        if (match_len > 0) {
-            const match_str = remaining[0..match_len];
+        const match_len = try regexp.nfaMatchLenAt(&nfa, remaining, allocator, start);
+        if (match_len != null) {
+            const len = match_len.?;
+            const match_str = remaining[0..len];
             return try vm.stringValue(allocator, match_str);
         }
     }
@@ -129,15 +130,20 @@ pub fn core_re_seq(self: *const Value, args: *const list.List, env: *Env) anyerr
     }
 
     var start: usize = 0;
-    while (start < n) {
+    while (start <= n) {
         const remaining = regexp.substringFrom(str, start);
-        const match_len = try regexp.nfaMatchLen(&nfa, remaining, allocator);
-        if (match_len > 0) {
-            const match_str = remaining[0..match_len];
+        const match_len = try regexp.nfaMatchLenAt(&nfa, remaining, allocator, start);
+        if (match_len != null) {
+            const len = match_len.?;
+            const match_str = remaining[0..len];
             try matches.append(allocator, try vm.stringValue(allocator, match_str));
-            // Advance past the match (by byte length / code point count)
-            const cp_count = vm.utf8CodepointCount(match_str);
-            start += cp_count;
+            // For zero-length matches, advance by 1 to avoid infinite loop
+            if (len == 0) {
+                start += 1;
+            } else {
+                const cp_count = vm.utf8CodepointCount(match_str);
+                start += cp_count;
+            }
         } else {
             start += 1;
         }
@@ -177,13 +183,15 @@ pub fn core_re_split(self: *const Value, args: *const list.List, env: *Env) anye
 
     var start: usize = 0;
     var last_end: usize = 0;
-    while (start < n) : (start += 1) {
+    while (start <= n) : (start += 1) {
         const remaining = regexp.substringFrom(str, start);
-        const match_len = try regexp.nfaMatchLen(&nfa, remaining, allocator);
-        if (match_len > 0) {
+        const match_len = try regexp.nfaMatchLenAt(&nfa, remaining, allocator, start);
+        if (match_len != null) {
+            const len = match_len.?;
+            if (len == 0) continue; // skip zero-length matches for split
             const before_str = regexp.substringRange(str, last_end, start);
             try parts.append(allocator, try vm.stringValue(allocator, before_str));
-            last_end = start + vm.utf8CodepointCount(remaining[0..match_len]);
+            last_end = start + vm.utf8CodepointCount(remaining[0..len]);
             start = last_end - 1; // -1 because loop increments
         }
     }
@@ -220,12 +228,13 @@ pub fn core_re_replace(self: *const Value, args: *const list.List, env: *Env) an
     const n = vm.utf8CodepointCount(str);
 
     var start: usize = 0;
-    while (start < n) : (start += 1) {
+    while (start <= n) : (start += 1) {
         const remaining = regexp.substringFrom(str, start);
-        const match_len = try regexp.nfaMatchLen(&nfa, remaining, allocator);
-        if (match_len > 0) {
-            const match_str = remaining[0..match_len];
-            const after = remaining[match_len..];
+        const match_len = try regexp.nfaMatchLenAt(&nfa, remaining, allocator, start);
+        if (match_len != null) {
+            const len = match_len.?;
+            const match_str = remaining[0..len];
+            const after = remaining[len..];
 
             // Get replacement string
             var repl_str: []const u8 = undefined;
@@ -277,11 +286,12 @@ pub fn core_re_replace_all(self: *const Value, args: *const list.List, env: *Env
     errdefer buf.deinit(allocator);
 
     var start: usize = 0;
-    while (start < n) {
+    while (start <= n) {
         const remaining = regexp.substringFrom(str, start);
-        const match_len = try regexp.nfaMatchLen(&nfa, remaining, allocator);
-        if (match_len > 0) {
-            const match_str = remaining[0..match_len];
+        const match_len = try regexp.nfaMatchLenAt(&nfa, remaining, allocator, start);
+        if (match_len != null) {
+            const len = match_len.?;
+            const match_str = remaining[0..len];
 
             // Get replacement string
             var repl_str: []const u8 = undefined;
@@ -299,7 +309,11 @@ pub fn core_re_replace_all(self: *const Value, args: *const list.List, env: *Env
             }
             try buf.appendSlice(allocator, repl_str);
 
-            start += vm.utf8CodepointCount(match_str);
+            if (len == 0) {
+                start += 1;
+            } else {
+                start += vm.utf8CodepointCount(match_str);
+            }
         } else {
             try buf.appendSlice(allocator, regexp.codepointBytes(str, start));
             start += 1;
@@ -336,7 +350,8 @@ fn getReplacementString(allocator: Allocator, v: Value) anyerror![]const u8 {
 
 fn callBuiltin(allocator: Allocator, op: Value, args: list.List, env: *Env) anyerror!Value {
     const call_result = try eval_mod.callWithEnv(allocator, &op, &args, env, 0);
-    return call_result.value.*;
+    // Phase 1: call_result.value is now Value by copy (not *Value)
+    return call_result.value;
 }
 
 // ============================================================

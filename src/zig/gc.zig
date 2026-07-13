@@ -70,6 +70,7 @@ pub const GCObjectType = enum(u8) {
     exception_data = 34,     // ExceptionData — runtime exception value
     ref_data = 35,           // RefData — STM reference value
     multimethod_data = 36,   // MultimethodData — multimethod dispatch
+    small_map = 37,          // SmallMap — linear array for small PersistentHashMaps (≤8 entries)
 };
 
 const Header = struct {
@@ -238,6 +239,149 @@ pub fn debugAllocPrintTop() void {
     std.log.err("=== END TOP ALLOCATION SOURCES ===\n", .{});
 }
 
+// ============================================================
+// Debug: print every allocation (with size and return address)
+// ============================================================
+var debug_print_allocs_active: bool = false;
+var debug_print_allocs_count: usize = 0;
+var debug_print_allocs_limit: usize = 0;
+
+/// Start printing every allocation to stderr.
+pub fn debugPrintAllocsStart(limit: usize) void {
+    debug_print_allocs_active = true;
+    debug_print_allocs_count = 0;
+    debug_print_allocs_limit = limit;
+}
+
+/// Stop printing every allocation.
+pub fn debugPrintAllocsStop() void {
+    debug_print_allocs_active = false;
+}
+
+/// Print the current allocation to stderr with stack trace.
+fn debugPrintAlloc(size: usize, return_addr: usize) void {
+    _ = return_addr;
+    if (!debug_print_allocs_active) return;
+    if (debug_print_allocs_count >= debug_print_allocs_limit) {
+        debug_print_allocs_active = false;
+        return;
+    }
+    std.debug.print("[ALLOC #{d}] size={d}\n", .{ debug_print_allocs_count + 1, size });
+
+    // Capture stack trace to find the real caller
+    var addr_buf: [32]usize = undefined;
+    const trace = std.debug.captureCurrentStackTrace(.{}, &addr_buf);
+    // Skip the first few frames (debugPrintAlloc, alloc, allocVTable, slab, etc.)
+    // to find the meaningful caller.
+    var i: usize = 0;
+    const skip_frames: usize = 5;
+    while (i < trace.return_addresses.len and i < skip_frames + 3) : (i += 1) {
+        if (i >= skip_frames) {
+            std.debug.print("  caller: 0x{x}\n", .{trace.return_addresses[i]});
+        }
+    }
+    debug_print_allocs_count += 1;
+}
+
+// ============================================================
+// Debug type-based allocation snapshot — counts blocks by GCObjectType
+// ============================================================
+
+/// Snapshot of block counts and bytes by GC object type.
+pub const DebugTypeSnapshot = struct {
+    /// Count of blocks per type (indexed by GCObjectType integer value).
+    counts: [38]usize = .{0} ** 38,
+    /// Total bytes per type.
+    bytes: [38]usize = .{0} ** 38,
+    /// Total alloc-count at time of snapshot.
+    alloc_count: usize = 0,
+    /// Total current-allocated at time of snapshot.
+    current_allocated: usize = 0,
+};
+
+/// Take a snapshot of all GC blocks, counting by object type.
+pub fn debugTypeSnapshot() DebugTypeSnapshot {
+    var snapshot: DebugTypeSnapshot = .{};
+    if (current_gc) |gc| {
+        snapshot.alloc_count = gc.alloc_count;
+        snapshot.current_allocated = gc.current_allocated;
+        var block = gc.blocks;
+        while (block) |b| {
+            const type_idx: usize = @intFromEnum(b.obj_type);
+            if (type_idx < snapshot.counts.len) {
+                snapshot.counts[type_idx] += 1;
+                snapshot.bytes[type_idx] += b.size;
+            }
+            block = b.next;
+        }
+    }
+    return snapshot;
+}
+
+/// Print the difference between two type snapshots.
+pub fn debugTypeSnapshotDiff(before: DebugTypeSnapshot, after: DebugTypeSnapshot) void {
+    const type_names = [_][]const u8{
+        "unknown", "value_array", "map_entries", "set_items", "queue_items",
+        "lazy_seq_thunk", "atom_data", "future_data", "promise_data",
+        "fn_data", "cons_data", "hash_map_node", "hash_map_kvp_array", "hash_map_sub_nodes",
+        "env", "namespace_manager", "record_data", "list_data", "vector_data",
+        "map_data", "set_data", "queue_data", "fn_arities", "string_data",
+        "bigint_limbs", "bigint_data", "ratio_data", "decimal_data",
+        "bytecode_program", "chunk_data", "chunked_cons_data", "frame",
+        "value_cache", "exception_data", "ref_data", "multimethod_data",
+        "small_map",
+    };
+
+    std.log.err("\n=== ALLOCATION DIFF (type | before | after | delta count | delta bytes) ===\n", .{});
+    var total_delta_count: usize = 0;
+    var total_delta_bytes: usize = 0;
+    var i: usize = 0;
+    while (i < type_names.len) : (i += 1) {
+        const count_before = if (i < before.counts.len) before.counts[i] else 0;
+        const count_after = if (i < after.counts.len) after.counts[i] else 0;
+        const bytes_before = if (i < before.bytes.len) before.bytes[i] else 0;
+        const bytes_after = if (i < after.bytes.len) after.bytes[i] else 0;
+        const delta_count = if (count_after > count_before) count_after - count_before else 0;
+        const delta_bytes = if (bytes_after > bytes_before) bytes_after - bytes_before else 0;
+        if (delta_count > 0 or delta_bytes > 0) {
+            std.log.err("  {s}: {d} -> {d}  (+{d} blocks, +{d} bytes)\n",
+                .{ type_names[i], count_before, count_after, delta_count, delta_bytes });
+            total_delta_count += delta_count;
+            total_delta_bytes += delta_bytes;
+        }
+    }
+    std.log.err("  TOTAL: +{d} blocks, +{d} bytes\n", .{ total_delta_count, total_delta_bytes });
+    std.log.err("=== END ALLOCATION DIFF ===\n", .{});
+}
+
+/// Print a full type snapshot (not diff).
+pub fn debugTypeSnapshotPrint(label: []const u8, snapshot: DebugTypeSnapshot) void {
+    const type_names = [_][]const u8{
+        "unknown", "value_array", "map_entries", "set_items", "queue_items",
+        "lazy_seq_thunk", "atom_data", "future_data", "promise_data",
+        "fn_data", "cons_data", "hash_map_node", "hash_map_kvp_array", "hash_map_sub_nodes",
+        "env", "namespace_manager", "record_data", "list_data", "vector_data",
+        "map_data", "set_data", "queue_data", "fn_arities", "string_data",
+        "bigint_limbs", "bigint_data", "ratio_data", "decimal_data",
+        "bytecode_program", "chunk_data", "chunked_cons_data", "frame",
+        "value_cache", "exception_data", "ref_data", "multimethod_data",
+        "small_map",
+    };
+
+    std.log.err("\n=== TYPE SNAPSHOT: {s} (alloc-count={d}, current-allocated={d}) ===\n",
+        .{ label, snapshot.alloc_count, snapshot.current_allocated });
+    var i: usize = 0;
+    while (i < type_names.len) : (i += 1) {
+        const count = if (i < snapshot.counts.len) snapshot.counts[i] else 0;
+        const bytes = if (i < snapshot.bytes.len) snapshot.bytes[i] else 0;
+        if (count > 0) {
+            std.log.err("  {s}: {d} blocks, {d} bytes ({d}KB)\n",
+                .{ type_names[i], count, bytes, bytes / 1024 });
+        }
+    }
+    std.log.err("=== END TYPE SNAPSHOT ===\n", .{});
+}
+
 pub const GC = struct {
     const Self = @This();
 
@@ -392,6 +536,8 @@ pub const GC = struct {
         }
         // Stack trace capture (writes to file)
         debugAllocWriteStackTrace(actual_size);
+        // Print every allocation (when active)
+        debugPrintAlloc(actual_size, @returnAddress());
 
         // Convert log2 alignment to actual alignment value
         const data_align: usize = @as(usize, 1) << @intFromEnum(alignment);

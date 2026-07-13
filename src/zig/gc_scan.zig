@@ -57,6 +57,7 @@ pub fn valueScanFn(obj: *anyopaque, ctx: *gc.ScanContext) void {
         .hash_map_node => phm.scanHashMapNode(obj, ctx),
         .hash_map_kvp_array => scanKvpArray(obj, ctx, header.size),
         .hash_map_sub_nodes => scanSubNodesArray(obj, ctx, header.size),
+        .small_map => phm.scanSmallMap(obj, ctx),
         .env => scanEnv(obj, ctx),
         .namespace_manager => scanNamespaceManager(obj, ctx),
         .record_data => scanRecordData(obj, ctx),
@@ -437,6 +438,10 @@ fn scanLazySeqThunk(thunk_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     if (thunk.shared_coll) |sc| {
         markPtr(sc, ctx);
     }
+    // Mark map_fn (inline Value stored to avoid one env.put per thunk step).
+    if (thunk.map_fn) |fn_val| {
+        scanValueChildrenDirect(&fn_val, ctx);
+    }
 }
 
 /// Scan AtomData: { value: Value, ref_count: usize }.
@@ -494,9 +499,12 @@ fn scanFnData(fndata_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     // Mark the fn's env struct itself (heap-allocated *Env)
     const fn_env = fndata.env;
     ctx.gc.markRecursive(fn_env, ctx);
-    // Mark the fn's env HAMT root node (triggers recursive scanning)
+    // Mark the fn's env HAMT root node + small_entries (triggers recursive scanning)
     if (fn_env.entries.root) |root| {
         ctx.gc.markRecursive(root, ctx);
+    }
+    if (fn_env.entries.small_entries) |sm| {
+        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(sm)), ctx);
     }
     // Mark the fn's env parent and ns_manager
     if (fn_env.parent) |parent| {
@@ -575,16 +583,26 @@ fn scanEnv(env_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     const env: *vm.Env = @ptrCast(@alignCast(env_ptr));
 
     // Mark the HAMT root node (triggers recursive scanning of all nodes)
+    // Also mark small_entries for small maps (≤8 entries use linear array, not HAMT)
     if (env.entries.root) |root| {
         ctx.gc.markRecursive(root, ctx);
+    }
+    if (env.entries.small_entries) |sm| {
+        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(sm)), ctx);
     }
     // Mark metas HAMT
     if (env.metas.root) |root| {
         ctx.gc.markRecursive(root, ctx);
     }
+    if (env.metas.small_entries) |sm| {
+        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(sm)), ctx);
+    }
     // Mark dynamic_vars HAMT
     if (env.dynamic_vars.root) |root| {
         ctx.gc.markRecursive(root, ctx);
+    }
+    if (env.dynamic_vars.small_entries) |sm| {
+        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(sm)), ctx);
     }
     // Mark referred_names list buffer and strings
     if (env.referred_names.items.len > 0) {
@@ -759,6 +777,11 @@ fn scanBytecodeProgram(bc_ptr: *anyopaque, ctx: *gc.ScanContext) void {
             }
         }
     }
+    // Mark resolved_values array and scan each Value in it
+    if (bc.resolved_values.items.len > 0) {
+        ctx.gc.setObjectType(bc.resolved_values.items.ptr, gc.GCObjectType.value_array);
+        ctx.gc.markRecursive(bc.resolved_values.items.ptr, ctx);
+    }
     // Mark source_markers array (backing memory + individual file strings)
     if (bc.source_markers.items.len > 0) {
         markPtr(bc.source_markers.items.ptr, ctx);
@@ -787,17 +810,26 @@ fn scanNamespaceManager(ns_mgr_ptr: *anyopaque, ctx: *gc.ScanContext) void {
 
     // Mark current_ns string
     if (ns_mgr.current_ns.len > 0) markPtr(ns_mgr.current_ns.ptr, ctx);
-    // Mark namespaces PersistentHashMap root node
+    // Mark namespaces PersistentHashMap root node + small_entries
     if (ns_mgr.namespaces.root) |root| {
         ctx.gc.markRecursive(root, ctx);
     }
-    // Mark aliases PersistentHashMap root node
+    if (ns_mgr.namespaces.small_entries) |sm| {
+        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(sm)), ctx);
+    }
+    // Mark aliases PersistentHashMap root node + small_entries
     if (ns_mgr.aliases.root) |root| {
         ctx.gc.markRecursive(root, ctx);
     }
-    // Mark dynamic_vars PersistentHashMap root node
+    if (ns_mgr.aliases.small_entries) |sm| {
+        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(sm)), ctx);
+    }
+    // Mark dynamic_vars PersistentHashMap root node + small_entries
     if (ns_mgr.dynamic_vars.root) |root| {
         ctx.gc.markRecursive(root, ctx);
+    }
+    if (ns_mgr.dynamic_vars.small_entries) |sm| {
+        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(sm)), ctx);
     }
     // Mark classpath buffer and strings
     if (ns_mgr.classpath.items.len > 0) {
@@ -824,9 +856,12 @@ fn scanFrame(frame_ptr: *anyopaque, ctx: *gc.ScanContext) void {
             ctx.gc.markRecursive(child, ctx);
         }
     }
-    // Mark overlay HAMT root (triggers recursive scanning of HAMT nodes)
+    // Mark overlay HAMT root + small_entries (triggers recursive scanning)
     if (frame.overlay.root) |root| {
         ctx.gc.markRecursive(root, ctx);
+    }
+    if (frame.overlay.small_entries) |sm| {
+        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(sm)), ctx);
     }
     // Mark memo cache entries (StringHashMapUnmanaged values are Value objects)
     if (frame.memo_cache.count() > 0) {
@@ -841,10 +876,8 @@ fn scanFrame(frame_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     if (frame.function_ref) |*ref| {
         scanValueChildrenDirect(ref, ctx);
     }
-    // Mark body_form if present (Phase 9: trampoline body stored in Frame)
-    if (frame.body_form) |*bf| {
-        scanValueChildrenDirect(bf, ctx);
-    }
+    // Phase 2: body_form_items is a slice into arity.body.items which is
+    // permanently rooted via the function definition. No GC scanning needed.
 }
 
 /// Scan ExceptionData: { message, data, cause, type_kw, allocator }.

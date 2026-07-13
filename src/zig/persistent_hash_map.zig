@@ -80,6 +80,271 @@ fn newSubNodesArrayLen(allocator: Allocator, len: usize) []?*Node {
     return arr;
 }
 
+/// Check if a symbol Value's string is in the phm.sym cache.
+/// Cached symbols are safe to share without cloning because their string
+/// data is on page_allocator (never freed).
+pub fn isCachedSymbol(val: Value) bool {
+    if (std.meta.activeTag(val) != .symbol) return false;
+    const s = val.symbol;
+    // Acquire spinlock to protect sym_cache from concurrent access
+    while (sym_cache_mutex.cmpxchgStrong(0, 1, .acq_rel, .monotonic) != null) {}
+    defer sym_cache_mutex.store(0, .release);
+    return sym_cache.get(s) != null;
+}
+
+/// Clone a Value only if it owns data that needs independent ownership.
+/// For cached symbols and immediate types, returns the Value as-is (no allocation).
+/// For all other types, delegates to vm.shallowClone.
+fn safeClone(val: Value, allocator: Allocator) anyerror!Value {
+    // Cached symbols are safe to share — no clone needed
+    if (isCachedSymbol(val)) return val;
+    // Immediate types: no heap data to clone, just copy the Value union.
+    // This avoids the shallowClone call overhead (switch + function call).
+    // Note: ValueCache provides *Value pointers for collections (ArrayList),
+    // but HAMT stores Value by value. These are Value unions, not pointers.
+    // shallowClone for these types already returns val.* (no alloc),
+    // so we shortcut here to skip the function call entirely.
+    switch (val) {
+        .nil, .bool, .integer, .float => return val,
+        else => return vm.shallowClone(&val, allocator),
+    }
+}
+
+// ============================================================
+// SmallMap — linear array for small PersistentHashMaps (≤8 entries)
+// ============================================================
+
+/// Threshold: maps with ≤ this many non-null entries use SmallMap.
+/// At 8 entries, linear search averages 4 comparisons — still fast.
+/// Beyond 8, HAMT's O(log₃₂ n) lookup becomes worthwhile.
+const SMALL_MAP_THRESHOLD: usize = 8;
+
+/// SmallMap — linear array of key-value pairs for small maps.
+/// Allocated via GC, registered as GCObjectType.small_map.
+/// Used internally by PersistentHashMap — not exposed to consumers.
+const SmallMap = struct {
+    entries: []Kvp, // GC-allocated array of Kvp (capacity = SMALL_MAP_THRESHOLD)
+    len: usize,     // number of active entries
+
+    /// Find a value by key. Linear scan.
+    pub fn find(self: *const SmallMap, key: Value) ?Value {
+        var i: usize = 0;
+        while (i < self.len) : (i += 1) {
+            if (vm.equals(self.entries[i].key, key)) return self.entries[i].val;
+        }
+        return null;
+    }
+
+    /// Find a value by key, returning pointer to stored Value.
+    pub fn findPtr(self: *const SmallMap, key: Value) ?*const Value {
+        var i: usize = 0;
+        while (i < self.len) : (i += 1) {
+            if (vm.equals(self.entries[i].key, key)) return &self.entries[i].val;
+        }
+        return null;
+    }
+
+    /// Check if key exists.
+    pub fn containsKey(self: *const SmallMap, key: Value) bool {
+        return self.find(key) != null;
+    }
+
+    /// Associate a key-value pair. Returns a NEW SmallMap (copy-on-write).
+    /// If the new count would exceed threshold, returns null to signal upgrade.
+    pub fn smAssoc(self: *const SmallMap, allocator: Allocator, key: Value, val: Value, addedLeaf: *LeafFlag) anyerror!?*SmallMap {
+        // Check if key already exists (update in place)
+        var i: usize = 0;
+        while (i < self.len) : (i += 1) {
+            if (vm.equals(self.entries[i].key, key)) {
+                if (vm.equals(self.entries[i].val, val)) {
+                    // Same value — return a structural clone (shares entries array)
+                    return self.cloneSmall(allocator);
+                }
+                // Update value — create new SmallMap with updated entry
+                return createSmallMapWithValue(allocator, self, i, val);
+            }
+        }
+        // New key — check if we have room
+        if (self.len >= SMALL_MAP_THRESHOLD) {
+            // Need to upgrade to HAMT. Signal caller.
+            addedLeaf.set(true);
+            return null;
+        }
+        addedLeaf.set(true);
+        return createSmallMapWithLeaf(allocator, self, key, val);
+    }
+
+    /// Remove a key. Returns a new SmallMap with the entry removed.
+    pub fn smWithout(self: *const SmallMap, allocator: Allocator, key: Value, removedLeaf: *LeafFlag) anyerror!*SmallMap {
+        var i: usize = 0;
+        while (i < self.len) : (i += 1) {
+            if (vm.equals(self.entries[i].key, key)) {
+                removedLeaf.set(true);
+                return createSmallMapWithout(allocator, self, i);
+            }
+        }
+        // Key not found — return structural clone
+        return self.cloneSmall(allocator);
+    }
+
+    /// Clone the SmallMap struct (shares the entries array — structural sharing).
+    pub fn cloneSmall(self: *const SmallMap, allocator: Allocator) *SmallMap {
+        const sm = allocator.create(SmallMap) catch @panic("OOM");
+        sm.* = SmallMap{
+            .entries = self.entries, // share array — entries are immutable
+            .len = self.len,
+        };
+        if (gc.current_gc) |gc_inst| {
+            gc_inst.setObjectType(@as(*anyopaque, @ptrCast(sm)), gc.GCObjectType.small_map);
+        }
+        return sm;
+    }
+
+    fn deinitSmall(self: *SmallMap, allocator: Allocator) void {
+        // Don't deinit entries array — it's shared via structural sharing.
+        // The GC will free it when unreachable.
+        // Only deinit the SmallMap struct itself.
+        allocator.destroy(self);
+    }
+};
+
+/// Allocate a new SmallMap with a single entry.
+fn createSmallMapLeaf(allocator: Allocator, key: Value, val: Value, addedLeaf: *LeafFlag) anyerror!*SmallMap {
+    addedLeaf.set(true);
+    const cloned_key = try safeClone(key, allocator);
+    const cloned_val = try safeClone(val, allocator);
+    var kvs: [1]Kvp = .{.{ .key = cloned_key, .val = cloned_val }};
+    const arr = newKvpArray(allocator, &kvs);
+
+    const sm = allocator.create(SmallMap) catch @panic("OOM");
+    sm.* = SmallMap{ .entries = arr, .len = 1 };
+    if (gc.current_gc) |gc_inst| {
+        gc_inst.setObjectType(@as(*anyopaque, @ptrCast(sm)), gc.GCObjectType.small_map);
+    }
+    return sm;
+}
+
+/// Create a new SmallMap with an entry added at the end.
+fn createSmallMapWithLeaf(allocator: Allocator, src: *const SmallMap, key: Value, val: Value) anyerror!*SmallMap {
+    const new_len = src.len + 1;
+    var new_kvs = newKvpArrayLen(allocator, new_len);
+    errdefer { for (new_kvs) |*kvp| { vm.valueDeinit(&kvp.key, allocator); vm.valueDeinit(&kvp.val, allocator); } allocator.free(new_kvs); }
+
+    var i: usize = 0;
+    while (i < src.len) : (i += 1) {
+        new_kvs[i] = .{
+            .key = try safeClone(src.entries[i].key, allocator),
+            .val = try safeClone(src.entries[i].val, allocator),
+        };
+    }
+    new_kvs[new_len - 1] = .{
+        .key = try safeClone(key, allocator),
+        .val = try safeClone(val, allocator),
+    };
+
+    const sm = allocator.create(SmallMap) catch @panic("OOM");
+    sm.* = SmallMap{ .entries = new_kvs, .len = new_len };
+    if (gc.current_gc) |gc_inst| {
+        gc_inst.setObjectType(@as(*anyopaque, @ptrCast(sm)), gc.GCObjectType.small_map);
+    }
+    return sm;
+}
+
+/// Create a new SmallMap with a value updated at index.
+fn createSmallMapWithValue(allocator: Allocator, src: *const SmallMap, idx: usize, new_val: Value) anyerror!*SmallMap {
+    const new_len = src.len;
+    var new_kvs = newKvpArrayLen(allocator, new_len);
+    errdefer { for (new_kvs) |*kvp| { vm.valueDeinit(&kvp.key, allocator); vm.valueDeinit(&kvp.val, allocator); } allocator.free(new_kvs); }
+
+    var i: usize = 0;
+    while (i < new_len) : (i += 1) {
+        if (i == idx) {
+            new_kvs[i] = .{
+                .key = try safeClone(src.entries[i].key, allocator),
+                .val = try safeClone(new_val, allocator),
+            };
+        } else {
+            new_kvs[i] = .{
+                .key = try safeClone(src.entries[i].key, allocator),
+                .val = try safeClone(src.entries[i].val, allocator),
+            };
+        }
+    }
+
+    const sm = allocator.create(SmallMap) catch @panic("OOM");
+    sm.* = SmallMap{ .entries = new_kvs, .len = new_len };
+    if (gc.current_gc) |gc_inst| {
+        gc_inst.setObjectType(@as(*anyopaque, @ptrCast(sm)), gc.GCObjectType.small_map);
+    }
+    return sm;
+}
+
+/// Create a new SmallMap with an entry removed at index.
+fn createSmallMapWithout(allocator: Allocator, src: *const SmallMap, remove_idx: usize) anyerror!*SmallMap {
+    const new_len = src.len - 1;
+    if (new_len == 0) {
+        // Return empty — caller will set small_entries to null
+        const sm = allocator.create(SmallMap) catch @panic("OOM");
+        sm.* = SmallMap{ .entries = &.{}, .len = 0 };
+        if (gc.current_gc) |gc_inst| {
+            gc_inst.setObjectType(@as(*anyopaque, @ptrCast(sm)), gc.GCObjectType.small_map);
+        }
+        return sm;
+    }
+    var new_kvs = newKvpArrayLen(allocator, new_len);
+    errdefer { for (new_kvs) |*kvp| { vm.valueDeinit(&kvp.key, allocator); vm.valueDeinit(&kvp.val, allocator); } allocator.free(new_kvs); }
+
+    var j: usize = 0;
+    var i: usize = 0;
+    while (i < src.len) : (i += 1) {
+        if (i == remove_idx) {
+            continue;
+        }
+        new_kvs[j] = .{
+            .key = try safeClone(src.entries[i].key, allocator),
+            .val = try safeClone(src.entries[i].val, allocator),
+        };
+        j += 1;
+    }
+
+    const sm = allocator.create(SmallMap) catch @panic("OOM");
+    sm.* = SmallMap{ .entries = new_kvs, .len = new_len };
+    if (gc.current_gc) |gc_inst| {
+        gc_inst.setObjectType(@as(*anyopaque, @ptrCast(sm)), gc.GCObjectType.small_map);
+    }
+    return sm;
+}
+
+/// Convert a SmallMap to a HAMT root by inserting all entries directly into HAMT nodes.
+/// Takes the existing SmallMap entries + one new entry (new_key, new_val).
+/// Builds the HAMT directly to avoid going through mapAssoc (which would create
+/// a new SmallMap and cause infinite recursion).
+fn smallMapToHAMT(allocator: Allocator, sm: *const SmallMap, new_key: Value, new_val: Value) anyerror!*Node {
+    var addedLeaf = LeafFlag{};
+    var root: ?*Node = null;
+
+    // Insert all existing entries directly into HAMT nodes
+    var i: usize = 0;
+    while (i < sm.len) : (i += 1) {
+        const h = valueHash(sm.entries[i].key);
+        if (root) |r| {
+            root = try nodeAssoc(r, allocator, 0, h, sm.entries[i].key, sm.entries[i].val, &addedLeaf);
+        } else {
+            root = try createBitmapLeaf(allocator, 0, h, sm.entries[i].key, sm.entries[i].val, &addedLeaf);
+        }
+    }
+
+    // Insert the new entry
+    const h = valueHash(new_key);
+    if (root) |r| {
+        root = try nodeAssoc(r, allocator, 0, h, new_key, new_val, &addedLeaf);
+    } else {
+        root = try createBitmapLeaf(allocator, 0, h, new_key, new_val, &addedLeaf);
+    }
+
+    return root.?;
+}
+
 // ============================================================
 // Hash code computation for Value types
 // Mirrors Clojure's hasheq behavior
@@ -408,8 +673,8 @@ const BitmapIndexedNode = struct {
         var i: usize = 0;
         while (i < self.array.len) : (i += 1) {
             new_kvs[i] = .{
-                .key = vm.shallowClone(&self.array[i].key, allocator) catch @panic("OOM"),
-                .val = vm.shallowClone(&self.array[i].val, allocator) catch @panic("OOM"),
+                .key = safeClone(self.array[i].key, allocator) catch @panic("OOM"),
+                .val = safeClone(self.array[i].val, allocator) catch @panic("OOM"),
             };
         }
         const new_subs = newSubNodesArray(allocator, self.sub_nodes);
@@ -618,8 +883,8 @@ const HashCollisionNode = struct {
         var i: usize = 0;
         while (i < self.kvs.len) : (i += 1) {
             new_kvs[i] = .{
-                .key = vm.shallowClone(&self.kvs[i].key, allocator) catch @panic("OOM"),
-                .val = vm.shallowClone(&self.kvs[i].val, allocator) catch @panic("OOM"),
+                .key = safeClone(self.kvs[i].key, allocator) catch @panic("OOM"),
+                .val = safeClone(self.kvs[i].val, allocator) catch @panic("OOM"),
             };
         }
         return newNode(allocator, Node{
@@ -711,6 +976,7 @@ fn deinitNodePtr(node: *Node, allocator: Allocator) void {
 pub const PersistentHashMap = struct {
     count: usize,
     root: ?*Node,
+    small_entries: ?*SmallMap, // non-null when count > 0 and count <= SMALL_MAP_THRESHOLD
     has_null: bool,
     null_value: Value,
 
@@ -718,6 +984,7 @@ pub const PersistentHashMap = struct {
     pub const EMPTY: PersistentHashMap = .{
         .count = 0,
         .root = null,
+        .small_entries = null,
         .has_null = false,
         .null_value = vm.nilValue(),
     };
@@ -740,6 +1007,10 @@ pub const PersistentHashMap = struct {
     /// Check if the map contains the given key.
     pub fn containsKey(self: PersistentHashMap, key: Value) bool {
         if (vm.getType(key) == .nil) return self.has_null;
+        if (self.count == 0) return false;
+        // Small map path
+        if (self.small_entries) |sm| return sm.containsKey(key);
+        // HAMT path
         if (self.root == null) return false;
         const h = valueHash(key);
         return nodeFindLeaf(self.root.?, 0, h, key) != null;
@@ -751,6 +1022,10 @@ pub const PersistentHashMap = struct {
             if (self.has_null) return self.null_value;
             return null;
         }
+        if (self.count == 0) return null;
+        // Small map path
+        if (self.small_entries) |sm| return sm.find(key);
+        // HAMT path
         if (self.root == null) return null;
         const h = valueHash(key);
         const result = nodeFindLeaf(self.root.?, 0, h, key);
@@ -771,6 +1046,10 @@ pub const PersistentHashMap = struct {
             if (self.has_null) return &self.null_value;
             return null;
         }
+        if (self.count == 0) return null;
+        // Small map path
+        if (self.small_entries) |sm| return sm.findPtr(key);
+        // HAMT path
         if (self.root == null) return null;
         const h = valueHash(key);
         return nodeFindPtr(self.root.?, 0, h, key);
@@ -783,11 +1062,54 @@ pub const PersistentHashMap = struct {
             return PersistentHashMap{
                 .count = if (self.has_null) self.count else self.count + 1,
                 .root = self.root,
+                .small_entries = self.small_entries,
                 .has_null = true,
                 .null_value = val,
             };
         }
 
+        // Small map path
+        if (self.small_entries) |sm| {
+            var addedLeaf = LeafFlag{};
+            const new_sm = try sm.smAssoc(allocator, key, val, &addedLeaf);
+            const new_count = if (addedLeaf.get()) self.count + 1 else self.count;
+
+            if (new_sm) |sm_ptr| {
+                // Still fits in small map
+                return PersistentHashMap{
+                    .count = new_count,
+                    .root = null,
+                    .small_entries = sm_ptr,
+                    .has_null = self.has_null,
+                    .null_value = self.null_value,
+                };
+            }
+            // Exceeded threshold — upgrade to HAMT.
+            // Build HAMT directly to avoid recursion through mapAssoc.
+            const new_root = try smallMapToHAMT(allocator, sm, key, val);
+            return PersistentHashMap{
+                .count = new_count,
+                .root = new_root,
+                .small_entries = null,
+                .has_null = self.has_null,
+                .null_value = self.null_value,
+            };
+        }
+
+        // Empty map — create small map (cheaper than HAMT for 1 entry)
+        if (self.count == 0) {
+            var addedLeaf = LeafFlag{};
+            const sm = try createSmallMapLeaf(allocator, key, val, &addedLeaf);
+            return PersistentHashMap{
+                .count = 1,
+                .root = null,
+                .small_entries = sm,
+                .has_null = self.has_null,
+                .null_value = self.null_value,
+            };
+        }
+
+        // HAMT path
         const h = valueHash(key);
         var addedLeaf = LeafFlag{};
         const new_root: *Node = if (self.root) |root| blk: {
@@ -800,6 +1122,7 @@ pub const PersistentHashMap = struct {
         return PersistentHashMap{
             .count = new_count,
             .root = new_root,
+            .small_entries = null,
             .has_null = self.has_null,
             .null_value = self.null_value,
         };
@@ -814,12 +1137,40 @@ pub const PersistentHashMap = struct {
             return PersistentHashMap{
                 .count = self.count - 1,
                 .root = self.root,
+                .small_entries = self.small_entries,
                 .has_null = false,
                 .null_value = vm.nilValue(),
             };
         }
+
+        // Small map path
+        if (self.small_entries) |sm| {
+            var removedLeaf = LeafFlag{};
+            const new_sm = try sm.smWithout(allocator, key, &removedLeaf);
+            const new_count = if (removedLeaf.get()) self.count - 1 else self.count;
+
+            if (new_count == 0) {
+                // Map is now empty
+                return PersistentHashMap{
+                    .count = 0,
+                    .root = null,
+                    .small_entries = null,
+                    .has_null = self.has_null,
+                    .null_value = self.null_value,
+                };
+            }
+            return PersistentHashMap{
+                .count = new_count,
+                .root = null,
+                .small_entries = new_sm,
+                .has_null = self.has_null,
+                .null_value = self.null_value,
+            };
+        }
+
         if (self.root == null) return self;
 
+        // HAMT path
         const h = valueHash(key);
         var removedLeaf = LeafFlag{};
         const new_root = try nodeWithout(self.root.?, allocator, 0, h, key, &removedLeaf);
@@ -829,6 +1180,7 @@ pub const PersistentHashMap = struct {
         return PersistentHashMap{
             .count = new_count,
             .root = new_root,
+            .small_entries = null,
             .has_null = self.has_null,
             .null_value = self.null_value,
         };
@@ -843,7 +1195,12 @@ pub const PersistentHashMap = struct {
             try result.append(allocator, vm.nilValue());
         }
 
-        if (self.root) |root| {
+        if (self.small_entries) |sm| {
+            var i: usize = 0;
+            while (i < sm.len) : (i += 1) {
+                try result.append(allocator, sm.entries[i].key);
+            }
+        } else if (self.root) |root| {
             try nodeAppendKeys(root, allocator, &result);
         }
 
@@ -859,7 +1216,12 @@ pub const PersistentHashMap = struct {
             try result.append(allocator, self.null_value);
         }
 
-        if (self.root) |root| {
+        if (self.small_entries) |sm| {
+            var i: usize = 0;
+            while (i < sm.len) : (i += 1) {
+                try result.append(allocator, sm.entries[i].val);
+            }
+        } else if (self.root) |root| {
             try nodeAppendVals(root, allocator, &result);
         }
 
@@ -876,7 +1238,13 @@ pub const PersistentHashMap = struct {
             try result.append(allocator, self.null_value);
         }
 
-        if (self.root) |root| {
+        if (self.small_entries) |sm| {
+            var i: usize = 0;
+            while (i < sm.len) : (i += 1) {
+                try result.append(allocator, sm.entries[i].key);
+                try result.append(allocator, sm.entries[i].val);
+            }
+        } else if (self.root) |root| {
             try nodeAppendEntries(root, allocator, &result);
         }
 
@@ -915,6 +1283,8 @@ pub const PersistentHashMap = struct {
         if (self.root) |root| {
             deinitNodePtr(root, allocator);
         }
+        // Don't deinit small_entries — it's GC-managed.
+        // The GC will free the SmallMap and its entries array when unreachable.
         if (self.has_null) {
             self.null_value.deinit(allocator);
         }
@@ -925,6 +1295,7 @@ pub const PersistentHashMap = struct {
     const EntryIterator = struct {
         map: PersistentHashMap,
         null_done: bool = false,
+        small_idx: usize = 0,
         root_iter: ?NodeEntryIterator = null,
 
         pub fn next(self: *EntryIterator) ?Kvp {
@@ -932,6 +1303,16 @@ pub const PersistentHashMap = struct {
                 self.null_done = true;
                 return Kvp{ .key = vm.nilValue(), .val = self.map.null_value };
             }
+            // Small map path
+            if (self.map.small_entries) |sm| {
+                if (self.small_idx < sm.len) {
+                    const kvp = sm.entries[self.small_idx];
+                    self.small_idx += 1;
+                    return kvp;
+                }
+                return null;
+            }
+            // HAMT path
             if (self.map.root == null) return null;
             if (self.root_iter == null) {
                 self.root_iter = NodeEntryIterator.init(self.map.root.?);
@@ -1040,8 +1421,8 @@ fn createBitmapLeaf(allocator: Allocator, shift: u6, hash: i32, key: Value, val:
     const bit = bitpos(hash, shift);
     addedLeaf.set(true);
 
-    const cloned_key = try vm.shallowClone(&key, allocator);
-    const cloned_val = try vm.shallowClone(&val, allocator);
+    const cloned_key = try safeClone(key, allocator);
+    const cloned_val = try safeClone(val, allocator);
     var kvs: [1]Kvp = .{ .{ .key = cloned_key, .val = cloned_val } };
     var subs: [1]?*Node = .{null};
 
@@ -1060,8 +1441,8 @@ fn createSubNode(allocator: Allocator, shift: u6, key1: Value, val1: Value, hash
     if (hash1 == hash2) {
         addedLeaf.set(true);
         var kvs: [2]Kvp = .{
-            .{ .key = try vm.shallowClone(&key1, allocator), .val = try vm.shallowClone(&val1, allocator) },
-            .{ .key = try vm.shallowClone(&key2, allocator), .val = try vm.shallowClone(&val2, allocator) },
+            .{ .key = try safeClone(key1, allocator), .val = try safeClone(val1, allocator) },
+            .{ .key = try safeClone(key2, allocator), .val = try safeClone(val2, allocator) },
         };
         return newNode(allocator, Node{
             .hash_collision = HashCollisionNode{
@@ -1086,8 +1467,8 @@ fn createSubNode(allocator: Allocator, shift: u6, key1: Value, val1: Value, hash
         if (shift >= MAX_SHIFT) {
             // Can't go deeper — treat as hash collision
             var kvs: [2]Kvp = .{
-                .{ .key = try vm.shallowClone(&key1, allocator), .val = try vm.shallowClone(&val1, allocator) },
-                .{ .key = try vm.shallowClone(&key2, allocator), .val = try vm.shallowClone(&val2, allocator) },
+                .{ .key = try safeClone(key1, allocator), .val = try safeClone(val1, allocator) },
+                .{ .key = try safeClone(key2, allocator), .val = try safeClone(val2, allocator) },
             };
             return newNode(allocator, Node{
                 .hash_collision = HashCollisionNode{
@@ -1117,11 +1498,11 @@ fn createSubNode(allocator: Allocator, shift: u6, key1: Value, val1: Value, hash
     var subs: [2]?*Node = .{ null, null };
 
     if (idx1 < idx2) {
-        kvs[0] = .{ .key = try vm.shallowClone(&key1, allocator), .val = try vm.shallowClone(&val1, allocator) };
-        kvs[1] = .{ .key = try vm.shallowClone(&key2, allocator), .val = try vm.shallowClone(&val2, allocator) };
+        kvs[0] = .{ .key = try safeClone(key1, allocator), .val = try safeClone(val1, allocator) };
+        kvs[1] = .{ .key = try safeClone(key2, allocator), .val = try safeClone(val2, allocator) };
     } else {
-        kvs[0] = .{ .key = try vm.shallowClone(&key2, allocator), .val = try vm.shallowClone(&val2, allocator) };
-        kvs[1] = .{ .key = try vm.shallowClone(&key1, allocator), .val = try vm.shallowClone(&val1, allocator) };
+        kvs[0] = .{ .key = try safeClone(key2, allocator), .val = try safeClone(val2, allocator) };
+        kvs[1] = .{ .key = try safeClone(key1, allocator), .val = try safeClone(val1, allocator) };
     }
 
     return newNode(allocator, Node{
@@ -1145,13 +1526,13 @@ fn createBitmapWithValue(allocator: Allocator, src: *const BitmapIndexedNode, id
     while (i < new_len) : (i += 1) {
         if (i == idx) {
             new_kvs[i] = .{
-                .key = try vm.shallowClone(&src.array[i].key, allocator),
-                .val = try vm.shallowClone(&new_val, allocator),
+                .key = try safeClone(src.array[i].key, allocator),
+                .val = try safeClone(new_val, allocator),
             };
         } else {
             new_kvs[i] = .{
-                .key = try vm.shallowClone(&src.array[i].key, allocator),
-                .val = try vm.shallowClone(&src.array[i].val, allocator),
+                .key = try safeClone(src.array[i].key, allocator),
+                .val = try safeClone(src.array[i].val, allocator),
             };
         }
     }
@@ -1186,8 +1567,8 @@ fn createBitmapWithSub(allocator: Allocator, src: *const BitmapIndexedNode, idx:
         } else {
             // Deep clone the Kvp
             new_kvs[i] = .{
-                .key = try vm.shallowClone(&src.array[i].key, allocator),
-                .val = try vm.shallowClone(&src.array[i].val, allocator),
+                .key = try safeClone(src.array[i].key, allocator),
+                .val = try safeClone(src.array[i].val, allocator),
             };
             new_subs[i] = src.sub_nodes[i];
         }
@@ -1213,18 +1594,18 @@ fn createBitmapWithLeaf(allocator: Allocator, src: *const BitmapIndexedNode, ins
     var i: usize = 0;
     while (i < insert_idx) : (i += 1) {
         new_kvs[i] = .{
-            .key = try vm.shallowClone(&src.array[i].key, allocator),
-            .val = try vm.shallowClone(&src.array[i].val, allocator),
+            .key = try safeClone(src.array[i].key, allocator),
+            .val = try safeClone(src.array[i].val, allocator),
         };
         new_subs[i] = src.sub_nodes[i];
     }
-    new_kvs[insert_idx] = .{ .key = try vm.shallowClone(&key, allocator), .val = try vm.shallowClone(&val, allocator) };
+    new_kvs[insert_idx] = .{ .key = try safeClone(key, allocator), .val = try safeClone(val, allocator) };
     new_subs[insert_idx] = null;
     var j: usize = insert_idx + 1;
     while (i < src.array.len) : ({ i += 1; j += 1; }) {
         new_kvs[j] = .{
-            .key = try vm.shallowClone(&src.array[i].key, allocator),
-            .val = try vm.shallowClone(&src.array[i].val, allocator),
+            .key = try safeClone(src.array[i].key, allocator),
+            .val = try safeClone(src.array[i].val, allocator),
         };
         new_subs[j] = src.sub_nodes[i];
     }
@@ -1256,8 +1637,8 @@ fn createBitmapWithout(allocator: Allocator, src: *const BitmapIndexedNode, remo
         }
         // Deep clone Kvp to avoid sharing Value pointers with src.
         new_kvs[j] = .{
-            .key = try vm.shallowClone(&src.array[i].key, allocator),
-            .val = try vm.shallowClone(&src.array[i].val, allocator),
+            .key = try safeClone(src.array[i].key, allocator),
+            .val = try safeClone(src.array[i].val, allocator),
         };
         // Sub-node pointers are shared (both old and new trees reference the same immutable sub-nodes).
         new_subs[j] = src.sub_nodes[i];
@@ -1483,13 +1864,13 @@ fn createCollisionNodeWithValue(allocator: Allocator, src: *const HashCollisionN
     while (i < new_len) : (i += 1) {
         if (i == idx) {
             new_kvs[i] = .{
-                .key = try vm.shallowClone(&src.kvs[i].key, allocator),
-                .val = try vm.shallowClone(&new_val, allocator),
+                .key = try safeClone(src.kvs[i].key, allocator),
+                .val = try safeClone(new_val, allocator),
             };
         } else {
             new_kvs[i] = .{
-                .key = try vm.shallowClone(&src.kvs[i].key, allocator),
-                .val = try vm.shallowClone(&src.kvs[i].val, allocator),
+                .key = try safeClone(src.kvs[i].key, allocator),
+                .val = try safeClone(src.kvs[i].val, allocator),
             };
         }
     }
@@ -1511,11 +1892,11 @@ fn createCollisionNodeAppend(allocator: Allocator, src: *const HashCollisionNode
     var i: usize = 0;
     while (i < src.kvs.len) : (i += 1) {
         new_kvs[i] = .{
-            .key = try vm.shallowClone(&src.kvs[i].key, allocator),
-            .val = try vm.shallowClone(&src.kvs[i].val, allocator),
+            .key = try safeClone(src.kvs[i].key, allocator),
+            .val = try safeClone(src.kvs[i].val, allocator),
         };
     }
-    new_kvs[new_len - 1] = .{ .key = try vm.shallowClone(&key, allocator), .val = try vm.shallowClone(&val, allocator) };
+    new_kvs[new_len - 1] = .{ .key = try safeClone(key, allocator), .val = try safeClone(val, allocator) };
 
     return newNode(allocator, Node{
         .hash_collision = HashCollisionNode{
@@ -1541,8 +1922,8 @@ fn createCollisionNodeWithout(allocator: Allocator, src: *const HashCollisionNod
         }
         // Deep clone to avoid sharing Value pointers with src.
         new_kvs[j] = .{
-            .key = try vm.shallowClone(&src.kvs[i].key, allocator),
-            .val = try vm.shallowClone(&src.kvs[i].val, allocator),
+            .key = try safeClone(src.kvs[i].key, allocator),
+            .val = try safeClone(src.kvs[i].val, allocator),
         };
         j += 1;
     }
@@ -1637,6 +2018,26 @@ pub fn scanHashMapNode(node_ptr: *anyopaque, ctx: *gc.ScanContext) void {
                 }
             }
         },
+    }
+}
+
+/// Scan function for SmallMap. Called by gc_scan.zig.
+pub fn scanSmallMap(map_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const sm: *SmallMap = @ptrCast(@alignCast(map_ptr));
+    // Mark the entries array buffer itself so it survives sweeps
+    if (sm.entries.len > 0) {
+        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(sm.entries.ptr))), ctx);
+    }
+    // Scan each Value in the entries array
+    var i: usize = 0;
+    while (i < sm.len) : (i += 1) {
+        gc_scan.scanValueChildrenDirect(&sm.entries[i].key, ctx);
+        gc_scan.scanValueChildrenDirect(&sm.entries[i].val, ctx);
+        // Mark wrapped pointers (e.g., *Env stored in NamespaceManager)
+        if (vm.getType(sm.entries[i].val) == .wrapped and sm.entries[i].val.wrapped != 0) {
+            const ptr = @as(*anyopaque, @ptrFromInt(sm.entries[i].val.wrapped));
+            ctx.gc.markRecursive(ptr, ctx);
+        }
     }
 }
 
