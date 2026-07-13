@@ -307,13 +307,13 @@ pub fn evalDosync(allocator: Allocator, l: *const list.List, frame: *vm.Frame, d
         txUnlock();
 
         // Evaluate body forms
+        // Phase 3: Use evalRecDirect — Value by copy, no *Value allocation
         var i: usize = 1;
         while (i < l.items.len) : (i += 1) {
             const item = &l.items[i];
-            const val_ptr = try eval_mod.evalRecV(allocator, item, frame, depth + 1);
+            const val = try eval_mod.evalRecDirect(allocator, item, frame, depth + 1);
             vm.valueDeinit(&result, allocator);
-            result = try vm.clone(&val_ptr.*, allocator);
-            vm.valueDeinit(val_ptr, allocator);
+            result = try vm.clone(&val, allocator);
         }
 
         // Commit phase: apply write-set
