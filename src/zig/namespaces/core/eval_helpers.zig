@@ -44,7 +44,9 @@ fn bindParam(allocator: Allocator, param: *const Value, arg: *const Value, env: 
 fn bindPattern(allocator: Allocator, pattern: Value, val: Value, env: *vm.Env) anyerror!void {
     switch (std.meta.activeTag(pattern)) {
         .symbol => {
-            try env.put(pattern.symbol, try vm.shallowClone(&val, allocator));
+            // In GC model, val is passed by copy and GC keeps underlying data alive.
+            // No clone needed — the HAMT stores a Value referencing the same GC-tracked data.
+            try env.put(pattern.symbol, val);
         },
         .vector => {
             // Vector destructuring: [a b & rest] matches elements of val
@@ -205,10 +207,9 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args_list: *const list
                             // Resolve operator from function's definition env (has ns_manager)
                             const resolved_op_ptr = try evalForm(allocator, body_op, fn_data.env);
                             defer vm.valueDeinit(&resolved_op_ptr.*, allocator);
-                            var call_args: list.List = .empty;
-                            errdefer call_args.deinit(allocator);
-                            try call_args.append(allocator, try vm.shallowClone(&args_list.items[0], allocator));
-                            try call_args.append(allocator, try vm.shallowClone(&args_list.items[1], allocator));
+                            // Use stack array — no clone needed (GC keeps data alive), no deinit needed.
+                            var args_arr: [2]Value = .{ args_list.items[0], args_list.items[1] };
+                            var call_args: list.List = .{ .items = &args_arr, .capacity = 2 };
                             return try callBuiltin(allocator, resolved_op_ptr, &call_args, env);
                         }
                     }
@@ -228,8 +229,8 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args_list: *const list
                     std.meta.activeTag(arity.body.items[0]) == .symbol and
                     std.mem.eql(u8, arity.body.items[0].symbol, param_name))
                 {
-                    // identity: return the argument directly
-                    return try allocBuiltinResult(allocator, try vm.shallowClone(&args_list.items[0], allocator));
+                    // identity: return the argument directly (no clone needed — GC keeps data alive)
+                    return try allocBuiltinResult(allocator, args_list.items[0]);
                 }
 
                 // --- Pattern 2 & 3: body is a single call ---
@@ -259,9 +260,9 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args_list: *const list
                             // Resolve operator from function's definition env (has ns_manager)
                             const resolved_op_ptr = try evalForm(allocator, body_op, fn_data.env);
                             defer vm.valueDeinit(&resolved_op_ptr.*, allocator);
-                            var call_args: list.List = .empty;
-                            errdefer call_args.deinit(allocator);
-                            try call_args.append(allocator, try vm.shallowClone(&args_list.items[0], allocator));
+                            // Use stack array — no clone needed (GC keeps data alive), no deinit needed.
+                            var args_arr: [1]Value = .{ args_list.items[0] };
+                            var call_args: list.List = .{ .items = &args_arr, .capacity = 1 };
                             return try callBuiltin(allocator, resolved_op_ptr, &call_args, env);
                         }
                     } else if (body_call.items.len == 3) {
@@ -285,20 +286,18 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args_list: *const list
                             // Resolve operator from function's definition env (has ns_manager)
                             const resolved_op_ptr = try evalForm(allocator, body_op, fn_data.env);
                             defer vm.valueDeinit(&resolved_op_ptr.*, allocator);
-                            var call_args: list.List = .empty;
-                            errdefer call_args.deinit(allocator);
-                            try call_args.append(allocator, try vm.shallowClone(&args_list.items[0], allocator));
-                            try call_args.append(allocator, try vm.shallowClone(body_arg1, allocator));
+                            // Use stack array — no clone needed (GC keeps data alive), no deinit needed.
+                            var args_arr: [2]Value = .{ args_list.items[0], body_arg1.* };
+                            var call_args: list.List = .{ .items = &args_arr, .capacity = 2 };
                             return try callBuiltin(allocator, resolved_op_ptr, &call_args, env);
                         } else if (arg1_is_param and arg0_is_literal) {
                             // (op <literal> param) — e.g. (- 0 n)
                             // Resolve operator from function's definition env (has ns_manager)
                             const resolved_op_ptr = try evalForm(allocator, body_op, fn_data.env);
                             defer vm.valueDeinit(&resolved_op_ptr.*, allocator);
-                            var call_args: list.List = .empty;
-                            errdefer call_args.deinit(allocator);
-                            try call_args.append(allocator, try vm.shallowClone(body_arg0, allocator));
-                            try call_args.append(allocator, try vm.shallowClone(&args_list.items[0], allocator));
+                            // Use stack array — no clone needed (GC keeps data alive), no deinit needed.
+                            var args_arr: [2]Value = .{ body_arg0.*, args_list.items[0] };
+                            var call_args: list.List = .{ .items = &args_arr, .capacity = 2 };
                             return try callBuiltin(allocator, resolved_op_ptr, &call_args, env);
                         }
                     }
