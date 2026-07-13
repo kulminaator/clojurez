@@ -8,6 +8,7 @@ const list = @import("list.zig");
 const vec = @import("vector.zig");
 const BI = @import("big_int.zig");
 const BD = @import("big_decimal.zig");
+const phm = @import("persistent_hash_map.zig");
 
 pub const ParseError = error{
     UnexpectedToken,
@@ -438,11 +439,8 @@ pub const Parser = struct {
     }
 
     fn symValue(self: *Parser, s: []const u8) anyerror!Value {
-        var tmp_buf: [256]u8 = undefined;
-        const copy_len = if (s.len < tmp_buf.len) s.len else tmp_buf.len;
-        @memcpy(tmp_buf[0..copy_len], s[0..copy_len]);
-        const duped = try self.allocator.dupe(u8, tmp_buf[0..copy_len]);
-        return .{ .symbol = duped };
+        _ = self;
+        return phm.sym(s);
     }
 
     fn parseSymbol(self: *Parser, s: []const u8) anyerror!Value {
@@ -456,22 +454,7 @@ pub const Parser = struct {
         if (std.mem.eql(u8, s, "true")) return vm.boolValue(true);
         if (std.mem.eql(u8, s, "false")) return vm.boolValue(false);
         if (std.mem.eql(u8, s, "nil")) return vm.nilValue();
-        // Copy via stack buffer to avoid aliasing with page_allocator
-        var tmp_buf: [256]u8 = undefined;
-        const copy_len = if (s.len < tmp_buf.len) s.len else tmp_buf.len;
-        @memcpy(tmp_buf[0..copy_len], s[0..copy_len]);
-        const duped = try self.allocator.dupe(u8, tmp_buf[0..copy_len]);
-        if (s.len > tmp_buf.len) {
-            // For very long symbols, do a two-step copy
-            const extra = try self.allocator.alloc(u8, s.len - copy_len);
-            @memcpy(extra, s[copy_len..]);
-            const full = try self.allocator.alloc(u8, s.len);
-            @memcpy(full[0..copy_len], tmp_buf[0..copy_len]);
-            @memcpy(full[copy_len..], extra);
-            self.allocator.free(extra);
-            return .{ .symbol = full };
-        }
-        return .{ .symbol = duped };
+        return phm.sym(s);
     }
 
     /// Expand #(body) shorthand into (fn [params] body).
@@ -494,9 +477,7 @@ pub const Parser = struct {
         // Create arg tracker
         var args: FnShorthandArgs = .{
             .allocator = self.allocator,
-            .arg_symbols = undefined,
         };
-        @memset(&args.arg_symbols, null);
 
         // Create sub-parser with fn shorthand mode
         var body_parser = try Parser.init(self.allocator, wrapped);
@@ -526,37 +507,29 @@ pub const Parser = struct {
         allocator: Allocator,
         max_positional: usize = 0,
         has_rest: bool = false,
-        // Cache for generated arg symbols (index 1-based, [0] unused)
-        arg_symbols: [32]?[]const u8 = undefined,
 
         /// Register a % arg reference and return the corresponding symbol.
         fn registerArg(self: *FnShorthandArgs, allocator: Allocator, s: []const u8) anyerror!Value {
             if (std.mem.eql(u8, s, "%")) {
                 // bare % → %1
-                return self.getArgSymbol(1);
+                return self.getArgSymbol(allocator, 1);
             } else if (std.mem.eql(u8, s, "%&")) {
                 self.has_rest = true;
-                const rest_name = try allocator.dupe(u8, "%&");
-                return .{ .symbol = rest_name };
+                return phm.sym("%&");
             } else if (s.len >= 2 and std.ascii.isDigit(s[1])) {
                 const n = std.fmt.parseInt(usize, s[1..], 10) catch return error.TypeError;
-                return self.getArgSymbol(n);
+                return self.getArgSymbol(allocator, n);
             }
             return error.TypeError;
         }
 
-        fn getArgSymbol(self: *FnShorthandArgs, n: usize) anyerror!Value {
+        fn getArgSymbol(self: *FnShorthandArgs, allocator: Allocator, n: usize) anyerror!Value {
             if (n > self.max_positional) self.max_positional = n;
-            if (n >= self.arg_symbols.len) {
-                // Dynamic allocation for high arg numbers
-                const name = try std.fmt.allocPrint(self.allocator, "%{d}", .{n});
-                return .{ .symbol = name };
-            }
-            if (self.arg_symbols[n] == null) {
-                const name = try std.fmt.allocPrint(self.allocator, "%{d}", .{n});
-                self.arg_symbols[n] = name;
-            }
-            return .{ .symbol = self.arg_symbols[n].? };
+            const name = try std.fmt.allocPrint(allocator, "%{d}", .{n});
+            errdefer allocator.free(name);
+            const val = phm.sym(name);
+            allocator.free(name);
+            return val;
         }
 
         /// Build the params vector from tracked args.
@@ -564,21 +537,19 @@ pub const Parser = struct {
             var i: usize = 1;
             while (i <= self.max_positional) : (i += 1) {
                 const name = try std.fmt.allocPrint(allocator, "%{d}", .{i});
-                try params_vec.append(allocator, .{ .symbol = name });
+                errdefer allocator.free(name);
+                const sym_val = phm.sym(name);
+                allocator.free(name);
+                try params_vec.append(allocator, sym_val);
             }
             if (self.has_rest) {
-                const rest_name = try allocator.dupe(u8, "%&");
-                try params_vec.append(allocator, .{ .symbol = rest_name });
+                try params_vec.append(allocator, phm.sym("%&"));
             }
         }
 
         fn deinit(self: *FnShorthandArgs) void {
-            var i: usize = 1;
-            while (i < self.arg_symbols.len) : (i += 1) {
-                if (self.arg_symbols[i] != null) {
-                    self.allocator.free(self.arg_symbols[i]);
-                }
-            }
+            // No-op: symbol strings are from phm.sym cache (page_allocator)
+            _ = self;
         }
     };
 };
