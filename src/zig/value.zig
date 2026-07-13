@@ -2085,10 +2085,14 @@ pub const Frame = struct {
     // True if any child frame is still alive.
     // Used for parent immutability enforcement (Phase 7).
     has_active_children: bool = false,
-    // The function body to evaluate (for trampoline frames).
-    // Only set for frames created by callFunction (Phase 9).
+    // The function body items to evaluate (for trampoline frames).
+    // Phase 2: stores a slice reference into arity.body.items instead of
+    // cloning into a temporary list Value. The body is part of the function
+    // definition (immutable, permanently rooted) — no clone needed.
     // null for scope frames (let, loop, binding).
-    body_form: ?Value = null,
+    body_form_items: ?[]const Value = null,
+    // Source line number for the body (for error reporting).
+    body_form_src_line: usize = 0,
     // True for frames created by callFunction (function call frames).
     // When true, symbol lookup skips the parent chain and goes directly
     // to root_env (the function's captured closure environment).
@@ -2286,11 +2290,8 @@ pub const Frame = struct {
             parent.has_active_children = parent.children.items.len > 0;
         }
         // Clean up this frame's resources
-        if (self.body_form) |bf_val| {
-            var bf = bf_val;
-            valueDeinit(&bf, allocator);
-        }
-        self.body_form = null;
+        self.body_form_items = null;
+        self.body_form_src_line = 0;
         self.overlay.root = null;
         self.overlay.count = 0;
         self.overlay.has_null = false;
@@ -2324,12 +2325,9 @@ pub const Frame = struct {
         // Clear memo cache (not needed after frame is done)
         self.memo_cache.deinit(allocator);
         self.memo_cache = .{};
-        // Clear body_form (body was already evaluated, no longer needed)
-        if (self.body_form) |bf_val| {
-            var bf = bf_val;
-            valueDeinit(&bf, allocator);
-        }
-        self.body_form = null;
+        // Clear body_form_items (body was already evaluated, no longer needed)
+        self.body_form_items = null;
+        self.body_form_src_line = 0;
         // Do NOT clear overlay — child frames on trampoline may still walk through us.
         // Do NOT null parent — child frames need the parent chain.
     }

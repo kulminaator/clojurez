@@ -876,10 +876,8 @@ fn scanFrame(frame_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     if (frame.function_ref) |*ref| {
         scanValueChildrenDirect(ref, ctx);
     }
-    // Mark body_form if present (Phase 9: trampoline body stored in Frame)
-    if (frame.body_form) |*bf| {
-        scanValueChildrenDirect(bf, ctx);
-    }
+    // Phase 2: body_form_items is a slice into arity.body.items which is
+    // permanently rooted via the function definition. No GC scanning needed.
 }
 
 /// Scan ExceptionData: { message, data, cause, type_kw, allocator }.

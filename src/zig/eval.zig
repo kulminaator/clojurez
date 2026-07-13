@@ -87,6 +87,64 @@ pub const EvalContext = struct {
 
 pub var eval_context: EvalContext = .{};
 
+/// Evaluate a body slice directly without creating a temporary list Value.
+/// Phase 2: The body is part of the function definition (immutable, permanently rooted).
+/// Non-tail forms are evaluated synchronously; the last form is in tail position
+/// (uses evalRec for trampoline support).
+/// Handles both "do" bodies (from evalFn/evalDefn) and direct bodies (from partial/comp/fnil/juxt).
+pub fn evalRecSlice(allocator: Allocator, items: []const Value, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
+    // Skip leading "do" symbol if present (common case from evalFn/evalDefn).
+    // Functions from partial/comp/fnil/juxt have bodies that ARE a single list form
+    // (not wrapped in do) — the body items are the elements of that single form.
+    const body_start: usize = if (items.len > 0 and
+        std.meta.activeTag(items[0]) == .symbol and
+        std.mem.eql(u8, items[0].symbol, "do"))
+        1
+    else
+        0;
+    const body_items = items[body_start..];
+
+    if (body_items.len == 0) return .{ .value = vm.nilValue() };
+
+    // For non-do bodies (partial/comp/fnil/juxt), the body_items are the elements
+    // of a SINGLE list form. We need to wrap them back into a list Value and
+    // evaluate that form. This is a rare case — the common "do" path below
+    // evaluates body_items as a sequence of forms.
+    if (body_start == 0) {
+        // Wrap body_items into a stack-allocated list Value.
+        // The body_items are permanently rooted (part of function definition),
+        // so we just need a wrapper for evalRec to dispatch correctly.
+        const mutable_items = @constCast(body_items);
+        var list_data: vm.ListData = .{ .items = std.ArrayListUnmanaged(Value){ .items = mutable_items, .capacity = body_items.len }, .src_line = 0 };
+        const body_list_val: Value = .{ .list = &list_data };
+        return evalRec(allocator, &body_list_val, frame, depth);
+    }
+
+    // Common case: "do" body — evaluate body_items as a sequence of forms.
+    // Non-tail forms evaluated synchronously (discard results)
+    var last_ptr: ?*Value = null;
+    errdefer {
+        if (last_ptr) |p| {
+            vm.valueDeinit(p, allocator);
+            allocator.destroy(p);
+        }
+    }
+    for (body_items[0 .. body_items.len - 1]) |form| {
+        if (last_ptr) |p| {
+            vm.valueDeinit(p, allocator);
+            allocator.destroy(p);
+        }
+        last_ptr = try evalRecV(allocator, &form, frame, depth);
+    }
+    // Last form in tail position — use evalRec for trampoline support
+    const tail_result = try evalRec(allocator, &body_items[body_items.len - 1], frame, depth);
+    if (last_ptr) |p| {
+        vm.valueDeinit(p, allocator);
+        allocator.destroy(p);
+    }
+    return tail_result;
+}
+
 // Phase 9: When false, callFunction evaluates body directly instead of trampolining.
 // Used by evalRecV to prevent interference with the main eval loop.
 // Thread-local to avoid race conditions when multiple futures evaluate concurrently.
@@ -280,7 +338,7 @@ fn formatEvalError(allocator: Allocator, err: anyerror, file: []const u8, form: 
         errdefer frames.deinit(allocator);
         var current: ?*vm.Frame = eval_context.root_frame;
         while (current) |frame| : (current = frame.parent) {
-            if (frame.function_ref != null or frame.body_form != null) {
+            if (frame.function_ref != null or frame.body_form_items != null) {
                 try frames.append(allocator, frame);
             }
         }
@@ -349,7 +407,7 @@ fn formatExceptionError(allocator: Allocator, ex: *vm.ExceptionData, file: []con
         errdefer frames.deinit(allocator);
         var current: ?*vm.Frame = eval_context.root_frame;
         while (current) |frame| : (current = frame.parent) {
-            if (frame.function_ref != null or frame.body_form != null) {
+            if (frame.function_ref != null or frame.body_form_items != null) {
                 try frames.append(allocator, frame);
             }
         }
@@ -451,14 +509,14 @@ pub fn evalWithFile(allocator: Allocator, form: Value, env: *Env, file: []const 
             return try allocValue(allocator, vm.nilValue());
         };
 
-        // Evaluate the child's body_form
-        const body_val = child_frame.body_form orelse {
+        // Phase 2: Evaluate the child's body_form_items directly (no clone needed).
+        const body_items = child_frame.body_form_items orelse {
             child_frame.detachFromParent();
             eval_context.current_frame = child_frame.parent;
             return try allocValue(allocator, vm.nilValue());
         };
 
-        result = evalRec(allocator, &body_val, child_frame, 0) catch |err| {
+        result = evalRecSlice(allocator, body_items, child_frame, 0) catch |err| {
             // Don't format internal control errors like ReplExit
             if (err == EvalError.ReplExit) {
                 child_frame.detachFromParent();
@@ -482,7 +540,10 @@ pub fn evalWithFile(allocator: Allocator, form: Value, env: *Env, file: []const 
                 clearException();
                 return err;
             }
-            const msg = formatEvalError(allocator, err, file, &body_val) catch {
+            // Use first body item for error reporting (or a nil placeholder if empty).
+            // The source line is available from body_form_src_line.
+            const err_form: Value = if (body_items.len > 0) body_items[0] else vm.nilValue();
+            const msg = formatEvalError(allocator, err, file, &err_form) catch {
                 child_frame.detachFromParent();
                 eval_context.current_frame = child_frame.parent;
                 return err;
@@ -1372,16 +1433,13 @@ fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, 
         }
     }
 
-    // TRAMPOLINE: Store body in child Frame.
-    // The eval() loop will read eval_context.current_frame and evaluate its body_form.
-    // Shallow-clone the body list (copy the array, share the Value pointers).
+    // Phase 2: Store body as a slice reference — no cloning needed.
+    // The body is part of the function definition (immutable, permanently rooted).
     // The FnData (and its body Values) is alive as long as the function Value is referenced,
     // and the function Value is held by the caller during the call.
     // The body Values are logically immutable — evaluation never mutates them.
-    var body_shallow: list.List = .empty;
-    errdefer body_shallow.deinit(allocator);
-    try body_shallow.appendSlice(allocator, arity.body.items);
-    const body_val = try vm.listValueWithLine(allocator, body_shallow, src_line);
+    child_frame.body_form_items = arity.body.items;
+    child_frame.body_form_src_line = src_line;
 
     // Phase 9: Trampoline or evaluate directly based on trampoline_allowed flag.
     // When trampoline_allowed is false (e.g., during evalRecV), evaluate directly
@@ -1389,12 +1447,11 @@ fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, 
     const src_loc = if (src_line > 0) SourceLoc{ .line = src_line } else SourceLoc{};
     child_frame.src_loc = src_loc;
     if (trampoline_allowed) {
-        child_frame.body_form = body_val;
         eval_context.current_frame = child_frame;
         return .trampoline;
     } else {
         // Evaluate body directly (no trampoline)
-        const result = try evalRec(allocator, &body_val, child_frame, 0);
+        const result = try evalRecSlice(allocator, arity.body.items, child_frame, 0);
         child_frame.deinit(allocator);
         return result;
     }
