@@ -655,6 +655,162 @@
   true)
 
 ;; ============================================================
+;; PHASE 4: empty? / not-empty
+;; ============================================================
+
+(check "bytecode: empty? empty vector"
+  ((fn [x] (empty? x)) [])
+  true)
+
+(check "bytecode: empty? non-empty vector"
+  ((fn [x] (empty? x)) [1])
+  false)
+
+(check "bytecode: empty? empty map"
+  ((fn [x] (empty? x)) {})
+  true)
+
+(check "bytecode: empty? non-empty map"
+  ((fn [x] (empty? x)) {:a 1})
+  false)
+
+(check "bytecode: empty? empty string"
+  ((fn [x] (empty? x)) "")
+  true)
+
+(check "bytecode: empty? non-empty string"
+  ((fn [x] (empty? x)) "hi")
+  false)
+
+(check "bytecode: empty? empty set"
+  ((fn [x] (empty? x)) #{})
+  true)
+
+(check "bytecode: not-empty empty vector"
+  ((fn [x] (not-empty x)) [])
+  nil)
+
+(check "bytecode: not-empty non-empty vector"
+  ((fn [x] (not-empty x)) [1 2 3])
+  [1 2 3])
+
+(check "bytecode: not-empty empty map"
+  ((fn [x] (not-empty x)) {})
+  nil)
+
+(check "bytecode: not-empty non-empty map"
+  ((fn [x] (not-empty x)) {:a 1})
+  {:a 1})
+
+;; ============================================================
+;; PHASE 5: inc / dec / even? / odd? / abs / identity / boolean
+;; ============================================================
+
+(check "bytecode: inc positive"
+  ((fn [x] (inc x)) 5)
+  6)
+
+(check "bytecode: inc negative"
+  ((fn [x] (inc x)) -3)
+  -2)
+
+(check "bytecode: inc zero"
+  ((fn [x] (inc x)) 0)
+  1)
+
+(check "bytecode: dec positive"
+  ((fn [x] (dec x)) 5)
+  4)
+
+(check "bytecode: dec zero"
+  ((fn [x] (dec x)) 0)
+  -1)
+
+(check "bytecode: even? true"
+  ((fn [x] (even? x)) 4)
+  true)
+
+(check "bytecode: even? false"
+  ((fn [x] (even? x)) 3)
+  false)
+
+(check "bytecode: even? zero"
+  ((fn [x] (even? x)) 0)
+  true)
+
+(check "bytecode: even? negative"
+  ((fn [x] (even? x)) -2)
+  true)
+
+(check "bytecode: odd? true"
+  ((fn [x] (odd? x)) 3)
+  true)
+
+(check "bytecode: odd? false"
+  ((fn [x] (odd? x)) 4)
+  false)
+
+(check "bytecode: odd? zero"
+  ((fn [x] (odd? x)) 0)
+  false)
+
+(check "bytecode: odd? negative"
+  ((fn [x] (odd? x)) -1)
+  true)
+
+(check "bytecode: abs positive"
+  ((fn [x] (abs x)) 5)
+  5)
+
+(check "bytecode: abs negative"
+  ((fn [x] (abs x)) -5)
+  5)
+
+(check "bytecode: abs zero"
+  ((fn [x] (abs x)) 0)
+  0)
+
+(check "bytecode: abs negative float"
+  ((fn [x] (abs x)) -3.14)
+  3.14)
+
+(check "bytecode: identity int"
+  ((fn [x] (identity x)) 42)
+  42)
+
+(check "bytecode: identity string"
+  ((fn [x] (identity x)) "hello")
+  "hello")
+
+(check "bytecode: identity nil"
+  ((fn [x] (identity x)) nil)
+  nil)
+
+(check "bytecode: boolean true"
+  ((fn [x] (boolean x)) true)
+  true)
+
+(check "bytecode: boolean false"
+  ((fn [x] (boolean x)) false)
+  false)
+
+(check "bytecode: boolean int"
+  ((fn [x] (boolean x)) 42)
+  true)
+
+(check "bytecode: boolean nil"
+  ((fn [x] (boolean x)) nil)
+  false)
+
+(check "bytecode: boolean empty string"
+  ((fn [x] (boolean x)) "")
+  true)
+
+(check "bytecode: boolean empty vector"
+  ((fn [x] (boolean x)) [])
+  true)
+
+;; ============================================================
 ;; SUMMARY
 ;; ============================================================
 
