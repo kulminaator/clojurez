@@ -14,6 +14,8 @@ const RatioMod = @import("ratio.zig");
 const BD = @import("big_decimal.zig");
 const arithmetic = @import("namespaces/core/arithmetic.zig");
 const helpers = @import("namespaces/core/helpers.zig");
+const sequences = @import("namespaces/core/sequences.zig");
+const chunks = @import("namespaces/core/chunks.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -1027,10 +1029,12 @@ pub fn execute(
             },
 
             .cons => {
-                const tail_entry = stack.pop() orelse return error.BytecodeError;
+                // Stack: [tail, head] (head on top)
+                // First pop = head (top of stack), second pop = tail
                 const head_entry = stack.pop() orelse return error.BytecodeError;
-                const tail_val = tail_entry.toValueConst();
+                const tail_entry = stack.pop() orelse return error.BytecodeError;
                 const head_val = head_entry.toValueConst();
+                const tail_val = tail_entry.toValueConst();
                 const cons_val = try vm.consValue(allocator, head_val, tail_val);
                 const cons_ptr = try eval_mod.allocValue(allocator, cons_val);
                 freeEntry(head_entry, allocator);
@@ -1465,20 +1469,32 @@ fn negateOp(val: Value, allocator: Allocator) anyerror!Value {
 
 /// VM implementation of (first coll) — returns first element or nil.
 fn vmFirst(allocator: Allocator, val: Value) anyerror!Value {
-    switch (val) {
+    var v = val;
+    // Handle lazy_seq: keep forcing until we get a concrete result.
+    while (std.meta.activeTag(v) == .lazy_seq) {
+        const result = try sequences.forceLazySeqGetResult(allocator, &v);
+        vm.valueDeinit(&v, allocator);
+        v = result;
+    }
+    switch (v) {
         .list => {
-            if (val.list.items.items.len == 0) return vm.nilValue();
-            return try vm.shallowClone(&val.list.items.items[0], allocator);
+            if (v.list.items.items.len == 0) return vm.nilValue();
+            return try vm.shallowClone(&v.list.items.items[0], allocator);
         },
         .vector => {
-            if (val.vector.items.items.len == 0) return vm.nilValue();
-            return try vm.shallowClone(&val.vector.items.items[0], allocator);
+            if (v.vector.items.items.len == 0) return vm.nilValue();
+            return try vm.shallowClone(&v.vector.items.items[0], allocator);
         },
         .cons => {
-            return try vm.shallowClone(&val.cons.head, allocator);
+            return try vm.shallowClone(&v.cons.head, allocator);
+        },
+        .chunked_cons => {
+            // Chunked cons: first is the first element of the chunk
+            const ccd = v.chunked_cons;
+            return ccd.chunk.items[ccd.chunk.off];
         },
         .string => {
-            const s = val.string;
+            const s = v.string;
             if (s.len == 0) return vm.nilValue();
             const cp_bytes = vm.utf8CodepointAt(s, 0) orelse return vm.nilValue();
             const cp = std.unicode.utf8Decode(cp_bytes) catch return vm.nilValue();
@@ -1490,28 +1506,65 @@ fn vmFirst(allocator: Allocator, val: Value) anyerror!Value {
 
 /// VM implementation of (rest coll) — returns all but first element.
 fn vmRest(allocator: Allocator, val: Value) anyerror!Value {
-    switch (val) {
+    var v = val;
+    // Handle lazy_seq: keep forcing until we get a concrete result.
+    while (std.meta.activeTag(v) == .lazy_seq) {
+        const result = try sequences.forceLazySeqGetResult(allocator, &v);
+        vm.valueDeinit(&v, allocator);
+        v = result;
+    }
+    switch (v) {
         .list => {
-            if (val.list.items.items.len <= 1) return try vm.listValue(allocator, list.empty());
+            if (v.list.items.items.len <= 1) return try vm.listValue(allocator, list.empty());
             var rest_list: list.List = .empty;
             errdefer rest_list.deinit(allocator);
-            for (val.list.items.items[1..]) |item| {
+            for (v.list.items.items[1..]) |item| {
                 try rest_list.append(allocator, try vm.shallowClone(&item, allocator));
             }
             return try vm.listValue(allocator, rest_list);
         },
         .vector => {
-            if (val.vector.items.items.len <= 1) return try vm.listValue(allocator, list.empty());
+            if (v.vector.items.items.len <= 1) return try vm.listValue(allocator, list.empty());
             var rest_list: list.List = .empty;
             errdefer rest_list.deinit(allocator);
-            for (val.vector.items.items[1..]) |item| {
+            for (v.vector.items.items[1..]) |item| {
                 try rest_list.append(allocator, try vm.shallowClone(&item, allocator));
             }
             return try vm.listValue(allocator, rest_list);
         },
         .cons => {
             // rest of cons is the tail
-            return try vm.shallowClone(&val.cons.tail, allocator);
+            return try vm.shallowClone(&v.cons.tail, allocator);
+        },
+        .chunked_cons => {
+            const ccd = v.chunked_cons;
+            const chunk = ccd.chunk;
+            // Clone tail before using — the caller may deinit the original
+            const tail = ccd.tail;
+            if (chunk.off + 1 < chunk.end) {
+                // More elements in this chunk — return new chunked_cons with dropped first
+                const dropped = chunk.dropFirst();
+                const new_chunk = try vm.chunkValue(
+                    allocator, dropped.items, dropped.off, dropped.end, false);
+                return chunks.chunkedCons(allocator, new_chunk, tail);
+            }
+            // Chunk exhausted — return seq of cloned tail
+            return try vmSeq(allocator, tail);
+        },
+        .string => {
+            const s = v.string;
+            const codepoint_count = vm.utf8CodepointCount(s);
+            if (codepoint_count <= 1) return try vm.listValue(allocator, list.empty());
+            // Convert remaining code points (from index 1) to a list of char values
+            var result: list.List = .empty;
+            errdefer result.deinit(allocator);
+            var idx: usize = 1;
+            while (idx < codepoint_count) : (idx += 1) {
+                const cp_bytes = vm.utf8CodepointAt(s, idx) orelse break;
+                const cp = std.unicode.utf8Decode(cp_bytes) catch break;
+                try result.append(allocator, vm.charValue(cp));
+            }
+            return try vm.listValue(allocator, result);
         },
         else => return try vm.listValue(allocator, list.empty()),
     }
@@ -2145,6 +2198,63 @@ fn isSimpleBytecodeForm(form: Value) bool {
     };
 }
 
+/// Check if a form is safe to compile as an argument to a recognized bytecode
+/// operator. Unlike isSimpleBytecodeForm, this allows nested calls to recognized
+/// bytecode operators and special forms. This enables (first (rest xs)) to compile
+/// because both first and rest are recognized operators.
+fn isSafeBytecodeArg(form: Value) bool {
+    return switch (form) {
+        .nil, .bool, .integer, .float, .string, .keyword, .symbol,
+        .bigint, .ratio, .decimal, .regex, .character => true,
+        .function, .builtin_fn, .atom, .lazy_seq, .cons, .reduced,
+        .future, .promise, .record, .chunk, .chunked_cons, .wrapped, .exception,
+        .ref, .multimethod => true, // self-evaluating
+        .list => {
+            const lst_items = form.list.items.items;
+            if (lst_items.len == 0) return true;
+            // A list is a function call. It's safe only if the operator is
+            // a recognized bytecode operator or special form.
+            if (std.meta.activeTag(lst_items[0]) == .symbol) {
+                const op = lst_items[0].symbol;
+                if (isBytecodeOptimizableOperator(op) or isBytecodeSpecialForm(op)) {
+                    // Recursively check all items (including nested args)
+                    for (lst_items) |item| {
+                        if (!isSafeBytecodeArg(item)) return false;
+                    }
+                    return true;
+                }
+            }
+            // Unknown function call — not safe for bytecode
+            return false;
+        },
+        .vector => {
+            for (form.vector.items.items) |item| {
+                if (!isSafeBytecodeArg(item)) return false;
+            }
+            return true;
+        },
+        .map => {
+            for (form.map.entries.items) |entry| {
+                if (!isSafeBytecodeArg(entry.key)) return false;
+                if (!isSafeBytecodeArg(entry.value)) return false;
+            }
+            return true;
+        },
+        .set => {
+            for (form.set.items.items) |item| {
+                if (!isSafeBytecodeArg(item)) return false;
+            }
+            return true;
+        },
+        .queue => {
+            for (form.queue.items.items) |item| {
+                if (!isSafeBytecodeArg(item)) return false;
+            }
+            return true;
+        },
+    };
+}
+
 /// Compile a function call: (fn arg1 arg2 ...).
     /// Optimizes known arithmetic/comparison operators to direct opcodes.
     /// Only optimizes when all args are "simple" forms (no nested function calls).
@@ -2153,7 +2263,8 @@ fn isSimpleBytecodeForm(form: Value) bool {
         if (items.len > 0 and std.meta.activeTag(items[0]) == .symbol) {
             const op_name = items[0].symbol;
 
-            // Check if all args are simple (no nested function calls)
+            // Check if all args are simple (no nested function calls).
+            // Used for operators that need literal/symbol args only.
             const all_simple = blk: {
                 for (items[1..]) |arg| {
                     if (!isSimpleBytecodeForm(arg)) break :blk false;
@@ -2161,8 +2272,19 @@ fn isSimpleBytecodeForm(form: Value) bool {
                 break :blk true;
             };
 
+            // Check if all args are safe for bytecode compilation.
+            // Unlike all_simple, this allows nested calls to recognized
+            // bytecode operators and special forms. Enables (first (rest xs))
+            // to compile because both first and rest are recognized operators.
+            const all_safe = blk: {
+                for (items[1..]) |arg| {
+                    if (!isSafeBytecodeArg(arg)) break :blk false;
+                }
+                break :blk true;
+            };
+
             // Arithmetic operators: +, -, *, /, rem
-            if (all_simple) {
+            if (all_safe) {
                 if (std.mem.eql(u8, op_name, "+")) {
                     return self.compileArithmeticOp(items[1..], .add);
                 }
@@ -2219,7 +2341,7 @@ fn isSimpleBytecodeForm(form: Value) bool {
             }
 
             // not: (not x) => push x, not
-            if (all_simple and std.mem.eql(u8, op_name, "not")) {
+            if (all_safe and std.mem.eql(u8, op_name, "not")) {
                 if (items.len == 2) {
                     try self.compileForm(items[1]);
                     _ = try self.program.emit0(self.allocator, .not);
@@ -2229,6 +2351,7 @@ fn isSimpleBytecodeForm(form: Value) bool {
             }
 
             // count: (count coll) => push coll, count
+            // Uses all_simple because bytecode count doesn't handle lazy_seq
             if (all_simple and std.mem.eql(u8, op_name, "count")) {
                 if (items.len == 2) {
                     try self.compileForm(items[1]);
@@ -2238,6 +2361,7 @@ fn isSimpleBytecodeForm(form: Value) bool {
             }
 
             // first: (first coll) => push coll, first
+            // Uses all_simple because bytecode first doesn't handle lazy_seq
             if (all_simple and std.mem.eql(u8, op_name, "first")) {
                 if (items.len == 2) {
                     try self.compileForm(items[1]);
@@ -2247,6 +2371,7 @@ fn isSimpleBytecodeForm(form: Value) bool {
             }
 
             // rest: (rest coll) => push coll, rest
+            // Uses all_simple because bytecode rest doesn't handle lazy_seq
             if (all_simple and std.mem.eql(u8, op_name, "rest")) {
                 if (items.len == 2) {
                     try self.compileForm(items[1]);
@@ -2256,7 +2381,7 @@ fn isSimpleBytecodeForm(form: Value) bool {
             }
 
             // nth: (nth coll index) => push coll, push index, nth
-            if (all_simple and std.mem.eql(u8, op_name, "nth")) {
+            if (all_safe and std.mem.eql(u8, op_name, "nth")) {
                 if (items.len == 3) {
                     try self.compileForm(items[1]);
                     try self.compileForm(items[2]);
@@ -2266,7 +2391,7 @@ fn isSimpleBytecodeForm(form: Value) bool {
             }
 
             // get: (get map key) => push map, push key, get
-            if (all_simple and std.mem.eql(u8, op_name, "get")) {
+            if (all_safe and std.mem.eql(u8, op_name, "get")) {
                 if (items.len == 3) {
                     try self.compileForm(items[1]);
                     try self.compileForm(items[2]);
@@ -2276,7 +2401,7 @@ fn isSimpleBytecodeForm(form: Value) bool {
             }
 
             // conj: (conj coll item) => push coll, push item, conj
-            if (all_simple and std.mem.eql(u8, op_name, "conj")) {
+            if (all_safe and std.mem.eql(u8, op_name, "conj")) {
                 if (items.len == 3) {
                     try self.compileForm(items[1]);
                     try self.compileForm(items[2]);
@@ -2286,7 +2411,7 @@ fn isSimpleBytecodeForm(form: Value) bool {
             }
 
             // assoc: (assoc map key val) => push map, push key, push val, assoc
-            if (all_simple and std.mem.eql(u8, op_name, "assoc")) {
+            if (all_safe and std.mem.eql(u8, op_name, "assoc")) {
                 if (items.len == 4) {
                     try self.compileForm(items[1]);
                     try self.compileForm(items[2]);
@@ -2297,13 +2422,44 @@ fn isSimpleBytecodeForm(form: Value) bool {
             }
 
             // compare: (compare a b) => push a, push b, compare
-            if (all_simple and std.mem.eql(u8, op_name, "compare")) {
+            if (all_safe and std.mem.eql(u8, op_name, "compare")) {
                 if (items.len == 3) {
                     try self.compileForm(items[1]);
                     try self.compileForm(items[2]);
                     _ = try self.program.emit0(self.allocator, .compare);
                     return;
                 }
+            }
+
+            // seq: (seq coll) => push coll, seq
+            // Uses all_simple because bytecode seq doesn't handle lazy_seq
+            if (all_simple and std.mem.eql(u8, op_name, "seq")) {
+                if (items.len == 2) {
+                    try self.compileForm(items[1]);
+                    _ = try self.program.emit0(self.allocator, .seq);
+                    return;
+                }
+            }
+
+            // cons: (cons head tail) => push tail, push head, cons
+            if (all_safe and std.mem.eql(u8, op_name, "cons")) {
+                if (items.len == 3) {
+                    try self.compileForm(items[2]); // tail first (stack order)
+                    try self.compileForm(items[1]); // head on top
+                    _ = try self.program.emit0(self.allocator, .cons);
+                    return;
+                }
+            }
+
+            // list: (list arg1 arg2 ...) => compile args, list_n
+            if (all_safe and std.mem.eql(u8, op_name, "list")) {
+                const n = items.len - 1;
+                var li: usize = 1;
+                while (li < items.len) : (li += 1) {
+                    try self.compileForm(items[li]);
+                }
+                _ = try self.program.emit(self.allocator, .list_n, n);
+                return;
             }
         }
 
@@ -3022,6 +3178,13 @@ fn isBytecodeOptimizableOperator(sym: []const u8) bool {
     }
     // compare
     if (std.mem.eql(u8, sym, "compare")) return true;
+    // seq, cons, list — VM opcodes exist, compiler wiring added (Phase 1)
+    if (std.mem.eql(u8, sym, "seq") or
+        std.mem.eql(u8, sym, "cons") or
+        std.mem.eql(u8, sym, "list"))
+    {
+        return true;
+    }
     return false;
 }
 
