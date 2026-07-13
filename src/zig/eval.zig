@@ -1099,7 +1099,8 @@ fn evalLetFn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
 fn bindPattern(allocator: Allocator, pattern: Value, val: Value, env: *vm.Env) anyerror!void {
     switch (std.meta.activeTag(pattern)) {
         .symbol => {
-            try env.put(pattern.symbol, try vm.shallowClone(&val, allocator));
+            // Phase 7: val is already a copy, GC keeps data alive — no clone needed
+            try env.put(pattern.symbol, val);
         },
         .vector => {
             // Vector destructuring: [a b & rest] matches elements of val
@@ -1120,7 +1121,8 @@ fn bindPattern(allocator: Allocator, pattern: Value, val: Value, env: *vm.Env) a
                         errdefer rest_list.deinit(allocator);
                         var k: usize = j;
                         while (k < vitems.len) : (k += 1) {
-                            try rest_list.append(allocator, try vm.shallowClone(&vitems[k], allocator));
+                            // Phase 7: vitems[k] is a copy from the source collection, no clone needed
+                            try rest_list.append(allocator, vitems[k]);
                         }
                         if (std.meta.activeTag(rest_sym) == .symbol) {
                             try env.put(rest_sym.symbol, try vm.listValue(allocator, rest_list));
@@ -1141,7 +1143,8 @@ fn bindPattern(allocator: Allocator, pattern: Value, val: Value, env: *vm.Env) a
 fn bindPatternFrame(allocator: Allocator, pattern: Value, val: Value, frame: *vm.Frame) anyerror!void {
     switch (std.meta.activeTag(pattern)) {
         .symbol => {
-            try frame.put(pattern.symbol, try vm.shallowClone(&val, allocator));
+            // Phase 7: val is already a copy, GC keeps data alive — no clone needed
+            try frame.put(pattern.symbol, val);
         },
         .vector => {
             // Vector destructuring: [a b & rest] matches elements of val
@@ -1162,7 +1165,8 @@ fn bindPatternFrame(allocator: Allocator, pattern: Value, val: Value, frame: *vm
                         errdefer rest_list.deinit(allocator);
                         var k: usize = j;
                         while (k < vitems.len) : (k += 1) {
-                            try rest_list.append(allocator, try vm.shallowClone(&vitems[k], allocator));
+                            // Phase 7: vitems[k] is a copy from the source collection, no clone needed
+                            try rest_list.append(allocator, vitems[k]);
                         }
                         if (std.meta.activeTag(rest_sym) == .symbol) {
                             try frame.put(rest_sym.symbol, try vm.listValue(allocator, rest_list));
@@ -1265,8 +1269,8 @@ fn evalLoop(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
             // Rebind loop variables with new values
             var j: usize = 0;
             while (j < recur_vals.len) : (j += 1) {
-                const new_val = try vm.shallowClone(&recur_vals[j], allocator);
-                try child_frame.put(bind_names.items[j], new_val);
+                // Phase 7: recur_vals[j] is already a Value copy, no clone needed
+                try child_frame.put(bind_names.items[j], recur_vals[j]);
             }
             vm.valueDeinit(&result, allocator);
             loop_depth += 1;
@@ -2411,7 +2415,8 @@ fn captureFrameEnv(allocator: Allocator, frame: *vm.Frame) anyerror!Env {
         var it = frames.items[i].overlay.entryIterator();
         while (it.next()) |entry| {
             if (std.meta.activeTag(entry.key) == .symbol) {
-                try env.put(entry.key.symbol, try vm.shallowClone(&entry.val, allocator));
+                // Phase 7: entry.val is a Value copy from the overlay HAMT, no clone needed
+                try env.put(entry.key.symbol, entry.val);
             }
         }
     }
