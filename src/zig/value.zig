@@ -2567,3 +2567,75 @@ pub const NamespaceManager = struct {
         return null;
     }
 };
+
+// ============================================================
+// Cached Keywords for Stats Functions
+// ============================================================
+// Keywords used in gc-stats and stack-stats are constant strings
+// that are created fresh on every call. This wastes allocations:
+//   - keywordValue() does allocator.dupe(u8, name) + tagStringData
+//   - gc-stats has 7 keywords = 7 string allocs per call
+//   - stack-stats has 4 keywords = 4 string allocs per call
+//
+// Solution: cache the keyword string data as singletons. The cached
+// strings are allocated once from the GC heap and reused forever.
+// This eliminates all keyword allocations in the hot stats path.
+// ============================================================
+
+const StatsKeywords = struct {
+    // gc-stats keywords
+    current_allocated: ?[]const u8 = null,
+    peak_allocated: ?[]const u8 = null,
+    total_allocated: ?[]const u8 = null,
+    total_freed: ?[]const u8 = null,
+    sweep_count: ?[]const u8 = null,
+    alloc_count: ?[]const u8 = null,
+    block_count: ?[]const u8 = null,
+    // stack-stats keywords
+    app_baseline: ?[]const u8 = null,
+    vm_baseline: ?[]const u8 = null,
+    current: ?[]const u8 = null,
+    usage: ?[]const u8 = null,
+};
+
+var stats_keywords: StatsKeywords = .{};
+
+/// Lazily initialize and return the cached keyword string for a given name.
+/// Returns the cached string on subsequent calls. Uses the GC allocator.
+pub fn getCachedKeyword(name: []const u8) anyerror![]const u8 {
+    // Resolve the cache slot for known keywords
+    const slot: ?*?[]const u8 = if (std.mem.eql(u8, name, "current-allocated")) &stats_keywords.current_allocated
+    else if (std.mem.eql(u8, name, "peak-allocated")) &stats_keywords.peak_allocated
+    else if (std.mem.eql(u8, name, "total-allocated")) &stats_keywords.total_allocated
+    else if (std.mem.eql(u8, name, "total-freed")) &stats_keywords.total_freed
+    else if (std.mem.eql(u8, name, "sweep-count")) &stats_keywords.sweep_count
+    else if (std.mem.eql(u8, name, "alloc-count")) &stats_keywords.alloc_count
+    else if (std.mem.eql(u8, name, "block-count")) &stats_keywords.block_count
+    else if (std.mem.eql(u8, name, "app-baseline")) &stats_keywords.app_baseline
+    else if (std.mem.eql(u8, name, "vm-baseline")) &stats_keywords.vm_baseline
+    else if (std.mem.eql(u8, name, "current")) &stats_keywords.current
+    else if (std.mem.eql(u8, name, "usage")) &stats_keywords.usage
+    else null;
+
+    if (slot) |s| {
+        if (s.*) |cached| return cached;
+
+        var allocator: Allocator = std.heap.page_allocator;
+        if (gc_mod.current_gc) |gc| allocator = gc.allocator();
+        const duped = try allocator.dupe(u8, name);
+        tagStringData(@as(*anyopaque, @ptrCast(@constCast(duped.ptr))));
+        s.* = duped;
+        return duped;
+    }
+
+    // Unknown keyword — allocate without caching
+    var allocator: Allocator = std.heap.page_allocator;
+    if (gc_mod.current_gc) |gc| allocator = gc.allocator();
+    return try allocator.dupe(u8, name);
+}
+
+/// Return a keyword Value using a cached string.
+/// Caller does NOT own the string — it is a global singleton.
+pub fn getCachedKeywordValue(name: []const u8) anyerror!Value {
+    return .{ .keyword = try getCachedKeyword(name) };
+}
