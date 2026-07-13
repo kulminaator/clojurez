@@ -219,11 +219,12 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args: []const Value, e
                             std.mem.eql(u8, body_arg1.symbol, arity.params.items[1].symbol))
                         {
                             // Resolve operator from function's definition env (has ns_manager)
-                            const resolved_op_ptr = try evalForm(allocator, body_op, fn_data.env);
-                            defer vm.valueDeinit(&resolved_op_ptr.*, allocator);
+                            // Phase 4: Use evalFormDirect — Value by copy, no *Value allocation
+                            const resolved_op = try evalFormDirect(allocator, body_op, fn_data.env);
                             // Use stack array — no clone needed (GC keeps data alive), no deinit needed.
                             var args_arr: [2]Value = .{ args[0], args[1] };
-                            return try callBuiltin(allocator, resolved_op_ptr, &args_arr, env);
+                            var op_val = resolved_op;
+                            return try callBuiltin(allocator, &op_val, &args_arr, env);
                         }
                     }
                 }
@@ -271,11 +272,12 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args: []const Value, e
                             std.mem.eql(u8, body_arg0.symbol, param_name))
                         {
                             // Resolve operator from function's definition env (has ns_manager)
-                            const resolved_op_ptr = try evalForm(allocator, body_op, fn_data.env);
-                            defer vm.valueDeinit(&resolved_op_ptr.*, allocator);
+                            // Phase 4: Use evalFormDirect — Value by copy, no *Value allocation
+                            const resolved_op = try evalFormDirect(allocator, body_op, fn_data.env);
                             // Use stack array — no clone needed (GC keeps data alive), no deinit needed.
                             var args_arr: [1]Value = .{ args[0] };
-                            return try callBuiltin(allocator, resolved_op_ptr, &args_arr, env);
+                            var op_val = resolved_op;
+                            return try callBuiltin(allocator, &op_val, &args_arr, env);
                         }
                     } else if (body_call.items.len == 3) {
                         // --- Pattern 3: (op param <literal>) or (op <literal> param) ---
@@ -296,19 +298,21 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args: []const Value, e
                         if (arg0_is_param and arg1_is_literal) {
                             // (op param <literal>) — e.g. (+ n 1), (= n 0)
                             // Resolve operator from function's definition env (has ns_manager)
-                            const resolved_op_ptr = try evalForm(allocator, body_op, fn_data.env);
-                            defer vm.valueDeinit(&resolved_op_ptr.*, allocator);
+                            // Phase 4: Use evalFormDirect — Value by copy, no *Value allocation
+                            const resolved_op = try evalFormDirect(allocator, body_op, fn_data.env);
                             // Use stack array — no clone needed (GC keeps data alive), no deinit needed.
                             var args_arr: [2]Value = .{ args[0], body_arg1.* };
-                            return try callBuiltin(allocator, resolved_op_ptr, &args_arr, env);
+                            var op_val = resolved_op;
+                            return try callBuiltin(allocator, &op_val, &args_arr, env);
                         } else if (arg1_is_param and arg0_is_literal) {
                             // (op <literal> param) — e.g. (- 0 n)
                             // Resolve operator from function's definition env (has ns_manager)
-                            const resolved_op_ptr = try evalForm(allocator, body_op, fn_data.env);
-                            defer vm.valueDeinit(&resolved_op_ptr.*, allocator);
+                            // Phase 4: Use evalFormDirect — Value by copy, no *Value allocation
+                            const resolved_op = try evalFormDirect(allocator, body_op, fn_data.env);
                             // Use stack array — no clone needed (GC keeps data alive), no deinit needed.
                             var args_arr: [2]Value = .{ body_arg0.*, args[0] };
-                            return try callBuiltin(allocator, resolved_op_ptr, &args_arr, env);
+                            var op_val = resolved_op;
+                            return try callBuiltin(allocator, &op_val, &args_arr, env);
                         }
                     }
                 }
@@ -505,6 +509,27 @@ pub fn evalBody(allocator: Allocator, body: *const list.List, env: *vm.Env) anye
     // Clone and wrap in a list value for normal evaluation.
     const list_val = try vm.listValue(allocator, try body.clone(allocator));
     return try evalForm(allocator, &list_val, env);
+}
+
+/// Evaluate a form, returning Value by copy — no *Value allocation.
+/// Use this instead of evalForm when the result is immediately consumed
+/// (read, used, then discarded) rather than stored or returned.
+/// Eliminates the allocBuiltinResult allocation for intermediate results.
+pub fn evalFormDirect(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!Value {
+    const ptr = try evalForm(allocator, form, env);
+    const v = ptr.*;
+    allocator.destroy(ptr); // no-op in GC allocator, but correct pattern
+    return v;
+}
+
+/// Call a function, returning Value by copy — no *Value allocation.
+/// Use this instead of callBuiltin when the result is immediately consumed
+/// (read, used, then discarded) rather than stored or returned.
+pub fn callBuiltinDirect(allocator: Allocator, f: *const Value, args: []const Value, env: *vm.Env) anyerror!Value {
+    const ptr = try callBuiltin(allocator, f, args, env);
+    const v = ptr.*;
+    allocator.destroy(ptr); // no-op in GC allocator, but correct pattern
+    return v;
 }
 
 /// Main evaluation dispatcher — routes to type-specific evaluators.
@@ -715,11 +740,9 @@ fn evalDo(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Valu
 /// (if test then then else?) — conditional.
 fn evalIf(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Value {
     if (form.list.items.items.len < 3) return error.ArityError;
-    const test_ptr = try evalForm(allocator, &form.list.items.items[1], env);
-    const truthy = vm.isTruthy(test_ptr.*);
-    vm.valueDeinit(&test_ptr.*, allocator);
-    allocator.destroy(test_ptr);
-    if (truthy) {
+    // Phase 4: Use evalFormDirect — Value by copy, no *Value allocation
+    const test_val = try evalFormDirect(allocator, &form.list.items.items[1], env);
+    if (vm.isTruthy(test_val)) {
         return try evalForm(allocator, &form.list.items.items[2], env);
     } else if (form.list.items.items.len >= 4) {
         return try evalForm(allocator, &form.list.items.items[3], env);
@@ -731,32 +754,25 @@ fn evalIf(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Valu
 /// (when test body...) — if with implicit do.
 fn evalWhen(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Value {
     if (form.list.items.items.len < 3) return error.ArityError;
-    const test_ptr = try evalForm(allocator, &form.list.items.items[1], env);
-    const truthy = vm.isTruthy(test_ptr.*);
-    vm.valueDeinit(&test_ptr.*, allocator);
-    allocator.destroy(test_ptr);
-    if (truthy) {
+    // Phase 4: Use evalFormDirect — Value by copy, no *Value allocation
+    const test_val = try evalFormDirect(allocator, &form.list.items.items[1], env);
+    if (vm.isTruthy(test_val)) {
         return evalDoSlice(allocator, form.list.items.items[2..], env);
     }
     return try allocBuiltinResult(allocator, vm.nilValue());
 }
 
 /// Evaluate a slice of forms as a do block (return last value).
+/// Phase 4: Non-final forms use evalFormDirect (Value by copy, no *Value allocation).
 fn evalDoSlice(allocator: Allocator, forms: []const Value, env: *vm.Env) anyerror!*Value {
-    var last_ptr: ?*Value = null;
-    errdefer {
-        if (last_ptr) |p| { vm.valueDeinit(&p.*, allocator); allocator.destroy(p); }
+    if (forms.len == 0) return try allocBuiltinResult(allocator, vm.nilValue());
+    // Non-tail forms: evaluate and discard (no *Value allocation)
+    var i: usize = 0;
+    while (i < forms.len - 1) : (i += 1) {
+        _ = try evalFormDirect(allocator, &forms[i], env);
     }
-    for (forms) |arg| {
-        if (last_ptr) |p| { vm.valueDeinit(&p.*, allocator); allocator.destroy(p); }
-        last_ptr = try evalForm(allocator, &arg, env);
-    }
-    if (last_ptr) |p| {
-        const result = p.*;
-        allocator.destroy(p);
-        return try allocBuiltinResult(allocator, result);
-    }
-    return try allocBuiltinResult(allocator, vm.nilValue());
+    // Tail form: evaluate and return (needs *Value for caller)
+    return try evalForm(allocator, &forms[forms.len - 1], env);
 }
 
 /// (and form*) — short-circuit and.
@@ -764,15 +780,14 @@ fn evalAnd(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Val
     if (form.list.items.items.len == 1) return try allocBuiltinResult(allocator, vm.boolValue(true));
     var i: usize = 1;
     while (i < form.list.items.items.len) : (i += 1) {
-        const val_ptr = try evalForm(allocator, &form.list.items.items[i], env);
-        if (!vm.isTruthy(val_ptr.*)) {
-            return val_ptr;
+        // Phase 4: Use evalFormDirect — Value by copy, no *Value allocation
+        const val = try evalFormDirect(allocator, &form.list.items.items[i], env);
+        if (!vm.isTruthy(val)) {
+            return try allocBuiltinResult(allocator, val);
         }
         if (i == form.list.items.items.len - 1) {
-            return val_ptr;
+            return try allocBuiltinResult(allocator, val);
         }
-        vm.valueDeinit(&val_ptr.*, allocator);
-        allocator.destroy(val_ptr);
     }
     return try allocBuiltinResult(allocator, vm.nilValue());
 }
@@ -782,10 +797,9 @@ fn evalOr(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Valu
     if (form.list.items.items.len == 0) return try allocBuiltinResult(allocator, vm.nilValue());
     var i: usize = 1;
     while (i < form.list.items.items.len) : (i += 1) {
-        const val_ptr = try evalForm(allocator, &form.list.items.items[i], env);
-        if (vm.isTruthy(val_ptr.*)) return val_ptr;
-        vm.valueDeinit(&val_ptr.*, allocator);
-        allocator.destroy(val_ptr);
+        // Phase 4: Use evalFormDirect — Value by copy, no *Value allocation
+        const val = try evalFormDirect(allocator, &form.list.items.items[i], env);
+        if (vm.isTruthy(val)) return try allocBuiltinResult(allocator, val);
     }
     return try allocBuiltinResult(allocator, vm.nilValue());
 }
@@ -795,11 +809,9 @@ fn evalCond(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Va
     var i: usize = 1;
     while (i < form.list.items.items.len) : (i += 2) {
         if (i + 1 >= form.list.items.items.len) return error.ArityError;
-        const test_ptr = try evalForm(allocator, &form.list.items.items[i], env);
-        const truthy = vm.isTruthy(test_ptr.*);
-        vm.valueDeinit(&test_ptr.*, allocator);
-        allocator.destroy(test_ptr);
-        if (truthy) {
+        // Phase 4: Use evalFormDirect — Value by copy, no *Value allocation
+        const test_val = try evalFormDirect(allocator, &form.list.items.items[i], env);
+        if (vm.isTruthy(test_val)) {
             return try evalForm(allocator, &form.list.items.items[i + 1], env);
         }
     }
@@ -818,13 +830,10 @@ fn evalLet(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Val
     var bi: usize = 0;
     while (bi < bind_items.len) : (bi += 2) {
         const sym = &bind_items[bi];
-        const val_ptr = try evalForm(allocator, &bind_items[bi + 1], &new_env);
-        defer {
-            vm.valueDeinit(&val_ptr.*, allocator);
-            allocator.destroy(val_ptr);
-        }
+        // Phase 4: Use evalFormDirect — Value by copy, no *Value allocation
+        const val = try evalFormDirect(allocator, &bind_items[bi + 1], &new_env);
         // Use bindPattern to support destructuring: [a b], [a & rest], nested
-        try bindPattern(allocator, sym.*, val_ptr.*, &new_env);
+        try bindPattern(allocator, sym.*, val, &new_env);
     }
 
     return evalDoSlice(allocator, form.list.items.items[2..], &new_env);
@@ -860,12 +869,9 @@ fn evalLoop(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Va
     i = 0;
     while (i < bind_items.len) : (i += 2) {
         const sym = &bind_items[i];
-        const val_ptr = try evalForm(allocator, &bind_items[i + 1], &loop_env);
-        defer {
-            vm.valueDeinit(&val_ptr.*, allocator);
-            allocator.destroy(val_ptr);
-        }
-        try loop_env.put(sym.symbol, val_ptr.*);
+        // Phase 4: Use evalFormDirect — Value by copy, no *Value allocation
+        const val = try evalFormDirect(allocator, &bind_items[i + 1], &loop_env);
+        try loop_env.put(sym.symbol, val);
     }
 
     // Push loop context for recur (stack-based for nested loops)
@@ -906,12 +912,9 @@ fn evalRecur(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*V
     // Evaluate new values in caller's env, rebind in loop env
     var i: usize = 0;
     while (i < args.len) : (i += 1) {
-        const val_ptr = try evalForm(allocator, &args[i], env);
-        defer {
-            vm.valueDeinit(&val_ptr.*, allocator);
-            allocator.destroy(val_ptr);
-        }
-        try loop_env.put(ctx.bind_names[i], val_ptr.*);
+        // Phase 4: Use evalFormDirect — Value by copy, no *Value allocation
+        const val = try evalFormDirect(allocator, &args[i], env);
+        try loop_env.put(ctx.bind_names[i], val);
     }
 
     return error.RecurLoop; // signal loop to restart
@@ -1036,27 +1039,25 @@ fn evalLazySeq(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!
 /// Handles macro expansion and normal function application.
 fn evalFunctionCall(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Value {
     const first = &form.list.items.items[0];
-    const op_ptr = try evalForm(allocator, first, env);
-    defer vm.valueDeinit(&op_ptr.*, allocator);
-    defer allocator.destroy(op_ptr);
+    // Phase 4: Use evalFormDirect — Value by copy, no *Value allocation
+    const op_val = try evalFormDirect(allocator, first, env);
 
     // Check if operator is a macro
-    if (std.meta.activeTag(op_ptr.*) == .function and op_ptr.function.is_macro) {
+    if (std.meta.activeTag(op_val) == .function and op_val.function.is_macro) {
         var macro_args: list.List = .empty;
         errdefer macro_args.deinit(allocator);
         for (form.list.items.items[1..]) |arg| {
             try macro_args.append(allocator, try vm.shallowClone(&arg, allocator));
         }
-        const expanded_ptr = try callBuiltin(allocator, op_ptr, macro_args.items, env);
-        const result = try evalForm(allocator, expanded_ptr, env);
-        vm.valueDeinit(&expanded_ptr.*, allocator);
+        const expanded_ptr = try callBuiltin(allocator, &op_val, macro_args.items, env);
+        const expanded = expanded_ptr.*;
         allocator.destroy(expanded_ptr);
-        return result;
+        return try evalForm(allocator, &expanded, env);
     }
 
     // Evaluate all arguments and call the function.
     // Use no-alloc paths for symbols and self-evaluating types.
-    // For lists/vectors/cons (nested calls), use evalForm which returns owned *Value.
+    // For lists/vectors/cons (nested calls), use evalFormDirect which returns Value by copy.
     var args: list.List = .empty;
     errdefer args.deinit(allocator);
     for (form.list.items.items[1..]) |arg| {
@@ -1069,26 +1070,14 @@ fn evalFunctionCall(allocator: Allocator, form: *const Value, env: *vm.Env) anye
             // Self-evaluating types: form IS the value — no allocation
             .nil, .bool, .integer, .float, .string, .keyword => evalSelfRef(&arg).*,
             // Lists, vectors, cons need evaluation (nested calls, etc.)
-            // evalForm returns owned *Value — must clean up after reading.
-            .list, .vector, .cons => blk: {
-                const arg_ptr = try evalForm(allocator, &arg, env);
-                const v = arg_ptr.*;
-                vm.valueDeinit(&arg_ptr.*, allocator);
-                allocator.destroy(arg_ptr);
-                break :blk v;
-            },
-            // Everything else (regex, char, etc.): shallow clone via evalForm path
-            else => blk: {
-                const arg_ptr = try evalForm(allocator, &arg, env);
-                const v = arg_ptr.*;
-                vm.valueDeinit(&arg_ptr.*, allocator);
-                allocator.destroy(arg_ptr);
-                break :blk v;
-            },
+            // Phase 4: Use evalFormDirect — Value by copy, no *Value allocation
+            .list, .vector, .cons => try evalFormDirect(allocator, &arg, env),
+            // Everything else (regex, char, etc.): shallow clone via evalFormDirect
+            else => try evalFormDirect(allocator, &arg, env),
         };
         try args.append(allocator, arg_val);
     }
-    return try callBuiltin(allocator, op_ptr, args.items, env);
+    return try callBuiltin(allocator, &op_val, args.items, env);
 }
 
 /// Evaluate a vector: evaluate each element.
@@ -1096,12 +1085,9 @@ fn evalVector(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*
     var new_vec: vec.Vector = .empty;
     errdefer new_vec.deinit(allocator);
     for (form.vector.items.items) |item| {
-        const item_ptr = try evalForm(allocator, &item, env);
-        defer {
-            vm.valueDeinit(&item_ptr.*, allocator);
-            allocator.destroy(item_ptr);
-        }
-        try new_vec.append(allocator, item_ptr.*);
+        // Phase 4: Use evalFormDirect — Value by copy, no *Value allocation
+        const val = try evalFormDirect(allocator, &item, env);
+        try new_vec.append(allocator, val);
     }
     return try allocBuiltinResult(allocator, try vm.vectorValue(allocator, new_vec));
 }
@@ -1142,20 +1128,16 @@ fn evalCons(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Va
         return try evalForm(allocator, &list_val, env);
     }
     // Non-symbol operator: evaluate normally
-    const op_ptr = try evalForm(allocator, first_item, env);
-    defer vm.valueDeinit(&op_ptr.*, allocator);
-    defer allocator.destroy(op_ptr);
+    // Phase 4: Use evalFormDirect — Value by copy, no *Value allocation
+    const op_val = try evalFormDirect(allocator, first_item, env);
     var args: list.List = .empty;
     errdefer args.deinit(allocator);
     for (cons_list.items[1..]) |arg| {
-        const arg_ptr = try evalForm(allocator, &arg, env);
-        defer {
-            vm.valueDeinit(&arg_ptr.*, allocator);
-            allocator.destroy(arg_ptr);
-        }
-        try args.append(allocator, arg_ptr.*);
+        // Phase 4: Use evalFormDirect — Value by copy, no *Value allocation
+        const val = try evalFormDirect(allocator, &arg, env);
+        try args.append(allocator, val);
     }
-    return try callBuiltin(allocator, op_ptr, args.items, env);
+    return try callBuiltin(allocator, &op_val, args.items, env);
 }
 
 /// macroexpand-1: expand a macro call once, or return the form unchanged.
