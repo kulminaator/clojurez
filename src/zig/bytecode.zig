@@ -2350,6 +2350,15 @@ fn isSafeBytecodeArg(form: Value) bool {
                 // Fall through to function call for wrong arity
             }
 
+            // nil?: (nil? x) => push x, is_nil
+            if (all_safe and std.mem.eql(u8, op_name, "nil?")) {
+                if (items.len == 2) {
+                    try self.compileForm(items[1]);
+                    _ = try self.program.emit0(self.allocator, .is_nil);
+                    return;
+                }
+            }
+
             // count: (count coll) => push coll, count
             // Uses all_simple because bytecode count doesn't handle lazy_seq
             if (all_simple and std.mem.eql(u8, op_name, "count")) {
@@ -3185,6 +3194,8 @@ fn isBytecodeOptimizableOperator(sym: []const u8) bool {
     {
         return true;
     }
+    // nil? — VM opcode exists, compiler wiring added (Phase 2)
+    if (std.mem.eql(u8, sym, "nil?")) return true;
     return false;
 }
 

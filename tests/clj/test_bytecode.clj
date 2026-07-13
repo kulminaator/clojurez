@@ -611,6 +611,50 @@
   :same)
 
 ;; ============================================================
+;; nil? (Phase 2: bytecode operator for nil? using is_nil opcode)
+;; ============================================================
+
+(check "bytecode: nil? with nil"
+  ((fn [x] (nil? x)) nil)
+  true)
+
+(check "bytecode: nil? with integer"
+  ((fn [x] (nil? x)) 1)
+  false)
+
+(check "bytecode: nil? with string"
+  ((fn [x] (nil? x)) "hello")
+  false)
+
+(check "bytecode: nil? with true"
+  ((fn [x] (nil? x)) true)
+  false)
+
+(check "bytecode: nil? with false"
+  ((fn [x] (nil? x)) false)
+  false)
+
+(check "bytecode: nil? with empty list"
+  ((fn [x] (nil? x)) '())
+  false)
+
+(check "bytecode: nil? in if"
+  ((fn [x] (if (nil? x) :was-nil :was-not-nil)) nil)
+  :was-nil)
+
+(check "bytecode: nil? in if (not nil)"
+  ((fn [x] (if (nil? x) :was-nil :was-not-nil)) 42)
+  :was-not-nil)
+
+(check "bytecode: not-nil? (not (nil? x))"
+  ((fn [x] (not (nil? x))) nil)
+  false)
+
+(check "bytecode: not-nil? (not (nil? x)) with value"
+  ((fn [x] (not (nil? x))) 42)
+  true)
+
+;; ============================================================
 ;; SUMMARY
 ;; ============================================================
 
