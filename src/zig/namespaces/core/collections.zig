@@ -21,10 +21,10 @@ pub fn core_conj(self: *const Value, args: *const list.List, env_env: *Env) anye
             var new_vec: vec.Vector = .empty;
             errdefer new_vec.deinit(env_env.allocator);
             for (coll.vector.items.items) |item| {
-                try new_vec.append(env_env.allocator, try vm.shallowClone(&item, env_env.allocator));
+                try new_vec.append(env_env.allocator, item);
             }
             for (args.items[1..]) |item| {
-                try new_vec.append(env_env.allocator, try vm.shallowClone(&item, env_env.allocator));
+                try new_vec.append(env_env.allocator, item);
             }
             return try vm.vectorValue(env_env.allocator, new_vec);
         },
@@ -33,12 +33,12 @@ pub fn core_conj(self: *const Value, args: *const list.List, env_env: *Env) anye
             errdefer new_list.deinit(env_env.allocator);
             var i: usize = args.items.len - 1;
             while (true) {
-                try new_list.append(env_env.allocator, try vm.shallowClone(&args.items[i], env_env.allocator));
+                try new_list.append(env_env.allocator, args.items[i]);
                 if (i == 1) break;
                 i -= 1;
             }
             for (coll.list.items.items) |item| {
-                try new_list.append(env_env.allocator, try vm.shallowClone(&item, env_env.allocator));
+                try new_list.append(env_env.allocator, item);
             }
             return try vm.listValue(env_env.allocator, new_list);
         },
@@ -51,7 +51,7 @@ pub fn core_conj(self: *const Value, args: *const list.List, env_env: *Env) anye
                 env_env.allocator.free(new_set.items);
             }
             for (coll.set.items.items) |item| {
-                try new_set.append(env_env.allocator, try vm.shallowClone(&item, env_env.allocator));
+                try new_set.append(env_env.allocator, item);
             }
             for (args.items[1..]) |item| {
                 var found = false;
@@ -62,7 +62,7 @@ pub fn core_conj(self: *const Value, args: *const list.List, env_env: *Env) anye
                     }
                 }
                 if (!found) {
-                    try new_set.append(env_env.allocator, try vm.shallowClone(&item, env_env.allocator));
+                    try new_set.append(env_env.allocator, item);
                 }
             }
             return try vm.setValue(env_env.allocator, new_set);
@@ -76,10 +76,10 @@ pub fn core_conj(self: *const Value, args: *const list.List, env_env: *Env) anye
                 env_env.allocator.free(new_queue.items);
             }
             for (coll.queue.items.items) |item| {
-                try new_queue.append(env_env.allocator, try vm.shallowClone(&item, env_env.allocator));
+                try new_queue.append(env_env.allocator, item);
             }
             for (args.items[1..]) |item| {
-                try new_queue.append(env_env.allocator, try vm.shallowClone(&item, env_env.allocator));
+                try new_queue.append(env_env.allocator, item);
             }
             return try vm.queueValue(env_env.allocator, new_queue);
         },
@@ -94,8 +94,8 @@ pub fn core_conj(self: *const Value, args: *const list.List, env_env: *Env) anye
             }
             for (coll.map.entries.items) |entry| {
                 try new_map.append(env_env.allocator, .{
-                    .key = try vm.shallowClone(&entry.key, env_env.allocator),
-                    .value = try vm.shallowClone(&entry.value, env_env.allocator),
+                    .key = entry.key,
+                    .value = entry.value,
                 });
             }
             for (args.items[1..]) |item| {
@@ -111,15 +111,15 @@ pub fn core_conj(self: *const Value, args: *const list.List, env_env: *Env) anye
                 while (j < new_map.items.len) : (j += 1) {
                     if (vm.equals(new_map.items[j].key, entry_items[0])) {
                         vm.valueDeinit(&new_map.items[j].value, env_env.allocator);
-                        new_map.items[j].value = try vm.shallowClone(&entry_items[1], env_env.allocator);
+                        new_map.items[j].value = entry_items[1];
                         found = true;
                         break;
                     }
                 }
                 if (!found) {
                     try new_map.append(env_env.allocator, .{
-                        .key = try vm.shallowClone(&entry_items[0], env_env.allocator),
-                        .value = try vm.shallowClone(&entry_items[1], env_env.allocator),
+                        .key = entry_items[0],
+                        .value = entry_items[1],
                     });
                 }
             }
@@ -129,7 +129,7 @@ pub fn core_conj(self: *const Value, args: *const list.List, env_env: *Env) anye
             // conj on record with map entries: (conj record [k v]) or (conj record {k v})
             // Each entry is a 2-element collection that becomes an assoc pair
             const allocator = env_env.allocator;
-            var current = try vm.shallowClone(&coll, allocator);
+            var current = coll;
             defer vm.valueDeinit(&current, allocator);
 
             for (args.items[1..]) |item| {
@@ -142,12 +142,12 @@ pub fn core_conj(self: *const Value, args: *const list.List, env_env: *Env) anye
                 if (entry_items.len != 2) return error.ArityError;
 
                 // Build args: (assoc current key value)
-                const current_clone = try vm.shallowClone(&current, allocator);
+                const current_clone = current;
                 var assoc_args: list.List = .empty;
                 defer assoc_args.deinit(allocator);
                 try assoc_args.append(allocator, current_clone);
-                try assoc_args.append(allocator, try vm.shallowClone(&entry_items[0], allocator));
-                try assoc_args.append(allocator, try vm.shallowClone(&entry_items[1], allocator));
+                try assoc_args.append(allocator, entry_items[0]);
+                try assoc_args.append(allocator, entry_items[1]);
 
                 const new_val = try maps.core_assoc(&current_clone, &assoc_args, env_env);
                 vm.valueDeinit(&current, allocator);
@@ -174,7 +174,7 @@ pub fn core_pop(self: *const Value, args: *const list.List, env_env: *Env) anyer
             const len = coll.vector.items.items.len - 1;
             var i: usize = 0;
             while (i < len) : (i += 1) {
-                try new_vec.append(env_env.allocator, try vm.shallowClone(&coll.vector.items.items[i], env_env.allocator));
+                try new_vec.append(env_env.allocator, coll.vector.items.items[i]);
             }
             return try vm.vectorValue(env_env.allocator, new_vec);
         },
@@ -185,7 +185,7 @@ pub fn core_pop(self: *const Value, args: *const list.List, env_env: *Env) anyer
             const len = coll.list.items.items.len - 1;
             var i: usize = 0;
             while (i < len) : (i += 1) {
-                try new_list.append(env_env.allocator, try vm.shallowClone(&coll.list.items.items[i], env_env.allocator));
+                try new_list.append(env_env.allocator, coll.list.items.items[i]);
             }
             return try vm.listValue(env_env.allocator, new_list);
         },
@@ -200,7 +200,7 @@ pub fn core_pop(self: *const Value, args: *const list.List, env_env: *Env) anyer
             }
             var i: usize = 1;
             while (i < coll.queue.items.items.len) : (i += 1) {
-                try new_queue.append(env_env.allocator, try vm.shallowClone(&coll.queue.items.items[i], env_env.allocator));
+                try new_queue.append(env_env.allocator, coll.queue.items.items[i]);
             }
             return try vm.queueValue(env_env.allocator, new_queue);
         },
@@ -212,7 +212,7 @@ pub fn core_last(self: *const Value, args: *const list.List, env_env: *Env) anye
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const allocator = env_env.allocator;
-    var coll = try vm.shallowClone(&args.items[0], allocator);
+    var coll = args.items[0];
     defer vm.valueDeinit(&coll, allocator);
 
     // Force lazy_seq
@@ -223,11 +223,11 @@ pub fn core_last(self: *const Value, args: *const list.List, env_env: *Env) anye
     switch (std.meta.activeTag(coll)) {
         .vector => {
             if (coll.vector.items.items.len == 0) return vm.nilValue();
-            return try vm.shallowClone(&coll.vector.items.items[coll.vector.items.items.len - 1], allocator);
+            return coll.vector.items.items[coll.vector.items.items.len - 1];
         },
         .list => {
             if (coll.list.items.items.len == 0) return vm.nilValue();
-            return try vm.shallowClone(&coll.list.items.items[coll.list.items.items.len - 1], allocator);
+            return coll.list.items.items[coll.list.items.items.len - 1];
         },
         .string => {
             const s = coll.string;
@@ -253,7 +253,7 @@ pub fn core_reverse(self: *const Value, args: *const list.List, env_env: *Env) a
             var i: usize = coll.vector.items.items.len;
             while (i > 0) {
                 i -= 1;
-                try new_vec.append(env_env.allocator, try vm.shallowClone(&coll.vector.items.items[i], env_env.allocator));
+                try new_vec.append(env_env.allocator, coll.vector.items.items[i]);
             }
             return try vm.vectorValue(env_env.allocator, new_vec);
         },
@@ -263,7 +263,7 @@ pub fn core_reverse(self: *const Value, args: *const list.List, env_env: *Env) a
             var i: usize = coll.list.items.items.len;
             while (i > 0) {
                 i -= 1;
-                try new_list.append(env_env.allocator, try vm.shallowClone(&coll.list.items.items[i], env_env.allocator));
+                try new_list.append(env_env.allocator, coll.list.items.items[i]);
             }
             return try vm.listValue(env_env.allocator, new_list);
         },
@@ -275,7 +275,7 @@ pub fn core_reverse(self: *const Value, args: *const list.List, env_env: *Env) a
             var i: usize = forced.list.items.items.len;
             while (i > 0) {
                 i -= 1;
-                try new_list.append(env_env.allocator, try vm.shallowClone(&forced.list.items.items[i], env_env.allocator));
+                try new_list.append(env_env.allocator, forced.list.items.items[i]);
             }
             return try vm.listValue(env_env.allocator, new_list);
         },
@@ -285,20 +285,21 @@ pub fn core_reverse(self: *const Value, args: *const list.List, env_env: *Env) a
 
 pub fn core_peek(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
+    _ = env_env;
     if (args.items.len != 1) return error.ArityError;
     const coll = args.items[0];
     switch (std.meta.activeTag(coll)) {
         .queue => {
             if (coll.queue.items.items.len == 0) return vm.nilValue();
-            return try vm.shallowClone(&coll.queue.items.items[0], env_env.allocator);
+            return coll.queue.items.items[0];
         },
         .vector => {
             if (coll.vector.items.items.len == 0) return vm.nilValue();
-            return try vm.shallowClone(&coll.vector.items.items[coll.vector.items.items.len - 1], env_env.allocator);
+            return coll.vector.items.items[coll.vector.items.items.len - 1];
         },
         .list => {
             if (coll.list.items.items.len == 0) return vm.nilValue();
-            return try vm.shallowClone(&coll.list.items.items[coll.list.items.items.len - 1], env_env.allocator);
+            return coll.list.items.items[coll.list.items.items.len - 1];
         },
         else => return error.TypeError,
     }

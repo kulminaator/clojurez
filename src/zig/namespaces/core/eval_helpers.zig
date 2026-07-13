@@ -81,7 +81,7 @@ fn bindPattern(allocator: Allocator, pattern: Value, val: Value, env: *vm.Env) a
                         errdefer rest_list.deinit(allocator);
                         var k: usize = j;
                         while (k < vitems.len) : (k += 1) {
-                            try rest_list.append(allocator, try vm.shallowClone(&vitems[k], allocator));
+                            try rest_list.append(allocator, vitems[k]);
                         }
                         if (std.meta.activeTag(rest_sym) == .symbol) {
                             try env.put(rest_sym.symbol, try vm.listValue(allocator, rest_list));
@@ -111,7 +111,7 @@ fn bindPattern(allocator: Allocator, pattern: Value, val: Value, env: *vm.Env) a
                         errdefer rest_list.deinit(allocator);
                         var k: usize = j;
                         while (k < vitems.len) : (k += 1) {
-                            try rest_list.append(allocator, try vm.shallowClone(&vitems[k], allocator));
+                            try rest_list.append(allocator, vitems[k]);
                         }
                         if (std.meta.activeTag(rest_sym) == .symbol) {
                             try env.put(rest_sym.symbol, try vm.listValue(allocator, rest_list));
@@ -149,7 +149,7 @@ pub fn parseParams(allocator: Allocator, params: list.List) anyerror!ParsedParam
             rest_name = try allocator.dupe(u8, item.symbol);
             break;
         } else {
-            try regular_params.append(allocator, try vm.shallowClone(&item, allocator));
+            try regular_params.append(allocator, item);
         }
     }
 
@@ -336,7 +336,7 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args: []const Value, e
 
             // Bind function name for self-reference (e.g., (fn self [x] (self (dec x))))
             if (fn_data.name) |fn_name| {
-                const fn_clone = try vm.shallowClone(f, allocator);
+                const fn_clone = f.*;
                 try new_env.put(fn_name, fn_clone);
             }
 
@@ -354,7 +354,7 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args: []const Value, e
                 errdefer rest_list.deinit(allocator);
                 var j: usize = min_args;
                 while (j < args.len) : (j += 1) {
-                    try rest_list.append(allocator, try vm.shallowClone(&args[j], allocator));
+                    try rest_list.append(allocator, args[j]);
                 }
                 try new_env.put(arity.rest_name.?, try vm.listValue(allocator, rest_list));
             } else if (has_rest) {
@@ -409,18 +409,18 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args: []const Value, e
             if (std.meta.activeTag(coll.*) == .map) {
                 for (coll.map.entries.items) |entry| {
                     if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, f.keyword)) {
-                        return try allocBuiltinResult(allocator, try vm.shallowClone(&entry.value, allocator));
+                        return try allocBuiltinResult(allocator, entry.value);
                     }
                 }
             } else if (std.meta.activeTag(coll.*) == .record) {
                 for (coll.record.fields.items) |entry| {
                     if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, f.keyword)) {
-                        return try allocBuiltinResult(allocator, try vm.shallowClone(&entry.value, allocator));
+                        return try allocBuiltinResult(allocator, entry.value);
                     }
                 }
                 for (coll.record.extmap.items) |entry| {
                     if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, f.keyword)) {
-                        return try allocBuiltinResult(allocator, try vm.shallowClone(&entry.value, allocator));
+                        return try allocBuiltinResult(allocator, entry.value);
                     }
                 }
             }
@@ -432,11 +432,11 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args: []const Value, e
             const key = &args[0];
             for (f.map.entries.items) |entry| {
                 if (vm.equals(entry.key, key.*)) {
-                    return try allocBuiltinResult(allocator, try vm.shallowClone(&entry.value, allocator));
+                    return try allocBuiltinResult(allocator, entry.value);
                 }
             }
             if (args.len == 2) {
-                return try allocBuiltinResult(allocator, try vm.shallowClone(&args[1], allocator));
+                return try allocBuiltinResult(allocator, args[1]);
             }
             return try allocBuiltinResult(allocator, vm.nilValue());
         },
@@ -446,7 +446,7 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args: []const Value, e
             const key = &args[0];
             for (f.set.items.items) |item| {
                 if (vm.equals(item, key.*)) {
-                    return try allocBuiltinResult(allocator, try vm.shallowClone(&item, allocator));
+                    return try allocBuiltinResult(allocator, item);
                 }
             }
             return try allocBuiltinResult(allocator, vm.nilValue());
@@ -457,16 +457,16 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args: []const Value, e
             const key = &args[0];
             for (f.record.fields.items) |entry| {
                 if (vm.equals(entry.key, key.*)) {
-                    return try allocBuiltinResult(allocator, try vm.shallowClone(&entry.value, allocator));
+                    return try allocBuiltinResult(allocator, entry.value);
                 }
             }
             for (f.record.extmap.items) |entry| {
                 if (vm.equals(entry.key, key.*)) {
-                    return try allocBuiltinResult(allocator, try vm.shallowClone(&entry.value, allocator));
+                    return try allocBuiltinResult(allocator, entry.value);
                 }
             }
             if (args.len == 2) {
-                return try allocBuiltinResult(allocator, try vm.shallowClone(&args[1], allocator));
+                return try allocBuiltinResult(allocator, args[1]);
             }
             return try allocBuiltinResult(allocator, vm.nilValue());
         },
@@ -545,7 +545,7 @@ pub fn evalForm(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror
         .list => return evalList(allocator, form, env),
         .vector => return evalVector(allocator, form, env),
         .cons => return evalCons(allocator, form, env),
-        else => return try allocBuiltinResult(allocator, try vm.shallowClone(form, allocator)),
+        else => return try allocBuiltinResult(allocator, form.*),
     }
 }
 
@@ -557,7 +557,7 @@ pub fn evalForm(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror
 
 /// Self-evaluating types return a clone of themselves.
 fn evalSelfEvaluating(allocator: Allocator, form: *const Value) anyerror!*Value {
-    return try allocBuiltinResult(allocator, try vm.shallowClone(form, allocator));
+    return try allocBuiltinResult(allocator, form.*);
 }
 
 /// Self-evaluating types: return the input pointer directly — no allocation.
@@ -643,12 +643,12 @@ fn evalQualifiedSymbol(allocator: Allocator, sym: []const u8, slash_idx: usize, 
         return fallbackSymbolLookup(allocator, sym, env);
     };
     const val = target_env.get(name);
-    if (val) |v| return try allocBuiltinResult(allocator, try vm.shallowClone(&v, allocator));
+    if (val) |v| return try allocBuiltinResult(allocator, v);
     return fallbackSymbolLookup(allocator, sym, env);
 }
 
 fn evalUnqualifiedSymbol(allocator: Allocator, sym: []const u8, env: *vm.Env) anyerror!*Value {
-    if (env.get(sym)) |v| return try allocBuiltinResult(allocator, try vm.shallowClone(&v, allocator));
+    if (env.get(sym)) |v| return try allocBuiltinResult(allocator, v);
     std.debug.print("Undefined symbol: '{s}'\n", .{sym});
     return error.UndefinedSymbol;
 }
@@ -656,7 +656,7 @@ fn evalUnqualifiedSymbol(allocator: Allocator, sym: []const u8, env: *vm.Env) an
 /// Fallback: try direct env lookup, then report undefined.
 fn fallbackSymbolLookup(allocator: Allocator, sym: []const u8, env: *vm.Env) anyerror!*Value {
     const val = env.get(sym);
-    if (val) |v| return try allocBuiltinResult(allocator, try vm.shallowClone(&v, allocator));
+    if (val) |v| return try allocBuiltinResult(allocator, v);
     std.debug.print("Undefined symbol: '{s}'\n", .{sym});
     return error.UndefinedSymbol;
 }
@@ -702,7 +702,7 @@ fn evalProtocolDispatch(allocator: Allocator, form: *const Value, env: *vm.Env) 
     defer args_list.deinit(allocator);
     var i: usize = 1;
     while (i < items.len) : (i += 1) {
-        try args_list.append(allocator, try vm.shallowClone(&items[i], allocator));
+        try args_list.append(allocator, items[i]);
     }
 
     const result = try protocols_mod.dispatchProtocolMethod(allocator, args_list, env, 0);
@@ -712,7 +712,7 @@ fn evalProtocolDispatch(allocator: Allocator, form: *const Value, env: *vm.Env) 
 /// (quote form) — return form unevaluated.
 fn evalQuote(allocator: Allocator, form: *const Value) anyerror!*Value {
     if (form.list.items.items.len != 2) return error.ArityError;
-    return try allocBuiltinResult(allocator, try vm.shallowClone(&form.list.items.items[1], allocator));
+    return try allocBuiltinResult(allocator, form.list.items.items[1]);
 }
 
 /// (quasiquote form) — template with unquote.
@@ -971,7 +971,7 @@ fn evalFn(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Valu
             errdefer body_list.deinit(allocator);
             try body_list.append(allocator, try vm.symValue(allocator, "do"));
             for (arity_items[1..]) |form_item| {
-                try body_list.append(allocator, try vm.shallowClone(&form_item, allocator));
+                try body_list.append(allocator, form_item);
             }
 
             try arities.append(allocator, vm.Arity{
@@ -997,7 +997,7 @@ fn evalFn(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Valu
         errdefer body_list.deinit(allocator);
         try body_list.append(allocator, try vm.symValue(allocator, "do"));
         for (body) |form_item| {
-            try body_list.append(allocator, try vm.shallowClone(&form_item, allocator));
+            try body_list.append(allocator, form_item);
         }
 
         try arities.append(allocator, vm.Arity{
@@ -1021,7 +1021,7 @@ fn evalLazySeq(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!
     errdefer body.deinit(allocator);
     try body.append(allocator, try vm.symValue(allocator, "do"));
     for (form.list.items.items[1..]) |f_item| {
-        try body.append(allocator, try vm.shallowClone(&f_item, allocator));
+        try body.append(allocator, f_item);
     }
     const thunk = try allocator.create(vm.LazySeqThunk);
     thunk.* = .{
@@ -1047,7 +1047,7 @@ fn evalFunctionCall(allocator: Allocator, form: *const Value, env: *vm.Env) anye
         var macro_args: list.List = .empty;
         errdefer macro_args.deinit(allocator);
         for (form.list.items.items[1..]) |arg| {
-            try macro_args.append(allocator, try vm.shallowClone(&arg, allocator));
+            try macro_args.append(allocator, arg);
         }
         const expanded_ptr = try callBuiltin(allocator, &op_val, macro_args.items, env);
         const expanded = expanded_ptr.*;
@@ -1100,12 +1100,12 @@ fn evalCons(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Va
     var c = form.*;
     while (std.meta.activeTag(c) == .cons) {
         const cdata = c.cons;
-        try cons_list.append(allocator, try vm.shallowClone(&cdata.head, allocator));
-        c = try vm.shallowClone(&cdata.tail, allocator);
+        try cons_list.append(allocator, cdata.head);
+        c = cdata.tail;
     }
     if (std.meta.activeTag(c) == .list) {
         for (c.list.items.items) |item| {
-            try cons_list.append(allocator, try vm.shallowClone(&item, allocator));
+            try cons_list.append(allocator, item);
         }
     } else if (std.meta.activeTag(c) != .nil) {
         try cons_list.append(allocator, c);
@@ -1149,7 +1149,7 @@ pub fn core_macroexpand_1(self: *const Value, args: *const list.List, env_env: *
 
     // Only lists can be macro calls
     if (std.meta.activeTag(form.*) != .list or form.*.list.items.items.len == 0) {
-        return try vm.shallowClone(form, env_env.allocator);
+        return form.*;
     }
 
     const allocator = env_env.allocator;
@@ -1159,14 +1159,14 @@ pub fn core_macroexpand_1(self: *const Value, args: *const list.List, env_env: *
     var op: Value = undefined;
     if (std.meta.activeTag(first.*) == .symbol) {
         if (env_env.get(first.*.symbol)) |v| {
-            op = try vm.shallowClone(&v, allocator);
+            op = v;
         } else {
             // Symbol not found - return form unchanged
-            return try vm.shallowClone(form, allocator);
+            return form.*;
         }
     } else {
         // Not a symbol - return form unchanged
-        return try vm.shallowClone(form, allocator);
+        return form.*;
     }
     defer vm.valueDeinit(&op, allocator);
 
@@ -1176,7 +1176,7 @@ pub fn core_macroexpand_1(self: *const Value, args: *const list.List, env_env: *
         var macro_args: list.List = .empty;
         defer macro_args.deinit(allocator);
         for (form.list.items.items[1..]) |arg| {
-            try macro_args.append(allocator, try vm.shallowClone(&arg, allocator));
+            try macro_args.append(allocator, arg);
         }
         // Call the macro with unevaluated args and return the result WITHOUT evaluating
         const result_ptr = try callBuiltin(allocator, &op, macro_args.items, env_env);
@@ -1186,7 +1186,7 @@ pub fn core_macroexpand_1(self: *const Value, args: *const list.List, env_env: *
     }
 
     // Not a macro - return form unchanged
-    return try vm.shallowClone(form, allocator);
+    return form.*;
 }
 
 /// macroexpand: repeatedly expand macros until no more expansion.
@@ -1194,13 +1194,13 @@ pub fn core_macroexpand_1(self: *const Value, args: *const list.List, env_env: *
 pub fn core_macroexpand(self: *const Value, args: *const list.List, env_env: *vm.Env) anyerror!Value {
     if (args.items.len != 1) return error.ArityError;
 
-    var current = try vm.shallowClone(&args.items[0], env_env.allocator);
+    var current = args.items[0];
     errdefer vm.valueDeinit(&current, env_env.allocator);
 
     while (true) {
         var call_args: list.List = .empty;
         errdefer call_args.deinit(env_env.allocator);
-        try call_args.append(env_env.allocator, try vm.shallowClone(&current, env_env.allocator));
+        try call_args.append(env_env.allocator, current);
         const expanded = try core_macroexpand_1(self, &call_args, env_env);
         vm.valueDeinit(&current, env_env.allocator);
 

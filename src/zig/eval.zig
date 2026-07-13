@@ -751,9 +751,10 @@ fn parseArityForms(allocator: Allocator, items: []const Value, end: usize, idx: 
         // Wrap body in a do block
         var body_list: list.List = .empty;
         errdefer body_list.deinit(allocator);
-        try body_list.append(allocator, try vm.symValue(allocator, "do"));
+        try body_list.append(allocator, phm.sym("do"));
         for (body_forms) |form_item| {
-            try body_list.append(allocator, try vm.shallowClone(&form_item, allocator));
+            // AST forms are permanently rooted — share by reference, no clone needed
+            try body_list.append(allocator, form_item);
         }
 
         // Parse params for variadic support (& rest)
@@ -806,7 +807,8 @@ fn parseParams(allocator: Allocator, params: list.List) anyerror!ParsedParams {
             // No more params expected after rest
             break;
         } else {
-            try regular_params.append(allocator, try vm.shallowClone(&item, allocator));
+            // AST param symbols are permanently rooted — share by reference, no clone needed
+            try regular_params.append(allocator, item);
         }
     }
 
@@ -1029,9 +1031,10 @@ fn evalLetFn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
         // Remaining elements are the body
         var body_list: list.List = .empty;
         errdefer body_list.deinit(allocator);
-        try body_list.append(allocator, try vm.symValue(allocator, "do"));
+        try body_list.append(allocator, phm.sym("do"));
         for (b.items.items[2..]) |form_item| {
-            try body_list.append(allocator, try vm.shallowClone(&form_item, allocator));
+            // AST forms are permanently rooted — share by reference, no clone needed
+            try body_list.append(allocator, form_item);
         }
 
         // Parse params for variadic support
@@ -2173,7 +2176,7 @@ fn evalRecur(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
     if (l.items.len < 2) return error.ArityError;
     var results: list.List = .empty;
     errdefer results.deinit(allocator);
-    try results.append(allocator, try vm.symValue(allocator, "__recur__"));
+    try results.append(allocator, phm.sym("__recur__"));
     for (l.items[1..]) |arg| {
         // Phase 3: Use evalRecDirect — Value by copy, no *Value allocation
         try results.append(allocator, try evalRecDirect(allocator, &arg, frame, depth + 1));
@@ -2369,9 +2372,10 @@ fn evalLazySeq(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dept
     if (l.items.len < 2) return error.ArityError;
     var body: list.List = .empty;
     errdefer body.deinit(allocator);
-    try body.append(allocator, try vm.symValue(allocator, "do"));
+    try body.append(allocator, phm.sym("do"));
     for (l.items[1..]) |form| {
-        try body.append(allocator, try vm.shallowClone(&form, allocator));
+        // AST forms are permanently rooted — share by reference, no clone needed
+        try body.append(allocator, form);
     }
     // Capture the effective environment: namespace env + all frame overlay bindings
     const thunk_env = try captureFrameEnv(allocator, frame);
@@ -2519,7 +2523,8 @@ fn evalExtend(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth
     if (l.items.len < 4) return error.ArityError;
     var ext_args: list.List = .empty;
     errdefer ext_args.deinit(allocator);
-    try ext_args.append(allocator, try vm.shallowClone(&l.items[1], allocator));
+    // AST form is permanently rooted — share by reference, no clone needed
+    try ext_args.append(allocator, l.items[1]);
     var ei: usize = 2;
     while (ei < l.items.len) : (ei += 1) {
         // Phase 3: Use evalRecDirect — Value by copy, no *Value allocation

@@ -208,7 +208,7 @@ pub fn core_keyword(self: *const Value, args: *const list.List, env_env: *Env) a
     const allocator = env_env.allocator;
     if (args.items.len == 1) {
         const arg = args.items[0];
-        if (std.meta.activeTag(arg) == .keyword) return try vm.shallowClone(&arg, allocator);
+        if (std.meta.activeTag(arg) == .keyword) return arg;
         if (std.meta.activeTag(arg) == .symbol) {
             return vm.keywordValue(allocator, arg.symbol);
         }
@@ -385,7 +385,7 @@ pub fn core_bigint(self: *const Value, args: *const list.List, env_env: *Env) an
     if (args.items.len != 1) return error.ArityError;
     const v = args.items[0];
     return switch (std.meta.activeTag(v)) {
-        .bigint => try vm.shallowClone(&v, allocator),
+        .bigint => v,
         .integer => try vm.bigIntValue(allocator, BI.bigIntFromI64(allocator, v.integer)),
         .float => {
             // Convert float to BigDecimal string, then truncate to BigInt
@@ -445,7 +445,7 @@ pub fn core_bigdec(self: *const Value, args: *const list.List, env_env: *Env) an
     if (args.items.len != 1) return error.ArityError;
     const v = args.items[0];
     return switch (std.meta.activeTag(v)) {
-        .decimal => try vm.shallowClone(&v, allocator),
+        .decimal => v,
         .integer => try vm.decimalValue(allocator, BD.BigDecimal.fromI64(allocator, v.integer, 0)),
         .float => {
             const s = try std.fmt.allocPrint(allocator, "{d}", .{v.float});
@@ -575,7 +575,7 @@ pub fn core_meta(self: *const Value, args: *const list.List, env_env: *Env) anye
                             const ns_env = ns_mgr.getNamespace(ns_name) orelse return vm.nilValue();
                             // Namespace metadata is stored under "*ns*" key
                             if (ns_env.getMeta("*ns*")) |meta| {
-                                return try vm.shallowClone(&meta, allocator);
+                                return meta;
                             }
                         }
                     }
@@ -626,10 +626,10 @@ pub fn core_meta(self: *const Value, args: *const list.List, env_env: *Env) anye
             const current_ns = ns_mgr.getCurrentNamespace();
             const ns_env = ns_mgr.getNamespace(current_ns) orelse env_env;
             if (ns_env.getMeta(sym_name)) |meta| {
-                return try vm.shallowClone(&meta, allocator);
+                return meta;
             }
         } else if (env_env.getMeta(sym_name)) |meta| {
-            return try vm.shallowClone(&meta, allocator);
+            return meta;
         }
         return vm.nilValue();
     }
@@ -708,7 +708,7 @@ fn buildFnMeta(allocator: Allocator, fn_data: *const vm.FnData) anyerror!Value {
     var arglists = try buildArglistsValue(allocator, fn_data);
     defer vm.valueDeinit(&arglists, allocator);
     const arglists_key = try vm.keywordValue(allocator, "arglists");
-    const arglists_val = try vm.shallowClone(&arglists, allocator);
+    const arglists_val = arglists;
     try entries.append(allocator, .{ .key = arglists_key, .value = arglists_val });
 
     // :name
@@ -753,7 +753,7 @@ fn buildArglistsValue(allocator: Allocator, fn_data: *const vm.FnData) anyerror!
         }
 
         for (arity.params.items) |param| {
-            const cloned_param = try vm.shallowClone(&param, allocator);
+            const cloned_param = param;
             try param_list.append(allocator, cloned_param);
         }
 
@@ -816,7 +816,7 @@ pub fn core_with_meta(self: *const Value, args: *const list.List, env_env: *Env)
         return try vm.recordValue(allocator, cloned_type_name, cloned_fields, cloned_extmap, new_meta_map);
     }
     // For other types, return a clone of the original value
-    return try vm.shallowClone(&val, allocator);
+    return val;
 }
 
 pub fn registerTypePredicateFunctions(env: *Env) anyerror!void {

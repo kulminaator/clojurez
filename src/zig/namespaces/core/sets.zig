@@ -10,7 +10,7 @@ pub fn core_set(self: *const Value, args: *const list.List, env_env: *Env) anyer
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     const coll = args.items[0];
-    if (std.meta.activeTag(coll) == .set) return try vm.shallowClone(&coll, env_env.allocator);
+    if (std.meta.activeTag(coll) == .set) return coll;
 
     const allocator = env_env.allocator;
     var new_set: vm.Set = .empty;
@@ -60,7 +60,7 @@ fn addToSet(new_set: *vm.Set, allocator: std.mem.Allocator, item: Value) anyerro
         }
     }
     if (!found) {
-        try new_set.append(allocator, try vm.shallowClone(&item, allocator));
+        try new_set.append(allocator, item);
     }
 }
 
@@ -94,7 +94,7 @@ pub fn core_disj(self: *const Value, args: *const list.List, env_env: *Env) anye
             }
         }
         if (should_keep) {
-            try new_set.append(env_env.allocator, try vm.shallowClone(&item, env_env.allocator));
+            try new_set.append(env_env.allocator, item);
         }
     }
     return try vm.setValue(env_env.allocator, new_set);

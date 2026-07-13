@@ -376,8 +376,8 @@ pub fn evalDefProtocol(
     }
     for (sigs.items) |*entry| {
         try sigs_map.append(allocator, .{
-            .key = try vm.shallowClone(&entry.key, allocator),
-            .value = try vm.shallowClone(&entry.value, allocator),
+            .key = entry.key,
+            .value = entry.value,
         });
     }
     try protocol_map.append(allocator, .{
@@ -468,7 +468,7 @@ pub fn evalDefProtocol(
                 var params_list: list.List = .empty;
                 defer params_list.deinit(allocator);
                 for (al_item.list.items.items) |param_sym| {
-                    try params_list.append(allocator, try vm.shallowClone(&param_sym, allocator));
+                    try params_list.append(allocator, param_sym);
                 }
 
                 const cloned_params = try params_list.clone(allocator);
@@ -497,7 +497,7 @@ pub fn evalDefProtocol(
         }
 
         var fn_val = try vm.fnValue(allocator, arities, dispatch_env, false);
-        const persistent_fn = try vm.shallowClone(&fn_val, allocator);
+        const persistent_fn = fn_val;
         vm.valueDeinit(&fn_val, allocator);
 
         try env.put(mname, persistent_fn);
@@ -611,8 +611,8 @@ fn updateProtocolImpls(
             // Clone existing impls
             for (impls_val.map.entries.items) |entry| {
                 try impls.append(allocator, .{
-                    .key = try vm.shallowClone(&entry.key, allocator),
-                    .value = try vm.shallowClone(&entry.value, allocator),
+                    .key = entry.key,
+                    .value = entry.value,
                 });
             }
         }
@@ -620,15 +620,15 @@ fn updateProtocolImpls(
     vm.valueDeinit(&impls_kw, allocator);
 
     // Get or create the type's method map
-    const atype_clone = try vm.shallowClone(&atype, allocator);
+    const atype_clone = atype;
     const existing_type_methods = getMapEntry(try vm.mapValue(allocator, impls), atype_clone);
     var type_methods: vm.Map = .empty;
     if (existing_type_methods) |tm| {
         if (std.meta.activeTag(tm) == .map) {
             for (tm.map.entries.items) |entry| {
                 try type_methods.append(allocator, .{
-                    .key = try vm.shallowClone(&entry.key, allocator),
-                    .value = try vm.shallowClone(&entry.value, allocator),
+                    .key = entry.key,
+                    .value = entry.value,
                 });
             }
         }
@@ -638,8 +638,8 @@ fn updateProtocolImpls(
     if (std.meta.activeTag(mmap) == .map) {
         for (mmap.map.entries.items) |entry| {
             try type_methods.append(allocator, .{
-                .key = try vm.shallowClone(&entry.key, allocator),
-                .value = try vm.shallowClone(&entry.value, allocator),
+                .key = entry.key,
+                .value = entry.value,
             });
         }
     }
@@ -657,8 +657,8 @@ fn updateProtocolImpls(
     for (impls.items) |entry| {
         if (!vm.equals(entry.key, atype_clone)) {
             try new_impls.append(allocator, .{
-                .key = try vm.shallowClone(&entry.key, allocator),
-                .value = try vm.shallowClone(&entry.value, allocator),
+                .key = entry.key,
+                .value = entry.value,
             });
         }
     }
@@ -684,8 +684,8 @@ fn updateProtocolImpls(
         const is_impls = std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, "impls");
         if (!is_impls) {
             try new_protocol.append(allocator, .{
-                .key = try vm.shallowClone(&entry.key, allocator),
-                .value = try vm.shallowClone(&entry.value, allocator),
+                .key = entry.key,
+                .value = entry.value,
             });
         }
     }
@@ -734,7 +734,7 @@ pub fn evalExtendType(
     errdefer extend_args.deinit(allocator);
 
     // Add atype as first arg (unevaluated)
-    try extend_args.append(allocator, try vm.shallowClone(&atype, allocator));
+    try extend_args.append(allocator, atype);
 
     while (idx < l.items.len) {
         // Evaluate the protocol
@@ -822,7 +822,7 @@ pub fn evalExtendType(
                 defer arity_form.deinit(allocator);
                 const def_items = mdef.list.items.items[1..];
                 for (def_items) |item| {
-                    try arity_form.append(allocator, try vm.shallowClone(&item, allocator));
+                    try arity_form.append(allocator, item);
                 }
                 // Append arity form directly to fn_form (not wrapped)
                 try fn_form.append(allocator, try vm.listValue(allocator, arity_form));
@@ -834,7 +834,7 @@ pub fn evalExtendType(
         // Phase 1: fn_ptr_r.value is now Value by copy (not *Value)
         const fn_ptr = fn_ptr_r.value;
             fn_form = .empty;
-            const persistent_fn = try vm.shallowClone(&fn_ptr, allocator);
+            const persistent_fn = fn_ptr;
             vm.valueDeinit(@constCast(&fn_ptr), allocator);
 
             try mmap.append(allocator, .{
@@ -956,7 +956,7 @@ pub fn evalExtendProtocol(
                 var arity_form: list.List = .empty;
                 defer arity_form.deinit(allocator);
                 for (def_items) |item| {
-                    try arity_form.append(allocator, try vm.shallowClone(&item, allocator));
+                    try arity_form.append(allocator, item);
                 }
                 try fn_form.append(allocator, try vm.listValue(allocator, arity_form));
                 arity_form = .empty;
@@ -966,7 +966,7 @@ pub fn evalExtendProtocol(
         // Phase 1: fn_ptr_r.value is now Value by copy (not *Value)
         const fn_ptr = fn_ptr_r.value;
             fn_form = .empty;
-            const persistent_fn = try vm.shallowClone(&fn_ptr, allocator);
+            const persistent_fn = fn_ptr;
             vm.valueDeinit(@constCast(&fn_ptr), allocator);
 
             try mmap.append(allocator, .{
@@ -978,9 +978,9 @@ pub fn evalExtendProtocol(
         // Build extend args: atype (unevaluated), protocol (evaluated), mmap (evaluated)
         var ext_args: list.List = .empty;
         defer ext_args.deinit(allocator);
-        try ext_args.append(allocator, try vm.shallowClone(&atype, allocator));
+        try ext_args.append(allocator, atype);
         // Phase 1: proto_ptr is now Value by copy (not *Value)
-        try ext_args.append(allocator, try vm.shallowClone(&proto_ptr, allocator));
+        try ext_args.append(allocator, proto_ptr);
         try ext_args.append(allocator, try vm.mapValue(allocator, mmap));
         mmap = .empty;
 

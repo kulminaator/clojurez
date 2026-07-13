@@ -52,6 +52,7 @@ pub fn core_empty_q(self: *const Value, args: *const list.List, _: *Env) anyerro
 
 pub fn core_not_empty(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
+    _ = env_env;
     if (args.items.len != 1) return error.ArityError;
     const coll = args.items[0];
     const len: usize = switch (std.meta.activeTag(coll)) {
@@ -63,7 +64,7 @@ pub fn core_not_empty(self: *const Value, args: *const list.List, env_env: *Env)
         else => return vm.nilValue(),
     };
     if (len == 0) return vm.nilValue();
-    return try vm.shallowClone(&coll, env_env.allocator);
+    return coll;
 }
 
 // ---- Higher-order functions ----
@@ -79,7 +80,7 @@ pub fn core_apply(self: *const Value, args: *const list.List, env_env: *Env) any
 
     var i: usize = 1;
     while (i < args.items.len - 1) : (i += 1) {
-        try call_args.append(env_env.allocator, try vm.shallowClone(&args.items[i], env_env.allocator));
+        try call_args.append(env_env.allocator, args.items[i]);
     }
 
     const coll = args.items[args.items.len - 1];
@@ -90,7 +91,7 @@ pub fn core_apply(self: *const Value, args: *const list.List, env_env: *Env) any
         else => return error.TypeError,
     }
     for (items) |item| {
-        try call_args.append(env_env.allocator, try vm.shallowClone(&item, env_env.allocator));
+        try call_args.append(env_env.allocator, item);
     }
 
     const result_ptr = try eval_helpers.callBuiltin(env_env.allocator, &f, call_args.items, env_env);
@@ -106,13 +107,13 @@ pub fn core_trampoline(self: *const Value, args: *const list.List, env_env: *Env
     if (args.items.len < 1) return error.ArityError;
 
     // Clone to main allocator — args may be on arena
-    var current = try vm.shallowClone(&args.items[0], allocator);
+    var current = args.items[0];
     if (args.items.len > 1) {
         var call_args: list.List = .empty;
         errdefer call_args.deinit(allocator);
         var i: usize = 1;
         while (i < args.items.len) : (i += 1) {
-            try call_args.append(allocator, try vm.shallowClone(&args.items[i], allocator));
+            try call_args.append(allocator, args.items[i]);
         }
         const result_ptr = try eval_helpers.callBuiltin(allocator, &current, call_args.items, env_env);
         const new_current = result_ptr.*;
@@ -140,13 +141,14 @@ pub fn core_trampoline(self: *const Value, args: *const list.List, env_env: *Env
 // if-not - if test is false, evaluate then, else evaluate else (if provided)
 pub fn core_if_not(self: *const Value, args: *const list.List, env_env: *Env) anyerror!Value {
     _ = self;
+    _ = env_env;
     if (args.items.len < 2 or args.items.len > 3) return error.ArityError;
     const cond = args.items[0];
     if (!vm.isTruthy(cond)) {
-        return try vm.shallowClone(&args.items[1], env_env.allocator);
+        return args.items[1];
     }
     if (args.items.len == 3) {
-        return try vm.shallowClone(&args.items[2], env_env.allocator);
+        return args.items[2];
     }
     return vm.nilValue();
 }
@@ -161,12 +163,12 @@ pub fn core_partial(self: *const Value, args: *const list.List, env_env: *Env) a
     var fn_env = try env_env.clone(env_env.allocator);
     defer fn_env.deinit(env_env.allocator);
 
-    try fn_env.put("__partial_fn", try vm.shallowClone(&f, env_env.allocator));
+    try fn_env.put("__partial_fn", f);
     var partial_args: list.List = .empty;
     errdefer partial_args.deinit(env_env.allocator);
     var i: usize = 1;
     while (i < args.items.len) : (i += 1) {
-        try partial_args.append(env_env.allocator, try vm.shallowClone(&args.items[i], env_env.allocator));
+        try partial_args.append(env_env.allocator, args.items[i]);
     }
     try fn_env.put("__partial_args", try vm.listValue(env_env.allocator, partial_args));
 
@@ -189,12 +191,12 @@ pub fn core_partial(self: *const Value, args: *const list.List, env_env: *Env) a
     const cloned_params = try params_list.clone(env_env.allocator);
     const cloned_body = try body.clone(env_env.allocator);
     var final_env = try env_env.clone(env_env.allocator);
-    try final_env.put("__partial_fn", try vm.shallowClone(&f, env_env.allocator));
+    try final_env.put("__partial_fn", f);
     var stored_args: list.List = .empty;
     errdefer stored_args.deinit(env_env.allocator);
     i = 1;
     while (i < args.items.len) : (i += 1) {
-        try stored_args.append(env_env.allocator, try vm.shallowClone(&args.items[i], env_env.allocator));
+        try stored_args.append(env_env.allocator, args.items[i]);
     }
     try final_env.put("__partial_args", try vm.listValue(env_env.allocator, stored_args));
 
@@ -206,7 +208,7 @@ pub fn core_comp(self: *const Value, args: *const list.List, env_env: *Env) anye
     _ = self;
     if (args.items.len < 1) return error.ArityError;
 
-    if (args.items.len == 1) return try vm.shallowClone(&args.items[0], env_env.allocator);
+    if (args.items.len == 1) return args.items[0];
 
     var fn_env = try env_env.clone(env_env.allocator);
     defer fn_env.deinit(env_env.allocator);
@@ -214,7 +216,7 @@ pub fn core_comp(self: *const Value, args: *const list.List, env_env: *Env) anye
     var i: usize = 0;
     while (i < args.items.len) : (i += 1) {
         const key = try std.fmt.allocPrint(env_env.allocator, "__comp_fn_{d}", .{i});
-        try fn_env.put(key, try vm.shallowClone(&args.items[i], env_env.allocator));
+        try fn_env.put(key, args.items[i]);
     }
 
     var params: list.List = .empty;
@@ -256,12 +258,12 @@ pub fn core_fnil(self: *const Value, args: *const list.List, env_env: *Env) anye
     var fn_env = try env_env.clone(env_env.allocator);
     defer fn_env.deinit(env_env.allocator);
 
-    try fn_env.put("__fnil_fn", try vm.shallowClone(&f, env_env.allocator));
+    try fn_env.put("__fnil_fn", f);
 
     var d: usize = 0;
     while (d < defaults_count) : (d += 1) {
         const key = try std.fmt.allocPrint(env_env.allocator, "__fnil_default_{d}", .{d});
-        try fn_env.put(key, try vm.shallowClone(&args.items[d + 1], env_env.allocator));
+        try fn_env.put(key, args.items[d + 1]);
     }
 
     var params: list.List = .empty;
@@ -319,7 +321,7 @@ pub fn core_juxt(self: *const Value, args: *const list.List, env_env: *Env) anye
     var i: usize = 0;
     while (i < args.items.len) : (i += 1) {
         const key = try std.fmt.allocPrint(env_env.allocator, "__juxt_fn_{d}", .{i});
-        try fn_env.put(key, try vm.shallowClone(&args.items[i], env_env.allocator));
+        try fn_env.put(key, args.items[i]);
     }
 
     var params: list.List = .empty;
