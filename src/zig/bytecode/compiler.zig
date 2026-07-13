@@ -302,25 +302,28 @@ pub const Compiler = struct {
                     return self.compileArithmeticOp(items[1..], .mod);
                 }
 
-                // Comparison operators (2-arg only)
-                if (items.len == 3) {
+                // Comparison operators
+                if (items.len >= 3) {
                     if (std.mem.eql(u8, op_name, "=")) {
-                        return self.compileComparisonOp(items[1..], .eq);
+                        return self.compileMultiArgEq(items[1..]);
                     }
                     if (std.mem.eql(u8, op_name, "!=") or std.mem.eql(u8, op_name, "not=")) {
-                        return self.compileComparisonOp(items[1..], .ne);
+                        return self.compileMultiArgNe(items[1..]);
                     }
-                    if (std.mem.eql(u8, op_name, "<")) {
-                        return self.compileComparisonOp(items[1..], .lt);
-                    }
-                    if (std.mem.eql(u8, op_name, ">")) {
-                        return self.compileComparisonOp(items[1..], .gt);
-                    }
-                    if (std.mem.eql(u8, op_name, "<=")) {
-                        return self.compileComparisonOp(items[1..], .le);
-                    }
-                    if (std.mem.eql(u8, op_name, ">=")) {
-                        return self.compileComparisonOp(items[1..], .ge);
+                    // 2-arg only for ordering comparisons
+                    if (items.len == 3) {
+                        if (std.mem.eql(u8, op_name, "<")) {
+                            return self.compileComparisonOp(items[1..], .lt);
+                        }
+                        if (std.mem.eql(u8, op_name, ">")) {
+                            return self.compileComparisonOp(items[1..], .gt);
+                        }
+                        if (std.mem.eql(u8, op_name, "<=")) {
+                            return self.compileComparisonOp(items[1..], .le);
+                        }
+                        if (std.mem.eql(u8, op_name, ">=")) {
+                            return self.compileComparisonOp(items[1..], .ge);
+                        }
                     }
                 }
             }
@@ -564,6 +567,85 @@ pub const Compiler = struct {
         try self.compileForm(args[0]);
         try self.compileForm(args[1]);
         _ = try self.program.emit0(self.allocator, opcode);
+    }
+
+    /// Compile variadic equality: (= a b c ...) => (and (= a b) (= b c) ...)
+    /// Uses short-circuit and logic: compile each (= x y), store in tmp,
+    /// jump to end if falsy. Load tmp at end.
+    fn compileMultiArgEq(self: *Compiler, args: []const Value) anyerror!void {
+        if (args.len == 0) {
+            _ = try self.program.emit0(self.allocator, .push_true);
+            return;
+        }
+        if (args.len == 1) {
+            _ = try self.program.emit0(self.allocator, .push_true);
+            return;
+        }
+        if (args.len == 2) {
+            return self.compileComparisonOp(args, .eq);
+        }
+        // Compile pairwise comparisons with short-circuit and logic
+        const tmp_idx = try self.program.addSymbol(self.allocator, "__eq_tmp");
+        var jump_nil_pcs: std.ArrayListUnmanaged(usize) = .empty;
+        defer jump_nil_pcs.deinit(self.allocator);
+
+        var i: usize = 0;
+        while (i < args.len - 1) : (i += 1) {
+            // Compile (= args[i] args[i+1])
+            try self.compileForm(args[i]);
+            try self.compileForm(args[i + 1]);
+            _ = try self.program.emit0(self.allocator, .eq);
+            // Store result
+            _ = try self.program.emit(self.allocator, .store_var, tmp_idx);
+            // Load and check
+            _ = try self.program.emit(self.allocator, .load_var, tmp_idx);
+            const jnil_pc = try self.program.emit(self.allocator, .jump_if_nil, 0);
+            try jump_nil_pcs.append(self.allocator, jnil_pc);
+        }
+        // All comparisons passed — load final result
+        const end_pc = self.program.instructions.items.len;
+        _ = try self.program.emit(self.allocator, .load_var, tmp_idx);
+        // Patch all jump targets
+        for (jump_nil_pcs.items) |pc| {
+            self.program.instructions.items[pc].operand = end_pc;
+        }
+    }
+
+    /// Compile variadic inequality: (!= a b c ...) => (not (and (= a b) (= b c) ...))
+    fn compileMultiArgNe(self: *Compiler, args: []const Value) anyerror!void {
+        if (args.len == 0) {
+            _ = try self.program.emit0(self.allocator, .push_true);
+            return;
+        }
+        if (args.len == 1) {
+            _ = try self.program.emit0(self.allocator, .push_true);
+            return;
+        }
+        if (args.len == 2) {
+            return self.compileComparisonOp(args, .ne);
+        }
+        // Same as multi-arg eq, then negate
+        const tmp_idx = try self.program.addSymbol(self.allocator, "__ne_tmp");
+        var jump_nil_pcs: std.ArrayListUnmanaged(usize) = .empty;
+        defer jump_nil_pcs.deinit(self.allocator);
+
+        var i: usize = 0;
+        while (i < args.len - 1) : (i += 1) {
+            try self.compileForm(args[i]);
+            try self.compileForm(args[i + 1]);
+            _ = try self.program.emit0(self.allocator, .eq);
+            _ = try self.program.emit(self.allocator, .store_var, tmp_idx);
+            _ = try self.program.emit(self.allocator, .load_var, tmp_idx);
+            const jnil_pc = try self.program.emit(self.allocator, .jump_if_nil, 0);
+            try jump_nil_pcs.append(self.allocator, jnil_pc);
+        }
+        const end_pc = self.program.instructions.items.len;
+        _ = try self.program.emit(self.allocator, .load_var, tmp_idx);
+        for (jump_nil_pcs.items) |pc| {
+            self.program.instructions.items[pc].operand = end_pc;
+        }
+        // Negate the result
+        _ = try self.program.emit0(self.allocator, .not);
     }
 
     /// Try to expand a macro call.

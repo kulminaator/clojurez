@@ -107,6 +107,95 @@
   true)
 
 ;; ============================================================
+;; PHASE 6: Multi-arg comparisons (=, !=, not=)
+;; ============================================================
+
+;; Multi-arg = (3 args)
+(check "bytecode: eq 3 args all equal"
+  ((fn [a b c] (= a b c)) 5 5 5)
+  true)
+
+(check "bytecode: eq 3 args first pair diff"
+  ((fn [a b c] (= a b c)) 5 6 5)
+  false)
+
+(check "bytecode: eq 3 args second pair diff"
+  ((fn [a b c] (= a b c)) 5 5 6)
+  false)
+
+;; Multi-arg = (4 args)
+(check "bytecode: eq 4 args all equal"
+  ((fn [a b c d] (= a b c d)) 3 3 3 3)
+  true)
+
+(check "bytecode: eq 4 args middle diff"
+  ((fn [a b c d] (= a b c d)) 3 3 4 3)
+  false)
+
+(check "bytecode: eq 4 args last diff"
+  ((fn [a b c d] (= a b c d)) 3 3 3 4)
+  false)
+
+;; Multi-arg not= (3 args)
+(check "bytecode: not= 3 args all different"
+  ((fn [a b c] (not= a b c)) 1 2 3)
+  true)
+
+(check "bytecode: not= 3 args first and last same"
+  ((fn [a b c] (not= a b c)) 1 2 1)
+  true)
+
+(check "bytecode: not= 3 args all same"
+  ((fn [a b c] (not= a b c)) 5 5 5)
+  false)
+
+;; Multi-arg != (3 args)
+(check "bytecode: != 3 args all different"
+  ((fn [a b c] (!= a b c)) 10 20 30)
+  true)
+
+(check "bytecode: != 3 args some same"
+  ((fn [a b c] (!= a b c)) 10 20 10)
+  true)
+
+(check "bytecode: != 3 args all same"
+  ((fn [a b c] (!= a b c)) 7 7 7)
+  false)
+
+;; Multi-arg = with strings
+(check "bytecode: eq 3 args strings all equal"
+  ((fn [a b c] (= a b c)) "hi" "hi" "hi")
+  true)
+
+(check "bytecode: eq 3 args strings not equal"
+  ((fn [a b c] (= a b c)) "hi" "hi" "bye")
+  false)
+
+;; Multi-arg = with mixed types (integer vs float: Clojure = is type-sensitive)
+(check "bytecode: eq 3 args mixed types"
+  ((fn [a b c] (= a b c)) 1 1 1.0)
+  false)
+
+;; Multi-arg = in if
+(check "bytecode: eq 3 args in if true"
+  ((fn [a b c] (if (= a b c) :all-eq :not-eq)) 4 4 4)
+  :all-eq)
+
+(check "bytecode: eq 3 args in if false"
+  ((fn [a b c] (if (= a b c) :all-eq :not-eq)) 4 5 4)
+  :not-eq)
+
+;; Multi-arg = in cond
+(check "bytecode: eq 3 args in cond"
+  ((fn [a b c] (cond (= a b c) :all (= a b) :pair :else :none)) 2 2 2)
+  :all)
+
+;; Multi-arg not= in if
+(check "bytecode: not= 3 args in if"
+  ((fn [a b c] (if (not= a b c) :diff :same)) 1 2 3)
+  :diff)
+
+;; ============================================================
 ;; IF (conditional)
 ;; ============================================================
 

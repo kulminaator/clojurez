@@ -21,16 +21,10 @@ pub fn core_eq(self: *const Value, args: *const list.List, _: *Env) anyerror!Val
     return vm.boolValue(true);
 }
 
-pub fn core_not_eq(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
-    _ = self;
-    if (args.items.len < 2) return error.ArityError;
-    var i: usize = 1;
-    while (i < args.items.len) : (i += 1) {
-        if (vm.equals(args.items[0], args.items[i])) {
-            return vm.boolValue(false);
-        }
-    }
-    return vm.boolValue(true);
+pub fn core_not_eq(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
+    // not= is simply (not (= args...))
+    const eq_result = core_eq(self, args, env) catch return error.ArityError;
+    return vm.boolValue(!eq_result.bool);
 }
 
 pub fn core_less(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
