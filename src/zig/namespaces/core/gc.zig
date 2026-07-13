@@ -193,6 +193,9 @@ pub fn registerGCFunctions(env: *Env) anyerror!void {
     try env.put("debug-builtin-result-stop", vm.builtinFnValue(core_debug_builtin_result_stop));
     try env.put("debug-alloc-value-start", vm.builtinFnValue(core_debug_alloc_value_start));
     try env.put("debug-alloc-value-stop", vm.builtinFnValue(core_debug_alloc_value_stop));
+    try env.put("bytecode-stats", vm.builtinFnValue(core_bytecode_stats));
+    try env.put("bytecode-reset-stats", vm.builtinFnValue(core_bytecode_reset_stats));
+    try env.put("bytecode-print-stats", vm.builtinFnValue(core_bytecode_print_stats));
 }
 
 /// zig.core/debug-print-allocs-start — start printing every allocation to stderr.
@@ -244,5 +247,68 @@ pub fn core_debug_alloc_value_stop(self: *const Value, args: *const list.List, _
     _ = self;
     if (args.items.len != 0) return error.ArityError;
     eval_mod.debugAllocValueStop();
+    return vm.nilValue();
+}
+
+/// zig.core/bytecode-stats — return a map of bytecode compilation and execution statistics.
+/// Takes no arguments. Returns a map with keys:
+///   :fn-compiled        — functions compiled to bytecode
+///   :fn-skipped         — functions using AST interpreter
+///   :total-analyzed     — total function definitions analyzed
+///   :total-instructions — total bytecode instructions generated
+///   :bytecode-executions — function calls executed via bytecode VM
+///   :ast-executions     — function calls executed via AST interpreter
+///   :total-executions   — total function calls
+pub fn core_bytecode_stats(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 0) return error.ArityError;
+
+    const allocator = env.allocator;
+    var entries: std.ArrayListUnmanaged(vm.MapEntry) = .empty;
+    errdefer {
+        for (entries.items) |*e| {
+            vm.valueDeinit(&e.key, allocator);
+            vm.valueDeinit(&e.value, allocator);
+        }
+        entries.deinit(allocator);
+    }
+
+    const total_analyzed = eval_mod.bytecode_fn_compiled + eval_mod.bytecode_fn_skipped;
+    const total_executions = eval_mod.bytecode_executions + eval_mod.ast_executions;
+
+    const fields = [_]struct { key: []const u8, val: usize }{
+        .{ .key = "fn-compiled", .val = eval_mod.bytecode_fn_compiled },
+        .{ .key = "fn-skipped", .val = eval_mod.bytecode_fn_skipped },
+        .{ .key = "total-analyzed", .val = total_analyzed },
+        .{ .key = "total-instructions", .val = eval_mod.bytecode_total_instructions },
+        .{ .key = "bytecode-executions", .val = eval_mod.bytecode_executions },
+        .{ .key = "ast-executions", .val = eval_mod.ast_executions },
+        .{ .key = "total-executions", .val = total_executions },
+    };
+
+    for (fields) |f| {
+        const key = try vm.getCachedKeywordValue(f.key);
+        const val = vm.intValue(@as(i64, @intCast(f.val)));
+        try entries.append(allocator, .{ .key = key, .value = val });
+    }
+
+    return try vm.mapValue(allocator, entries);
+}
+
+/// zig.core/bytecode-reset-stats — reset bytecode measurement counters.
+/// Takes no arguments. Returns nil.
+pub fn core_bytecode_reset_stats(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 0) return error.ArityError;
+    eval_mod.resetBytecodeStats();
+    return vm.nilValue();
+}
+
+/// zig.core/bytecode-print-stats — print bytecode stats to stderr.
+/// Takes no arguments. Returns nil.
+pub fn core_bytecode_print_stats(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
+    _ = self;
+    if (args.items.len != 0) return error.ArityError;
+    eval_mod.printBytecodeStats();
     return vm.nilValue();
 }

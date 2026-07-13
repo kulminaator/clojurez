@@ -30,6 +30,45 @@ var debug_alloc_active: bool = false;
 var debug_alloc_count: usize = 0;
 var debug_alloc_limit: usize = 0;
 
+// Bytecode measurement counters
+pub var bytecode_fn_compiled: usize = 0;
+pub var bytecode_fn_skipped: usize = 0;
+pub var bytecode_executions: usize = 0;
+pub var ast_executions: usize = 0;
+pub var bytecode_total_instructions: usize = 0;
+
+/// Reset bytecode measurement counters.
+pub fn resetBytecodeStats() void {
+    bytecode_fn_compiled = 0;
+    bytecode_fn_skipped = 0;
+    bytecode_executions = 0;
+    ast_executions = 0;
+    bytecode_total_instructions = 0;
+}
+
+/// Print bytecode measurement stats to stderr.
+pub fn printBytecodeStats() void {
+    const total_compilations = bytecode_fn_compiled + bytecode_fn_skipped;
+    const total_executions = bytecode_executions + ast_executions;
+    const pct_compiled = if (total_compilations > 0)
+        @as(f64, @floatFromInt(bytecode_fn_compiled)) / @as(f64, @floatFromInt(total_compilations)) * 100.0
+    else 0.0;
+    const pct_executions = if (total_executions > 0)
+        @as(f64, @floatFromInt(bytecode_executions)) / @as(f64, @floatFromInt(total_executions)) * 100.0
+    else 0.0;
+    std.debug.print("\n=== Bytecode Measurement Stats ===\n", .{});
+    std.debug.print("Functions compiled to bytecode: {d}\n", .{bytecode_fn_compiled});
+    std.debug.print("Functions using AST interpreter: {d}\n", .{bytecode_fn_skipped});
+    std.debug.print("Total function definitions analyzed: {d}\n", .{total_compilations});
+    std.debug.print("Percent compiled to bytecode: {d}%\n", .{@as(i64, @intFromFloat(pct_compiled))});
+    std.debug.print("Total bytecode instructions generated: {d}\n", .{bytecode_total_instructions});
+    std.debug.print("Bytecode VM executions: {d}\n", .{bytecode_executions});
+    std.debug.print("AST interpreter executions: {d}\n", .{ast_executions});
+    std.debug.print("Total function executions: {d}\n", .{total_executions});
+    std.debug.print("Percent executed via bytecode: {d}%\n", .{@as(i64, @intFromFloat(pct_executions))});
+    std.debug.print("=== End Bytecode Stats ===\n\n", .{});
+}
+
 pub fn debugAllocValueStart(limit: usize) void {
     debug_alloc_active = true;
     debug_alloc_count = 0;
@@ -1410,6 +1449,8 @@ fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, 
                 allocator.destroy(bc_env);
                 child_frame.deinit(allocator);
                 // Phase 1: bytecode .value is *Value (bytecode still uses *Value), extract the Value
+                // Bytecode measurement
+                bytecode_executions += 1;
                 return .{ .value = v.* };
             },
             .trampoline => {
@@ -1417,8 +1458,13 @@ fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, 
                 // Fall back to AST interpreter for the trampoline case.
                 bc_env.deinit(allocator);
                 allocator.destroy(bc_env);
+                // Count the bytecode attempt (even though it fell through to AST)
+                bytecode_executions += 1;
             },
         }
+    } else {
+        // Bytecode measurement: AST path
+        ast_executions += 1;
     }
 
     // Phase 2: Store body as a slice reference — no cloning needed.
@@ -2044,6 +2090,12 @@ fn evalDefn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
             if (gc_mod.current_gc) |gc_inst| {
                 gc_inst.setObjectType(a.bytecode.?, gc_mod.GCObjectType.bytecode_program);
             }
+            // Bytecode measurement
+            bytecode_fn_compiled += 1;
+            bytecode_total_instructions += a.bytecode.?.instructions.items.len;
+        } else {
+            // Bytecode measurement
+            bytecode_fn_skipped += 1;
         }
     }
 

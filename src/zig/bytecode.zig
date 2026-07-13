@@ -59,6 +59,7 @@ pub const OpCode = enum(u8) {
     gt,
     le,
     ge,
+    compare,      // pop 2, push -1/0/1
 
     // --- Arithmetic (pop operands, push result) ---
     add,
@@ -66,6 +67,8 @@ pub const OpCode = enum(u8) {
     mul,
     div,
     rem,
+    quot,         // integer division (truncate toward zero)
+    mod,          // floor modulus
     neg,
 
     // --- Type checks (pop 1, push bool) ---
@@ -243,11 +246,14 @@ pub const BytecodeProgram = struct {
             .gt => "GT",
             .le => "LE",
             .ge => "GE",
+            .compare => "COMPARE",
             .add => "ADD",
             .sub => "SUB",
             .mul => "MUL",
             .div => "DIV",
             .rem => "REM",
+            .quot => "QUOT",
+            .mod => "MOD",
             .neg => "NEG",
             .is_nil => "IS_NIL",
             .is_truthy => "IS_TRUTHY",
@@ -867,7 +873,7 @@ pub fn execute(
                 }
             },
 
-            .eq, .ne, .lt, .gt, .le, .ge => {
+            .eq, .ne, .lt, .gt, .le, .ge, .compare => {
                 const b_entry = stack.pop() orelse return error.BytecodeError;
                 const a_entry = stack.pop() orelse return error.BytecodeError;
                 const a_val = a_entry.toValueConst();
@@ -887,7 +893,7 @@ pub fn execute(
                 try stack.pushPtr(result_ptr);
             },
 
-            .add, .sub, .mul, .div, .rem => {
+            .add, .sub, .mul, .div, .rem, .quot, .mod => {
                 const b_entry = stack.pop() orelse return error.BytecodeError;
                 const a_entry = stack.pop() orelse return error.BytecodeError;
 
@@ -901,6 +907,17 @@ pub fn execute(
                         .mul => ai * bi,
                         .div => if (bi == 0) return error.DivisionByZero else @divTrunc(ai, bi),
                         .rem => if (bi == 0) return error.DivisionByZero else ai - @divTrunc(ai, bi) * bi,
+                        .quot => if (bi == 0) return error.DivisionByZero else @divTrunc(ai, bi),
+                        .mod => if (bi == 0) return error.DivisionByZero else blk: {
+                            // mod: floor division remainder (sign follows divisor)
+                            const q = @divTrunc(ai, bi);
+                            const r = ai - q * bi;
+                            // Adjust for floor division: result should have same sign as divisor
+                            if ((r != 0) and ((r > 0) != (bi > 0))) {
+                                break :blk r + bi;
+                            }
+                            break :blk r;
+                        },
                         else => unreachable,
                     };
                     try stack.pushInt(result);
@@ -914,6 +931,13 @@ pub fn execute(
                         .mul => af * bf,
                         .div => if (bf == 0) return error.DivisionByZero else af / bf,
                         .rem => if (bf == 0) return error.DivisionByZero else @rem(af, bf),
+                        .quot => if (bf == 0) return error.DivisionByZero else @trunc(af / bf),
+                        .mod => if (bf == 0) return error.DivisionByZero else blk: {
+                            // mod: floor division remainder
+                            const q = @floor(af / bf);
+                            const r = af - q * bf;
+                            break :blk r;
+                        },
                         else => unreachable,
                     };
                     try stack.pushFloat(result);
@@ -1317,6 +1341,7 @@ fn compareOp(op: OpCode, a: Value, b: Value) anyerror!Value {
             const bn = helpers.toNum(b);
             return vm.boolValue(an >= bn);
         },
+        .compare => vm.intValue(vm.compare(a, b)),
         else => unreachable,
     };
 }
@@ -2159,6 +2184,12 @@ fn isSimpleBytecodeForm(form: Value) bool {
                 if (std.mem.eql(u8, op_name, "rem")) {
                     return self.compileArithmeticOp(items[1..], .rem);
                 }
+                if (std.mem.eql(u8, op_name, "quot")) {
+                    return self.compileArithmeticOp(items[1..], .quot);
+                }
+                if (std.mem.eql(u8, op_name, "mod")) {
+                    return self.compileArithmeticOp(items[1..], .mod);
+                }
 
                 // Comparison operators: =, !=, not=, <, >, <=, >=
                 // Only optimize 2-arg comparisons (items.len == 3: op + 2 args).
@@ -2195,6 +2226,84 @@ fn isSimpleBytecodeForm(form: Value) bool {
                     return;
                 }
                 // Fall through to function call for wrong arity
+            }
+
+            // count: (count coll) => push coll, count
+            if (all_simple and std.mem.eql(u8, op_name, "count")) {
+                if (items.len == 2) {
+                    try self.compileForm(items[1]);
+                    _ = try self.program.emit0(self.allocator, .count);
+                    return;
+                }
+            }
+
+            // first: (first coll) => push coll, first
+            if (all_simple and std.mem.eql(u8, op_name, "first")) {
+                if (items.len == 2) {
+                    try self.compileForm(items[1]);
+                    _ = try self.program.emit0(self.allocator, .first);
+                    return;
+                }
+            }
+
+            // rest: (rest coll) => push coll, rest
+            if (all_simple and std.mem.eql(u8, op_name, "rest")) {
+                if (items.len == 2) {
+                    try self.compileForm(items[1]);
+                    _ = try self.program.emit0(self.allocator, .rest);
+                    return;
+                }
+            }
+
+            // nth: (nth coll index) => push coll, push index, nth
+            if (all_simple and std.mem.eql(u8, op_name, "nth")) {
+                if (items.len == 3) {
+                    try self.compileForm(items[1]);
+                    try self.compileForm(items[2]);
+                    _ = try self.program.emit0(self.allocator, .nth);
+                    return;
+                }
+            }
+
+            // get: (get map key) => push map, push key, get
+            if (all_simple and std.mem.eql(u8, op_name, "get")) {
+                if (items.len == 3) {
+                    try self.compileForm(items[1]);
+                    try self.compileForm(items[2]);
+                    _ = try self.program.emit0(self.allocator, .get);
+                    return;
+                }
+            }
+
+            // conj: (conj coll item) => push coll, push item, conj
+            if (all_simple and std.mem.eql(u8, op_name, "conj")) {
+                if (items.len == 3) {
+                    try self.compileForm(items[1]);
+                    try self.compileForm(items[2]);
+                    _ = try self.program.emit0(self.allocator, .conj);
+                    return;
+                }
+            }
+
+            // assoc: (assoc map key val) => push map, push key, push val, assoc
+            if (all_simple and std.mem.eql(u8, op_name, "assoc")) {
+                if (items.len == 4) {
+                    try self.compileForm(items[1]);
+                    try self.compileForm(items[2]);
+                    try self.compileForm(items[3]);
+                    _ = try self.program.emit0(self.allocator, .assoc);
+                    return;
+                }
+            }
+
+            // compare: (compare a b) => push a, push b, compare
+            if (all_simple and std.mem.eql(u8, op_name, "compare")) {
+                if (items.len == 3) {
+                    try self.compileForm(items[1]);
+                    try self.compileForm(items[2]);
+                    _ = try self.program.emit0(self.allocator, .compare);
+                    return;
+                }
             }
         }
 
@@ -2876,12 +2985,14 @@ fn isSimpleBytecodeForm(form: Value) bool {
 /// bytecode compiler can emit as direct opcodes (not function calls).
 /// These are "safe" for bytecode compilation since they don't use call_n.
 fn isBytecodeOptimizableOperator(sym: []const u8) bool {
-    // Arithmetic: +, -, *, /, rem
+    // Arithmetic: +, -, *, /, rem, quot, mod
     if (std.mem.eql(u8, sym, "+") or
         std.mem.eql(u8, sym, "-") or
         std.mem.eql(u8, sym, "*") or
         std.mem.eql(u8, sym, "/") or
-        std.mem.eql(u8, sym, "rem"))
+        std.mem.eql(u8, sym, "rem") or
+        std.mem.eql(u8, sym, "quot") or
+        std.mem.eql(u8, sym, "mod"))
     {
         return true;
     }
@@ -2898,6 +3009,19 @@ fn isBytecodeOptimizableOperator(sym: []const u8) bool {
     }
     // not: single-arg negation
     if (std.mem.eql(u8, sym, "not")) return true;
+    // Collection access: nth, get, assoc, conj, count, first, rest
+    if (std.mem.eql(u8, sym, "nth") or
+        std.mem.eql(u8, sym, "get") or
+        std.mem.eql(u8, sym, "assoc") or
+        std.mem.eql(u8, sym, "conj") or
+        std.mem.eql(u8, sym, "count") or
+        std.mem.eql(u8, sym, "first") or
+        std.mem.eql(u8, sym, "rest"))
+    {
+        return true;
+    }
+    // compare
+    if (std.mem.eql(u8, sym, "compare")) return true;
     return false;
 }
 
