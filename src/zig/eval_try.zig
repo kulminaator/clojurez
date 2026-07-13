@@ -271,7 +271,9 @@ pub fn evalTry(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dept
 
     // Return the last body value, or nil if no body
     if (body_result) |v| {
-        return .{ .value = v };
+        // Phase 1: v is *Value from evalRecV, extract the Value
+        return .{ .value = v.* };
     }
-    return .{ .value = try eval.allocValue(allocator, vm.nilValue()) };
+    // Phase 1: nilValue returns Value by copy, no allocValue wrapper needed
+    return .{ .value = vm.nilValue() };
 }

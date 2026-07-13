@@ -826,7 +826,11 @@ pub fn execute(
                 const call_result = try eval_mod.callWithEnv(allocator, &fn_val, &args, env, 0);
 
                 switch (call_result) {
-                    .value => |v| try stack.pushPtr(v),
+                    // Phase 1: .value is now Value by copy, need *Value for bytecode stack
+                    .value => |v| {
+                        const ptr = try eval_mod.allocValue(allocator, v);
+                        try stack.pushPtr(ptr);
+                    },
                     .trampoline => return .trampoline,
                 }
             },
@@ -1398,7 +1402,8 @@ fn delegateArithmetic(op: OpCode, a: Value, b: Value, allocator: Allocator, env:
     const call_result = try eval_mod.callWithEnv(allocator, &fn_val, &args, env, 0);
 
     switch (call_result) {
-        .value => |v| return try vm.shallowClone(v, allocator),
+        // Phase 1: .value is now Value by copy, pass &v to shallowClone
+        .value => |v| return try vm.shallowClone(&v, allocator),
         .trampoline => return error.NotImplemented,
     }
 }

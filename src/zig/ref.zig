@@ -355,7 +355,8 @@ pub fn evalDosync(allocator: Allocator, l: *const list.List, frame: *vm.Frame, d
         }
     }
 
-    return .{ .value = try eval_mod.allocValue(allocator, result) };
+    // Phase 1: result is already Value by copy, no allocValue wrapper needed
+    return .{ .value = result };
 }
 
 // ============================================================

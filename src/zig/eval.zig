@@ -25,17 +25,41 @@ const timeout_mod = @import("timeout.zig");
 
 const Allocator = std.mem.Allocator;
 
+// Debug: track allocValue calls
+var debug_alloc_active: bool = false;
+var debug_alloc_count: usize = 0;
+var debug_alloc_limit: usize = 0;
+
+pub fn debugAllocValueStart(limit: usize) void {
+    debug_alloc_active = true;
+    debug_alloc_count = 0;
+    debug_alloc_limit = limit;
+}
+pub fn debugAllocValueStop() void {
+    debug_alloc_active = false;
+}
+
 // Re-export SourceLoc from value.zig for backward compatibility
 pub const SourceLoc = vm.SourceLoc;
 
-/// Result of evalRec: either a normal *Value or a Trampoline marker.
+/// Result of evalRec: either a Value (by copy) or a Trampoline marker.
+/// Phase 1: Changed from *Value to Value — eliminates allocValue in every evalRec branch.
+/// The single allocation happens at the boundary (evalRecV, eval return).
 pub const EvalResult = union(enum) {
-    value: *Value,
+    value: Value,
     trampoline, // signals that a frame was pushed, caller should continue loop
 };
 
 /// Allocate a Value on the GC heap and initialize it from a stack Value.
 pub fn allocValue(allocator: Allocator, val: Value) anyerror!*Value {
+    if (debug_alloc_active) {
+        if (debug_alloc_count < debug_alloc_limit) {
+            const src = @src();
+            std.debug.print("[ALLOC_VALUE #{d}] {s}:{d} type={s}\n",
+                .{ debug_alloc_count + 1, src.file, src.line, @tagName(std.meta.activeTag(val)) });
+            debug_alloc_count += 1;
+        }
+    }
     const ptr = try allocator.create(Value);
     ptr.* = val;
     return ptr;
@@ -418,7 +442,7 @@ pub fn evalWithFile(allocator: Allocator, form: Value, env: *Env, file: []const 
         };
 
         switch (current) {
-            .value => |v| return v,
+            .value => |v| return try allocValue(allocator, v),
             .trampoline => {},
         }
 
@@ -507,7 +531,8 @@ pub fn evalRecV(allocator: Allocator, form: *const Value, frame: *vm.Frame, dept
     // With trampolining disabled, evalRec always returns .value
     const result = try evalRec(allocator, form, frame, depth);
     return switch (result) {
-        .value => |v| v,
+        // Phase 1: ONE allocation at the boundary — evalRec returns Value by copy
+        .value => |v| try allocValue(allocator, v),
         .trampoline => unreachable, // should not happen with trampoline_allowed = false
     };
 }
@@ -516,10 +541,9 @@ pub fn evalRecV(allocator: Allocator, form: *const Value, frame: *vm.Frame, dept
 /// When a function body needs evaluation, returns .trampoline instead of recursing.
 pub fn evalRec(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     switch (form.*) {
-        // Literals: allocate a new *Value wrapper. Cannot return AST pointer directly
-        // because valueDeinit would overwrite the shared AST Value with nil.
+        // Phase 1: Literals — return by copy, no allocation. The form is AST (immutable, rooted).
         .nil, .bool, .integer, .float, .bigint, .ratio, .decimal, .string, .regex, .character, .keyword, .set, .queue, .chunk, .chunked_cons, .atom, .future, .promise, .reduced, .wrapped, .record, .exception, .ref, .multimethod => {
-            return .{ .value = try allocValue(allocator, form.*) };
+            return .{ .value = form.* };
         },
         .symbol => {
             if (std.mem.eql(u8, form.*.symbol, "quote") or
@@ -527,7 +551,7 @@ pub fn evalRec(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth
                 std.mem.eql(u8, form.*.symbol, "unquote") or
                 std.mem.eql(u8, form.*.symbol, "unquote-splicing"))
             {
-                return .{ .value = try allocValue(allocator, form.*) };
+                return .{ .value = form.* };
             }
             // Handle qualified symbols: alias/name or namespace/name
             if (std.mem.indexOfScalar(u8, form.*.symbol, '/')) |slash_idx| {
@@ -535,7 +559,7 @@ pub fn evalRec(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth
                 const name = form.*.symbol[slash_idx + 1 ..];
                 const ns_mgr = findNsManager(frame.root_env) orelse {
                     const val2 = frame.get(form.*.symbol);
-                    if (val2) |v| return .{ .value = try allocValue(allocator, v) };
+                    if (val2) |v| return .{ .value = v };
                     std.debug.print("Undefined symbol: '{s}'\n", .{form.*.symbol});
                     return error.UndefinedSymbol;
                 };
@@ -543,17 +567,17 @@ pub fn evalRec(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth
                 const target_ns = ns_mgr.resolveAlias(current_ns, alias) orelse alias;
                 const target_env = ns_mgr.getNamespace(target_ns) orelse {
                     const val3 = frame.get(form.*.symbol);
-                    if (val3) |v| return .{ .value = try allocValue(allocator, v) };
+                    if (val3) |v| return .{ .value = v };
                     std.debug.print("Undefined symbol: '{s}'\n", .{form.*.symbol});
                     return error.UndefinedSymbol;
                 };
                 const val4 = target_env.get(name);
-                if (val4) |v| return .{ .value = try allocValue(allocator, v) };
+                if (val4) |v| return .{ .value = v };
                 std.debug.print("Undefined symbol: '{s}'\n", .{form.*.symbol});
                 return error.UndefinedSymbol;
             }
             const val = frame.get(form.*.symbol);
-            if (val) |v| return .{ .value = try allocValue(allocator, v) };
+            if (val) |v| return .{ .value = v };
             std.debug.print("Undefined symbol: '{s}'\n", .{form.*.symbol});
             return error.UndefinedSymbol;
         },
@@ -566,9 +590,9 @@ pub fn evalRec(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth
         .map => {
             return try evalMap(allocator, form, frame, depth);
         },
-        // Functions, builtins, lazy-seqs: allocate new wrapper to avoid valueDeinit corruption.
-        .function, .builtin_fn => return .{ .value = try allocValue(allocator, form.*) },
-        .lazy_seq => return .{ .value = try allocValue(allocator, form.*) },
+        // Phase 1: Functions, builtins, lazy-seqs — return by copy, no allocation.
+        .function, .builtin_fn => return .{ .value = form.* },
+        .lazy_seq => return .{ .value = form.* },
         .cons => {
             return try evalCons(allocator, form, frame, depth);
         },
@@ -726,7 +750,8 @@ fn parseParams(allocator: Allocator, params: list.List) anyerror!ParsedParams {
 
 fn evalList(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     const l = &form.*.list.items;
-    if (l.items.len == 0) return .{ .value = try allocValue(allocator, try vm.listValue(allocator, list.empty())) };
+    // Phase 1: listValue returns Value by copy, no allocValue wrapper needed
+    if (l.items.len == 0) return .{ .value = try vm.listValue(allocator, list.empty()) };
 
     const first = l.items[0];
 
@@ -750,7 +775,8 @@ fn evalVector(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth:
         const ptr = try evalRecV(allocator, &item, frame, depth + 1);
         try new_vec.append(allocator, ptr.*);
     }
-    return .{ .value = try allocValue(allocator, try vm.vectorValue(allocator, new_vec)) };
+    // Phase 1: vectorValue returns Value by copy, no allocValue wrapper needed
+    return .{ .value = try vm.vectorValue(allocator, new_vec) };
 }
 
 /// Evaluate a map key-value pairs element-wise.
@@ -772,7 +798,8 @@ fn evalMap(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: us
             .value = val_ptr.*,
         });
     }
-    return .{ .value = try allocValue(allocator, try vm.mapValue(allocator, new_map)) };
+    // Phase 1: mapValue returns Value by copy, no allocValue wrapper needed
+    return .{ .value = try vm.mapValue(allocator, new_map) };
 }
 
 /// Evaluate a cons cell as a form: convert cons chain to list, then evaluate.
@@ -819,10 +846,9 @@ fn evalFunctionCall(allocator: Allocator, form: *const Value, frame: *vm.Frame, 
         trampoline_allowed = false;
         defer trampoline_allowed = saved_trampoline;
         const macro_r = try call(allocator, op_ptr, &macro_args, frame, depth);
-        const expanded_ptr = macro_r.value;
-        var expanded = expanded_ptr.*;
+        // Phase 1: macro_r.value is now Value by copy (not *Value)
+        var expanded = macro_r.value;
         defer vm.valueDeinit(&expanded, allocator);
-        defer allocator.destroy(expanded_ptr);
         // Evaluate the expanded form
         return try evalRec(allocator, &expanded, frame, depth);
     }
@@ -884,7 +910,8 @@ fn evalLet(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: u
     }
     const body_items = body;
     if (body_items.len == 0) {
-        return .{ .value = try allocValue(allocator, vm.nilValue()) };
+        // Phase 1: nilValue returns Value by copy, no allocValue wrapper needed
+        return .{ .value = vm.nilValue() };
     }
     // Evaluate all but the last form synchronously
     for (body_items[0 .. body_items.len - 1]) |form| {
@@ -1008,7 +1035,8 @@ fn evalLetFn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
     errdefer vm.valueDeinit(&do_result, allocator);
     const bf = body_forms;
     if (bf.len == 0) {
-        return .{ .value = try allocValue(allocator, vm.nilValue()) };
+        // Phase 1: nilValue returns Value by copy, no allocValue wrapper needed
+        return .{ .value = vm.nilValue() };
     }
     // Non-tail forms evaluated synchronously
     for (bf[0 .. bf.len - 1]) |form| {
@@ -1127,7 +1155,8 @@ fn evalCond(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
         }
         vm.valueDeinit(result_ptr, allocator);
     }
-    return .{ .value = try allocValue(allocator, vm.nilValue()) };
+    // Phase 1: nilValue returns Value by copy, no allocValue wrapper needed
+    return .{ .value = vm.nilValue() };
 }
 
 fn evalLoop(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
@@ -1202,7 +1231,8 @@ fn evalLoop(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
             continue;
         }
 
-        return .{ .value = try allocValue(allocator, result) };
+        // Phase 1: result is already Value by copy, no allocValue wrapper needed
+        return .{ .value = result };
     }
 }
 
@@ -1238,7 +1268,8 @@ pub fn callWithEnvV(allocator: Allocator, op: *const Value, args_list: *const li
     defer trampoline_allowed = saved_trampoline;
     const result = try callWithEnv(allocator, op, args_list, env, depth);
     return switch (result) {
-        .value => |v| v,
+        // Phase 1: .value is now Value by copy, need to allocate *Value for return
+        .value => |v| try allocValue(allocator, v),
         .trampoline => unreachable,
     };
 }
@@ -1259,15 +1290,17 @@ pub fn evalRecVWithEnv(allocator: Allocator, form: *const Value, env: *Env, dept
 pub fn callWithSrc(allocator: Allocator, op: *const Value, args_list: *const list.List, frame: *vm.Frame, depth: usize, src_line: usize) anyerror!EvalResult {
     switch (std.meta.activeTag(op.*)) {
         .function => return callFunction(allocator, op, args_list, frame, depth, src_line),
-        .builtin_fn => return .{ .value = try allocValue(allocator, try callBuiltinFn(allocator, op, args_list, frame.root_env)) },
+        // Phase 1: callBuiltinFn returns Value by copy, no allocValue wrapper
+        .builtin_fn => return .{ .value = try callBuiltinFn(allocator, op, args_list, frame.root_env) },
         .multimethod => {
             const result = try eval_multi.invokeMultimethod(allocator, op.*, args_list, frame, depth);
             return result;
         },
-        .set => return .{ .value = try allocValue(allocator, try callSet(allocator, op, args_list)) },
-        .keyword => return .{ .value = try allocValue(allocator, try callKeyword(allocator, op, args_list)) },
-        .map => return .{ .value = try allocValue(allocator, try callMap(allocator, op, args_list)) },
-        .record => return .{ .value = try allocValue(allocator, try callRecord(allocator, op, args_list)) },
+        // Phase 1: callSet/Keyword/Map/Record return Value by copy, no allocValue wrapper
+        .set => return .{ .value = try callSet(allocator, op, args_list) },
+        .keyword => return .{ .value = try callKeyword(allocator, op, args_list) },
+        .map => return .{ .value = try callMap(allocator, op, args_list) },
+        .record => return .{ .value = try callRecord(allocator, op, args_list) },
         .lazy_seq => return callLazySeq(allocator, op, frame, depth),
         else => {
             std.debug.print("NotCallable: tried to call value of type {s}\n", .{@tagName(std.meta.activeTag(op.*))});
@@ -1311,7 +1344,8 @@ fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, 
         // Protocol dispatch still uses Env-based lookup
         const result = try protocols.dispatchProtocolMethod(allocator, args.*, child_frame.root_env, 0);
         child_frame.deinit(allocator);
-        return .{ .value = try allocValue(allocator, result) };
+        // Phase 1: dispatchProtocolMethod returns Value by copy, no allocValue wrapper
+        return .{ .value = result };
     }
 
     // If bytecode is available, use the VM instead of AST interpreter
@@ -1326,7 +1360,8 @@ fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, 
                 bc_env.deinit(allocator);
                 allocator.destroy(bc_env);
                 child_frame.deinit(allocator);
-                return .{ .value = v };
+                // Phase 1: bytecode .value is *Value (bytecode still uses *Value), extract the Value
+                return .{ .value = v.* };
             },
             .trampoline => {
                 // A user-defined function was called from within the bytecode.
@@ -1562,8 +1597,10 @@ fn callRecord(allocator: Allocator, op: *const Value, args: *const list.List) an
 /// Call a lazy-seq as a function: forces its evaluation (no args allowed).
 fn callLazySeq(allocator: Allocator, op: *const Value, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     const result_ptr = try forceLazySeq(allocator, op.*, frame, depth);
-    // result_ptr is already a *Value — return it directly
-    return .{ .value = result_ptr };
+    // Phase 1: extract Value from *Value, no extra allocation needed
+    const v = result_ptr.*;
+    allocator.destroy(result_ptr);
+    return .{ .value = v };
 }
 
 // Flatten a cons chain into a list for doall/dorun.
@@ -1807,7 +1844,8 @@ fn evalCase(allocator: Allocator, forms: []const Value, frame: *vm.Frame, depth:
         }
     }
 
-    return .{ .value = try allocValue(allocator, vm.nilValue()) };
+    // Phase 1: nilValue returns Value by copy, no allocValue wrapper needed
+    return .{ .value = vm.nilValue() };
 }
 
 // ============================================================================
@@ -1822,7 +1860,9 @@ fn evalQuote(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
     _ = frame;
     _ = depth;
     if (l.items.len != 2) return error.ArityError;
-    return .{ .value = try vm.cloneGC(&l.items[1], allocator) };
+    // Phase 1: cloneGC returns *Value, extract the Value
+    const ptr = try vm.cloneGC(&l.items[1], allocator);
+    return .{ .value = ptr.* };
 }
 
 /// (quit) / (exit) — signal REPL to exit
@@ -1839,7 +1879,8 @@ fn evalQuasiquote(allocator: Allocator, l: *const list.List, frame: *vm.Frame, d
     if (l.items.len != 2) return error.ArityError;
     // Pass the full Frame so unquote can resolve local bindings (e.g. macro parameters)
     const result = try eval_macro.unquoteProcess(allocator, l.items[1], frame, depth + 1);
-    return .{ .value = try allocValue(allocator, result) };
+    // Phase 1: unquoteProcess returns Value by copy, no allocValue wrapper needed
+    return .{ .value = result };
 }
 
 /// (def name value?) — define in current namespace
@@ -1852,7 +1893,9 @@ fn evalDef(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: u
     const val_ptr = try evalRecV(allocator, &l.items[eval_idx], frame, depth + 1);
     const persistent_val = try vm.shallowClone(&val_ptr.*, allocator);
     try bindInCurrentNamespace(frame.root_env, sym.symbol, persistent_val);
-    return .{ .value = try vm.cloneGC(&sym, allocator) };
+    // Phase 1: cloneGC returns *Value, extract the Value
+    const ptr = try vm.cloneGC(&sym, allocator);
+    return .{ .value = ptr.* };
 }
 
 /// (if test then else?) — conditional
@@ -1865,11 +1908,13 @@ fn evalIf(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: us
     if (truthy) {
         // Then-branch in tail position — use evalRec for trampoline
         if (l.items.len >= 3) return try evalRec(allocator, &l.items[2], frame, depth + 1);
-        return .{ .value = try allocValue(allocator, vm.nilValue()) };
+        // Phase 1: nilValue returns Value by copy, no allocValue wrapper needed
+        return .{ .value = vm.nilValue() };
     } else {
         // Else-branch in tail position — use evalRec for trampoline
         if (l.items.len >= 4) return try evalRec(allocator, &l.items[3], frame, depth + 1);
-        return .{ .value = try allocValue(allocator, vm.nilValue()) };
+        // Phase 1: nilValue returns Value by copy, no allocValue wrapper needed
+        return .{ .value = vm.nilValue() };
     }
 }
 
@@ -1883,7 +1928,8 @@ fn evalWhen(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
     if (truthy) {
         const body = l.items[2..];
         if (body.len == 0) {
-            return .{ .value = try allocValue(allocator, vm.nilValue()) };
+            // Phase 1: nilValue returns Value by copy, no allocValue wrapper needed
+            return .{ .value = vm.nilValue() };
         }
         // Non-tail forms evaluated synchronously
         var do_result: Value = vm.nilValue();
@@ -1896,14 +1942,16 @@ fn evalWhen(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
         // Last form in tail position
         return try evalRec(allocator, &body[body.len - 1], frame, depth + 1);
     }
-    return .{ .value = try allocValue(allocator, vm.nilValue()) };
+    // Phase 1: nilValue returns Value by copy, no allocValue wrapper needed
+    return .{ .value = vm.nilValue() };
 }
 
 /// (do body...) — evaluate a sequence of forms
 fn evalDo(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     const body = l.items[1..];
     if (body.len == 0) {
-        return .{ .value = try allocValue(allocator, vm.nilValue()) };
+        // Phase 1: nilValue returns Value by copy, no allocValue wrapper needed
+        return .{ .value = vm.nilValue() };
     }
     // Non-tail forms evaluated synchronously (no trampoline — we discard results)
     var last_ptr: ?*Value = null;
@@ -1995,7 +2043,9 @@ fn evalDefn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
     const persistent_fn = try vm.shallowClone(&fn_val, allocator);
     vm.valueDeinit(&fn_val, allocator);
     try bindInCurrentNamespace(frame.root_env, fname.symbol, persistent_fn);
-    return .{ .value = try vm.cloneGC(&fname, allocator) };
+    // Phase 1: cloneGC returns *Value, extract the Value
+    const ptr = try vm.cloneGC(&fname, allocator);
+    return .{ .value = ptr.* };
 }
 
 /// (fn name? ([params] body...)+) — anonymous function
@@ -2031,7 +2081,8 @@ fn evalFn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: us
     }
 
     const fn_val = try vm.fnValueNamed(allocator, arities, fn_env, false, fn_name_str);
-    return .{ .value = try allocValue(allocator, fn_val) };
+    // Phase 1: fnValueNamed returns Value by copy, no allocValue wrapper needed
+    return .{ .value = fn_val };
 }
 
 /// (defmacro name docstring? ([params] body...)+) — define a macro
@@ -2075,7 +2126,9 @@ fn evalDefmacro(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dep
     const persistent_macro = try vm.shallowClone(&macro_fn, allocator);
     vm.valueDeinit(&macro_fn, allocator);
     try bindInCurrentNamespace(frame.root_env, macro_name.symbol, persistent_macro);
-    return .{ .value = try vm.cloneGC(&macro_name, allocator) };
+    // Phase 1: cloneGC returns *Value, extract the Value
+    const ptr = try vm.cloneGC(&macro_name, allocator);
+    return .{ .value = ptr.* };
 }
 
 /// (set! name value) — modify a variable
@@ -2094,7 +2147,8 @@ fn evalSetBang(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dept
     const persistent_val = try vm.shallowClone(&val_ptr.*, allocator);
     // Write to current frame's overlay (not root namespace env)
     try frame.put(sym.symbol, persistent_val);
-    return .{ .value = val_ptr };
+    // Phase 1: val_ptr is *Value from evalRecV, extract the Value
+    return .{ .value = val_ptr.* };
 }
 
 /// (recur new-arg*) — tail recursion signal
@@ -2108,7 +2162,8 @@ fn evalRecur(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
         const ptr = try evalRecV(allocator, &arg, frame, depth + 1);
         try results.append(allocator, ptr.*);
     }
-    return .{ .value = try allocValue(allocator, try vm.listValue(allocator, results)) };
+    // Phase 1: listValue returns Value by copy, no allocValue wrapper needed
+    return .{ .value = try vm.listValue(allocator, results) };
 }
 
 /// (var name value?) — create a mutable var
@@ -2116,15 +2171,17 @@ fn evalVar(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: u
     if (l.items.len < 2 or l.items.len > 3) return error.ArityError;
     const sym = l.items[1];
     if (std.meta.activeTag(sym) != .symbol) return error.TypeError;
-    const val_ptr = if (l.items.len >= 3)
-        // Value evaluated synchronously
-        try evalRecV(allocator, &l.items[2], frame, depth + 1)
-    else
-        try allocValue(allocator, vm.nilValue());
-    const persistent_val = try vm.shallowClone(&val_ptr.*, allocator);
+    // Phase 1: Use Value by copy to avoid allocValue for the default nil case
+    const val: Value = if (l.items.len >= 3) blk: {
+        const ptr = try evalRecV(allocator, &l.items[2], frame, depth + 1);
+        break :blk ptr.*;
+    } else vm.nilValue();
+    const persistent_val = try vm.shallowClone(&val, allocator);
     // Write to current frame's overlay (local var)
     try frame.put(sym.symbol, persistent_val);
-    return .{ .value = try vm.cloneGC(&sym, allocator) };
+    // Phase 1: cloneGC returns *Value, extract the Value
+    const ptr = try vm.cloneGC(&sym, allocator);
+    return .{ .value = ptr.* };
 }
 
 /// (deref form) / (@ form) — get value from atom/var/reduced/future
@@ -2136,7 +2193,8 @@ fn evalDeref(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
         const data = arg_ptr.*.atom;
         const val = try vm.shallowClone(&data.value, allocator);
         vm.valueDeinit(&arg_ptr.*, allocator);
-        return .{ .value = try allocValue(allocator, val) };
+        // Phase 1: shallowClone returns Value by copy, no allocValue wrapper needed
+        return .{ .value = val };
     }
     if (std.meta.activeTag(arg_ptr.*) == .ref) {
         // Deref a ref — read current value
@@ -2146,13 +2204,15 @@ fn evalDeref(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
         errdefer deref_args.deinit(allocator);
         try deref_args.append(allocator, ref_val);
         const result = try ref_mod.core_ref_deref(testSelf(), &deref_args, frame.root_env);
-        return .{ .value = try allocValue(allocator, result) };
+        // Phase 1: core_ref_deref returns Value by copy, no allocValue wrapper needed
+        return .{ .value = result };
     }
     if (std.meta.activeTag(arg_ptr.*) == .reduced) {
         const data = arg_ptr.*.reduced;
         const val = try vm.shallowClone(&data.*, allocator);
         vm.valueDeinit(&arg_ptr.*, allocator);
-        return .{ .value = try allocValue(allocator, val) };
+        // Phase 1: shallowClone returns Value by copy, no allocValue wrapper needed
+        return .{ .value = val };
     }
     if (std.meta.activeTag(arg_ptr.*) == .future) {
         // Deref a future — blocks until done
@@ -2162,7 +2222,8 @@ fn evalDeref(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
         errdefer deref_args.deinit(allocator);
         try deref_args.append(allocator, future_val);
         const result = try threading.core_deref_future(testSelf(), &deref_args, frame.root_env);
-        return .{ .value = try allocValue(allocator, result) };
+        // Phase 1: core_deref_future returns Value by copy, no allocValue wrapper needed
+        return .{ .value = result };
     }
     if (std.meta.activeTag(arg_ptr.*) == .promise) {
         // Deref a promise — blocks until delivered
@@ -2172,10 +2233,12 @@ fn evalDeref(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
         errdefer deref_args.deinit(allocator);
         try deref_args.append(allocator, promise_val);
         const result = try threading.core_deref_promise(testSelf(), &deref_args, frame.root_env);
-        return .{ .value = try allocValue(allocator, result) };
+        // Phase 1: core_deref_promise returns Value by copy, no allocValue wrapper needed
+        return .{ .value = result };
     }
     vm.valueDeinit(&arg_ptr.*, allocator);
-    return .{ .value = try allocValue(allocator, vm.nilValue()) };
+    // Phase 1: nilValue returns Value by copy, no allocValue wrapper needed
+    return .{ .value = vm.nilValue() };
 }
 
 /// Helper for evalDeref: create a dummy self Value for builtin calls.
@@ -2187,7 +2250,8 @@ fn testSelf() *const vm.Value {
 fn evalOr(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     const forms = l.items[1..];
     if (forms.len == 0) {
-        return .{ .value = try allocValue(allocator, vm.nilValue()) };
+        // Phase 1: nilValue returns Value by copy, no allocValue wrapper needed
+        return .{ .value = vm.nilValue() };
     }
     // Non-tail forms evaluated synchronously
     var last_ptr: ?*Value = null;
@@ -2204,7 +2268,8 @@ fn evalOr(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: us
                 vm.valueDeinit(p, allocator);
                 allocator.destroy(p);
             }
-            return .{ .value = val_ptr };
+            // Phase 1: val_ptr is *Value from evalRecV, extract the Value
+            return .{ .value = val_ptr.* };
         }
         if (last_ptr) |p| {
             vm.valueDeinit(p, allocator);
@@ -2225,12 +2290,16 @@ fn evalOr(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: us
 fn evalAnd(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     const forms = l.items[1..];
     if (forms.len == 0) {
-        return .{ .value = try allocValue(allocator, vm.boolValue(true)) };
+        // Phase 1: boolValue returns Value by copy, no allocValue wrapper needed
+        return .{ .value = vm.boolValue(true) };
     }
     // Non-tail forms evaluated synchronously
     for (forms[0 .. forms.len - 1]) |form_item| {
         const val_ptr = try evalRecV(allocator, &form_item, frame, depth + 1);
-        if (!vm.isTruthy(val_ptr.*)) return .{ .value = val_ptr };
+        if (!vm.isTruthy(val_ptr.*)) {
+            // Phase 1: val_ptr is *Value from evalRecV, extract the Value
+            return .{ .value = val_ptr.* };
+        }
         vm.valueDeinit(val_ptr, allocator);
     }
     // Last form in tail position
@@ -2301,7 +2370,8 @@ fn evalBinding(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dept
 
     const body = l.items[2..];
     if (body.len == 0) {
-        return .{ .value = try allocValue(allocator, vm.nilValue()) };
+        // Phase 1: nilValue returns Value by copy, no allocValue wrapper needed
+        return .{ .value = vm.nilValue() };
     }
     // Non-tail forms evaluated synchronously
     var do_result: Value = vm.nilValue();
@@ -2336,7 +2406,8 @@ fn evalLazySeq(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dept
     if (gc_mod.current_gc) |gc| {
         gc.setObjectType(@as(*anyopaque, @ptrCast(thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
     }
-    return .{ .value = try allocValue(allocator, vm.lazySeqValue(thunk)) };
+    // Phase 1: lazySeqValue returns Value by copy, no allocValue wrapper needed
+    return .{ .value = vm.lazySeqValue(thunk) };
 }
 
 /// Capture the effective environment of a Frame into a flat Env.
@@ -2407,7 +2478,8 @@ fn evalDorun(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
         .vector => items = coll.vector.items.items,
         .set => items = coll.set.items.items,
         .queue => items = coll.queue.items.items,
-        else => return .{ .value = try allocValue(allocator, vm.nilValue()) },
+        // Phase 1: nilValue returns Value by copy, no allocValue wrapper needed
+        else => return .{ .value = vm.nilValue() },
     }
     var count: usize = 0;
     var i: usize = 0;
@@ -2421,7 +2493,8 @@ fn evalDorun(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
         }
         count += 1;
     }
-    return .{ .value = try allocValue(allocator, vm.nilValue()) };
+    // Phase 1: nilValue returns Value by copy, no allocValue wrapper needed
+    return .{ .value = vm.nilValue() };
 }
 
 /// (doall coll) — realize lazy sequences and return result
@@ -2431,14 +2504,17 @@ fn evalDoall(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
     if (std.meta.activeTag(coll_ptr.*) == .lazy_seq) {
         const forced = try sequences.forceLazySeqHelper(allocator, coll_ptr.*);
         vm.valueDeinit(&coll_ptr.*, allocator);
-        return .{ .value = try vm.cloneGC(&forced, allocator) };
+        // Phase 1: cloneGC returns *Value, extract the Value
+        const ptr = try vm.cloneGC(&forced, allocator);
+        return .{ .value = ptr.* };
     }
     if (std.meta.activeTag(coll_ptr.*) == .nil) {
         vm.valueDeinit(&coll_ptr.*, allocator);
-        return .{ .value = try allocValue(allocator, try vm.listValue(allocator, list.empty())) };
+        // Phase 1: listValue returns Value by copy, no allocValue wrapper needed
+        return .{ .value = try vm.listValue(allocator, list.empty()) };
     }
-    // coll_ptr is already a *Value, return it directly without cloning
-    return .{ .value = coll_ptr };
+    // Phase 1: coll_ptr is *Value from evalRecV, extract the Value
+    return .{ .value = coll_ptr.* };
 }
 
 /// (throw expr) — evaluate expr and signal an exception.
@@ -2476,7 +2552,8 @@ fn evalExtend(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth
         try ext_args.append(allocator, ptr.*);
     }
     const result = try protocols.evalExtend(allocator, ext_args, frame.root_env, depth + 1);
-    return .{ .value = try allocValue(allocator, result) };
+    // Phase 1: evalExtend returns Value by copy, no allocValue wrapper needed
+    return .{ .value = result };
 }
 
 // ============================================================================
@@ -2486,52 +2563,62 @@ fn evalExtend(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth
 
 fn evalNsForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     const result = try eval_ns.evalNs(allocator, l.*, frame.root_env, depth);
-    return .{ .value = try allocValue(allocator, result) };
+    // Phase 1: evalNs returns Value by copy, no allocValue wrapper needed
+    return .{ .value = result };
 }
 
 fn evalInNsForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     const result = try eval_ns.evalInNs(allocator, l.*, frame.root_env, depth);
-    return .{ .value = try allocValue(allocator, result) };
+    // Phase 1: evalInNs returns Value by copy, no allocValue wrapper needed
+    return .{ .value = result };
 }
 
 fn evalDefprotocolForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     const result = try protocols.evalDefProtocol(allocator, l.*, frame.root_env, depth + 1);
-    return .{ .value = try allocValue(allocator, result) };
+    // Phase 1: evalDefProtocol returns Value by copy, no allocValue wrapper needed
+    return .{ .value = result };
 }
 
 fn evalExtendTypeForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     const result = try protocols.evalExtendType(allocator, l.*, frame.root_env, depth + 1);
-    return .{ .value = try allocValue(allocator, result) };
+    // Phase 1: evalExtendType returns Value by copy, no allocValue wrapper needed
+    return .{ .value = result };
 }
 
 fn evalExtendProtocolForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     const result = try protocols.evalExtendProtocol(allocator, l.*, frame.root_env, depth + 1);
-    return .{ .value = try allocValue(allocator, result) };
+    // Phase 1: evalExtendProtocol returns Value by copy, no allocValue wrapper needed
+    return .{ .value = result };
 }
 
 fn evalDefrecordForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     const result = try records.evalDefRecord(allocator, l.*, frame.root_env, depth + 1);
-    return .{ .value = try allocValue(allocator, result) };
+    // Phase 1: evalDefRecord returns Value by copy, no allocValue wrapper needed
+    return .{ .value = result };
 }
 
 fn evalThreadLastForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     const result = try eval_thread.evalThreadLast(allocator, l.items[1..], frame, depth + 1);
-    return .{ .value = try allocValue(allocator, result) };
+    // Phase 1: evalThreadLast returns Value by copy, no allocValue wrapper needed
+    return .{ .value = result };
 }
 
 fn evalThreadFirstForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     const result = try eval_thread.evalThreadFirst(allocator, l.items[1..], frame, depth + 1);
-    return .{ .value = try allocValue(allocator, result) };
+    // Phase 1: evalThreadFirst returns Value by copy, no allocValue wrapper needed
+    return .{ .value = result };
 }
 
 fn evalCondThreadFirstForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     const result = try eval_thread.evalCondThreadFirst(allocator, l.items[1..], frame, depth + 1);
-    return .{ .value = try allocValue(allocator, result) };
+    // Phase 1: evalCondThreadFirst returns Value by copy, no allocValue wrapper needed
+    return .{ .value = result };
 }
 
 fn evalCondThreadLastForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     const result = try eval_thread.evalCondThreadLast(allocator, l.items[1..], frame, depth + 1);
-    return .{ .value = try allocValue(allocator, result) };
+    // Phase 1: evalCondThreadLast returns Value by copy, no allocValue wrapper needed
+    return .{ .value = result };
 }
 
 fn evalCaseForm(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: usize) anyerror!EvalResult {

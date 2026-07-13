@@ -360,13 +360,14 @@ fn processRecordProtocolSpec(
 
     // Evaluate the protocol symbol to get the protocol value
     const proto_ptr_r = try eval.evalRecWithEnv(allocator, &proto_sym, env, depth + 1);
+    // Phase 1: proto_ptr_r.value is now Value by copy (not *Value)
         const proto_ptr = proto_ptr_r.value;
-    defer vm.valueDeinit(&proto_ptr.*, allocator);
+    defer vm.valueDeinit(@constCast(&proto_ptr), allocator);
 
     // Validate it's a protocol (has :sigs key)
     var sigs_kw = try vm.keywordValue(allocator, "sigs");
     defer vm.valueDeinit(&sigs_kw, allocator);
-    if (getMapEntry(proto_ptr.*, sigs_kw) == null) {
+    if (getMapEntry(proto_ptr, sigs_kw) == null) {
         return makeErrorStr(allocator, "defrecord: {s} is not a protocol", .{proto_sym.symbol});
     }
 
@@ -474,10 +475,11 @@ fn processRecordProtocolSpec(
 
         // Evaluate to get a function value
         const fn_ptr_r = try eval.evalRecWithEnv(allocator, &(try vm.listValue(allocator, fn_form)), env, depth + 1);
+        // Phase 1: fn_ptr_r.value is now Value by copy (not *Value)
         const fn_ptr = fn_ptr_r.value;
         fn_form = .empty;
-        const persistent_fn = try vm.shallowClone(&fn_ptr.*, allocator);
-        vm.valueDeinit(&fn_ptr.*, allocator);
+        const persistent_fn = try vm.shallowClone(&fn_ptr, allocator);
+        vm.valueDeinit(@constCast(&fn_ptr), allocator);
 
         try mmap.append(allocator, .{
             .key = try vm.keywordValue(allocator, mname),
@@ -493,7 +495,8 @@ fn processRecordProtocolSpec(
     var extend_args: list.List = .empty;
     defer extend_args.deinit(allocator);
     try extend_args.append(allocator, atype);
-    try extend_args.append(allocator, proto_ptr.*);
+    // Phase 1: proto_ptr is now Value by copy (not *Value)
+    try extend_args.append(allocator, proto_ptr);
     try extend_args.append(allocator, try vm.mapValue(allocator, mmap));
     mmap = .empty;
 

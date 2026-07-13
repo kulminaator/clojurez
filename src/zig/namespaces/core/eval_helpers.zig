@@ -12,6 +12,20 @@ const gc_mod = @import("../../gc.zig");
 
 const Allocator = std.mem.Allocator;
 
+// Debug: track allocBuiltinResult calls
+var debug_alloc_builtin_active: bool = false;
+var debug_alloc_builtin_count: usize = 0;
+var debug_alloc_builtin_limit: usize = 0;
+
+pub fn debugAllocBuiltinStart(limit: usize) void {
+    debug_alloc_builtin_active = true;
+    debug_alloc_builtin_count = 0;
+    debug_alloc_builtin_limit = limit;
+}
+pub fn debugAllocBuiltinStop() void {
+    debug_alloc_builtin_active = false;
+}
+
 /// Loop context for evalLoop/evalRecur coordination.
 /// Stack-based to support nested loops.
 const LoopContext = struct {
@@ -356,6 +370,10 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args: []const Value, e
             }
 
             // Check for bytecode — if available, use the bytecode VM
+            if (debug_alloc_builtin_active) {
+                const has_bc = arity.bytecode != null;
+                std.debug.print("[CALL_BUILTIN] bytecode={s}\n", .{if (has_bc) "YES" else "NO"});
+            }
             if (arity.bytecode) |bc| {
                 const bytecode_mod = @import("../../bytecode.zig");
                 const vm_result = try bytecode_mod.execute(allocator, bc, &new_env);
@@ -456,6 +474,16 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args: []const Value, e
 }
 
 fn allocBuiltinResult(allocator: Allocator, val: Value) anyerror!*Value {
+    if (debug_alloc_builtin_active) {
+        if (debug_alloc_builtin_count >= debug_alloc_builtin_limit) {
+            debug_alloc_builtin_active = false;
+        } else {
+            const src = @src();
+            std.debug.print("[BUILTIN_RESULT #{d}] size=Value from {s}:{d} val_type={s}\n",
+                .{ debug_alloc_builtin_count + 1, src.file, src.line, @tagName(std.meta.activeTag(val)) });
+            debug_alloc_builtin_count += 1;
+        }
+    }
     const ptr = try allocator.create(Value);
     ptr.* = val;
     return ptr;
@@ -481,6 +509,11 @@ pub fn evalBody(allocator: Allocator, body: *const list.List, env: *vm.Env) anye
 
 /// Main evaluation dispatcher — routes to type-specific evaluators.
 pub fn evalForm(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Value {
+    if (debug_alloc_builtin_active) {
+        if (debug_alloc_builtin_count < debug_alloc_builtin_limit) {
+            std.debug.print("[EVAL_FORM] type={s}\n", .{@tagName(std.meta.activeTag(form.*))});
+        }
+    }
     switch (std.meta.activeTag(form.*)) {
         .nil, .bool, .integer, .float, .string, .keyword => return evalSelfEvaluating(allocator, form),
         .symbol => return evalSymbol(allocator, form, env),

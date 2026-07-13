@@ -82,7 +82,8 @@ fn futureThreadEntry(fn_val: Value, future_data: *vm.FutureData) void {
             child_env.deinit(allocator);
             break :errhandler;
         };
-        result = call_result.value.*;
+        // Phase 1: call_result.value is now Value by copy (not *Value)
+        result = call_result.value;
 
         // Store result and mark done
         future_data.result = result;

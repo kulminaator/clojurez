@@ -350,7 +350,8 @@ fn getReplacementString(allocator: Allocator, v: Value) anyerror![]const u8 {
 
 fn callBuiltin(allocator: Allocator, op: Value, args: list.List, env: *Env) anyerror!Value {
     const call_result = try eval_mod.callWithEnv(allocator, &op, &args, env, 0);
-    return call_result.value.*;
+    // Phase 1: call_result.value is now Value by copy (not *Value)
+    return call_result.value;
 }
 
 // ============================================================

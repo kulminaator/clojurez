@@ -81,7 +81,9 @@ pub fn evalDefmulti(allocator: Allocator, l: *const list.List, frame: *vm.Frame,
     // Bind in current namespace
     try eval.bindInCurrentNamespace(frame.root_env, sym_name, mm_val);
 
-    return .{ .value = try vm.cloneGC(&sym, allocator) };
+    // Phase 1: cloneGC returns *Value, extract the Value
+    const ptr = try vm.cloneGC(&sym, allocator);
+    return .{ .value = ptr.* };
 }
 
 /// (defmethod mm dispatch-val [params] body) — Add a method to a multimethod.
@@ -133,7 +135,9 @@ pub fn evalDefmethod(allocator: Allocator, l: *const list.List, frame: *vm.Frame
     const dispatch_key = try vm.clone(dispatch_val_ptr, allocator);
     try mm_data.method_table.append(allocator, .{ .key = dispatch_key, .value = method_fn });
 
-    return .{ .value = try vm.cloneGC(&mm_sym, allocator) };
+    // Phase 1: cloneGC returns *Value, extract the Value
+    const ptr = try vm.cloneGC(&mm_sym, allocator);
+    return .{ .value = ptr.* };
 }
 
 /// Invoke a multimethod with the given arguments.
@@ -152,7 +156,8 @@ pub fn invokeMultimethod(allocator: Allocator, mm_val: Value, args: *const list.
 
     const dispatch_result = try eval.callWithSrc(allocator, &dispatch_fn, args, frame, depth + 1, 0);
     const dispatch_val = switch (dispatch_result) {
-        .value => |v| try vm.clone(v, allocator),
+        // Phase 1: .value is now Value by copy, pass &v to clone
+        .value => |v| try vm.clone(&v, allocator),
         .trampoline => unreachable, // should not happen with trampoline_allowed = false
     };
     defer vm.valueDeinit(@constCast(&dispatch_val), allocator);
