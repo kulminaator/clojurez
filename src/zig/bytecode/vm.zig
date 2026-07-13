@@ -216,6 +216,49 @@ pub fn execute(
                 }
             },
 
+            .call_self => {
+                const n = inst.operand;
+                const self_fn_val = program.self_fn orelse return error.BytecodeError;
+
+                var temp_args: std.ArrayListUnmanaged(StackEntry) = .empty;
+                var i: usize = 0;
+                while (i < n) : (i += 1) {
+                    const arg_entry = stack.pop() orelse {
+                        for (temp_args.items) |ae| vmt.freeEntry(ae, allocator);
+                        allocator.free(temp_args.items);
+                        return error.BytecodeError;
+                    };
+                    try temp_args.append(allocator, arg_entry);
+                }
+
+                var args: list.List = .empty;
+                var remaining_count: usize = temp_args.items.len;
+                errdefer {
+                    args.deinit(allocator);
+                    for (temp_args.items[0..remaining_count]) |ae| vmt.freeEntry(ae, allocator);
+                    allocator.free(temp_args.items);
+                }
+                var j: usize = temp_args.items.len;
+                while (j > 0) : (j -= 1) {
+                    remaining_count -= 1;
+                    const arg_entry = temp_args.items[j - 1];
+                    const arg_val = arg_entry.toValueConst();
+                    const cloned = try vm.shallowClone(&arg_val, allocator);
+                    try args.append(allocator, cloned);
+                }
+                allocator.free(temp_args.items);
+
+                const call_result = try eval_mod.callWithEnv(allocator, &self_fn_val, &args, env, 0);
+
+                switch (call_result) {
+                    .value => |v| {
+                        const ptr = try eval_mod.allocValue(allocator, v);
+                        try stack.pushPtr(ptr);
+                    },
+                    .trampoline => return .trampoline,
+                }
+            },
+
             .jump => {
                 pc = inst.operand;
             },
@@ -547,6 +590,14 @@ pub fn execute(
             .is_not_empty => {
                 const entry = stack.pop() orelse return error.BytecodeError;
                 const result = try vmo.vmIsNotEmpty(allocator, entry.toValueConst());
+                const result_ptr = try eval_mod.allocValue(allocator, result);
+                vmt.freeEntry(entry, allocator);
+                try stack.pushPtr(result_ptr);
+            },
+
+            .make_empty => {
+                const entry = stack.pop() orelse return error.BytecodeError;
+                const result = try vmo.vmMakeEmpty(allocator, entry.toValueConst());
                 const result_ptr = try eval_mod.allocValue(allocator, result);
                 vmt.freeEntry(entry, allocator);
                 try stack.pushPtr(result_ptr);

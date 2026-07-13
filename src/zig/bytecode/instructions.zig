@@ -38,6 +38,7 @@ pub const OpCode = enum(u8) {
 
     // --- Function calls ---
     call_n,         // operand = n; pops n args then fn, pushes result
+    call_self,      // operand = n; pops n args, calls self_fn with them
 
     // --- Control flow (operand = target PC) ---
     jump,
@@ -94,6 +95,7 @@ pub const OpCode = enum(u8) {
     seq,
     is_empty,       // pop 1 (coll), push bool (true if empty)
     is_not_empty,   // pop 1 (coll), push coll if not empty, nil if empty
+    make_empty,     // pop 1 (coll), push empty collection of same type
 
     // --- Special ---
     deref,          // pop 1, push dereferenced value
@@ -141,6 +143,7 @@ pub const BytecodeProgram = struct {
     source_markers: std.ArrayListUnmanaged(SourceMarker),
     fn_pool: ?[]*FnMetadata = null,                 // function metadata pool (for make_fn)
     loop_infos: std.ArrayListUnmanaged(LoopInfo) = .empty, // loop binding info (for loop/recur)
+    self_fn: ?Value = null,                          // enclosing function value (for call_self)
     source_file: []const u8 = "",
 
     pub fn init(allocator: Allocator) BytecodeProgram {
@@ -242,6 +245,7 @@ pub const BytecodeProgram = struct {
             .load_cached => "LOAD_CACHED",
             .store_var => "STORE_VAR",
             .call_n => "CALL_N",
+            .call_self => "CALL_SELF",
             .jump => "JUMP",
             .jump_if_nil => "JUMP_IF_NIL",
             .jump_if_not_nil => "JUMP_IF_NOT_NIL",
@@ -288,6 +292,7 @@ pub const BytecodeProgram = struct {
             .seq => "SEQ",
             .is_empty => "IS_EMPTY",
             .is_not_empty => "IS_NOT_EMPTY",
+            .make_empty => "MAKE_EMPTY",
             .deref => "DEREF",
             .quote => "QUOTE",
             .loop_start => "LOOP_START",

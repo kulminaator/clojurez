@@ -28,6 +28,7 @@ pub const Compiler = struct {
     allocator: Allocator,
     program: *BytecodeProgram,
     env: ?*vm.Env, // for macro expansion
+    fn_name: ?[]const u8 = null, // enclosing function name (for call_self)
     // Function pointer to break circular dependency with compiler_special_forms.zig.
     // Set by the compile() entry point before any compilation begins.
     compile_fn: *const ch.CompileFnType = &compile,
@@ -370,6 +371,13 @@ pub const Compiler = struct {
                 return;
             }
 
+            // empty: (empty coll) => push coll, make_empty
+            if (all_safe and std.mem.eql(u8, op_name, "empty") and items.len == 2) {
+                try self.compileForm(items[1]);
+                _ = try self.program.emit0(self.allocator, .make_empty);
+                return;
+            }
+
             // Shorthand operators (Phase 5)
             if (all_safe and items.len == 2) {
                 if (std.mem.eql(u8, op_name, "inc")) {
@@ -538,6 +546,17 @@ pub const Compiler = struct {
             try self.compileForm(items[i]);
         }
 
+        // Check for self-recursive call
+        if (std.meta.activeTag(items[0]) == .symbol) {
+            if (self.fn_name) |fname| {
+                const op_name = items[0].symbol;
+                if (std.mem.eql(u8, op_name, fname)) {
+                    _ = try self.program.emit(self.allocator, .call_self, n);
+                    return;
+                }
+            }
+        }
+
         if (std.meta.activeTag(items[0]) == .symbol) {
             const op_name = items[0].symbol;
             if (!try self.tryResolveAndEmitLoad(op_name)) {
@@ -684,8 +703,9 @@ pub const Compiler = struct {
 /// Compile a Clojure AST (list.List) to bytecode.
 /// The AST is a list where the first element is the operator and the rest are arguments.
 /// env is optional — needed for macro expansion.
+/// fn_name is the name of the enclosing function (for call_self support).
 /// Returns a BytecodeProgram that can be executed by the VM.
-pub fn compile(allocator: Allocator, ast: list.List, source_file: []const u8, env: ?*vm.Env) anyerror!BytecodeProgram {
+pub fn compile(allocator: Allocator, ast: list.List, source_file: []const u8, env: ?*vm.Env, fn_name: ?[]const u8) anyerror!BytecodeProgram {
     var program = BytecodeProgram.init(allocator);
     errdefer program.deinit(allocator);
     program.source_file = source_file;
@@ -694,6 +714,7 @@ pub fn compile(allocator: Allocator, ast: list.List, source_file: []const u8, en
         .allocator = allocator,
         .program = &program,
         .env = env,
+        .fn_name = fn_name,
     };
 
     var forms = ast.items;

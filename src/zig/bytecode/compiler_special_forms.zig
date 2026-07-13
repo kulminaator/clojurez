@@ -159,7 +159,7 @@ pub fn compileFn(self: *Compiler, items: []const Value) anyerror!void {
             for (body_forms) |bf| {
                 try body_list.append(self.allocator, try vm.shallowClone(&bf, self.allocator));
             }
-            const bc_prog = try self.compile_fn(self.allocator, body_list, "<fn>", self.env);
+            const bc_prog = try self.compile_fn(self.allocator, body_list, "<fn>", self.env, null);
             const bc_created = try self.allocator.create(BytecodeProgram);
             bc_created.* = bc_prog;
             bc_ptr = bc_created;

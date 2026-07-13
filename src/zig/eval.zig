@@ -2081,9 +2081,9 @@ fn evalDefn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
     for (arities.items) |*a| {
         if (!bytecode_mod.containsUnhandledSpecialFormInList(a.body) and
             !bytecode_mod.containsDestructuring(a.params) and
-            !bytecode_mod.containsRealFunctionCallsInList(a.body))
+            !bytecode_mod.containsRealFunctionCallsInList(a.body, fname.symbol))
         {
-            const bc = try bytecode_mod.compile(allocator, a.body, "<defn>", frame.root_env);
+            const bc = try bytecode_mod.compile(allocator, a.body, "<defn>", frame.root_env, fname.symbol);
             a.bytecode = try allocator.create(bytecode_mod.BytecodeProgram);
             a.bytecode.?.* = bc;
             // Register BytecodeProgram with GC so its internal arrays are scanned
@@ -2115,6 +2115,12 @@ fn evalDefn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
     var fn_val = try vm.fnValueNamedWithDoc(allocator, arities, fn_env, false, null, docstring);
     const persistent_fn = try vm.shallowClone(&fn_val, allocator);
     vm.valueDeinit(&fn_val, allocator);
+    // Set self_fn on bytecode programs for call_self support
+    for (arities.items) |*a| {
+        if (a.bytecode) |bc| {
+            bc.self_fn = persistent_fn;
+        }
+    }
     try bindInCurrentNamespace(frame.root_env, fname.symbol, persistent_fn);
     // Phase 1: cloneGC returns *Value, extract the Value
     const ptr = try vm.cloneGC(&fname, allocator);

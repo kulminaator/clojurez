@@ -903,4 +903,93 @@
 ;; SUMMARY
 ;; ============================================================
 
+;; ============================================================
+;; PHASE 8: call_self (recursive self-calls)
+;; ============================================================
+
+(defn __bc-factorial [n] (if (<= n 1) 1 (* n (__bc-factorial (- n 1)))))
+(defn __bc-fibonacci [n] (if (<= n 1) n (+ (__bc-fibonacci (- n 1)) (__bc-fibonacci (- n 2)))))
+(defn __bc-abs-recursive [n] (if (>= n 0) n (__bc-abs-recursive (- n))))
+
+(check "bytecode: factorial 5"
+  (__bc-factorial 5)
+  120)
+
+(check "bytecode: factorial 10"
+  (__bc-factorial 10)
+  3628800)
+
+(check "bytecode: factorial 0"
+  (__bc-factorial 0)
+  1)
+
+(check "bytecode: fibonacci 10"
+  (__bc-fibonacci 10)
+  55)
+
+(check "bytecode: fibonacci 0"
+  (__bc-fibonacci 0)
+  0)
+
+(check "bytecode: fibonacci 1"
+  (__bc-fibonacci 1)
+  1)
+
+(check "bytecode: abs-recursive positive"
+  (__bc-abs-recursive 5)
+  5)
+
+(check "bytecode: abs-recursive negative"
+  (__bc-abs-recursive -5)
+  5)
+
+(check "bytecode: abs-recursive zero"
+  (__bc-abs-recursive 0)
+  0)
+
+;; ============================================================
+;; PHASE 9: empty function
+;; ============================================================
+
+(defn __bc-empty-list [coll] (empty coll))
+(defn __bc-empty-vector [coll] (empty coll))
+(defn __bc-empty-map [coll] (empty coll))
+(defn __bc-empty-set [coll] (empty coll))
+
+(check "bytecode: empty list"
+  (__bc-empty-list (list 1 2 3))
+  '())
+
+(check "bytecode: empty vector"
+  (__bc-empty-vector [1 2 3])
+  [])
+
+(check "bytecode: empty map"
+  (__bc-empty-map {:a 1 :b 2})
+  {})
+
+(check "bytecode: empty set"
+  (__bc-empty-set #{1 2 3})
+  #{})
+
+(check "bytecode: empty returns correct type list"
+  (list? (__bc-empty-list (list 1 2 3)))
+  true)
+
+(check "bytecode: empty returns correct type vector"
+  (vector? (__bc-empty-vector [1 2 3]))
+  true)
+
+(check "bytecode: empty returns correct type map"
+  (map? (__bc-empty-map {:a 1}))
+  true)
+
+(check "bytecode: empty returns correct type set"
+  (set? (__bc-empty-set #{1}))
+  true)
+
+;; ============================================================
+;; SUMMARY
+;; ============================================================
+
 (println "bytecode tests complete")

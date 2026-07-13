@@ -380,6 +380,18 @@ pub fn vmIsNotEmpty(allocator: Allocator, val: Value) anyerror!Value {
     return try vm.shallowClone(&val, allocator);
 }
 
+/// VM implementation of (empty coll) — returns empty collection of same type.
+pub fn vmMakeEmpty(allocator: Allocator, val: Value) anyerror!Value {
+    return switch (std.meta.activeTag(val)) {
+        .list => vm.listValue(allocator, list.empty()),
+        .vector => vm.vectorValue(allocator, vec.empty()),
+        .map => vm.mapValue(allocator, .empty),
+        .set => vm.setValue(allocator, .empty),
+        .queue => vm.queueValue(allocator, .empty),
+        else => vm.nilValue(),
+    };
+}
+
 /// VM implementation of (get map key) — returns value or nil.
 pub fn vmGet(allocator: Allocator, coll: Value, key: Value) anyerror!Value {
     switch (coll) {
@@ -550,26 +562,33 @@ pub fn vmTypeCheck(op: OpCode, val: Value) Value {
 
 /// VM implementation of (seq coll) — returns seq or nil.
 pub fn vmSeq(allocator: Allocator, val: Value) anyerror!Value {
-    switch (val) {
+    // Force lazy sequences before processing
+    var v = val;
+    while (std.meta.activeTag(v) == .lazy_seq) {
+        const result = try sequences.forceLazySeqGetResult(allocator, &v);
+        vm.valueDeinit(&v, allocator);
+        v = result;
+    }
+    switch (v) {
         .nil => return vm.nilValue(),
         .list => {
-            if (val.list.items.items.len == 0) return vm.nilValue();
-            return try vm.shallowClone(&val, allocator);
+            if (v.list.items.items.len == 0) return vm.nilValue();
+            return try vm.shallowClone(&v, allocator);
         },
         .vector => {
-            if (val.vector.items.items.len == 0) return vm.nilValue();
+            if (v.vector.items.items.len == 0) return vm.nilValue();
             var l: list.List = .empty;
             errdefer l.deinit(allocator);
-            for (val.vector.items.items) |item| {
+            for (v.vector.items.items) |item| {
                 try l.append(allocator, try vm.shallowClone(&item, allocator));
             }
             return try vm.listValue(allocator, l);
         },
         .map => {
-            if (val.map.entries.items.len == 0) return vm.nilValue();
+            if (v.map.entries.items.len == 0) return vm.nilValue();
             var l: list.List = .empty;
             errdefer l.deinit(allocator);
-            for (val.map.entries.items) |entry| {
+            for (v.map.entries.items) |entry| {
                 var pair: list.List = .empty;
                 try pair.append(allocator, try vm.shallowClone(&entry.key, allocator));
                 try pair.append(allocator, try vm.shallowClone(&entry.value, allocator));
@@ -578,29 +597,29 @@ pub fn vmSeq(allocator: Allocator, val: Value) anyerror!Value {
             return try vm.listValue(allocator, l);
         },
         .set => {
-            if (val.set.items.items.len == 0) return vm.nilValue();
+            if (v.set.items.items.len == 0) return vm.nilValue();
             var l: list.List = .empty;
             errdefer l.deinit(allocator);
-            for (val.set.items.items) |item| {
+            for (v.set.items.items) |item| {
                 try l.append(allocator, try vm.shallowClone(&item, allocator));
             }
             return try vm.listValue(allocator, l);
         },
         .string => {
-            if (val.string.len == 0) return vm.nilValue();
+            if (v.string.len == 0) return vm.nilValue();
             var l: list.List = .empty;
             errdefer l.deinit(allocator);
             var i: usize = 0;
-            while (i < val.string.len) {
-                const cp_len = std.unicode.utf8ByteSequenceLength(val.string[i]) catch break;
-                const cp_bytes = val.string[i .. i + cp_len];
+            while (i < v.string.len) {
+                const cp_len = std.unicode.utf8ByteSequenceLength(v.string[i]) catch break;
+                const cp_bytes = v.string[i .. i + cp_len];
                 const cp = std.unicode.utf8Decode(cp_bytes) catch break;
                 try l.append(allocator, vm.charValue(cp));
                 i += cp_len;
             }
             return try vm.listValue(allocator, l);
         },
-        .cons => return try vm.shallowClone(&val, allocator),
+        .cons => return try vm.shallowClone(&v, allocator),
         else => return error.TypeError,
     }
 }

@@ -165,6 +165,11 @@ pub fn isBytecodeOptimizableOperator(sym: []const u8) bool {
     {
         return true;
     }
+    // Collection constructors
+    if (std.mem.eql(u8, sym, "empty"))
+    {
+        return true;
+    }
     // Shorthand operators (compile to opcode sequences)
     if (std.mem.eql(u8, sym, "inc") or
         std.mem.eql(u8, sym, "dec") or
@@ -205,18 +210,19 @@ pub fn isBytecodeSpecialForm(sym: []const u8) bool {
 }
 
 /// Check if a list contains any REAL function calls (not arithmetic/comparison).
-pub fn containsRealFunctionCallsInList(l: list.List) bool {
-    return containsRealFunctionCallsInItems(l.items);
+/// fn_name is the enclosing function name — self-calls are not "real" function calls.
+pub fn containsRealFunctionCallsInList(l: list.List, fn_name: ?[]const u8) bool {
+    return containsRealFunctionCallsInItems(l.items, fn_name);
 }
 
-fn containsRealFunctionCallsInItems(items: []const Value) bool {
+fn containsRealFunctionCallsInItems(items: []const Value, fn_name: ?[]const u8) bool {
     for (items) |item| {
-        if (containsRealFunctionCallsHelper(item)) return true;
+        if (containsRealFunctionCallsHelper(item, fn_name)) return true;
     }
     return false;
 }
 
-fn containsRealFunctionCallsHelper(form: Value) bool {
+fn containsRealFunctionCallsHelper(form: Value, fn_name: ?[]const u8) bool {
     switch (form) {
         .list => {
             const lst_items = form.list.items.items;
@@ -224,35 +230,44 @@ fn containsRealFunctionCallsHelper(form: Value) bool {
             if (std.meta.activeTag(lst_items[0]) == .symbol) {
                 if (isBytecodeOptimizableOperator(lst_items[0].symbol)) {
                     for (lst_items[1..]) |arg| {
-                        if (containsRealFunctionCallsHelper(arg)) return true;
+                        if (containsRealFunctionCallsHelper(arg, fn_name)) return true;
                     }
                     return false;
                 }
                 if (isBytecodeSpecialForm(lst_items[0].symbol)) {
                     for (lst_items[1..]) |arg| {
-                        if (containsRealFunctionCallsHelper(arg)) return true;
+                        if (containsRealFunctionCallsHelper(arg, fn_name)) return true;
                     }
                     return false;
+                }
+                // Self-recursive call — not a "real" function call
+                if (fn_name) |fname| {
+                    if (std.mem.eql(u8, lst_items[0].symbol, fname)) {
+                        for (lst_items[1..]) |arg| {
+                            if (containsRealFunctionCallsHelper(arg, fn_name)) return true;
+                        }
+                        return false;
+                    }
                 }
             }
             return true;
         },
         .vector => {
             for (form.vector.items.items) |item| {
-                if (containsRealFunctionCallsHelper(item)) return true;
+                if (containsRealFunctionCallsHelper(item, fn_name)) return true;
             }
             return false;
         },
         .map => {
             for (form.map.entries.items) |entry| {
-                if (containsRealFunctionCallsHelper(entry.key)) return true;
-                if (containsRealFunctionCallsHelper(entry.value)) return true;
+                if (containsRealFunctionCallsHelper(entry.key, fn_name)) return true;
+                if (containsRealFunctionCallsHelper(entry.value, fn_name)) return true;
             }
             return false;
         },
         .cons => {
-            if (containsRealFunctionCallsHelper(form.cons.head)) return true;
-            if (containsRealFunctionCallsHelper(form.cons.tail)) return true;
+            if (containsRealFunctionCallsHelper(form.cons.head, fn_name)) return true;
+            if (containsRealFunctionCallsHelper(form.cons.tail, fn_name)) return true;
             return false;
         },
         else => return false,
@@ -398,4 +413,4 @@ pub fn parseParams(allocator: Allocator, params: list.List) anyerror!ParsedParam
 
 /// Function signature for the compile entry point.
 /// Used to break circular dependency between compiler.zig and compiler_special_forms.zig.
-pub const CompileFnType = fn (allocator: Allocator, ast: list.List, source_file: []const u8, env: ?*vm.Env) anyerror!bc.BytecodeProgram;
+pub const CompileFnType = fn (allocator: Allocator, ast: list.List, source_file: []const u8, env: ?*vm.Env, fn_name: ?[]const u8) anyerror!bc.BytecodeProgram;

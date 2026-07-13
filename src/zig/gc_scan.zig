@@ -802,6 +802,10 @@ fn scanBytecodeProgram(bc_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     if (bc.fn_pool) |pool| {
         if (pool.len > 0) markPtr(pool.ptr, ctx);
     }
+    // Mark self_fn (for call_self recursive calls)
+    if (bc.self_fn) |fn_val| {
+        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(&fn_val))), ctx);
+    }
 }
 
 /// Scan a NamespaceManager struct.
