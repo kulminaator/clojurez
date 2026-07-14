@@ -112,6 +112,11 @@ pub const OpCode = enum(u8) {
     range,          // operand = arg count (1-3); pops args (start first on stack), pushes lazy-seq
     vec,            // pop 1 (coll/seq), push vector
 
+    // --- Phase 5: sort and merge ---
+    sort,           // pop 1 (coll), push sorted list
+    sort_by,        // pop 2 (key-fn, coll), push sorted list
+    merge,          // pop 2 (map2, map1), push merged map
+
     // --- Special ---
     deref,          // pop 1, push dereferenced value
     quote,          // operand = index into constant pool; push quoted value
@@ -321,6 +326,9 @@ pub const BytecodeProgram = struct {
             .make_symbol => "MAKE_SYMBOL",
             .range => "RANGE",
             .vec => "VEC",
+            .sort => "SORT",
+            .sort_by => "SORT_BY",
+            .merge => "MERGE",
             .deref => "DEREF",
             .quote => "QUOTE",
             .loop_start => "LOOP_START",
@@ -380,6 +388,7 @@ pub const BytecodeProgram = struct {
                 },
                 .loop_start => std.debug.print("target={}", .{inst.operand}),
                 .range => std.debug.print("args={}", .{inst.operand}),
+                .sort, .sort_by, .merge => {},
                 else => {},
             }
             std.debug.print("\n", .{});

@@ -658,6 +658,36 @@ pub const Compiler = struct {
                 _ = try self.program.emit0(self.allocator, .vec);
                 return;
             }
+
+            // Phase 5: sort: (sort coll)
+            if (all_safe and std.mem.eql(u8, op_name, "sort") and items.len == 2) {
+                try self.compileForm(items[1]);
+                _ = try self.program.emit0(self.allocator, .sort);
+                return;
+            }
+
+            // Phase 5: sort-by: (sort-by key-fn coll)
+            if (all_safe and std.mem.eql(u8, op_name, "sort-by") and items.len == 3) {
+                try self.compileForm(items[1]);  // key-fn
+                try self.compileForm(items[2]);  // coll
+                _ = try self.program.emit0(self.allocator, .sort_by);
+                return;
+            }
+
+            // Phase 5: merge: (merge map1 map2) or (merge map1 map2 map3 ...)
+            if (all_safe and std.mem.eql(u8, op_name, "merge")) {
+                const n = items.len - 1;
+                if (n >= 2) {
+                    // Push in forward order: m1 first, m2 second, etc.
+                    // VM will pop and reverse to get [m1, m2, ...]
+                    var mi: usize = 1;
+                    while (mi < items.len) : (mi += 1) {
+                        try self.compileForm(items[mi]);
+                    }
+                    _ = try self.program.emit(self.allocator, .merge, n);
+                    return;
+                }
+            }
         }
 
         // Not a known operator — compile as regular function call

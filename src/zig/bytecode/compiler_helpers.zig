@@ -222,6 +222,13 @@ pub fn isBytecodeOptimizableOperator(sym: []const u8) bool {
     {
         return true;
     }
+    // Phase 5: sort and merge
+    if (std.mem.eql(u8, sym, "sort") or
+        std.mem.eql(u8, sym, "sort-by") or
+        std.mem.eql(u8, sym, "merge"))
+    {
+        return true;
+    }
     return false;
 }
 

@@ -1456,6 +1456,58 @@
   [0 1 2])
 
 ;; ============================================================
+;; PHASE 5: sort and merge opcodes
+;; ============================================================
+
+(defn __bc-sort [xs] (sort xs))
+(defn __bc-sort-by [coll] (sort-by first coll))
+(defn __bc-merge [m1 m2] (merge m1 m2))
+
+(check "bytecode: sort numbers"
+  (vec (__bc-sort '(3 1 4 1 5)))
+  [1 1 3 4 5])
+
+(check "bytecode: sort-by on pairs"
+  (vec (__bc-sort-by '([3 "a"] [1 "b"] [2 "c"])))
+  [[1 "b"] [2 "c"] [3 "a"]])
+
+(check "bytecode: merge two maps"
+  (__bc-merge {:a 1} {:b 2})
+  {:a 1 :b 2})
+
+(check "bytecode: merge with overlap"
+  (__bc-merge {:a 1} {:a 2 :b 3})
+  {:a 2 :b 3})
+
+(check "bytecode: sort empty"
+  (vec (__bc-sort '()))
+  [])
+
+(check "bytecode: sort single element"
+  (vec (__bc-sort '(42)))
+  [42])
+
+(check "bytecode: sort already sorted"
+  (vec (__bc-sort '(1 2 3 4)))
+  [1 2 3 4])
+
+(check "bytecode: sort reverse"
+  (vec (__bc-sort '(5 4 3 2 1)))
+  [1 2 3 4 5])
+
+(check "bytecode: sort-by with keyword"
+  (vec (sort-by :x '({:x 3} {:x 1} {:x 2})))
+  [{:x 1} {:x 2} {:x 3}])
+
+(check "bytecode: merge three maps"
+  ((fn [m1 m2 m3] (merge m1 m2 m3)) {:a 1} {:b 2} {:c 3})
+  {:a 1 :b 2 :c 3})
+
+(check "bytecode: merge with multiple overlaps"
+  ((fn [m1 m2 m3] (merge m1 m2 m3)) {:a 1 :b 1} {:b 2 :c 2} {:c 3 :d 3})
+  {:a 1 :b 2 :c 3 :d 3})
+
+;; ============================================================
 ;; SUMMARY
 ;; ============================================================
 

@@ -1073,6 +1073,95 @@ pub fn vmVec(allocator: Allocator, val: Value) anyerror!Value {
     return try vm.vectorValue(allocator, v);
 }
 
+/// VM implementation of (sort coll) — returns sorted list.
+pub fn vmSort(allocator: Allocator, coll: Value, env: *vm.Env) anyerror!Value {
+    const fn_val = try resolveSymbol(env, "sort");
+    var arg_list: list.List = .empty;
+    errdefer arg_list.deinit(allocator);
+    try arg_list.append(allocator, try vm.shallowClone(&coll, allocator));
+    const call_result = try eval_mod.callWithEnv(allocator, &fn_val, &arg_list, env, 0);
+    switch (call_result) {
+        .value => |v| return try vm.shallowClone(&v, allocator),
+        .trampoline => return error.NotImplemented,
+    }
+}
+
+/// VM implementation of (sort-by key-fn coll) — returns sorted list.
+pub fn vmSortBy(allocator: Allocator, key_fn: Value, coll: Value, env: *vm.Env) anyerror!Value {
+    const fn_val = try resolveSymbol(env, "sort-by");
+    var arg_list: list.List = .empty;
+    errdefer arg_list.deinit(allocator);
+    try arg_list.append(allocator, try vm.shallowClone(&key_fn, allocator));
+    try arg_list.append(allocator, try vm.shallowClone(&coll, allocator));
+    const call_result = try eval_mod.callWithEnv(allocator, &fn_val, &arg_list, env, 0);
+    switch (call_result) {
+        .value => |v| return try vm.shallowClone(&v, allocator),
+        .trampoline => return error.NotImplemented,
+    }
+}
+
+/// VM implementation of (merge map1 map2 ...) — returns merged map.
+pub fn vmMerge(allocator: Allocator, maps: []const Value) anyerror!Value {
+    if (maps.len == 0) return try vm.mapValue(allocator, .empty);
+
+    var base_map: vm.Map = .empty;
+    errdefer {
+        for (base_map.items) |*entry| {
+            vm.valueDeinit(&entry.key, allocator);
+            vm.valueDeinit(&entry.value, allocator);
+        }
+        allocator.free(base_map.items);
+    }
+
+    for (maps) |map_val| {
+        switch (map_val) {
+            .map => {
+                for (map_val.map.entries.items) |entry| {
+                    var found = false;
+                    var j: usize = 0;
+                    while (j < base_map.items.len) : (j += 1) {
+                        if (vm.equals(base_map.items[j].key, entry.key)) {
+                            vm.valueDeinit(&base_map.items[j].value, allocator);
+                            base_map.items[j].value = try vm.shallowClone(&entry.value, allocator);
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        try base_map.append(allocator, .{
+                            .key = try vm.shallowClone(&entry.key, allocator),
+                            .value = try vm.shallowClone(&entry.value, allocator),
+                        });
+                    }
+                }
+            },
+            .record => {
+                for (map_val.record.fields.items) |entry| {
+                    var found = false;
+                    var j: usize = 0;
+                    while (j < base_map.items.len) : (j += 1) {
+                        if (vm.equals(base_map.items[j].key, entry.key)) {
+                            vm.valueDeinit(&base_map.items[j].value, allocator);
+                            base_map.items[j].value = try vm.shallowClone(&entry.value, allocator);
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        try base_map.append(allocator, .{
+                            .key = try vm.shallowClone(&entry.key, allocator),
+                            .value = try vm.shallowClone(&entry.value, allocator),
+                        });
+                    }
+                }
+            },
+            else => return error.TypeError,
+        }
+    }
+
+    return try vm.mapValue(allocator, base_map);
+}
+
 /// Create a function value from FnMetadata, capturing current environment.
 pub fn vmMakeFn(allocator: Allocator, meta: *const FnMetadata, env: *const vm.Env) anyerror!Value {
     var arities: std.ArrayListUnmanaged(vm.Arity) = .empty;
