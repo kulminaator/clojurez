@@ -1004,11 +1004,9 @@ pub fn vmRange(allocator: Allocator, args: []const Value, env: *vm.Env) anyerror
     for (args) |arg| {
         try arg_list.append(allocator, try vm.shallowClone(&arg, allocator));
     }
-    const call_result = try eval_mod.callWithEnv(allocator, &fn_val, &arg_list, env, 0);
-    switch (call_result) {
-        .value => |v| return try vm.shallowClone(&v, allocator),
-        .trampoline => return error.NotImplemented,
-    }
+    const result_ptr = try eval_mod.callWithEnvV(allocator, &fn_val, &arg_list, env, 0);
+    defer allocator.destroy(result_ptr);
+    return try vm.shallowClone(result_ptr, allocator);
 }
 
 /// VM implementation of (vec coll) — converts collection/seq to vector.
@@ -1073,17 +1071,40 @@ pub fn vmVec(allocator: Allocator, val: Value) anyerror!Value {
     return try vm.vectorValue(allocator, v);
 }
 
+/// VM implementation of (map fn coll) — returns lazy-seq.
+pub fn vmMapFn(allocator: Allocator, fn_val: Value, coll: Value, env: *vm.Env) anyerror!Value {
+    const map_fn = try resolveSymbol(env, "map");
+    var arg_list: list.List = .empty;
+    errdefer arg_list.deinit(allocator);
+    try arg_list.append(allocator, try vm.shallowClone(&fn_val, allocator));
+    try arg_list.append(allocator, try vm.shallowClone(&coll, allocator));
+    const result_ptr = try eval_mod.callWithEnvV(allocator, &map_fn, &arg_list, env, 0);
+    defer allocator.destroy(result_ptr);
+    return try vm.shallowClone(result_ptr, allocator);
+}
+
+/// VM implementation of (reduce fn coll) or (reduce fn init coll) — returns result.
+pub fn vmReduceFn(allocator: Allocator, args: []const Value, env: *vm.Env) anyerror!Value {
+    const reduce_fn = try resolveSymbol(env, "reduce");
+    var arg_list: list.List = .empty;
+    errdefer arg_list.deinit(allocator);
+    for (args) |arg| {
+        try arg_list.append(allocator, try vm.shallowClone(&arg, allocator));
+    }
+    const result_ptr = try eval_mod.callWithEnvV(allocator, &reduce_fn, &arg_list, env, 0);
+    defer allocator.destroy(result_ptr);
+    return try vm.shallowClone(result_ptr, allocator);
+}
+
 /// VM implementation of (sort coll) — returns sorted list.
 pub fn vmSort(allocator: Allocator, coll: Value, env: *vm.Env) anyerror!Value {
     const fn_val = try resolveSymbol(env, "sort");
     var arg_list: list.List = .empty;
     errdefer arg_list.deinit(allocator);
     try arg_list.append(allocator, try vm.shallowClone(&coll, allocator));
-    const call_result = try eval_mod.callWithEnv(allocator, &fn_val, &arg_list, env, 0);
-    switch (call_result) {
-        .value => |v| return try vm.shallowClone(&v, allocator),
-        .trampoline => return error.NotImplemented,
-    }
+    const result_ptr = try eval_mod.callWithEnvV(allocator, &fn_val, &arg_list, env, 0);
+    defer allocator.destroy(result_ptr);
+    return try vm.shallowClone(result_ptr, allocator);
 }
 
 /// VM implementation of (sort-by key-fn coll) — returns sorted list.
@@ -1093,11 +1114,9 @@ pub fn vmSortBy(allocator: Allocator, key_fn: Value, coll: Value, env: *vm.Env) 
     errdefer arg_list.deinit(allocator);
     try arg_list.append(allocator, try vm.shallowClone(&key_fn, allocator));
     try arg_list.append(allocator, try vm.shallowClone(&coll, allocator));
-    const call_result = try eval_mod.callWithEnv(allocator, &fn_val, &arg_list, env, 0);
-    switch (call_result) {
-        .value => |v| return try vm.shallowClone(&v, allocator),
-        .trampoline => return error.NotImplemented,
-    }
+    const result_ptr = try eval_mod.callWithEnvV(allocator, &fn_val, &arg_list, env, 0);
+    defer allocator.destroy(result_ptr);
+    return try vm.shallowClone(result_ptr, allocator);
 }
 
 /// VM implementation of (merge map1 map2 ...) — returns merged map.

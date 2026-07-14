@@ -904,6 +904,44 @@ pub fn execute(
                 const result_ptr = try eval_mod.allocValue(allocator, result);
                 try stack.pushPtr(result_ptr);
             },
+
+            // Phase 6: map_fn
+            .map_fn => {
+                const coll_entry = stack.pop() orelse return error.BytecodeError;
+                const fn_entry = stack.pop() orelse return error.BytecodeError;
+                const result = try vmo.vmMapFn(allocator, fn_entry.toValueConst(), coll_entry.toValueConst(), env);
+                const result_ptr = try eval_mod.allocValue(allocator, result);
+                vmt.freeEntry(fn_entry, allocator);
+                vmt.freeEntry(coll_entry, allocator);
+                try stack.pushPtr(result_ptr);
+            },
+
+            // Phase 6: reduce_fn
+            .reduce_fn => {
+                const n = inst.operand;
+                var temp_entries: std.ArrayListUnmanaged(StackEntry) = .empty;
+                errdefer { for (temp_entries.items) |ae| vmt.freeEntry(ae, allocator); allocator.free(temp_entries.items); }
+                var i: usize = 0;
+                while (i < n) : (i += 1) {
+                    const entry_val = stack.pop() orelse return error.BytecodeError;
+                    try temp_entries.append(allocator, entry_val);
+                }
+                var vals: std.ArrayListUnmanaged(Value) = .empty;
+                errdefer { for (vals.items) |*v| vm.valueDeinit(v, allocator); allocator.free(vals.items); }
+                var j: usize = temp_entries.items.len;
+                while (j > 0) : (j -= 1) {
+                    const entry = temp_entries.items[j - 1];
+                    const val = entry.toValueConst();
+                    try vals.append(allocator, try vm.shallowClone(&val, allocator));
+                }
+                for (temp_entries.items) |ae| vmt.freeEntry(ae, allocator);
+                allocator.free(temp_entries.items);
+                const result = try vmo.vmReduceFn(allocator, vals.items, env);
+                for (vals.items) |*v| vm.valueDeinit(v, allocator);
+                allocator.free(vals.items);
+                const result_ptr = try eval_mod.allocValue(allocator, result);
+                try stack.pushPtr(result_ptr);
+            },
         }
     }
 

@@ -688,6 +688,31 @@ pub const Compiler = struct {
                     return;
                 }
             }
+
+            // Phase 6: map: (map fn coll)
+            if (all_safe and std.mem.eql(u8, op_name, "map") and items.len == 3) {
+                try self.compileForm(items[1]);  // fn
+                try self.compileForm(items[2]);  // coll
+                _ = try self.program.emit0(self.allocator, .map_fn);
+                return;
+            }
+
+            // Phase 6: reduce: (reduce fn coll) or (reduce fn init coll)
+            if (all_safe and std.mem.eql(u8, op_name, "reduce")) {
+                const n = items.len - 1;
+                if (n == 2 or n == 3) {
+                    if (n == 2) {
+                        try self.compileForm(items[1]);  // fn
+                        try self.compileForm(items[2]);  // coll
+                    } else {
+                        try self.compileForm(items[1]);  // fn
+                        try self.compileForm(items[2]);  // init
+                        try self.compileForm(items[3]);  // coll
+                    }
+                    _ = try self.program.emit(self.allocator, .reduce_fn, n);
+                    return;
+                }
+            }
         }
 
         // Not a known operator — compile as regular function call

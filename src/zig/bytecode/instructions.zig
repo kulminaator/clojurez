@@ -117,6 +117,10 @@ pub const OpCode = enum(u8) {
     sort_by,        // pop 2 (key-fn, coll), push sorted list
     merge,          // pop 2 (map2, map1), push merged map
 
+    // --- Phase 6: map and reduce ---
+    map_fn,         // pop 2 (coll, fn), push lazy-seq
+    reduce_fn,      // operand = arg count (2 or 3); pop args, push result
+
     // --- Special ---
     deref,          // pop 1, push dereferenced value
     quote,          // operand = index into constant pool; push quoted value
@@ -329,6 +333,8 @@ pub const BytecodeProgram = struct {
             .sort => "SORT",
             .sort_by => "SORT_BY",
             .merge => "MERGE",
+            .map_fn => "MAP_FN",
+            .reduce_fn => "REDUCE_FN",
             .deref => "DEREF",
             .quote => "QUOTE",
             .loop_start => "LOOP_START",
@@ -389,6 +395,8 @@ pub const BytecodeProgram = struct {
                 .loop_start => std.debug.print("target={}", .{inst.operand}),
                 .range => std.debug.print("args={}", .{inst.operand}),
                 .sort, .sort_by, .merge => {},
+                .map_fn => {},
+                .reduce_fn => std.debug.print("args={}", .{inst.operand}),
                 else => {},
             }
             std.debug.print("\n", .{});

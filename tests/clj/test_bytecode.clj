@@ -1508,6 +1508,62 @@
   {:a 1 :b 2 :c 3 :d 3})
 
 ;; ============================================================
+;; PHASE 6: map and reduce opcodes
+;; ============================================================
+
+(defn __bc-map-inc [xs] (map #(+ % 1) xs))
+(defn __bc-reduce-add [xs] (reduce + xs))
+(defn __bc-reduce-init [xs] (reduce + 100 xs))
+
+(check "bytecode: map inc"
+  (vec (__bc-map-inc [1 2 3]))
+  [2 3 4])
+
+(check "bytecode: reduce +"
+  (__bc-reduce-add [1 2 3 4 5])
+  15)
+
+(check "bytecode: reduce with init"
+  (__bc-reduce-init [1 2 3])
+  106)
+
+(check "bytecode: map with multiply"
+  (vec ((fn [xs] (map #(* % 3) xs)) [1 2 3]))
+  [3 6 9])
+
+(check "bytecode: map over list"
+  (vec (__bc-map-inc '(10 20 30)))
+  [11 21 31])
+
+(check "bytecode: reduce *"
+  ((fn [xs] (reduce * xs)) [2 3 4])
+  24)
+
+(check "bytecode: reduce with init and *"
+  ((fn [xs] (reduce * 10 xs)) [2 3 4])
+  240)
+
+(check "bytecode: reduce on empty with init"
+  ((fn [] (reduce + 42 [])))
+  42)
+
+(check "bytecode: map identity"
+  (vec ((fn [xs] (map identity xs)) [5 6 7]))
+  [5 6 7])
+
+(check "bytecode: reduce max"
+  ((fn [xs] (reduce max xs)) [3 7 2 9 1])
+  9)
+
+(check "bytecode: reduce max with init"
+  ((fn [xs] (reduce max 0 xs)) [3 7 2 9 1])
+  9)
+
+(check "bytecode: reduce min"
+  ((fn [xs] (reduce min xs)) [3 7 2 9 1])
+  1)
+
+;; ============================================================
 ;; SUMMARY
 ;; ============================================================
 
