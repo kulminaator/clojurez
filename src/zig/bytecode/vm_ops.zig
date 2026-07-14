@@ -1207,6 +1207,21 @@ pub fn vmMerge(allocator: Allocator, maps: []const Value) anyerror!Value {
     return try vm.mapValue(allocator, base_map);
 }
 
+/// Concatenate multiple collections into a single list.
+pub fn vmConcat(allocator: Allocator, collections: []const Value, env: *vm.Env) anyerror!Value {
+    if (collections.len == 0) return vm.nilValue();
+
+    const concat_fn = try resolveSymbol(env, "concat");
+    var args: list.List = .empty;
+    errdefer args.deinit(allocator);
+    for (collections) |coll| {
+        try args.append(allocator, try vm.shallowClone(&coll, allocator));
+    }
+    const result_ptr = try eval_mod.callWithEnvV(allocator, &concat_fn, &args, env, 0);
+    defer allocator.destroy(result_ptr);
+    return try vm.shallowClone(result_ptr, allocator);
+}
+
 /// Create a function value from FnMetadata, capturing current environment.
 pub fn vmMakeFn(allocator: Allocator, meta: *const FnMetadata, env: *const vm.Env) anyerror!Value {
     var arities: std.ArrayListUnmanaged(vm.Arity) = .empty;

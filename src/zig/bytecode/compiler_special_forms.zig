@@ -819,4 +819,236 @@ pub fn compileThreadingLeft(self: *Compiler, items: []const Value) anyerror!void
     _ = try self.program.emit(self.allocator, .load_var, tmp_idx);
 }
 
+// ============================================================
+// Phase 9: Quasiquote
+// ============================================================
+
+/// Compile (quasiquote form) — the backtick operator.
+/// `x => quote x (constant)
+/// `(~x) => compile x (unquote)
+/// `(~@x) => compile x (unquote-splicing)
+/// `(a b c) => (list a b c) with unquote handling
+pub fn compileQuasiquote(self: *Compiler, items: []const Value) anyerror!void {
+    if (items.len < 2) {
+        _ = try self.program.emit0(self.allocator, .push_nil);
+        return;
+    }
+    try compileQuasiquoteForm(self, items[1]);
+}
+
+/// Compile a single quasiquote form.
+fn compileQuasiquoteForm(self: *Compiler, form: Value) anyerror!void {
+    switch (form) {
+        .list => {
+            const lst_items = form.list.items.items;
+            if (lst_items.len == 0) {
+                _ = try self.program.emit(self.allocator, .list_n, 0);
+                return;
+            }
+            // Check for nested quasiquote: (quasiquote x)
+            // e.g. `(~`(a b)) — the inner `(a b)` is a quasiquote
+            if (std.meta.activeTag(lst_items[0]) == .symbol and
+                std.mem.eql(u8, lst_items[0].symbol, "quasiquote"))
+            {
+                if (lst_items.len >= 2) {
+                    try compileQuasiquoteForm(self, lst_items[1]);
+                    return;
+                }
+            }
+            // Check for unquote-splicing at top level: (~@ x)
+            const first = lst_items[0];
+            if (std.meta.activeTag(first) == .symbol and
+                std.mem.eql(u8, first.symbol, "unquote-splicing"))
+            {
+                if (lst_items.len >= 2) {
+                    try self.compileForm(lst_items[1]);
+                    return;
+                }
+            }
+            // Regular list — process elements
+            try compileQuasiquoteList(self, lst_items);
+        },
+        .vector => {
+            // Compile vector as a vector, handling ~ and ~@
+            try compileQuasiquoteVector(self, form.vector.items.items);
+        },
+        .map => {
+            // Compile map as (hash-map ...)
+            const n = form.map.entries.items.len;
+            for (form.map.entries.items) |entry| {
+                try compileQuasiquoteForm(self, entry.key);
+                try compileQuasiquoteForm(self, entry.value);
+            }
+            _ = try self.program.emit(self.allocator, .map_n, n);
+        },
+        else => {
+            // Literal — push as constant
+            const idx = try self.program.addConstant(self.allocator, try vm.shallowClone(&form, self.allocator));
+            _ = try self.program.emit(self.allocator, .push_const, idx);
+        },
+    }
+}
+
+/// Check if a list form is (unquote-splicing x).
+fn isUnquoteSplicing(form: Value) bool {
+    if (std.meta.activeTag(form) != .list) return false;
+    const lst_items = form.list.items.items;
+    if (lst_items.len < 2) return false;
+    if (std.meta.activeTag(lst_items[0]) != .symbol) return false;
+    return std.mem.eql(u8, lst_items[0].symbol, "unquote-splicing");
+}
+
+/// Check if a list form is (unquote x).
+fn isUnquote(form: Value) bool {
+    if (std.meta.activeTag(form) != .list) return false;
+    const lst_items = form.list.items.items;
+    if (lst_items.len < 2) return false;
+    if (std.meta.activeTag(lst_items[0]) != .symbol) return false;
+    return std.mem.eql(u8, lst_items[0].symbol, "unquote");
+}
+
+/// Compile a quasiquote list's elements, handling ~ and ~@.
+/// Uses concat for splicing: (concat (list 1 2) spliced (list 3))
+fn compileQuasiquoteList(self: *Compiler, items: []const Value) anyerror!void {
+    if (items.len == 0) {
+        _ = try self.program.emit(self.allocator, .list_n, 0);
+        return;
+    }
+
+    // Check if any element is unquote-splicing
+    const has_splice = blk: {
+        for (items) |item| {
+            if (isUnquoteSplicing(item)) break :blk true;
+        }
+        break :blk false;
+    };
+
+    if (!has_splice) {
+        // No splicing — simple case, compile each element and build list
+        for (items) |item| {
+            if (isUnquote(item) and item.list.items.items.len >= 2) {
+                // ~expr — compile expr directly
+                try self.compileForm(item.list.items.items[1]);
+            } else {
+                try compileQuasiquoteForm(self, item);
+            }
+        }
+        _ = try self.program.emit(self.allocator, .list_n, items.len);
+        return;
+    }
+
+    // Has splicing — use concat approach.
+    // Accumulate non-splice elements into a list, then concat with splice results.
+    var current_list_count: usize = 0;
+    var concat_count: usize = 0;
+
+    for (items) |item| {
+        if (isUnquoteSplicing(item)) {
+            // Emit accumulated list if any
+            if (current_list_count > 0) {
+                _ = try self.program.emit(self.allocator, .list_n, current_list_count);
+                concat_count += 1;
+                current_list_count = 0;
+            }
+            // Compile the splice expression (should produce a seq)
+            if (item.list.items.items.len >= 2) {
+                try self.compileForm(item.list.items.items[1]);
+            } else {
+                _ = try self.program.emit0(self.allocator, .push_nil);
+            }
+            concat_count += 1;
+        } else {
+            // Regular element or unquote
+            if (isUnquote(item) and item.list.items.items.len >= 2) {
+                try self.compileForm(item.list.items.items[1]);
+            } else {
+                try compileQuasiquoteForm(self, item);
+            }
+            current_list_count += 1;
+        }
+    }
+
+    // Emit remaining accumulated list
+    if (current_list_count > 0) {
+        _ = try self.program.emit(self.allocator, .list_n, current_list_count);
+        concat_count += 1;
+    }
+
+    // If we had any splicing, concat all pieces together
+    if (concat_count > 0) {
+        _ = try self.program.emit(self.allocator, .concat_n, concat_count);
+    }
+}
+
+/// Compile a quasiquote vector's elements, handling ~ and ~@.
+/// Produces a vector (not a list) when no splicing.
+/// With splicing, produces a vector from the concatenated result.
+fn compileQuasiquoteVector(self: *Compiler, items: []const Value) anyerror!void {
+    if (items.len == 0) {
+        _ = try self.program.emit(self.allocator, .vector_n, 0);
+        return;
+    }
+
+    // Check if any element is unquote-splicing
+    const has_splice = blk: {
+        for (items) |item| {
+            if (isUnquoteSplicing(item)) break :blk true;
+        }
+        break :blk false;
+    };
+
+    if (!has_splice) {
+        // No splicing — compile each element and build vector
+        for (items) |item| {
+            if (isUnquote(item) and item.list.items.items.len >= 2) {
+                try self.compileForm(item.list.items.items[1]);
+            } else {
+                try compileQuasiquoteForm(self, item);
+            }
+        }
+        _ = try self.program.emit(self.allocator, .vector_n, items.len);
+        return;
+    }
+
+    // Has splicing — use concat then vec approach.
+    // First concat all pieces, then convert to vector.
+    var current_list_count: usize = 0;
+    var concat_count: usize = 0;
+
+    for (items) |item| {
+        if (isUnquoteSplicing(item)) {
+            if (current_list_count > 0) {
+                _ = try self.program.emit(self.allocator, .list_n, current_list_count);
+                concat_count += 1;
+                current_list_count = 0;
+            }
+            if (item.list.items.items.len >= 2) {
+                try self.compileForm(item.list.items.items[1]);
+            } else {
+                _ = try self.program.emit0(self.allocator, .push_nil);
+            }
+            concat_count += 1;
+        } else {
+            if (isUnquote(item) and item.list.items.items.len >= 2) {
+                try self.compileForm(item.list.items.items[1]);
+            } else {
+                try compileQuasiquoteForm(self, item);
+            }
+            current_list_count += 1;
+        }
+    }
+
+    if (current_list_count > 0) {
+        _ = try self.program.emit(self.allocator, .list_n, current_list_count);
+        concat_count += 1;
+    }
+
+    if (concat_count > 0) {
+        _ = try self.program.emit(self.allocator, .concat_n, concat_count);
+    }
+
+    // Convert the resulting sequence to a vector
+    _ = try self.program.emit0(self.allocator, .vec);
+}
+
 // Forward reference to compile function (defined in compiler.zig)

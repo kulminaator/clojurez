@@ -1656,6 +1656,78 @@
   3)
 
 ;; ============================================================
+;; PHASE 9: quasiquote
+;; ============================================================
+
+(check "bytecode: quasiquote literal list"
+  ((fn [] `(1 2 3)))
+  '(1 2 3))
+
+(check "bytecode: quasiquote literal vector"
+  ((fn [] `[1 2 3]))
+  [1 2 3])
+
+(check "bytecode: quasiquote literal keyword"
+  ((fn [] `:foo))
+  :foo)
+
+(check "bytecode: quasiquote literal string"
+  ((fn [] `"hello"))
+  "hello")
+
+(check "bytecode: quasiquote literal map"
+  ((fn [] `{ :a 1 :b 2 }))
+  '{ :a 1 :b 2 })
+
+(check "bytecode: quasiquote with unquote"
+  ((fn [x] `(~x 2 3)) 42)
+  '(42 2 3))
+
+(check "bytecode: quasiquote with unquote in vector"
+  ((fn [x] `[~x 2 3]) 99)
+  [99 2 3])
+
+(check "bytecode: quasiquote with unquote first"
+  ((fn [x] `(~x)) 7)
+  '(7))
+
+(check "bytecode: quasiquote with multiple unquotes"
+  ((fn [x y] `(~x ~y)) 1 2)
+  '(1 2))
+
+(check "bytecode: quasiquote unquote-splicing"
+  ((fn [xs] `(1 ~@xs 4)) '(2 3))
+  '(1 2 3 4))
+
+(check "bytecode: quasiquote unquote-splicing empty"
+  ((fn [] `(1 ~@'() 4)))
+  '(1 4))
+
+(check "bytecode: quasiquote unquote-splicing at start"
+  ((fn [xs] `(~@xs 3 4)) '(1 2))
+  '(1 2 3 4))
+
+(check "bytecode: quasiquote unquote-splicing at end"
+  ((fn [xs] `(1 2 ~@xs)) '(3 4))
+  '(1 2 3 4))
+
+(check "bytecode: quasiquote multiple splices"
+  ((fn [a b] `(~@a :mid ~@b)) '(1) '(2 3))
+  '(1 :mid 2 3))
+
+(check "bytecode: quasiquote empty list"
+  ((fn [] `()))
+  '())
+
+(check "bytecode: quasiquote nested literal"
+  ((fn [] `((1 2) (3 4))))
+  '((1 2) (3 4)))
+
+(check "bytecode: quasiquote with unquote arithmetic"
+  ((fn [x] `(~(+ x 1) ~(* x 2))) 5)
+  '(6 10))
+
+;; ============================================================
 ;; SUMMARY
 ;; ============================================================
 

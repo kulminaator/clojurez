@@ -240,6 +240,11 @@ pub fn isBytecodeOptimizableOperator(sym: []const u8) bool {
     {
         return true;
     }
+    // Phase 9: concat
+    if (std.mem.eql(u8, sym, "concat"))
+    {
+        return true;
+    }
     return false;
 }
 
@@ -268,7 +273,8 @@ pub fn isBytecodeSpecialForm(sym: []const u8) bool {
         std.mem.eql(u8, sym, "case") or
         std.mem.eql(u8, sym, "letfn") or
         std.mem.eql(u8, sym, "->") or
-        std.mem.eql(u8, sym, "->>"))
+        std.mem.eql(u8, sym, "->>") or
+        std.mem.eql(u8, sym, "quasiquote"))
     {
         return true;
     }
@@ -371,8 +377,7 @@ pub fn containsUnhandledSpecialFormHelper(form: Value) bool {
             if (lst_items.len == 0) return false;
             if (std.meta.activeTag(lst_items[0]) == .symbol) {
                 const sym = lst_items[0].symbol;
-                if (std.mem.eql(u8, sym, "quasiquote") or
-                    std.mem.eql(u8, sym, "binding") or
+                if (std.mem.eql(u8, sym, "binding") or
                     std.mem.eql(u8, sym, "lazy-seq") or
                     std.mem.eql(u8, sym, "dorun") or
                     std.mem.eql(u8, sym, "doall") or

@@ -124,6 +124,9 @@ pub const OpCode = enum(u8) {
     // --- Phase 7: apply ---
     apply_fn,       // pop 2 (args-coll, fn), push result
 
+    // --- Phase 9: concat ---
+    concat_n,       // pop n collections, push concatenated list (operand = n)
+
     // --- Special ---
     deref,          // pop 1, push dereferenced value
     quote,          // operand = index into constant pool; push quoted value
@@ -339,6 +342,7 @@ pub const BytecodeProgram = struct {
             .map_fn => "MAP_FN",
             .reduce_fn => "REDUCE_FN",
             .apply_fn => "APPLY_FN",
+            .concat_n => "CONCAT_N",
             .deref => "DEREF",
             .quote => "QUOTE",
             .loop_start => "LOOP_START",
@@ -402,6 +406,7 @@ pub const BytecodeProgram = struct {
                 .map_fn => {},
                 .reduce_fn => std.debug.print("args={}", .{inst.operand}),
                 .apply_fn => {},
+                .concat_n => std.debug.print("n={}", .{inst.operand}),
                 else => {},
             }
             std.debug.print("\n", .{});

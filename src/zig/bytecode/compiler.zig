@@ -217,6 +217,7 @@ pub const Compiler = struct {
             if (std.mem.eql(u8, sym, "letfn")) { try csf.compileLetFn(self, l.items); return; }
             if (std.mem.eql(u8, sym, "->")) { try csf.compileThreadingRight(self, l.items); return; }
             if (std.mem.eql(u8, sym, "->>")) { try csf.compileThreadingLeft(self, l.items); return; }
+            if (std.mem.eql(u8, sym, "quasiquote")) { try csf.compileQuasiquote(self, l.items); return; }
 
             // Macro expansion
             if (self.env) |e| {
@@ -730,6 +731,19 @@ pub const Compiler = struct {
                 try self.compileForm(items[2]);  // args-coll
                 _ = try self.program.emit0(self.allocator, .apply_fn);
                 return;
+            }
+
+            // Phase 9: concat: (concat coll1 coll2 ...)
+            if (effective_all_safe and std.mem.eql(u8, op_name, "concat")) {
+                const n = items.len - 1;
+                if (n >= 1) {
+                    var ci: usize = 1;
+                    while (ci < items.len) : (ci += 1) {
+                        try self.compileForm(items[ci]);
+                    }
+                    _ = try self.program.emit(self.allocator, .concat_n, n);
+                    return;
+                }
             }
         }
 
