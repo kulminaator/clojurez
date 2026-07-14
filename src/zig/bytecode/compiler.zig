@@ -29,6 +29,9 @@ pub const Compiler = struct {
     program: *BytecodeProgram,
     env: ?*vm.Env, // for macro expansion
     fn_name: ?[]const u8 = null, // enclosing function name (for call_self)
+    // When true, skip special operator compilation (map, reduce, etc.)
+    // and use generic call_n. Used by threading macros to preserve arg order.
+    skip_special_ops: bool = false,
     // Function pointer to break circular dependency with compiler_special_forms.zig.
     // Set by the compile() entry point before any compilation begins.
     compile_fn: *const ch.CompileFnType = &compile,
@@ -212,6 +215,8 @@ pub const Compiler = struct {
             if (std.mem.eql(u8, sym, "recur")) { try csf.compileRecur(self, l.items); return; }
             if (std.mem.eql(u8, sym, "case")) { try csf.compileCase(self, l.items); return; }
             if (std.mem.eql(u8, sym, "letfn")) { try csf.compileLetFn(self, l.items); return; }
+            if (std.mem.eql(u8, sym, "->")) { try csf.compileThreadingRight(self, l.items); return; }
+            if (std.mem.eql(u8, sym, "->>")) { try csf.compileThreadingLeft(self, l.items); return; }
 
             // Macro expansion
             if (self.env) |e| {
@@ -279,8 +284,13 @@ pub const Compiler = struct {
                 break :blk true;
             };
 
+            // When skip_special_ops is true (e.g., threading macros building synthetic
+            // call lists), disable special operator compilation to preserve argument order.
+            const effective_all_safe = all_safe and !self.skip_special_ops;
+            const effective_all_simple = all_simple and !self.skip_special_ops;
+
             // Arithmetic operators
-            if (all_safe) {
+            if (effective_all_safe) {
                 if (std.mem.eql(u8, op_name, "+")) {
                     return self.compileArithmeticOp(items[1..], .add);
                 }
@@ -335,7 +345,7 @@ pub const Compiler = struct {
             }
 
             // not: (not x) => push x, not
-            if (all_safe and std.mem.eql(u8, op_name, "not")) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "not")) {
                 if (items.len == 2) {
                     try self.compileForm(items[1]);
                     _ = try self.program.emit0(self.allocator, .not);
@@ -344,7 +354,7 @@ pub const Compiler = struct {
             }
 
             // nil?: (nil? x) => push x, is_nil
-            if (all_safe and std.mem.eql(u8, op_name, "nil?")) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "nil?")) {
                 if (items.len == 2) {
                     try self.compileForm(items[1]);
                     _ = try self.program.emit0(self.allocator, .is_nil);
@@ -353,7 +363,7 @@ pub const Compiler = struct {
             }
 
             // Type predicates: (number? x), (int? x), (float? x), etc.
-            if (all_safe and items.len == 2) {
+            if (effective_all_safe and items.len == 2) {
                 const tc_opcode = typePredicateOpcode(op_name);
                 if (tc_opcode) |opcode| {
                     try self.compileForm(items[1]);
@@ -363,28 +373,28 @@ pub const Compiler = struct {
             }
 
             // empty?: (empty? coll) => push coll, is_empty
-            if (all_safe and std.mem.eql(u8, op_name, "empty?") and items.len == 2) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "empty?") and items.len == 2) {
                 try self.compileForm(items[1]);
                 _ = try self.program.emit0(self.allocator, .is_empty);
                 return;
             }
 
             // not-empty: (not-empty coll) => push coll, is_not_empty
-            if (all_safe and std.mem.eql(u8, op_name, "not-empty") and items.len == 2) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "not-empty") and items.len == 2) {
                 try self.compileForm(items[1]);
                 _ = try self.program.emit0(self.allocator, .is_not_empty);
                 return;
             }
 
             // empty: (empty coll) => push coll, make_empty
-            if (all_safe and std.mem.eql(u8, op_name, "empty") and items.len == 2) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "empty") and items.len == 2) {
                 try self.compileForm(items[1]);
                 _ = try self.program.emit0(self.allocator, .make_empty);
                 return;
             }
 
             // Shorthand operators (Phase 5)
-            if (all_safe and items.len == 2) {
+            if (effective_all_safe and items.len == 2) {
                 if (std.mem.eql(u8, op_name, "inc")) {
                     // (inc n) => n 1 +
                     try self.compileForm(items[1]);
@@ -436,7 +446,7 @@ pub const Compiler = struct {
             }
 
             // count: (count coll) => push coll, count
-            if (all_simple and std.mem.eql(u8, op_name, "count")) {
+            if (effective_all_simple and std.mem.eql(u8, op_name, "count")) {
                 if (items.len == 2) {
                     try self.compileForm(items[1]);
                     _ = try self.program.emit0(self.allocator, .count);
@@ -445,7 +455,7 @@ pub const Compiler = struct {
             }
 
             // first: (first coll) => push coll, first
-            if (all_simple and std.mem.eql(u8, op_name, "first")) {
+            if (effective_all_simple and std.mem.eql(u8, op_name, "first")) {
                 if (items.len == 2) {
                     try self.compileForm(items[1]);
                     _ = try self.program.emit0(self.allocator, .first);
@@ -454,7 +464,7 @@ pub const Compiler = struct {
             }
 
             // rest: (rest coll) => push coll, rest
-            if (all_simple and std.mem.eql(u8, op_name, "rest")) {
+            if (effective_all_simple and std.mem.eql(u8, op_name, "rest")) {
                 if (items.len == 2) {
                     try self.compileForm(items[1]);
                     _ = try self.program.emit0(self.allocator, .rest);
@@ -463,7 +473,7 @@ pub const Compiler = struct {
             }
 
             // nth: (nth coll index) => push coll, push index, nth
-            if (all_safe and std.mem.eql(u8, op_name, "nth")) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "nth")) {
                 if (items.len == 3) {
                     try self.compileForm(items[1]);
                     try self.compileForm(items[2]);
@@ -473,7 +483,7 @@ pub const Compiler = struct {
             }
 
             // get: (get map key) => push map, push key, get
-            if (all_safe and std.mem.eql(u8, op_name, "get")) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "get")) {
                 if (items.len == 3) {
                     try self.compileForm(items[1]);
                     try self.compileForm(items[2]);
@@ -483,7 +493,7 @@ pub const Compiler = struct {
             }
 
             // conj: (conj coll item) => push coll, push item, conj
-            if (all_safe and std.mem.eql(u8, op_name, "conj")) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "conj")) {
                 if (items.len == 3) {
                     try self.compileForm(items[1]);
                     try self.compileForm(items[2]);
@@ -493,7 +503,7 @@ pub const Compiler = struct {
             }
 
             // assoc: (assoc map key val) => push map, push key, push val, assoc
-            if (all_safe and std.mem.eql(u8, op_name, "assoc")) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "assoc")) {
                 if (items.len == 4) {
                     try self.compileForm(items[1]);
                     try self.compileForm(items[2]);
@@ -504,7 +514,7 @@ pub const Compiler = struct {
             }
 
             // compare: (compare a b) => push a, push b, compare
-            if (all_safe and std.mem.eql(u8, op_name, "compare")) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "compare")) {
                 if (items.len == 3) {
                     try self.compileForm(items[1]);
                     try self.compileForm(items[2]);
@@ -514,7 +524,7 @@ pub const Compiler = struct {
             }
 
             // seq: (seq coll) => push coll, seq
-            if (all_simple and std.mem.eql(u8, op_name, "seq")) {
+            if (effective_all_simple and std.mem.eql(u8, op_name, "seq")) {
                 if (items.len == 2) {
                     try self.compileForm(items[1]);
                     _ = try self.program.emit0(self.allocator, .seq);
@@ -523,7 +533,7 @@ pub const Compiler = struct {
             }
 
             // cons: (cons head tail) => push tail, push head, cons
-            if (all_safe and std.mem.eql(u8, op_name, "cons")) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "cons")) {
                 if (items.len == 3) {
                     try self.compileForm(items[2]);
                     try self.compileForm(items[1]);
@@ -533,7 +543,7 @@ pub const Compiler = struct {
             }
 
             // list: (list arg1 arg2 ...) => compile args, list_n
-            if (all_safe and std.mem.eql(u8, op_name, "list")) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "list")) {
                 const n = items.len - 1;
                 var li: usize = 1;
                 while (li < items.len) : (li += 1) {
@@ -544,7 +554,7 @@ pub const Compiler = struct {
             }
 
             // contains?: (contains? coll key) => compile coll, compile key, contains
-            if (all_safe and std.mem.eql(u8, op_name, "contains?") and items.len == 3) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "contains?") and items.len == 3) {
                 try self.compileForm(items[1]);
                 try self.compileForm(items[2]);
                 _ = try self.program.emit0(self.allocator, .contains);
@@ -552,7 +562,7 @@ pub const Compiler = struct {
             }
 
             // str: (str arg1 arg2 ...) => compile args, str_n
-            if (all_safe and std.mem.eql(u8, op_name, "str")) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "str")) {
                 const n = items.len - 1;
                 var si: usize = 1;
                 while (si < items.len) : (si += 1) {
@@ -563,49 +573,49 @@ pub const Compiler = struct {
             }
 
             // Phase 12: peek: (peek coll) => push coll, peek
-            if (all_safe and std.mem.eql(u8, op_name, "peek") and items.len == 2) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "peek") and items.len == 2) {
                 try self.compileForm(items[1]);
                 _ = try self.program.emit0(self.allocator, .peek);
                 return;
             }
 
             // Phase 12: pop: (pop coll) => push coll, pop
-            if (all_safe and std.mem.eql(u8, op_name, "pop") and items.len == 2) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "pop") and items.len == 2) {
                 try self.compileForm(items[1]);
                 _ = try self.program.emit0(self.allocator, .pop);
                 return;
             }
 
             // Phase 13: reduced: (reduced val) => push val, make_reduced
-            if (all_safe and std.mem.eql(u8, op_name, "reduced") and items.len == 2) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "reduced") and items.len == 2) {
                 try self.compileForm(items[1]);
                 _ = try self.program.emit0(self.allocator, .make_reduced);
                 return;
             }
 
             // Phase 13: reduced?: (reduced? val) => push val, is_reduced
-            if (all_safe and std.mem.eql(u8, op_name, "reduced?") and items.len == 2) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "reduced?") and items.len == 2) {
                 try self.compileForm(items[1]);
                 _ = try self.program.emit0(self.allocator, .is_reduced);
                 return;
             }
 
             // Phase 13: unreduced: (unreduced val) => push val, unreduced
-            if (all_safe and std.mem.eql(u8, op_name, "unreduced") and items.len == 2) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "unreduced") and items.len == 2) {
                 try self.compileForm(items[1]);
                 _ = try self.program.emit0(self.allocator, .unreduced);
                 return;
             }
 
             // Phase 14: meta: (meta val) => push val, get_meta
-            if (all_safe and std.mem.eql(u8, op_name, "meta") and items.len == 2) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "meta") and items.len == 2) {
                 try self.compileForm(items[1]);
                 _ = try self.program.emit0(self.allocator, .get_meta);
                 return;
             }
 
             // Phase 14: with-meta: (with-meta val meta) => push val, push meta, set_meta
-            if (all_safe and std.mem.eql(u8, op_name, "with-meta") and items.len == 3) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "with-meta") and items.len == 3) {
                 try self.compileForm(items[1]);
                 try self.compileForm(items[2]);
                 _ = try self.program.emit0(self.allocator, .set_meta);
@@ -613,7 +623,7 @@ pub const Compiler = struct {
             }
 
             // Phase 15: keyword: (keyword name) or (keyword ns name)
-            if (all_safe and std.mem.eql(u8, op_name, "keyword")) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "keyword")) {
                 const n = items.len - 1;
                 if (n == 1 or n == 2) {
                     var ki: usize = 1;
@@ -626,7 +636,7 @@ pub const Compiler = struct {
             }
 
             // Phase 15: symbol: (symbol name) or (symbol ns name)
-            if (all_safe and std.mem.eql(u8, op_name, "symbol")) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "symbol")) {
                 const n = items.len - 1;
                 if (n == 1 or n == 2) {
                     var si: usize = 1;
@@ -639,7 +649,7 @@ pub const Compiler = struct {
             }
 
             // Phase 4: range: (range end) or (range start end) or (range start end step)
-            if (all_safe and std.mem.eql(u8, op_name, "range")) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "range")) {
                 const n = items.len - 1;
                 if (n >= 1 and n <= 3) {
                     // Push args in order: start first (or just end for 1-arg)
@@ -653,21 +663,21 @@ pub const Compiler = struct {
             }
 
             // Phase 4: vec: (vec coll)
-            if (all_safe and std.mem.eql(u8, op_name, "vec") and items.len == 2) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "vec") and items.len == 2) {
                 try self.compileForm(items[1]);
                 _ = try self.program.emit0(self.allocator, .vec);
                 return;
             }
 
             // Phase 5: sort: (sort coll)
-            if (all_safe and std.mem.eql(u8, op_name, "sort") and items.len == 2) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "sort") and items.len == 2) {
                 try self.compileForm(items[1]);
                 _ = try self.program.emit0(self.allocator, .sort);
                 return;
             }
 
             // Phase 5: sort-by: (sort-by key-fn coll)
-            if (all_safe and std.mem.eql(u8, op_name, "sort-by") and items.len == 3) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "sort-by") and items.len == 3) {
                 try self.compileForm(items[1]);  // key-fn
                 try self.compileForm(items[2]);  // coll
                 _ = try self.program.emit0(self.allocator, .sort_by);
@@ -675,7 +685,7 @@ pub const Compiler = struct {
             }
 
             // Phase 5: merge: (merge map1 map2) or (merge map1 map2 map3 ...)
-            if (all_safe and std.mem.eql(u8, op_name, "merge")) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "merge")) {
                 const n = items.len - 1;
                 if (n >= 2) {
                     // Push in forward order: m1 first, m2 second, etc.
@@ -690,7 +700,7 @@ pub const Compiler = struct {
             }
 
             // Phase 6: map: (map fn coll)
-            if (all_safe and std.mem.eql(u8, op_name, "map") and items.len == 3) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "map") and items.len == 3) {
                 try self.compileForm(items[1]);  // fn
                 try self.compileForm(items[2]);  // coll
                 _ = try self.program.emit0(self.allocator, .map_fn);
@@ -698,7 +708,7 @@ pub const Compiler = struct {
             }
 
             // Phase 6: reduce: (reduce fn coll) or (reduce fn init coll)
-            if (all_safe and std.mem.eql(u8, op_name, "reduce")) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "reduce")) {
                 const n = items.len - 1;
                 if (n == 2 or n == 3) {
                     if (n == 2) {
@@ -715,7 +725,7 @@ pub const Compiler = struct {
             }
 
             // Phase 7: apply: (apply fn args-coll)
-            if (all_safe and std.mem.eql(u8, op_name, "apply") and items.len == 3) {
+            if (effective_all_safe and std.mem.eql(u8, op_name, "apply") and items.len == 3) {
                 try self.compileForm(items[1]);  // fn
                 try self.compileForm(items[2]);  // args-coll
                 _ = try self.program.emit0(self.allocator, .apply_fn);

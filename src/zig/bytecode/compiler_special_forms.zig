@@ -698,3 +698,125 @@ pub fn compileLetFn(self: *Compiler, items: []const Value) anyerror!void {
 }
 
 // Forward reference to compile function (defined in compiler.zig)
+
+/// Compile (-> expr form1 form2 ...)
+/// Desugars at compile time: each form gets the result of previous as first arg.
+/// (-> x (f a) (g b)) => (g (f x a) b)
+pub fn compileThreadingRight(self: *Compiler, items: []const Value) anyerror!void {
+    if (items.len < 2) {
+        _ = try self.program.emit0(self.allocator, .push_nil);
+        return;
+    }
+
+    // Use a temp variable to hold the current threaded value.
+    // Build synthetic call lists with correct arg order and use skip_special_ops
+    // to avoid the bytecode compiler reordering args for map/reduce/etc.
+    const tmp_idx = try self.program.addSymbol(self.allocator, "__thread_right_tmp");
+
+    // Compile the initial expression and store in temp
+    try self.compileForm(items[1]);
+    _ = try self.program.emit(self.allocator, .store_var, tmp_idx);
+
+    // Temporarily disable special operator compilation
+    const prev_skip = self.skip_special_ops;
+    self.skip_special_ops = true;
+
+    var i: usize = 2;
+    while (i < items.len) : (i += 1) {
+        const form = items[i];
+
+        // Build synthetic call list: (fn __thread_right_tmp arg1 arg2 ...)
+        var call_list: list.List = .empty;
+        errdefer call_list.deinit(self.allocator);
+
+        if (std.meta.activeTag(form) == .list and form.list.items.items.len > 0) {
+            const lst = form.list;
+            const first = lst.items.items[0];
+            const rest = lst.items.items[1..];
+
+            try call_list.append(self.allocator, try vm.shallowClone(&first, self.allocator));
+            // Insert the temp symbol as first argument
+            try call_list.append(self.allocator, try vm.symValue(self.allocator, "__thread_right_tmp"));
+            for (rest) |arg| {
+                try call_list.append(self.allocator, try vm.shallowClone(&arg, self.allocator));
+            }
+        } else {
+            // Not a list — treat as function: (form prev-result)
+            try call_list.append(self.allocator, try vm.shallowClone(&form, self.allocator));
+            try call_list.append(self.allocator, try vm.symValue(self.allocator, "__thread_right_tmp"));
+        }
+
+        // Compile the synthetic call (skip_special_ops ensures correct arg order)
+        try self.compileForm(try vm.listValue(self.allocator, call_list));
+
+        // Store result back in temp for next iteration
+        _ = try self.program.emit(self.allocator, .store_var, tmp_idx);
+    }
+
+    self.skip_special_ops = prev_skip;
+
+    // Load final result from temp
+    _ = try self.program.emit(self.allocator, .load_var, tmp_idx);
+}
+
+/// Compile (->> expr form1 form2 ...)
+/// Desugars at compile time: each form gets the result of previous as LAST arg.
+/// (->> x (f a) (g b)) => (g b (f a x))
+pub fn compileThreadingLeft(self: *Compiler, items: []const Value) anyerror!void {
+    if (items.len < 2) {
+        _ = try self.program.emit0(self.allocator, .push_nil);
+        return;
+    }
+
+    // Use a temp variable to hold the current threaded value.
+    // Build synthetic call lists with correct arg order and use skip_special_ops
+    // to avoid the bytecode compiler reordering args for map/reduce/etc.
+    const tmp_idx = try self.program.addSymbol(self.allocator, "__thread_left_tmp");
+
+    // Compile the initial expression and store in temp
+    try self.compileForm(items[1]);
+    _ = try self.program.emit(self.allocator, .store_var, tmp_idx);
+
+    // Temporarily disable special operator compilation
+    const prev_skip = self.skip_special_ops;
+    self.skip_special_ops = true;
+
+    var i: usize = 2;
+    while (i < items.len) : (i += 1) {
+        const form = items[i];
+
+        // Build synthetic call list: (fn arg1 arg2 ... __thread_left_tmp)
+        var call_list: list.List = .empty;
+        errdefer call_list.deinit(self.allocator);
+
+        if (std.meta.activeTag(form) == .list and form.list.items.items.len > 0) {
+            const lst = form.list;
+            const first = lst.items.items[0];
+            const rest = lst.items.items[1..];
+
+            try call_list.append(self.allocator, try vm.shallowClone(&first, self.allocator));
+            for (rest) |arg| {
+                try call_list.append(self.allocator, try vm.shallowClone(&arg, self.allocator));
+            }
+        } else {
+            // Not a list — treat as function: (form prev-result)
+            try call_list.append(self.allocator, try vm.shallowClone(&form, self.allocator));
+        }
+
+        // Add the temp symbol as last argument
+        try call_list.append(self.allocator, try vm.symValue(self.allocator, "__thread_left_tmp"));
+
+        // Compile the synthetic call (skip_special_ops ensures correct arg order)
+        try self.compileForm(try vm.listValue(self.allocator, call_list));
+
+        // Store result back in temp for next iteration
+        _ = try self.program.emit(self.allocator, .store_var, tmp_idx);
+    }
+
+    self.skip_special_ops = prev_skip;
+
+    // Load final result from temp
+    _ = try self.program.emit(self.allocator, .load_var, tmp_idx);
+}
+
+// Forward reference to compile function (defined in compiler.zig)

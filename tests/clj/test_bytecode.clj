@@ -1601,6 +1601,61 @@
   0)
 
 ;; ============================================================
+;; PHASE 8: threading macros
+;; ============================================================
+
+(defn __bc-thread-right [x] (-> x (+ 1) (* 2) (- 3)))
+(defn __bc-thread-left [x] (->> x (+ 1) (* 2) (- 3)))
+(defn __bc-thread-right-simple [x] (-> x inc dec))
+(defn __bc-thread-left-simple [x] (->> x inc dec))
+(defn __bc-thread-right-identity [x] (-> x identity))
+(defn __bc-thread-left-identity [x] (->> x identity))
+
+(check "bytecode: -> simple pipeline"
+  (__bc-thread-right 5)
+  9)  ; ((5 + 1) * 2) - 3 = 9
+
+(check "bytecode: ->> simple pipeline"
+  (__bc-thread-left 5)
+  -9)  ; (- 3 (* 2 (+ 1 5))) = -9
+
+(check "bytecode: -> with inc/dec"
+  (__bc-thread-right-simple 10)
+  10)  ; (dec (inc 10)) = 10
+
+(check "bytecode: ->> with inc/dec"
+  (__bc-thread-left-simple 10)
+  10)  ; (dec (inc 10)) = 10
+
+(check "bytecode: -> with identity"
+  (__bc-thread-right-identity 42)
+  42)
+
+(check "bytecode: ->> with identity"
+  (__bc-thread-left-identity 42)
+  42)
+
+(check "bytecode: ->> with map and vec"
+  ((fn [xs] (->> xs (map #(* % 2)) (vec))) [1 2 3])
+  [2 4 6])
+
+(check "bytecode: -> with single form"
+  ((fn [x] (-> x (+ 10))) 5)
+  15)
+
+(check "bytecode: ->> with single form"
+  ((fn [x] (->> x (+ 10))) 5)
+  15)
+
+(check "bytecode: -> with seq on list"
+  ((fn [xs] (-> xs (conj 99) seq)) '(1 2))
+  '(99 1 2))
+
+(check "bytecode: ->> with map and first"
+  ((fn [xs] (->> xs (map #(* % 3)) first)) [1 2 3])
+  3)
+
+;; ============================================================
 ;; SUMMARY
 ;; ============================================================
 

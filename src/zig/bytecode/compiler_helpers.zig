@@ -266,7 +266,9 @@ pub fn isBytecodeSpecialForm(sym: []const u8) bool {
         std.mem.eql(u8, sym, "loop") or
         std.mem.eql(u8, sym, "recur") or
         std.mem.eql(u8, sym, "case") or
-        std.mem.eql(u8, sym, "letfn"))
+        std.mem.eql(u8, sym, "letfn") or
+        std.mem.eql(u8, sym, "->") or
+        std.mem.eql(u8, sym, "->>"))
     {
         return true;
     }
@@ -374,8 +376,6 @@ pub fn containsUnhandledSpecialFormHelper(form: Value) bool {
                     std.mem.eql(u8, sym, "lazy-seq") or
                     std.mem.eql(u8, sym, "dorun") or
                     std.mem.eql(u8, sym, "doall") or
-                    std.mem.eql(u8, sym, "->") or
-                    std.mem.eql(u8, sym, "->>") or
                     std.mem.eql(u8, sym, "cond->") or
                     std.mem.eql(u8, sym, "cond->>"))
                 {
