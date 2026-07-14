@@ -442,6 +442,12 @@ fn scanLazySeqThunk(thunk_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     if (thunk.map_fn) |fn_val| {
         scanValueChildrenDirect(&fn_val, ctx);
     }
+    // Phase 10: Mark bytecode program so GC doesn't free it.
+    if (thunk.bytecode) |bc| {
+        const bc_ptr: *anyopaque = @ptrCast(@constCast(bc));
+        ctx.gc.setObjectType(bc_ptr, gc.GCObjectType.bytecode_program);
+        ctx.gc.markRecursive(bc_ptr, ctx);
+    }
 }
 
 /// Scan AtomData: { value: Value, ref_count: usize }.

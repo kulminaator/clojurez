@@ -308,6 +308,11 @@ pub const LazySeqThunk = struct {
     // to avoid one env.put (HAMT allocation) per thunk step.
     // Only map_fn is stored directly; coll/idx remain in env.
     map_fn: ?Value = null,
+
+    // Phase 10: Bytecode for lazy-seq body.
+    // When non-null, forceLazySeqGetResult executes this bytecode
+    // instead of evaluating the body list.
+    bytecode: ?*const bytecode_mod.BytecodeProgram = null,
 };
 
 pub const AtomData = struct {

@@ -127,6 +127,9 @@ pub const OpCode = enum(u8) {
     // --- Phase 9: concat ---
     concat_n,       // pop n collections, push concatenated list (operand = n)
 
+    // --- Phase 10: lazy-seq ---
+    make_lazy_seq,  // operand = index into lazy_seq_bytecodes; push lazy-seq (captures current env)
+
     // --- Special ---
     deref,          // pop 1, push dereferenced value
     quote,          // operand = index into constant pool; push quoted value
@@ -174,6 +177,7 @@ pub const BytecodeProgram = struct {
     fn_pool: ?[]*FnMetadata = null,                 // function metadata pool (for make_fn)
     loop_infos: std.ArrayListUnmanaged(LoopInfo) = .empty, // loop binding info (for loop/recur)
     self_fn: ?Value = null,                          // enclosing function value (for call_self)
+    lazy_seq_bytecodes: std.ArrayListUnmanaged(*BytecodeProgram) = .empty, // Phase 10: lazy-seq bytecode programs
     source_file: []const u8 = "",
 
     pub fn init(allocator: Allocator) BytecodeProgram {
@@ -208,6 +212,12 @@ pub const BytecodeProgram = struct {
             allocator.free(info.binding_sym_indices);
         }
         self.loop_infos.deinit(allocator);
+        // Phase 10: deinit lazy-seq bytecode programs
+        for (self.lazy_seq_bytecodes.items) |bc| {
+            bc.deinit(allocator);
+            allocator.destroy(bc);
+        }
+        self.lazy_seq_bytecodes.deinit(allocator);
         if (self.fn_pool) |pool| {
             for (pool) |meta| {
                 meta.deinit();
@@ -216,6 +226,16 @@ pub const BytecodeProgram = struct {
             allocator.free(pool);
         }
         self.instructions.deinit(allocator);
+    }
+
+    /// Add a lazy-seq bytecode program to the pool. Returns the index.
+    /// The bytecode program is moved (not cloned) into the pool.
+    pub fn addLazySeqBytecode(self: *BytecodeProgram, allocator: Allocator, bc: BytecodeProgram) anyerror!usize {
+        const idx = self.lazy_seq_bytecodes.items.len;
+        const bc_ptr = try allocator.create(BytecodeProgram);
+        bc_ptr.* = bc;
+        try self.lazy_seq_bytecodes.append(allocator, bc_ptr);
+        return idx;
     }
 
     /// Add loop binding info. Returns the index.
@@ -343,6 +363,7 @@ pub const BytecodeProgram = struct {
             .reduce_fn => "REDUCE_FN",
             .apply_fn => "APPLY_FN",
             .concat_n => "CONCAT_N",
+            .make_lazy_seq => "MAKE_LAZY_SEQ",
             .deref => "DEREF",
             .quote => "QUOTE",
             .loop_start => "LOOP_START",
@@ -407,6 +428,7 @@ pub const BytecodeProgram = struct {
                 .reduce_fn => std.debug.print("args={}", .{inst.operand}),
                 .apply_fn => {},
                 .concat_n => std.debug.print("n={}", .{inst.operand}),
+                .make_lazy_seq => std.debug.print("bc[{}]", .{inst.operand}),
                 else => {},
             }
             std.debug.print("\n", .{});

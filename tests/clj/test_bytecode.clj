@@ -1728,6 +1728,49 @@
   '(6 10))
 
 ;; ============================================================
+;; PHASE 10: lazy-seq
+;; ============================================================
+
+(defn __bc-lazy-range [n]
+  (lazy-seq
+    (when (> n 0)
+      (cons n (__bc-lazy-range (dec n))))))
+
+(check "bytecode: lazy-seq basic"
+  (vec (take 5 (__bc-lazy-range 10)))
+  [10 9 8 7 6])
+
+(check "bytecode: lazy-seq takes only needed"
+  (vec (take 3 (__bc-lazy-range 100)))
+  [100 99 98])
+
+(check "bytecode: lazy-seq empty"
+  (vec (take 5 (__bc-lazy-range 0)))
+  [])
+
+(check "bytecode: lazy-seq single element"
+  (vec (take 1 (__bc-lazy-range 1)))
+  [1])
+
+(defn __bc-lazy-consts [n]
+  (lazy-seq
+    (if (>= n 5)
+      nil
+      (cons n (__bc-lazy-consts (inc n))))))
+
+(check "bytecode: lazy-seq with inc"
+  (vec (__bc-lazy-consts 0))
+  [0 1 2 3 4])
+
+(check "bytecode: lazy-seq fn in map"
+  (vec (map #(* % 2) (take 5 (__bc-lazy-range 10))))
+  [20 18 16 14 12])
+
+(check "bytecode: lazy-seq fn in reduce"
+  (reduce + (take 5 (__bc-lazy-range 10)))
+  40)  ; 10+9+8+7+6 = 40
+
+;; ============================================================
 ;; SUMMARY
 ;; ============================================================
 

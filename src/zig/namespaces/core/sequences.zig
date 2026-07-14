@@ -11,6 +11,7 @@ const helpers = @import("helpers.zig");
 const chunks = @import("chunks.zig");
 const test_utils = @import("test_utils.zig");
 const gc_mod = @import("../../gc.zig");
+const bytecode_mod = @import("../../bytecode.zig");
 const Allocator = std.mem.Allocator;
 
 /// Convert a UTF-8 string to a list of character values.
@@ -43,6 +44,17 @@ pub fn forceLazySeqHelper(allocator: Allocator, lazy: Value) anyerror!Value {
         var result: Value = undefined;
         if (thunk.custom_handler) |handler| {
             result = try forceLazySeqCustomHandler(allocator, handler, @constCast(&thunk.env), thunk);
+        } else if (thunk.bytecode) |bc_prog| {
+            // Phase 10: Execute bytecode body
+            var thunk_env = try thunk.env.clone(allocator);
+            const exec_result = try bytecode_mod.execute(allocator, bc_prog, &thunk_env);
+            switch (exec_result) {
+                .value => |v| {
+                    result = try vm.shallowClone(v, allocator);
+                    allocator.destroy(v);
+                },
+                .trampoline => return error.RuntimeError,
+            }
         } else {
             const cloned_body = try list.clone(&thunk.body, allocator);
             var thunk_env = try thunk.env.clone(allocator);
@@ -155,6 +167,17 @@ fn evalLazySeqThunk(allocator: Allocator, lazy: Value) anyerror!Value {
         var result: Value = undefined;
         if (thunk.custom_handler) |handler| {
             result = try forceLazySeqCustomHandler(allocator, handler, @constCast(&thunk.env), thunk);
+        } else if (thunk.bytecode) |bc_prog| {
+            // Phase 10: Execute bytecode body
+            var thunk_env = try thunk.env.clone(allocator);
+            const exec_result = try bytecode_mod.execute(allocator, bc_prog, &thunk_env);
+            switch (exec_result) {
+                .value => |v| {
+                    result = try vm.shallowClone(v, allocator);
+                    allocator.destroy(v);
+                },
+                .trampoline => return error.RuntimeError,
+            }
         } else {
             const cloned_body = try list.clone(&thunk.body, allocator);
             var thunk_env = try thunk.env.clone(allocator);
@@ -390,6 +413,21 @@ pub fn forceLazySeqGetResult(allocator: Allocator, lazy: *const Value) anyerror!
         // Check for custom handler (bypasses Clojure evaluator)
         if (thunk.custom_handler) |handler| {
             return forceLazySeqCustomHandler(allocator, handler, @constCast(&thunk.env), thunk);
+        }
+
+        // Phase 10: Check for bytecode body
+        if (thunk.bytecode) |bc_prog| {
+            var thunk_env = try thunk.env.clone(allocator);
+            // Execute the bytecode program in the cloned environment
+            const result = try bytecode_mod.execute(allocator, bc_prog, &thunk_env);
+            switch (result) {
+                .value => |v| {
+                    const cloned = try vm.shallowClone(v, allocator);
+                    allocator.destroy(v);
+                    return cloned;
+                },
+                .trampoline => return error.RuntimeError,
+            }
         }
 
         const cloned_body = try list.clone(&thunk.body, allocator);

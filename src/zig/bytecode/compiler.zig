@@ -218,6 +218,7 @@ pub const Compiler = struct {
             if (std.mem.eql(u8, sym, "->")) { try csf.compileThreadingRight(self, l.items); return; }
             if (std.mem.eql(u8, sym, "->>")) { try csf.compileThreadingLeft(self, l.items); return; }
             if (std.mem.eql(u8, sym, "quasiquote")) { try csf.compileQuasiquote(self, l.items); return; }
+            if (std.mem.eql(u8, sym, "lazy-seq")) { try csf.compileLazySeq(self, l.items); return; }
 
             // Macro expansion
             if (self.env) |e| {

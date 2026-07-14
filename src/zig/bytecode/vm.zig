@@ -205,15 +205,14 @@ pub fn execute(
                 allocator.free(temp_args.items);
 
                 const fn_val = fn_entry.toValueConst();
-                const call_result = try eval_mod.callWithEnv(allocator, &fn_val, &args, env, 0);
-
-                switch (call_result) {
-                    .value => |v| {
-                        const ptr = try eval_mod.allocValue(allocator, v);
-                        try stack.pushPtr(ptr);
-                    },
-                    .trampoline => return .trampoline,
-                }
+                // Use callWithEnvV to disable trampolining and evaluate directly.
+                // This handles nested function calls within bytecode without
+                // requiring trampoline support in the VM.
+                const result_ptr = try eval_mod.callWithEnvV(allocator, &fn_val, &args, env, 0);
+                const result_val = try vm.shallowClone(result_ptr, allocator);
+                allocator.destroy(result_ptr);
+                const result_ptr2 = try eval_mod.allocValue(allocator, result_val);
+                try stack.pushPtr(result_ptr2);
             },
 
             .call_self => {
@@ -979,6 +978,16 @@ pub fn execute(
                 allocator.free(vals.items);
                 const result_ptr = try eval_mod.allocValue(allocator, result);
                 try stack.pushPtr(result_ptr);
+            },
+
+            // Phase 10: make_lazy_seq
+            .make_lazy_seq => {
+                const bc_idx = inst.operand;
+                if (bc_idx >= program.lazy_seq_bytecodes.items.len) return error.BytecodeError;
+                const bc_prog = program.lazy_seq_bytecodes.items[bc_idx];
+                const lazy_val = try vmo.vmMakeLazySeq(allocator, bc_prog, env);
+                const lazy_ptr = try eval_mod.allocValue(allocator, lazy_val);
+                try stack.pushPtr(lazy_ptr);
             },
         }
     }

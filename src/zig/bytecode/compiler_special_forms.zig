@@ -699,6 +699,44 @@ pub fn compileLetFn(self: *Compiler, items: []const Value) anyerror!void {
 
 // Forward reference to compile function (defined in compiler.zig)
 
+// ============================================================
+// Phase 10: lazy-seq
+// ============================================================
+
+/// Compile (lazy-seq body...)
+/// Creates a lazy-seq whose thunk body is compiled as bytecode.
+/// When forced, the bytecode is executed in the captured environment.
+pub fn compileLazySeq(self: *Compiler, items: []const Value) anyerror!void {
+    if (items.len < 2) {
+        _ = try self.program.emit0(self.allocator, .push_nil);
+        return;
+    }
+
+    // Build a "do" body from the lazy-seq body forms
+    var body_list: list.List = .empty;
+    errdefer body_list.deinit(self.allocator);
+    try body_list.append(self.allocator, try vm.symValue(self.allocator, "do"));
+    for (items[1..]) |form| {
+        try body_list.append(self.allocator, try vm.shallowClone(&form, self.allocator));
+    }
+
+    // Compile the body as bytecode
+    const bc_prog = try self.compile_fn(
+        self.allocator,
+        body_list,
+        "<lazy-seq>",
+        self.env,
+        null,
+    );
+
+    // Add to the lazy_seq_bytecodes pool
+    const bc_idx = try self.program.addLazySeqBytecode(self.allocator, bc_prog);
+
+    // Emit make_lazy_seq with the bytecode index
+    // At runtime, this creates a LazySeqThunk with the bytecode and current env
+    _ = try self.program.emit(self.allocator, .make_lazy_seq, bc_idx);
+}
+
 /// Compile (-> expr form1 form2 ...)
 /// Desugars at compile time: each form gets the result of previous as first arg.
 /// (-> x (f a) (g b)) => (g (f x a) b)

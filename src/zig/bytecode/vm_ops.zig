@@ -16,6 +16,7 @@ const sequences = @import("../namespaces/core/sequences.zig");
 const chunks = @import("../namespaces/core/chunks.zig");
 const bc = @import("instructions.zig");
 const vmt = @import("vm_types.zig");
+const gc_mod = @import("../gc.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -1263,4 +1264,34 @@ pub fn vmMakeFn(allocator: Allocator, meta: *const FnMetadata, env: *const vm.En
     const persistent_fn = try vm.shallowClone(&fn_val, allocator);
     vm.valueDeinit(&fn_val, allocator);
     return persistent_fn;
+}
+
+/// Phase 10: Create a lazy-seq from a pre-compiled bytecode program.
+/// Captures the current environment so the bytecode can access variables
+/// from the enclosing scope when the lazy-seq is forced.
+pub fn vmMakeLazySeq(
+    allocator: Allocator,
+    bc_prog: *const bc.BytecodeProgram,
+    env: *const vm.Env,
+) anyerror!Value {
+    // Clone the environment to capture current bindings
+    const thunk_env = try env.clone(allocator);
+
+    // Create the thunk with bytecode
+    const thunk = try allocator.create(vm.LazySeqThunk);
+    thunk.* = .{
+        .params = list.empty(),
+        .body = list.empty(),
+        .env = thunk_env,
+        .bytecode = bc_prog,
+    };
+
+    // Register with GC
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(thunk)), gc_mod.GCObjectType.lazy_seq_thunk);
+        // Also register the bytecode program with GC
+        gc.setObjectType(@as(*anyopaque, @ptrCast(@constCast(bc_prog))), gc_mod.GCObjectType.bytecode_program);
+    }
+
+    return vm.lazySeqValue(thunk);
 }

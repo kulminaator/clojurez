@@ -274,7 +274,8 @@ pub fn isBytecodeSpecialForm(sym: []const u8) bool {
         std.mem.eql(u8, sym, "letfn") or
         std.mem.eql(u8, sym, "->") or
         std.mem.eql(u8, sym, "->>") or
-        std.mem.eql(u8, sym, "quasiquote"))
+        std.mem.eql(u8, sym, "quasiquote") or
+        std.mem.eql(u8, sym, "lazy-seq"))
     {
         return true;
     }
@@ -378,7 +379,6 @@ pub fn containsUnhandledSpecialFormHelper(form: Value) bool {
             if (std.meta.activeTag(lst_items[0]) == .symbol) {
                 const sym = lst_items[0].symbol;
                 if (std.mem.eql(u8, sym, "binding") or
-                    std.mem.eql(u8, sym, "lazy-seq") or
                     std.mem.eql(u8, sym, "dorun") or
                     std.mem.eql(u8, sym, "doall") or
                     std.mem.eql(u8, sym, "cond->") or
