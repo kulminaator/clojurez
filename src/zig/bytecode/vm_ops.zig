@@ -74,8 +74,8 @@ pub fn resolveSymbol(env: *vm.Env, sym_name: []const u8) anyerror!Value {
 /// For <, >, <=, >=, uses toNum conversion to match core_less etc.
 pub fn compareOp(op: OpCode, a: Value, b: Value) anyerror!Value {
     return switch (op) {
-        .eq => vm.boolValue(vm.compare(a, b) == 0),
-        .ne => vm.boolValue(vm.compare(a, b) != 0),
+        .eq => vm.boolValue(vm.equals(a, b)),
+        .ne => vm.boolValue(!vm.equals(a, b)),
         .lt => {
             const an = helpers.toNum(a);
             const bn = helpers.toNum(b);
@@ -439,8 +439,10 @@ fn vmAssocMap(allocator: Allocator, map_val: Value, key: Value, val: Value) anye
         allocator.free(new_map.items);
     }
     try new_map.ensureTotalCapacity(allocator, map_val.map.entries.items.len + 1);
+    var found_key = false;
     for (map_val.map.entries.items) |entry| {
         if (vm.equals(entry.key, key)) {
+            found_key = true;
             try new_map.append(allocator, .{
                 .key = try vm.shallowClone(&entry.key, allocator),
                 .value = try vm.shallowClone(&val, allocator),
@@ -452,7 +454,7 @@ fn vmAssocMap(allocator: Allocator, map_val: Value, key: Value, val: Value) anye
             });
         }
     }
-    if (new_map.items.len == map_val.map.entries.items.len) {
+    if (!found_key) {
         try new_map.append(allocator, .{
             .key = try vm.shallowClone(&key, allocator),
             .value = try vm.shallowClone(&val, allocator),
