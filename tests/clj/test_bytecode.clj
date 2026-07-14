@@ -1357,6 +1357,55 @@
   107)
 
 ;; ============================================================
+;; PHASE 3: if-let, when-let, when-some
+;; ============================================================
+;; These tests verify that if-let, when-let, and when-some compile to bytecode.
+
+(defn __bc-if-let-ok [x] (if-let [v x] (* v 2) :none))
+(defn __bc-if-let-nil [x] (if-let [v x] (* v 2) :none))
+(defn __bc-when-let-ok [x] (when-let [v x] (* v 3)))
+(defn __bc-when-let-nil [x] (when-let [v x] (* v 3)))
+(defn __bc-when-some-ok [x] (when-some [v x] (+ v 10)))
+(defn __bc-when-some-nil [x] (when-some [v x] (+ v 10)))
+(defn __bc-when-some-false [x] (when-some [v x] v))
+
+(check "bytecode: if-let with value"
+  (__bc-if-let-ok 5)
+  10)
+
+(check "bytecode: if-let with nil"
+  (__bc-if-let-nil nil)
+  :none)
+
+(check "bytecode: if-let with false (false is falsy, goes to else)"
+  (__bc-if-let-ok false)
+  :none)
+
+(check "bytecode: when-let with value"
+  (__bc-when-let-ok 4)
+  12)
+
+(check "bytecode: when-let with nil"
+  (__bc-when-let-nil nil)
+  nil)
+
+(check "bytecode: when-let with false (false is falsy, returns nil)"
+  ((fn [x] (when-let [v x] (* v 3))) false)
+  nil)
+
+(check "bytecode: when-some with value"
+  (__bc-when-some-ok 3)
+  13)
+
+(check "bytecode: when-some with nil"
+  (__bc-when-some-nil nil)
+  nil)
+
+(check "bytecode: when-some with false (false is not nil, enters body)"
+  (__bc-when-some-false false)
+  false)
+
+;; ============================================================
 ;; SUMMARY
 ;; ============================================================
 

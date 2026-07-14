@@ -205,6 +205,9 @@ pub const Compiler = struct {
             if (std.mem.eql(u8, sym, "when")) { try csf.compileWhen(self, l.items); return; }
             if (std.mem.eql(u8, sym, "when-not")) { try csf.compileWhenNot(self, l.items); return; }
             if (std.mem.eql(u8, sym, "when-first")) { try csf.compileWhenFirst(self, l.items); return; }
+            if (std.mem.eql(u8, sym, "if-let")) { try csf.compileIfLet(self, l.items); return; }
+            if (std.mem.eql(u8, sym, "when-let")) { try csf.compileWhenLet(self, l.items); return; }
+            if (std.mem.eql(u8, sym, "when-some")) { try csf.compileWhenSome(self, l.items); return; }
             if (std.mem.eql(u8, sym, "loop")) { try csf.compileLoop(self, l.items); return; }
             if (std.mem.eql(u8, sym, "recur")) { try csf.compileRecur(self, l.items); return; }
             if (std.mem.eql(u8, sym, "case")) { try csf.compileCase(self, l.items); return; }

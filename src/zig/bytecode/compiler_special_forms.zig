@@ -517,6 +517,137 @@ pub fn compileCase(self: *Compiler, items: []const Value) anyerror!void {
     }
 }
 
+/// Compile (if-let [sym test] then else?)
+/// Desugars to: (let [sym test] (if sym then else?))
+/// Uses truthiness check (nil and false are both falsy).
+pub fn compileIfLet(self: *Compiler, items: []const Value) anyerror!void {
+    if (items.len < 3) {
+        _ = try self.program.emit0(self.allocator, .push_nil);
+        return;
+    }
+    const binding = items[1];
+    const then_form = items[2];
+    const else_form = if (items.len >= 4) items[3] else null;
+
+    const bind_items: []const Value = switch (std.meta.activeTag(binding)) {
+        .vector => binding.vector.items.items,
+        .list => binding.list.items.items,
+        else => { _ = try self.program.emit0(self.allocator, .push_nil); return; },
+    };
+    if (bind_items.len < 2) {
+        _ = try self.program.emit0(self.allocator, .push_nil);
+        return;
+    }
+    const sym = bind_items[0];
+    const test_form = bind_items[1];
+
+    // Compile test value and store in sym
+    try self.compileForm(test_form);
+    const sym_idx = try self.program.addSymbol(self.allocator, sym.symbol);
+    _ = try self.program.emit(self.allocator, .store_var, sym_idx);
+
+    // if sym then then_form else else_form
+    _ = try self.program.emit(self.allocator, .load_var, sym_idx);
+    const jump_to_else_pc = try self.program.emit(self.allocator, .jump_if_nil, 0);
+    try self.compileForm(then_form);
+    const jump_past_else_pc = try self.program.emit(self.allocator, .jump, 0);
+    const else_pc = self.program.instructions.items.len;
+    self.program.instructions.items[jump_to_else_pc].operand = else_pc;
+    if (else_form) |ef| {
+        try self.compileForm(ef);
+    } else {
+        _ = try self.program.emit0(self.allocator, .push_nil);
+    }
+    const past_else_pc = self.program.instructions.items.len;
+    self.program.instructions.items[jump_past_else_pc].operand = past_else_pc;
+}
+
+/// Compile (when-let [sym test] body...)
+/// Desugars to: (if-let [sym test] (do body...))
+/// Uses truthiness check (nil and false are both falsy).
+pub fn compileWhenLet(self: *Compiler, items: []const Value) anyerror!void {
+    if (items.len < 3) {
+        _ = try self.program.emit0(self.allocator, .push_nil);
+        return;
+    }
+    const binding = items[1];
+    const body = items[2..];
+
+    const bind_items: []const Value = switch (std.meta.activeTag(binding)) {
+        .vector => binding.vector.items.items,
+        .list => binding.list.items.items,
+        else => { _ = try self.program.emit0(self.allocator, .push_nil); return; },
+    };
+    if (bind_items.len < 2) {
+        _ = try self.program.emit0(self.allocator, .push_nil);
+        return;
+    }
+    const sym = bind_items[0];
+    const test_form = bind_items[1];
+
+    // Compile test value and store in sym
+    try self.compileForm(test_form);
+    const sym_idx = try self.program.addSymbol(self.allocator, sym.symbol);
+    _ = try self.program.emit(self.allocator, .store_var, sym_idx);
+
+    // if sym then body else nil
+    _ = try self.program.emit(self.allocator, .load_var, sym_idx);
+    const jump_to_else_pc = try self.program.emit(self.allocator, .jump_if_nil, 0);
+    for (body) |form| {
+        try self.compileForm(form);
+    }
+    const jump_past_else_pc = try self.program.emit(self.allocator, .jump, 0);
+    const else_pc = self.program.instructions.items.len;
+    self.program.instructions.items[jump_to_else_pc].operand = else_pc;
+    _ = try self.program.emit0(self.allocator, .push_nil);
+    const past_else_pc = self.program.instructions.items.len;
+    self.program.instructions.items[jump_past_else_pc].operand = past_else_pc;
+}
+
+/// Compile (when-some [sym test] body...)
+/// Like when-let but checks for nil only (false is considered truthy).
+/// Desugars to: (let [sym test] (if (not (nil? sym)) (do body...)))
+pub fn compileWhenSome(self: *Compiler, items: []const Value) anyerror!void {
+    if (items.len < 3) {
+        _ = try self.program.emit0(self.allocator, .push_nil);
+        return;
+    }
+    const binding = items[1];
+    const body = items[2..];
+
+    const bind_items: []const Value = switch (std.meta.activeTag(binding)) {
+        .vector => binding.vector.items.items,
+        .list => binding.list.items.items,
+        else => { _ = try self.program.emit0(self.allocator, .push_nil); return; },
+    };
+    if (bind_items.len < 2) {
+        _ = try self.program.emit0(self.allocator, .push_nil);
+        return;
+    }
+    const sym = bind_items[0];
+    const test_form = bind_items[1];
+
+    // Compile test value and store in sym
+    try self.compileForm(test_form);
+    const sym_idx = try self.program.addSymbol(self.allocator, sym.symbol);
+    _ = try self.program.emit(self.allocator, .store_var, sym_idx);
+
+    // if (not (nil? sym)) then body else nil
+    // Load sym, check is_nil, jump if nil
+    _ = try self.program.emit(self.allocator, .load_var, sym_idx);
+    _ = try self.program.emit0(self.allocator, .is_nil);
+    const jump_to_else_pc = try self.program.emit(self.allocator, .jump_if_not_nil, 0);
+    for (body) |form| {
+        try self.compileForm(form);
+    }
+    const jump_past_else_pc = try self.program.emit(self.allocator, .jump, 0);
+    const else_pc = self.program.instructions.items.len;
+    self.program.instructions.items[jump_to_else_pc].operand = else_pc;
+    _ = try self.program.emit0(self.allocator, .push_nil);
+    const past_else_pc = self.program.instructions.items.len;
+    self.program.instructions.items[jump_past_else_pc].operand = past_else_pc;
+}
+
 /// Compile (letfn [(f [params] body...) (g [params] body...)] usage...).
 pub fn compileLetFn(self: *Compiler, items: []const Value) anyerror!void {
     if (items.len < 3) {
