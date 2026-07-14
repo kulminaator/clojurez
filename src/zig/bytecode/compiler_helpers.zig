@@ -235,6 +235,11 @@ pub fn isBytecodeOptimizableOperator(sym: []const u8) bool {
     {
         return true;
     }
+    // Phase 7: apply
+    if (std.mem.eql(u8, sym, "apply"))
+    {
+        return true;
+    }
     return false;
 }
 

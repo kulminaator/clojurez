@@ -942,6 +942,17 @@ pub fn execute(
                 const result_ptr = try eval_mod.allocValue(allocator, result);
                 try stack.pushPtr(result_ptr);
             },
+
+            // Phase 7: apply_fn
+            .apply_fn => {
+                const coll_entry = stack.pop() orelse return error.BytecodeError;
+                const fn_entry = stack.pop() orelse return error.BytecodeError;
+                const result = try vmo.vmApplyFn(allocator, fn_entry.toValueConst(), coll_entry.toValueConst(), env);
+                const result_ptr = try eval_mod.allocValue(allocator, result);
+                vmt.freeEntry(fn_entry, allocator);
+                vmt.freeEntry(coll_entry, allocator);
+                try stack.pushPtr(result_ptr);
+            },
         }
     }
 

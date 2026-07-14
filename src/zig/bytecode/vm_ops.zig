@@ -1096,6 +1096,32 @@ pub fn vmReduceFn(allocator: Allocator, args: []const Value, env: *vm.Env) anyer
     return try vm.shallowClone(result_ptr, allocator);
 }
 
+/// VM implementation of (apply fn args-coll) — calls fn with elements of args-coll as arguments.
+pub fn vmApplyFn(allocator: Allocator, fn_val: Value, coll: Value, env: *vm.Env) anyerror!Value {
+    // Build the argument list from the collection
+    var call_args: list.List = .empty;
+    errdefer call_args.deinit(allocator);
+
+    switch (coll) {
+        .list => {
+            for (coll.list.items.items) |item| {
+                try call_args.append(allocator, try vm.shallowClone(&item, allocator));
+            }
+        },
+        .vector => {
+            for (coll.vector.items.items) |item| {
+                try call_args.append(allocator, try vm.shallowClone(&item, allocator));
+            }
+        },
+        else => return error.TypeError,
+    }
+
+    // Call the function with the expanded arguments
+    const result_ptr = try eval_mod.callWithEnvV(allocator, &fn_val, &call_args, env, 0);
+    defer allocator.destroy(result_ptr);
+    return try vm.shallowClone(result_ptr, allocator);
+}
+
 /// VM implementation of (sort coll) — returns sorted list.
 pub fn vmSort(allocator: Allocator, coll: Value, env: *vm.Env) anyerror!Value {
     const fn_val = try resolveSymbol(env, "sort");

@@ -713,6 +713,14 @@ pub const Compiler = struct {
                     return;
                 }
             }
+
+            // Phase 7: apply: (apply fn args-coll)
+            if (all_safe and std.mem.eql(u8, op_name, "apply") and items.len == 3) {
+                try self.compileForm(items[1]);  // fn
+                try self.compileForm(items[2]);  // args-coll
+                _ = try self.program.emit0(self.allocator, .apply_fn);
+                return;
+            }
         }
 
         // Not a known operator — compile as regular function call

@@ -1564,6 +1564,43 @@
   1)
 
 ;; ============================================================
+;; PHASE 7: apply
+;; ============================================================
+
+(defn __bc-apply-plus [xs] (apply + xs))
+(defn __bc-apply-conj [base xs] (apply conj base xs))
+(defn __bc-apply-max [xs] (apply max xs))
+(defn __bc-apply-str [xs] (apply str xs))
+
+(check "bytecode: apply + to list"
+  (__bc-apply-plus '(1 2 3 4))
+  10)
+
+(check "bytecode: apply conj"
+  (__bc-apply-conj [1] [2 3])
+  [1 2 3])
+
+(check "bytecode: apply max to vector"
+  (__bc-apply-max [5 3 8 1 6])
+  8)
+
+(check "bytecode: apply str"
+  (__bc-apply-str ["a" "b" "c"])
+  "abc")
+
+(check "bytecode: apply + to vector"
+  ((fn [xs] (apply + xs)) [10 20 30])
+  60)
+
+(check "bytecode: apply conj to list"
+  ((fn [base xs] (apply conj base xs)) '(1) '(2 3 4))
+  '(4 3 2 1))
+
+(check "bytecode: apply with empty vector"
+  ((fn [] (apply + [])))
+  0)
+
+;; ============================================================
 ;; SUMMARY
 ;; ============================================================
 
