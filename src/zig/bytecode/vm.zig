@@ -603,6 +603,43 @@ pub fn execute(
                 try stack.pushPtr(result_ptr);
             },
 
+            .contains => {
+                const key_entry = stack.pop() orelse return error.BytecodeError;
+                const coll_entry = stack.pop() orelse return error.BytecodeError;
+                const result = try vmo.vmContains(allocator, coll_entry.toValueConst(), key_entry.toValueConst());
+                const result_ptr = try eval_mod.allocValue(allocator, result);
+                vmt.freeEntry(key_entry, allocator);
+                vmt.freeEntry(coll_entry, allocator);
+                try stack.pushPtr(result_ptr);
+            },
+
+            .str_n => {
+                const n = inst.operand;
+                var temp_entries: std.ArrayListUnmanaged(StackEntry) = .empty;
+                errdefer { for (temp_entries.items) |ae| vmt.freeEntry(ae, allocator); allocator.free(temp_entries.items); }
+                var i: usize = 0;
+                while (i < n) : (i += 1) {
+                    const entry_val = stack.pop() orelse return error.BytecodeError;
+                    try temp_entries.append(allocator, entry_val);
+                }
+                // Reverse to get original argument order
+                var values: std.ArrayListUnmanaged(Value) = .empty;
+                errdefer { for (values.items) |*v| vm.valueDeinit(v, allocator); allocator.free(values.items); }
+                var j: usize = temp_entries.items.len;
+                while (j > 0) : (j -= 1) {
+                    const entry = temp_entries.items[j - 1];
+                    const val = entry.toValueConst();
+                    try values.append(allocator, try vm.shallowClone(&val, allocator));
+                }
+                for (temp_entries.items) |ae| vmt.freeEntry(ae, allocator);
+                allocator.free(temp_entries.items);
+                const result = try vmo.vmStrN(allocator, values.items);
+                for (values.items) |*v| vm.valueDeinit(v, allocator);
+                allocator.free(values.items);
+                const result_ptr = try eval_mod.allocValue(allocator, result);
+                try stack.pushPtr(result_ptr);
+            },
+
             .deref => {
                 const entry = stack.pop() orelse return error.BytecodeError;
                 const result = try vmo.vmDeref(allocator, entry.toValueConst());

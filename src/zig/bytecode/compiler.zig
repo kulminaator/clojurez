@@ -537,6 +537,25 @@ pub const Compiler = struct {
                 _ = try self.program.emit(self.allocator, .list_n, n);
                 return;
             }
+
+            // contains?: (contains? coll key) => compile coll, compile key, contains
+            if (all_safe and std.mem.eql(u8, op_name, "contains?") and items.len == 3) {
+                try self.compileForm(items[1]);
+                try self.compileForm(items[2]);
+                _ = try self.program.emit0(self.allocator, .contains);
+                return;
+            }
+
+            // str: (str arg1 arg2 ...) => compile args, str_n
+            if (all_safe and std.mem.eql(u8, op_name, "str")) {
+                const n = items.len - 1;
+                var si: usize = 1;
+                while (si < items.len) : (si += 1) {
+                    try self.compileForm(items[si]);
+                }
+                _ = try self.program.emit(self.allocator, .str_n, n);
+                return;
+            }
         }
 
         // Not a known operator — compile as regular function call

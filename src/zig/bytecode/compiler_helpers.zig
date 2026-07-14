@@ -170,6 +170,16 @@ pub fn isBytecodeOptimizableOperator(sym: []const u8) bool {
     {
         return true;
     }
+    // Collection containment
+    if (std.mem.eql(u8, sym, "contains?"))
+    {
+        return true;
+    }
+    // String concatenation
+    if (std.mem.eql(u8, sym, "str"))
+    {
+        return true;
+    }
     // Shorthand operators (compile to opcode sequences)
     if (std.mem.eql(u8, sym, "inc") or
         std.mem.eql(u8, sym, "dec") or

@@ -655,6 +655,74 @@ pub fn vmDeref(allocator: Allocator, val: Value) anyerror!Value {
     }
 }
 
+/// VM implementation of (contains? coll key) — checks if collection contains key.
+/// Matches core_contains_q behavior.
+pub fn vmContains(allocator: Allocator, coll: Value, key: Value) anyerror!Value {
+    _ = allocator;
+    switch (std.meta.activeTag(coll)) {
+        .map => {
+            for (coll.map.entries.items) |entry| {
+                if (vm.equals(entry.key, key)) return vm.boolValue(true);
+            }
+            return vm.boolValue(false);
+        },
+        .record => {
+            for (coll.record.fields.items) |entry| {
+                if (vm.equals(entry.key, key)) return vm.boolValue(true);
+            }
+            for (coll.record.extmap.items) |entry| {
+                if (vm.equals(entry.key, key)) return vm.boolValue(true);
+            }
+            return vm.boolValue(false);
+        },
+        .set => {
+            for (coll.set.items.items) |item| {
+                if (vm.equals(item, key)) return vm.boolValue(true);
+            }
+            return vm.boolValue(false);
+        },
+        .vector, .list => {
+            if (std.meta.activeTag(key) != .integer) return vm.boolValue(false);
+            const idx = key.integer;
+            if (idx < 0) return vm.boolValue(false);
+            const len: usize = switch (std.meta.activeTag(coll)) {
+                .vector => coll.vector.items.items.len,
+                .list => coll.list.items.items.len,
+                else => unreachable,
+            };
+            return vm.boolValue(@as(usize, @intCast(idx)) < len);
+        },
+        else => return error.TypeError,
+    }
+}
+
+/// VM implementation of (str arg1 arg2 ...) — concatenates args to string.
+/// Matches core_str behavior: nil is skipped, other types use fmtToBuffer.
+pub fn vmStrN(allocator: Allocator, values: []const Value) anyerror!Value {
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    errdefer buf.deinit(allocator);
+
+    for (values) |arg| {
+        // nil is skipped (not converted to "nil")
+        if (std.meta.activeTag(arg) == .nil) continue;
+        // Handle character type: convert code point to UTF-8 string
+        if (std.meta.activeTag(arg) == .character) {
+            var utf8_buf: [4]u8 = undefined;
+            const utf8_len = std.unicode.utf8Encode(arg.character, &utf8_buf) catch return error.InvalidUnicode;
+            try buf.appendSlice(allocator, utf8_buf[0..utf8_len]);
+            continue;
+        }
+        // Handle string type: append directly
+        if (std.meta.activeTag(arg) == .string) {
+            try buf.appendSlice(allocator, arg.string);
+            continue;
+        }
+        // All other types: use fmtToBuffer
+        try vm.fmtToBuffer(arg, &buf, allocator);
+    }
+    return vm.stringValue(allocator, try buf.toOwnedSlice(allocator));
+}
+
 /// Create a function value from FnMetadata, capturing current environment.
 pub fn vmMakeFn(allocator: Allocator, meta: *const FnMetadata, env: *const vm.Env) anyerror!Value {
     var arities: std.ArrayListUnmanaged(vm.Arity) = .empty;

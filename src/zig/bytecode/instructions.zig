@@ -96,6 +96,8 @@ pub const OpCode = enum(u8) {
     is_empty,       // pop 1 (coll), push bool (true if empty)
     is_not_empty,   // pop 1 (coll), push coll if not empty, nil if empty
     make_empty,     // pop 1 (coll), push empty collection of same type
+    contains,       // pop 2 (key, coll), push bool
+    str_n,          // pop n values, push concatenated string (operand = n)
 
     // --- Special ---
     deref,          // pop 1, push dereferenced value
@@ -293,6 +295,8 @@ pub const BytecodeProgram = struct {
             .is_empty => "IS_EMPTY",
             .is_not_empty => "IS_NOT_EMPTY",
             .make_empty => "MAKE_EMPTY",
+            .contains => "CONTAINS",
+            .str_n => "STR_N",
             .deref => "DEREF",
             .quote => "QUOTE",
             .loop_start => "LOOP_START",

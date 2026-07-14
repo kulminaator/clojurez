@@ -989,6 +989,127 @@
   true)
 
 ;; ============================================================
+;; PHASE 10: str operator
+;; ============================================================
+
+(defn __bc-str2 [a b] (str a b))
+(defn __bc-str3 [a b c] (str a b c))
+(defn __bc-str-nil [a b] (str a nil b))
+(defn __bc-str-single [x] (str x))
+(defn __bc-str-zero [] (str))
+
+(check "bytecode: str two strings"
+  (__bc-str2 "hello" " world")
+  "hello world")
+
+(check "bytecode: str string and int"
+  (__bc-str2 "count: " 42)
+  "count: 42")
+
+(check "bytecode: str three args"
+  (__bc-str3 "a" "-" "b")
+  "a-b")
+
+(check "bytecode: str with nil (skipped)"
+  (__bc-str-nil "x" "y")
+  "xy")
+
+(check "bytecode: str single int"
+  (__bc-str-single 123)
+  "123")
+
+(check "bytecode: str single keyword"
+  (__bc-str-single :foo)
+  ":foo")
+
+(check "bytecode: str single bool true"
+  (__bc-str-single true)
+  "true")
+
+(check "bytecode: str single bool false"
+  (__bc-str-single false)
+  "false")
+
+(check "bytecode: str zero args"
+  (__bc-str-zero)
+  "")
+
+(defn __bc-str-nil-only [] (str nil))
+
+(check "bytecode: str nil only"
+  (__bc-str-nil-only)
+  "")
+
+(check "bytecode: str with float"
+  ((fn [x] (str "pi=" x)) 3.14)
+  "pi=3.14")
+
+(check "bytecode: str with character"
+  ((fn [c] (str c)) \A)
+  "A")
+
+;; ============================================================
+;; PHASE 11: contains? operator
+;; ============================================================
+
+(defn __bc-contains-map [m k] (contains? m k))
+(defn __bc-contains-vector [v i] (contains? v i))
+(defn __bc-contains-set [s x] (contains? s x))
+(defn __bc-contains-list [l i] (contains? l i))
+
+(check "bytecode: contains? map has key"
+  (__bc-contains-map {:a 1 :b 2} :a)
+  true)
+
+(check "bytecode: contains? map missing key"
+  (__bc-contains-map {:a 1 :b 2} :c)
+  false)
+
+(check "bytecode: contains? vector index in range"
+  (__bc-contains-vector [10 20 30] 1)
+  true)
+
+(check "bytecode: contains? vector index 0"
+  (__bc-contains-vector [10 20 30] 0)
+  true)
+
+(check "bytecode: contains? vector index out of range"
+  (__bc-contains-vector [10 20 30] 5)
+  false)
+
+(check "bytecode: contains? set has element"
+  (__bc-contains-set #{1 2 3} 2)
+  true)
+
+(check "bytecode: contains? set missing element"
+  (__bc-contains-set #{1 2 3} 5)
+  false)
+
+(check "bytecode: contains? list index in range"
+  (__bc-contains-list '(a b c) 2)
+  true)
+
+(check "bytecode: contains? list index out of range"
+  (__bc-contains-list '(a b c) 5)
+  false)
+
+(check "bytecode: contains? empty map"
+  (__bc-contains-map {} :a)
+  false)
+
+(check "bytecode: contains? empty vector"
+  (__bc-contains-vector [] 0)
+  false)
+
+(check "bytecode: contains? in if"
+  ((fn [m] (if (contains? m :x) :has-x :no-x)) {:x 1})
+  :has-x)
+
+(check "bytecode: contains? in if false"
+  ((fn [m] (if (contains? m :x) :has-x :no-x)) {:y 2})
+  :no-x)
+
+;; ============================================================
 ;; SUMMARY
 ;; ============================================================
 
