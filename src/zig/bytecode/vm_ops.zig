@@ -723,6 +723,244 @@ pub fn vmStrN(allocator: Allocator, values: []const Value) anyerror!Value {
     return vm.stringValue(allocator, try buf.toOwnedSlice(allocator));
 }
 
+/// VM implementation of (peek coll) — returns last element or nil.
+/// Matches core_peek behavior: queue returns first, vector/list returns last.
+pub fn vmPeek(allocator: Allocator, val: Value) anyerror!Value {
+    return switch (std.meta.activeTag(val)) {
+        .queue => {
+            if (val.queue.items.items.len == 0) return vm.nilValue();
+            return try vm.shallowClone(&val.queue.items.items[0], allocator);
+        },
+        .vector => {
+            if (val.vector.items.items.len == 0) return vm.nilValue();
+            return try vm.shallowClone(&val.vector.items.items[val.vector.items.items.len - 1], allocator);
+        },
+        .list => {
+            if (val.list.items.items.len == 0) return vm.nilValue();
+            return try vm.shallowClone(&val.list.items.items[val.list.items.items.len - 1], allocator);
+        },
+        else => return error.TypeError,
+    };
+}
+
+/// VM implementation of (pop coll) — returns collection without last element.
+/// Matches core_pop behavior: vector/list removes last, queue removes first.
+pub fn vmPop(allocator: Allocator, val: Value) anyerror!Value {
+    return switch (std.meta.activeTag(val)) {
+        .vector => {
+            if (val.vector.items.items.len == 0) return try vm.vectorValue(allocator, vec.empty());
+            var new_vec: vec.Vector = .empty;
+            errdefer new_vec.deinit(allocator);
+            const len = val.vector.items.items.len - 1;
+            var i: usize = 0;
+            while (i < len) : (i += 1) {
+                try new_vec.append(allocator, val.vector.items.items[i]);
+            }
+            return try vm.vectorValue(allocator, new_vec);
+        },
+        .list => {
+            if (val.list.items.items.len == 0) return try vm.listValue(allocator, list.empty());
+            var new_list: list.List = .empty;
+            errdefer new_list.deinit(allocator);
+            const len = val.list.items.items.len - 1;
+            var i: usize = 0;
+            while (i < len) : (i += 1) {
+                try new_list.append(allocator, val.list.items.items[i]);
+            }
+            return try vm.listValue(allocator, new_list);
+        },
+        .queue => {
+            if (val.queue.items.items.len == 0) return try vm.queueValue(allocator, .empty);
+            var new_queue: vm.Queue = .empty;
+            errdefer {
+                for (new_queue.items) |*item| {
+                    vm.valueDeinit(item, allocator);
+                }
+                allocator.free(new_queue.items);
+            }
+            var i: usize = 1;
+            while (i < val.queue.items.items.len) : (i += 1) {
+                try new_queue.append(allocator, val.queue.items.items[i]);
+            }
+            return try vm.queueValue(allocator, new_queue);
+        },
+        else => return error.TypeError,
+    };
+}
+
+/// VM implementation of (make-reduced val) — wraps value in reduced wrapper.
+pub fn vmMakeReduced(allocator: Allocator, val: Value) anyerror!Value {
+    return vm.reducedValue(allocator, try vm.shallowClone(&val, allocator));
+}
+
+/// VM implementation of (is-reduced val) — checks if value is a reduced wrapper.
+pub fn vmIsReduced(allocator: Allocator, val: Value) anyerror!Value {
+    _ = allocator;
+    return vm.boolValue(std.meta.activeTag(val) == .reduced);
+}
+
+/// VM implementation of (unreduced val) — unwraps reduced or returns as-is.
+pub fn vmUnreduced(allocator: Allocator, val: Value) anyerror!Value {
+    if (std.meta.activeTag(val) == .reduced) {
+        const data = val.reduced;
+        return try vm.shallowClone(data, allocator);
+    }
+    return try vm.shallowClone(&val, allocator);
+}
+
+/// VM implementation of (get-meta val) — returns metadata map or nil.
+/// Handles common cases: functions (cached_meta), records (meta field).
+/// For symbols/keywords, returns nil (full namespace lookup requires AST evaluator).
+pub fn vmGetMeta(allocator: Allocator, val: Value) anyerror!Value {
+    return switch (std.meta.activeTag(val)) {
+        .function => {
+            const fn_data = val.function;
+            if (fn_data.cached_meta) |cached| {
+                return cached;
+            }
+            // Build metadata from function data
+            var meta_map: vm.Map = .empty;
+            errdefer { for (meta_map.items) |*e| { vm.valueDeinit(&e.key, allocator); vm.valueDeinit(&e.value, allocator); } allocator.free(meta_map.items); }
+            if (fn_data.name) |name| {
+                const key = try vm.keywordValue(allocator, "name");
+                const v = try vm.symValue(allocator, name);
+                try meta_map.append(allocator, .{ .key = key, .value = v });
+            }
+            if (fn_data.is_macro) {
+                const key = try vm.keywordValue(allocator, "macro");
+                try meta_map.append(allocator, .{ .key = key, .value = vm.boolValue(true) });
+            }
+            if (fn_data.docstring) |doc| {
+                const key = try vm.keywordValue(allocator, "doc");
+                const v = try vm.stringValue(allocator, doc);
+                try meta_map.append(allocator, .{ .key = key, .value = v });
+            }
+            if (fn_data.namespace) |ns| {
+                const key = try vm.keywordValue(allocator, "ns");
+                const v = try vm.symValue(allocator, ns);
+                try meta_map.append(allocator, .{ .key = key, .value = v });
+            }
+            if (meta_map.items.len > 0) {
+                return try vm.mapValue(allocator, meta_map);
+            }
+            return vm.nilValue();
+        },
+        .record => {
+            if (val.record.meta) |m| {
+                const cloned = try vm.cloneMap(allocator, m);
+                return try vm.mapValue(allocator, cloned);
+            }
+            return vm.nilValue();
+        },
+        else => return vm.nilValue(),
+    };
+}
+
+/// VM implementation of (set-meta val meta) — returns new value with metadata.
+/// For records, creates a new record with the meta. For other types, returns clone.
+pub fn vmSetMeta(allocator: Allocator, val: Value, meta: Value) anyerror!Value {
+    if (std.meta.activeTag(meta) == .nil) return try vm.shallowClone(&val, allocator);
+    if (std.meta.activeTag(meta) != .map) return error.TypeError;
+
+    return switch (std.meta.activeTag(val)) {
+        .record => {
+            const rd = val.record;
+            const new_meta_map = try vm.cloneMap(allocator, meta.map.entries);
+            errdefer {
+                for (new_meta_map.items) |*entry| {
+                    vm.valueDeinit(&entry.key, allocator);
+                    vm.valueDeinit(&entry.value, allocator);
+                }
+                allocator.free(new_meta_map.items);
+            }
+            const cloned_fields = try vm.cloneMap(allocator, rd.fields);
+            const cloned_extmap = try vm.cloneMap(allocator, rd.extmap);
+            const cloned_type_name = try allocator.dupe(u8, rd.type_name);
+            errdefer {
+                for (cloned_fields.items) |*entry| {
+                    vm.valueDeinit(&entry.key, allocator);
+                    vm.valueDeinit(&entry.value, allocator);
+                }
+                allocator.free(cloned_fields.items);
+                for (cloned_extmap.items) |*entry| {
+                    vm.valueDeinit(&entry.key, allocator);
+                    vm.valueDeinit(&entry.value, allocator);
+                }
+                allocator.free(cloned_extmap.items);
+                allocator.free(cloned_type_name);
+            }
+            return try vm.recordValue(allocator, cloned_type_name, cloned_fields, cloned_extmap, new_meta_map);
+        },
+        else => return try vm.shallowClone(&val, allocator),
+    };
+}
+
+/// VM implementation of (make-keyword ns name) or (make-keyword name).
+/// Matches core_keyword behavior: ns/name concatenated with "/".
+pub fn vmMakeKeyword(allocator: Allocator, parts: []const Value) anyerror!Value {
+    if (parts.len == 0 or parts.len > 2) return error.ArityError;
+    const name_val = parts[parts.len - 1];
+    const name_str = switch (name_val) {
+        .string => |s| s,
+        .symbol => |s| s,
+        .keyword => |s| s,
+        else => return error.TypeError,
+    };
+
+    if (parts.len == 2) {
+        const ns_val = parts[0];
+        if (std.meta.activeTag(ns_val) == .nil) {
+            return vm.keywordValue(allocator, name_str);
+        }
+        const ns_str = switch (ns_val) {
+            .string => |s| s,
+            .symbol => |s| s,
+            .keyword => |s| s,
+            else => return error.TypeError,
+        };
+        var buf: std.ArrayList(u8) = .empty;
+        errdefer buf.deinit(allocator);
+        try buf.appendSlice(allocator, ns_str);
+        try buf.appendSlice(allocator, "/");
+        try buf.appendSlice(allocator, name_str);
+        return vm.keywordValue(allocator, buf.items);
+    }
+    return vm.keywordValue(allocator, name_str);
+}
+
+/// VM implementation of (make-symbol ns name) or (make-symbol name).
+/// Matches core_symbol behavior: ns/name concatenated with "/".
+pub fn vmMakeSymbol(allocator: Allocator, parts: []const Value) anyerror!Value {
+    if (parts.len == 0 or parts.len > 2) return error.ArityError;
+    const name_val = parts[parts.len - 1];
+    const name_str = switch (name_val) {
+        .string => |s| s,
+        .symbol => |s| s,
+        .keyword => |s| s,
+        else => return error.TypeError,
+    };
+
+    if (parts.len == 2) {
+        const ns_val = parts[0];
+        if (std.meta.activeTag(ns_val) == .nil) {
+            return vm.symValue(allocator, name_str);
+        }
+        const ns_str = switch (ns_val) {
+            .string => |s| s,
+            .symbol => |s| s,
+            .keyword => |s| s,
+            else => return error.TypeError,
+        };
+        var buf: std.ArrayList(u8) = .empty;
+        errdefer buf.deinit(allocator);
+        try buf.appendSlice(allocator, ns_str);
+        try buf.appendSlice(allocator, "/");
+        try buf.appendSlice(allocator, name_str);
+        return vm.symValue(allocator, buf.items);
+    }
+    return vm.symValue(allocator, name_str);
+}
+
 /// Create a function value from FnMetadata, capturing current environment.
 pub fn vmMakeFn(allocator: Allocator, meta: *const FnMetadata, env: *const vm.Env) anyerror!Value {
     var arities: std.ArrayListUnmanaged(vm.Arity) = .empty;

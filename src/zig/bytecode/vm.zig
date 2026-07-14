@@ -712,6 +712,115 @@ pub fn execute(
                 const fn_ptr = try eval_mod.allocValue(allocator, fn_val);
                 try stack.pushPtr(fn_ptr);
             },
+
+            // Phase 12: peek/pop
+            .peek => {
+                const entry = stack.pop() orelse return error.BytecodeError;
+                const result = try vmo.vmPeek(allocator, entry.toValueConst());
+                const result_ptr = try eval_mod.allocValue(allocator, result);
+                vmt.freeEntry(entry, allocator);
+                try stack.pushPtr(result_ptr);
+            },
+            .pop => {
+                const entry = stack.pop() orelse return error.BytecodeError;
+                const result = try vmo.vmPop(allocator, entry.toValueConst());
+                const result_ptr = try eval_mod.allocValue(allocator, result);
+                vmt.freeEntry(entry, allocator);
+                try stack.pushPtr(result_ptr);
+            },
+
+            // Phase 13: reduced ops
+            .make_reduced => {
+                const entry = stack.pop() orelse return error.BytecodeError;
+                const result = try vmo.vmMakeReduced(allocator, entry.toValueConst());
+                const result_ptr = try eval_mod.allocValue(allocator, result);
+                vmt.freeEntry(entry, allocator);
+                try stack.pushPtr(result_ptr);
+            },
+            .is_reduced => {
+                const entry = stack.pop() orelse return error.BytecodeError;
+                const result = try vmo.vmIsReduced(allocator, entry.toValueConst());
+                const result_ptr = try eval_mod.allocValue(allocator, result);
+                vmt.freeEntry(entry, allocator);
+                try stack.pushPtr(result_ptr);
+            },
+            .unreduced => {
+                const entry = stack.pop() orelse return error.BytecodeError;
+                const result = try vmo.vmUnreduced(allocator, entry.toValueConst());
+                const result_ptr = try eval_mod.allocValue(allocator, result);
+                vmt.freeEntry(entry, allocator);
+                try stack.pushPtr(result_ptr);
+            },
+
+            // Phase 14: meta ops
+            .get_meta => {
+                const entry = stack.pop() orelse return error.BytecodeError;
+                const result = try vmo.vmGetMeta(allocator, entry.toValueConst());
+                const result_ptr = try eval_mod.allocValue(allocator, result);
+                vmt.freeEntry(entry, allocator);
+                try stack.pushPtr(result_ptr);
+            },
+            .set_meta => {
+                const meta_entry = stack.pop() orelse return error.BytecodeError;
+                const val_entry = stack.pop() orelse return error.BytecodeError;
+                const result = try vmo.vmSetMeta(allocator, val_entry.toValueConst(), meta_entry.toValueConst());
+                const result_ptr = try eval_mod.allocValue(allocator, result);
+                vmt.freeEntry(meta_entry, allocator);
+                vmt.freeEntry(val_entry, allocator);
+                try stack.pushPtr(result_ptr);
+            },
+
+            // Phase 15: keyword/symbol constructors
+            .make_keyword => {
+                const n = inst.operand;
+                var temp_entries: std.ArrayListUnmanaged(StackEntry) = .empty;
+                errdefer { for (temp_entries.items) |ae| vmt.freeEntry(ae, allocator); allocator.free(temp_entries.items); }
+                var i: usize = 0;
+                while (i < n) : (i += 1) {
+                    const entry_val = stack.pop() orelse return error.BytecodeError;
+                    try temp_entries.append(allocator, entry_val);
+                }
+                var parts: std.ArrayListUnmanaged(Value) = .empty;
+                errdefer { for (parts.items) |*v| vm.valueDeinit(v, allocator); allocator.free(parts.items); }
+                var j: usize = temp_entries.items.len;
+                while (j > 0) : (j -= 1) {
+                    const entry = temp_entries.items[j - 1];
+                    const val = entry.toValueConst();
+                    try parts.append(allocator, try vm.shallowClone(&val, allocator));
+                }
+                for (temp_entries.items) |ae| vmt.freeEntry(ae, allocator);
+                allocator.free(temp_entries.items);
+                const result = try vmo.vmMakeKeyword(allocator, parts.items);
+                for (parts.items) |*v| vm.valueDeinit(v, allocator);
+                allocator.free(parts.items);
+                const result_ptr = try eval_mod.allocValue(allocator, result);
+                try stack.pushPtr(result_ptr);
+            },
+            .make_symbol => {
+                const n = inst.operand;
+                var temp_entries: std.ArrayListUnmanaged(StackEntry) = .empty;
+                errdefer { for (temp_entries.items) |ae| vmt.freeEntry(ae, allocator); allocator.free(temp_entries.items); }
+                var i: usize = 0;
+                while (i < n) : (i += 1) {
+                    const entry_val = stack.pop() orelse return error.BytecodeError;
+                    try temp_entries.append(allocator, entry_val);
+                }
+                var parts: std.ArrayListUnmanaged(Value) = .empty;
+                errdefer { for (parts.items) |*v| vm.valueDeinit(v, allocator); allocator.free(parts.items); }
+                var j: usize = temp_entries.items.len;
+                while (j > 0) : (j -= 1) {
+                    const entry = temp_entries.items[j - 1];
+                    const val = entry.toValueConst();
+                    try parts.append(allocator, try vm.shallowClone(&val, allocator));
+                }
+                for (temp_entries.items) |ae| vmt.freeEntry(ae, allocator);
+                allocator.free(temp_entries.items);
+                const result = try vmo.vmMakeSymbol(allocator, parts.items);
+                for (parts.items) |*v| vm.valueDeinit(v, allocator);
+                allocator.free(parts.items);
+                const result_ptr = try eval_mod.allocValue(allocator, result);
+                try stack.pushPtr(result_ptr);
+            },
         }
     }
 

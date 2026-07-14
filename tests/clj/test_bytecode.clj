@@ -1110,6 +1110,168 @@
   :no-x)
 
 ;; ============================================================
+;; PHASE 12: peek/pop operators
+;; ============================================================
+
+(defn __bc-peek-vector [v] (peek v))
+(defn __bc-peek-list [l] (peek l))
+(defn __bc-pop-vector [v] (pop v))
+(defn __bc-pop-list [l] (pop l))
+
+(check "bytecode: peek vector last element"
+  (__bc-peek-vector [1 2 3])
+  3)
+
+(check "bytecode: peek list last element"
+  (__bc-peek-list '(1 2 3))
+  3)
+
+(check "bytecode: peek empty vector"
+  (__bc-peek-vector [])
+  nil)
+
+(check "bytecode: peek empty list"
+  (__bc-peek-list '())
+  nil)
+
+(check "bytecode: peek single element vector"
+  (__bc-peek-vector [42])
+  42)
+
+(check "bytecode: peek single element list"
+  (__bc-peek-list '(42))
+  42)
+
+(check "bytecode: pop vector removes last"
+  (__bc-pop-vector [1 2 3])
+  [1 2])
+
+(check "bytecode: pop list removes last"
+  (__bc-pop-list '(1 2 3))
+  '(1 2))
+
+(check "bytecode: pop empty vector"
+  (__bc-pop-vector [])
+  [])
+
+(check "bytecode: pop empty list"
+  (__bc-pop-list '())
+  '())
+
+(check "bytecode: pop single element vector"
+  (__bc-pop-vector [42])
+  [])
+
+(check "bytecode: pop single element list"
+  (__bc-pop-list '(42))
+  '())
+
+;; ============================================================
+;; PHASE 13: reduced/unreduced/reduced? operators
+;; ============================================================
+
+(defn __bc-reduced [x] (reduced x))
+(defn __bc-reduced-q [x] (reduced? x))
+(defn __bc-unreduced [x] (unreduced x))
+
+(check "bytecode: reduced wraps value"
+  (reduced? (__bc-reduced 42))
+  true)
+
+(check "bytecode: reduced? on reduced value"
+  (__bc-reduced-q (reduced 10))
+  true)
+
+(check "bytecode: reduced? on normal value"
+  (__bc-reduced-q 10)
+  false)
+
+(check "bytecode: reduced? on nil"
+  (__bc-reduced-q nil)
+  false)
+
+(check "bytecode: unreduced unwraps reduced"
+  (__bc-unreduced (reduced 99))
+  99)
+
+(check "bytecode: unreduced passes through normal"
+  (__bc-unreduced 99)
+  99)
+
+(check "bytecode: unreduced passes through nil"
+  (__bc-unreduced nil)
+  nil)
+
+(check "bytecode: reduced in function (returns reduced wrapper)"
+  (reduced? ((fn [x] (if (> x 5) (reduced x) x)) 10))
+  true)
+
+;; ============================================================
+;; PHASE 14: meta/with-meta operators
+;; ============================================================
+
+(defn __bc-meta-fn [f] (meta f))
+
+(check "bytecode: meta on function returns map"
+  (map? (__bc-meta-fn (fn [x] x)))
+  true)
+
+(check "bytecode: meta on nil returns nil"
+  (meta nil)
+  nil)
+
+(check "bytecode: meta on integer returns nil"
+  (meta 42)
+  nil)
+
+(check "bytecode: meta on string returns nil"
+  (meta "hello")
+  nil)
+
+;; ============================================================
+;; PHASE 15: keyword/symbol constructors
+;; ============================================================
+
+(defn __bc-keyword1 [s] (keyword s))
+(defn __bc-keyword2 [ns s] (keyword ns s))
+(defn __bc-symbol1 [s] (symbol s))
+(defn __bc-symbol2 [ns s] (symbol ns s))
+
+(check "bytecode: keyword from string"
+  (__bc-keyword1 "foo")
+  :foo)
+
+(check "bytecode: keyword from string with namespace"
+  (__bc-keyword2 "ns" "bar")
+  :ns/bar)
+
+(check "bytecode: keyword nil namespace"
+  (__bc-keyword2 nil "baz")
+  :baz)
+
+(check "bytecode: symbol from string"
+  (__bc-symbol1 "qux")
+  'qux)
+
+(check "bytecode: symbol from string with namespace"
+  (__bc-symbol2 "myns" "quux")
+  'myns/quux)
+
+(check "bytecode: symbol nil namespace"
+  (__bc-symbol2 nil "corge")
+  'corge)
+
+(check "bytecode: keyword in if"
+  ((fn [s] (if (= (keyword s) :test) :match :no-match)) "test")
+  :match)
+
+(defn __bc-symbol-if [s] (if (= (symbol s) 'test) :match :no-match))
+
+(check "bytecode: symbol in if"
+  (__bc-symbol-if "test")
+  :match)
+
+;; ============================================================
 ;; SUMMARY
 ;; ============================================================
 

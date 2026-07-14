@@ -191,6 +191,31 @@ pub fn isBytecodeOptimizableOperator(sym: []const u8) bool {
     {
         return true;
     }
+    // Phase 12: peek/pop
+    if (std.mem.eql(u8, sym, "peek") or
+        std.mem.eql(u8, sym, "pop"))
+    {
+        return true;
+    }
+    // Phase 13: reduced ops
+    if (std.mem.eql(u8, sym, "reduced") or
+        std.mem.eql(u8, sym, "reduced?") or
+        std.mem.eql(u8, sym, "unreduced"))
+    {
+        return true;
+    }
+    // Phase 14: meta ops
+    if (std.mem.eql(u8, sym, "meta") or
+        std.mem.eql(u8, sym, "with-meta"))
+    {
+        return true;
+    }
+    // Phase 15: keyword/symbol constructors
+    if (std.mem.eql(u8, sym, "keyword") or
+        std.mem.eql(u8, sym, "symbol"))
+    {
+        return true;
+    }
     return false;
 }
 

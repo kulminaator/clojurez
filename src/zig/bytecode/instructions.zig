@@ -98,6 +98,15 @@ pub const OpCode = enum(u8) {
     make_empty,     // pop 1 (coll), push empty collection of same type
     contains,       // pop 2 (key, coll), push bool
     str_n,          // pop n values, push concatenated string (operand = n)
+    peek,           // pop 1 (coll), push last element (or nil)
+    pop,            // pop 1 (coll), push collection without last element
+    make_reduced,   // pop 1 (val), push reduced wrapper
+    is_reduced,     // pop 1 (val), push bool (true if reduced wrapper)
+    unreduced,      // pop 1 (val), push unwrapped value (or val if not reduced)
+    get_meta,       // pop 1 (val), push metadata map (or nil)
+    set_meta,       // pop 2 (meta, val), push new value with metadata
+    make_keyword,   // pop 1 (string), push keyword value
+    make_symbol,    // pop 1 (string), push symbol value
 
     // --- Special ---
     deref,          // pop 1, push dereferenced value
@@ -297,6 +306,15 @@ pub const BytecodeProgram = struct {
             .make_empty => "MAKE_EMPTY",
             .contains => "CONTAINS",
             .str_n => "STR_N",
+            .peek => "PEEK",
+            .pop => "POP",
+            .make_reduced => "MAKE_REDUCED",
+            .is_reduced => "IS_REDUCED",
+            .unreduced => "UNREDUCED",
+            .get_meta => "GET_META",
+            .set_meta => "SET_META",
+            .make_keyword => "MAKE_KEYWORD",
+            .make_symbol => "MAKE_SYMBOL",
             .deref => "DEREF",
             .quote => "QUOTE",
             .loop_start => "LOOP_START",

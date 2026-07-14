@@ -556,6 +556,82 @@ pub const Compiler = struct {
                 _ = try self.program.emit(self.allocator, .str_n, n);
                 return;
             }
+
+            // Phase 12: peek: (peek coll) => push coll, peek
+            if (all_safe and std.mem.eql(u8, op_name, "peek") and items.len == 2) {
+                try self.compileForm(items[1]);
+                _ = try self.program.emit0(self.allocator, .peek);
+                return;
+            }
+
+            // Phase 12: pop: (pop coll) => push coll, pop
+            if (all_safe and std.mem.eql(u8, op_name, "pop") and items.len == 2) {
+                try self.compileForm(items[1]);
+                _ = try self.program.emit0(self.allocator, .pop);
+                return;
+            }
+
+            // Phase 13: reduced: (reduced val) => push val, make_reduced
+            if (all_safe and std.mem.eql(u8, op_name, "reduced") and items.len == 2) {
+                try self.compileForm(items[1]);
+                _ = try self.program.emit0(self.allocator, .make_reduced);
+                return;
+            }
+
+            // Phase 13: reduced?: (reduced? val) => push val, is_reduced
+            if (all_safe and std.mem.eql(u8, op_name, "reduced?") and items.len == 2) {
+                try self.compileForm(items[1]);
+                _ = try self.program.emit0(self.allocator, .is_reduced);
+                return;
+            }
+
+            // Phase 13: unreduced: (unreduced val) => push val, unreduced
+            if (all_safe and std.mem.eql(u8, op_name, "unreduced") and items.len == 2) {
+                try self.compileForm(items[1]);
+                _ = try self.program.emit0(self.allocator, .unreduced);
+                return;
+            }
+
+            // Phase 14: meta: (meta val) => push val, get_meta
+            if (all_safe and std.mem.eql(u8, op_name, "meta") and items.len == 2) {
+                try self.compileForm(items[1]);
+                _ = try self.program.emit0(self.allocator, .get_meta);
+                return;
+            }
+
+            // Phase 14: with-meta: (with-meta val meta) => push val, push meta, set_meta
+            if (all_safe and std.mem.eql(u8, op_name, "with-meta") and items.len == 3) {
+                try self.compileForm(items[1]);
+                try self.compileForm(items[2]);
+                _ = try self.program.emit0(self.allocator, .set_meta);
+                return;
+            }
+
+            // Phase 15: keyword: (keyword name) or (keyword ns name)
+            if (all_safe and std.mem.eql(u8, op_name, "keyword")) {
+                const n = items.len - 1;
+                if (n == 1 or n == 2) {
+                    var ki: usize = 1;
+                    while (ki < items.len) : (ki += 1) {
+                        try self.compileForm(items[ki]);
+                    }
+                    _ = try self.program.emit(self.allocator, .make_keyword, n);
+                    return;
+                }
+            }
+
+            // Phase 15: symbol: (symbol name) or (symbol ns name)
+            if (all_safe and std.mem.eql(u8, op_name, "symbol")) {
+                const n = items.len - 1;
+                if (n == 1 or n == 2) {
+                    var si: usize = 1;
+                    while (si < items.len) : (si += 1) {
+                        try self.compileForm(items[si]);
+                    }
+                    _ = try self.program.emit(self.allocator, .make_symbol, n);
+                    return;
+                }
+            }
         }
 
         // Not a known operator — compile as regular function call
