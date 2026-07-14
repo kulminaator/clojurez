@@ -234,6 +234,8 @@ pub fn isBytecodeSpecialForm(sym: []const u8) bool {
         std.mem.eql(u8, sym, "or") or
         std.mem.eql(u8, sym, "cond") or
         std.mem.eql(u8, sym, "when") or
+        std.mem.eql(u8, sym, "when-not") or
+        std.mem.eql(u8, sym, "when-first") or
         std.mem.eql(u8, sym, "loop") or
         std.mem.eql(u8, sym, "recur") or
         std.mem.eql(u8, sym, "case") or
@@ -340,10 +342,8 @@ pub fn containsUnhandledSpecialFormHelper(form: Value) bool {
             if (lst_items.len == 0) return false;
             if (std.meta.activeTag(lst_items[0]) == .symbol) {
                 const sym = lst_items[0].symbol;
-                if (std.mem.eql(u8, sym, "when-not") or
-                    std.mem.eql(u8, sym, "when-let") or
+                if (std.mem.eql(u8, sym, "when-let") or
                     std.mem.eql(u8, sym, "when-some") or
-                    std.mem.eql(u8, sym, "when-first") or
                     std.mem.eql(u8, sym, "if-let") or
                     std.mem.eql(u8, sym, "quasiquote") or
                     std.mem.eql(u8, sym, "binding") or

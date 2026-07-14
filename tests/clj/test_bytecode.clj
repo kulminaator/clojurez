@@ -1272,6 +1272,91 @@
   :match)
 
 ;; ============================================================
+;; PHASE 1: fn bytecode compilation
+;; ============================================================
+;; These tests verify that anonymous functions (fn) compile to bytecode
+;; when eligible, just like named functions (defn).
+
+(check "bytecode: fn with arithmetic compiles"
+  ((fn [a b] (+ a b)) 3 4)
+  7)
+
+(check "bytecode: fn with if compiles"
+  ((fn [x] (if (> x 0) x (- x))) -3)
+  3)
+
+(check "bytecode: fn with let compiles"
+  ((fn [x] (let [y (* x 2)] (+ y 1))) 5)
+  11)
+
+(check "bytecode: fn with loop/recur compiles"
+  ((fn [n] (loop [i 0 s 0] (if (>= i n) s (recur (+ i 1) (+ s i))))) 5)
+  10)
+
+(check "bytecode: fn with cond compiles"
+  ((fn [x] (cond (= x 1) :one (= x 2) :two :else :other)) 2)
+  :two)
+
+(check "bytecode: fn with cond no else compiles"
+  ((fn [x] (cond (= x 1) :one (= x 2) :two)) 3)
+  nil)
+
+(check "bytecode: fn with and/or compiles"
+  ((fn [a b] (and a (or b false))) true false)
+  false)
+
+(check "bytecode: fn with when compiles"
+  ((fn [x] (when (> x 0) (* x 2))) 5)
+  10)
+
+(check "bytecode: fn with nested fn compiles"
+  ((fn [x] (let [inner (fn [y] (+ y 1))] (inner x))) 42)
+  43)
+
+(check "bytecode: fn with self-recursive name compiles"
+  ((fn factorial [n] (if (<= n 1) 1 (* n (factorial (- n 1))))) 5)
+  120)
+
+;; ============================================================
+;; PHASE 2: when-not and when-first
+;; ============================================================
+;; These tests verify that when-not and when-first compile to bytecode.
+
+(defn __bc-when-not-true [x] (when-not x :nope))
+(defn __bc-when-not-false [x] (when-not x :yep))
+(defn __bc-when-first-ok [xs] (when-first [f xs] (* f 2)))
+(defn __bc-when-first-nil [xs] (when-first [f xs] (* f 2)))
+
+(check "bytecode: when-not with truthy test"
+  (__bc-when-not-true true)
+  nil)
+
+(check "bytecode: when-not with falsy test"
+  (__bc-when-not-false false)
+  :yep)
+
+(check "bytecode: when-first with non-empty list"
+  (__bc-when-first-ok '(5 6 7))
+  10)
+
+(check "bytecode: when-first with empty list"
+  (__bc-when-first-nil '())
+  nil)
+
+(check "bytecode: when-first with nil first element"
+  (let [f (fn [xs] (when-first [first-el xs] first-el))]
+    (f (list nil 1 2)))
+  nil)
+
+(check "bytecode: when-not with multiple body forms"
+  ((fn [x] (when-not x (inc 1) (* 2 3))) false)
+  6)
+
+(check "bytecode: when-first arithmetic in body"
+  ((fn [xs] (when-first [f xs] (+ f 100))) '(7))
+  107)
+
+;; ============================================================
 ;; SUMMARY
 ;; ============================================================
 

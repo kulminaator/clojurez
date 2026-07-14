@@ -422,7 +422,14 @@ pub fn vmGet(allocator: Allocator, coll: Value, key: Value) anyerror!Value {
 
 /// VM implementation of (assoc map key val) — returns new map.
 pub fn vmAssoc(allocator: Allocator, map_val: Value, key: Value, val: Value) anyerror!Value {
-    if (std.meta.activeTag(map_val) != .map) return error.TypeError;
+    return switch (map_val) {
+        .map => vmAssocMap(allocator, map_val, key, val),
+        .vector => vmAssocVector(allocator, map_val, key, val),
+        else => return error.TypeError,
+    };
+}
+
+fn vmAssocMap(allocator: Allocator, map_val: Value, key: Value, val: Value) anyerror!Value {
     var new_map: vm.Map = .empty;
     errdefer {
         for (new_map.items) |*entry| {
@@ -452,6 +459,30 @@ pub fn vmAssoc(allocator: Allocator, map_val: Value, key: Value, val: Value) any
         });
     }
     return try vm.mapValue(allocator, new_map);
+}
+
+fn vmAssocVector(allocator: Allocator, vec_val: Value, key: Value, val: Value) anyerror!Value {
+    const idx: usize = switch (key) {
+        .integer => @as(usize, @intCast(key.integer)),
+        else => return error.TypeError,
+    };
+    var new_vec: vec.Vector = .empty;
+    errdefer new_vec.deinit(allocator);
+    try new_vec.ensureTotalCapacity(allocator, vec_val.vector.items.items.len);
+    // Copy elements up to the index
+    var i: usize = 0;
+    while (i < vec_val.vector.items.items.len) : (i += 1) {
+        if (i == idx) {
+            try new_vec.append(allocator, try vm.shallowClone(&val, allocator));
+        } else {
+            try new_vec.append(allocator, try vm.shallowClone(&vec_val.vector.items.items[i], allocator));
+        }
+    }
+    // If idx is at the end, append the value
+    if (idx == vec_val.vector.items.items.len) {
+        try new_vec.append(allocator, try vm.shallowClone(&val, allocator));
+    }
+    return try vm.vectorValue(allocator, new_vec);
 }
 
 /// VM implementation of (conj coll item) — returns new collection.

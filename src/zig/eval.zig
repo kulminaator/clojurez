@@ -2144,6 +2144,10 @@ fn evalFn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: us
         for (arities.items) |*a| {
             a.params.deinit(allocator);
             a.body.deinit(allocator);
+            if (a.bytecode) |bc| {
+                bc.deinit(allocator);
+                allocator.destroy(bc);
+            }
             if (a.rest_name) |rn| allocator.free(rn);
         }
         allocator.free(arities.items);
@@ -2159,7 +2163,34 @@ fn evalFn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: us
         fn_name_str = try allocator.dupe(u8, name_sym.symbol);
     }
 
+    // Compile each arity's body to bytecode (Phase 1: fn bytecode compilation).
+    // Skip if body contains unhandled special forms, destructuring, or real function calls.
+    for (arities.items) |*a| {
+        if (!bytecode_mod.containsUnhandledSpecialFormInList(a.body) and
+            !bytecode_mod.containsDestructuring(a.params) and
+            !bytecode_mod.containsRealFunctionCallsInList(a.body, fn_name_str))
+        {
+            const bc = try bytecode_mod.compile(allocator, a.body, "<fn>", fn_env.parent, fn_name_str);
+            a.bytecode = try allocator.create(bytecode_mod.BytecodeProgram);
+            a.bytecode.?.* = bc;
+            // Register BytecodeProgram with GC so its internal arrays are scanned
+            if (gc_mod.current_gc) |gc_inst| {
+                gc_inst.setObjectType(a.bytecode.?, gc_mod.GCObjectType.bytecode_program);
+            }
+            bytecode_fn_compiled += 1;
+            bytecode_total_instructions += a.bytecode.?.instructions.items.len;
+        } else {
+            bytecode_fn_skipped += 1;
+        }
+    }
+
     const fn_val = try vm.fnValueNamed(allocator, arities, fn_env, false, fn_name_str);
+    // Set self_fn on bytecode programs for call_self support (self-recursive calls)
+    for (arities.items) |*a| {
+        if (a.bytecode) |bc| {
+            bc.self_fn = fn_val;
+        }
+    }
     // Phase 1: fnValueNamed returns Value by copy, no allocValue wrapper needed
     return .{ .value = fn_val };
 }

@@ -294,7 +294,11 @@ pub fn compileCond(self: *Compiler, items: []const Value) anyerror!void {
     const end_pc = self.program.instructions.items.len;
     var j: usize = 0;
     while (j < jump_nil_pcs.items.len) : (j += 1) {
-        const target = clause_starts.items[j + 1];
+        // Last non-else clause: jump to end (no next clause to fall through to)
+        const target = if (j + 1 < clause_starts.items.len)
+            clause_starts.items[j + 1]
+        else
+            end_pc;
         self.program.instructions.items[jump_nil_pcs.items[j]].operand = target;
     }
     for (jump_end_pcs.items) |pc| {
@@ -311,6 +315,73 @@ pub fn compileWhen(self: *Compiler, items: []const Value) anyerror!void {
     try self.compileForm(items[1]);
     const jump_to_else_pc = try self.program.emit(self.allocator, .jump_if_nil, 0);
     for (items[2..]) |form| {
+        try self.compileForm(form);
+    }
+    const jump_past_else_pc = try self.program.emit(self.allocator, .jump, 0);
+    const else_pc = self.program.instructions.items.len;
+    self.program.instructions.items[jump_to_else_pc].operand = else_pc;
+    _ = try self.program.emit0(self.allocator, .push_nil);
+    const past_else_pc = self.program.instructions.items.len;
+    self.program.instructions.items[jump_past_else_pc].operand = past_else_pc;
+}
+
+/// Compile (when-not test body...) — desugars to (if (not test) (do body...) nil)
+pub fn compileWhenNot(self: *Compiler, items: []const Value) anyerror!void {
+    if (items.len < 2) {
+        _ = try self.program.emit0(self.allocator, .push_nil);
+        return;
+    }
+    // Compile test
+    try self.compileForm(items[1]);
+    // Negate
+    _ = try self.program.emit0(self.allocator, .not);
+    // jump_if_nil to end (test was truthy, skip body)
+    const jump_to_else_pc = try self.program.emit(self.allocator, .jump_if_nil, 0);
+    // body
+    for (items[2..]) |form| {
+        try self.compileForm(form);
+    }
+    // jump past nil
+    const jump_past_else_pc = try self.program.emit(self.allocator, .jump, 0);
+    const else_pc = self.program.instructions.items.len;
+    self.program.instructions.items[jump_to_else_pc].operand = else_pc;
+    _ = try self.program.emit0(self.allocator, .push_nil);
+    const past_else_pc = self.program.instructions.items.len;
+    self.program.instructions.items[jump_past_else_pc].operand = past_else_pc;
+}
+
+/// Compile (when-first [sym coll] body...)
+/// Desugars to: (let [sym (first coll)] (if sym (do body...) nil))
+pub fn compileWhenFirst(self: *Compiler, items: []const Value) anyerror!void {
+    if (items.len < 3) {
+        _ = try self.program.emit0(self.allocator, .push_nil);
+        return;
+    }
+    const binding = items[1];
+    const body = items[2..];
+    // binding is a vector/list [sym coll]
+    const bind_items: []const Value = switch (std.meta.activeTag(binding)) {
+        .vector => binding.vector.items.items,
+        .list => binding.list.items.items,
+        else => { _ = try self.program.emit0(self.allocator, .push_nil); return; },
+    };
+    if (bind_items.len < 2) {
+        _ = try self.program.emit0(self.allocator, .push_nil);
+        return;
+    }
+    const sym = bind_items[0];
+    const coll = bind_items[1];
+
+    // Compile (first coll) and store in sym
+    try self.compileForm(coll);
+    _ = try self.program.emit0(self.allocator, .first);
+    const sym_idx = try self.program.addSymbol(self.allocator, sym.symbol);
+    _ = try self.program.emit(self.allocator, .store_var, sym_idx);
+
+    // if sym then body else nil
+    _ = try self.program.emit(self.allocator, .load_var, sym_idx);
+    const jump_to_else_pc = try self.program.emit(self.allocator, .jump_if_nil, 0);
+    for (body) |form| {
         try self.compileForm(form);
     }
     const jump_past_else_pc = try self.program.emit(self.allocator, .jump, 0);
