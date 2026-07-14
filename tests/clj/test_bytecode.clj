@@ -1406,6 +1406,56 @@
   false)
 
 ;; ============================================================
+;; PHASE 4: range and vec opcodes
+;; ============================================================
+
+(defn __bc-range1 [n] (range n))
+(defn __bc-range2 [s e] (range s e))
+(defn __bc-range3 [s e step] (range s e step))
+(defn __bc-vec-list [xs] (vec xs))
+(defn __bc-vec-range [n] (vec (range n)))
+
+(check "bytecode: range 5"
+  (vec (__bc-range1 5))
+  [0 1 2 3 4])
+
+(check "bytecode: range 2 6"
+  (vec (__bc-range2 2 6))
+  [2 3 4 5])
+
+(check "bytecode: range 0 10 3"
+  (vec (__bc-range3 0 10 3))
+  [0 3 6 9])
+
+(check "bytecode: vec from list"
+  (__bc-vec-list '(1 2 3))
+  [1 2 3])
+
+(check "bytecode: vec from range"
+  (__bc-vec-range 4)
+  [0 1 2 3])
+
+(check "bytecode: vec from nil"
+  ((fn [x] (vec x)) nil)
+  [])
+
+(check "bytecode: vec from vector (identity)"
+  ((fn [x] (vec x)) [10 20 30])
+  [10 20 30])
+
+(check "bytecode: range empty (start >= end with positive step)"
+  ((fn [] (range 5 3)))
+  nil)
+
+(check "bytecode: range with negative step"
+  (vec ((fn [] (range 5 0 -1))))
+  [5 4 3 2 1])
+
+(check "bytecode: vec from lazy-seq (via range)"
+  (vec (range 3))
+  [0 1 2])
+
+;; ============================================================
 ;; SUMMARY
 ;; ============================================================
 

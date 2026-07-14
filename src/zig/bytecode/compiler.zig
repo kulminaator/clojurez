@@ -637,6 +637,27 @@ pub const Compiler = struct {
                     return;
                 }
             }
+
+            // Phase 4: range: (range end) or (range start end) or (range start end step)
+            if (all_safe and std.mem.eql(u8, op_name, "range")) {
+                const n = items.len - 1;
+                if (n >= 1 and n <= 3) {
+                    // Push args in order: start first (or just end for 1-arg)
+                    var ri: usize = 1;
+                    while (ri < items.len) : (ri += 1) {
+                        try self.compileForm(items[ri]);
+                    }
+                    _ = try self.program.emit(self.allocator, .range, n);
+                    return;
+                }
+            }
+
+            // Phase 4: vec: (vec coll)
+            if (all_safe and std.mem.eql(u8, op_name, "vec") and items.len == 2) {
+                try self.compileForm(items[1]);
+                _ = try self.program.emit0(self.allocator, .vec);
+                return;
+            }
         }
 
         // Not a known operator — compile as regular function call

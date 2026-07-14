@@ -108,6 +108,10 @@ pub const OpCode = enum(u8) {
     make_keyword,   // pop 1 (string), push keyword value
     make_symbol,    // pop 1 (string), push symbol value
 
+    // --- Phase 4: range and vec ---
+    range,          // operand = arg count (1-3); pops args (start first on stack), pushes lazy-seq
+    vec,            // pop 1 (coll/seq), push vector
+
     // --- Special ---
     deref,          // pop 1, push dereferenced value
     quote,          // operand = index into constant pool; push quoted value
@@ -315,6 +319,8 @@ pub const BytecodeProgram = struct {
             .set_meta => "SET_META",
             .make_keyword => "MAKE_KEYWORD",
             .make_symbol => "MAKE_SYMBOL",
+            .range => "RANGE",
+            .vec => "VEC",
             .deref => "DEREF",
             .quote => "QUOTE",
             .loop_start => "LOOP_START",
@@ -373,6 +379,7 @@ pub const BytecodeProgram = struct {
                     }
                 },
                 .loop_start => std.debug.print("target={}", .{inst.operand}),
+                .range => std.debug.print("args={}", .{inst.operand}),
                 else => {},
             }
             std.debug.print("\n", .{});

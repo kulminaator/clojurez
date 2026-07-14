@@ -216,6 +216,12 @@ pub fn isBytecodeOptimizableOperator(sym: []const u8) bool {
     {
         return true;
     }
+    // Phase 4: range and vec
+    if (std.mem.eql(u8, sym, "range") or
+        std.mem.eql(u8, sym, "vec"))
+    {
+        return true;
+    }
     return false;
 }
 

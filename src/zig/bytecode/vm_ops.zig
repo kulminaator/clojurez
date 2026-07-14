@@ -653,6 +653,7 @@ pub fn vmSeq(allocator: Allocator, val: Value) anyerror!Value {
             return try vm.listValue(allocator, l);
         },
         .cons => return try vm.shallowClone(&v, allocator),
+        .chunked_cons => return try vm.shallowClone(&v, allocator),
         else => return error.TypeError,
     }
 }
@@ -992,6 +993,84 @@ pub fn vmMakeSymbol(allocator: Allocator, parts: []const Value) anyerror!Value {
         return vm.symValue(allocator, buf.items);
     }
     return vm.symValue(allocator, name_str);
+}
+
+/// VM implementation of (range end) / (range start end) / (range start end step).
+/// Delegates to the zig.core/range builtin.
+pub fn vmRange(allocator: Allocator, args: []const Value, env: *vm.Env) anyerror!Value {
+    const fn_val = try resolveSymbol(env, "range");
+    var arg_list: list.List = .empty;
+    errdefer arg_list.deinit(allocator);
+    for (args) |arg| {
+        try arg_list.append(allocator, try vm.shallowClone(&arg, allocator));
+    }
+    const call_result = try eval_mod.callWithEnv(allocator, &fn_val, &arg_list, env, 0);
+    switch (call_result) {
+        .value => |v| return try vm.shallowClone(&v, allocator),
+        .trampoline => return error.NotImplemented,
+    }
+}
+
+/// VM implementation of (vec coll) — converts collection/seq to vector.
+pub fn vmVec(allocator: Allocator, val: Value) anyerror!Value {
+    var v: vec.Vector = .empty;
+    errdefer v.deinit(allocator);
+    switch (val) {
+        .nil => return try vm.vectorValue(allocator, v),
+        .vector => {
+            for (val.vector.items.items) |item| {
+                try v.append(allocator, try vm.shallowClone(&item, allocator));
+            }
+        },
+        .list => {
+            for (val.list.items.items) |item| {
+                try v.append(allocator, try vm.shallowClone(&item, allocator));
+            }
+        },
+        .lazy_seq => {
+            var seq_val = try vmSeq(allocator, val);
+            errdefer vm.valueDeinit(&seq_val, allocator);
+            switch (seq_val) {
+                .list => {
+                    for (seq_val.list.items.items) |item| {
+                        try v.append(allocator, try vm.shallowClone(&item, allocator));
+                    }
+                },
+                .nil => {},
+                .chunked_cons => {
+                    // Iterate through chunked_cons chain to collect all elements
+                    var current = try vm.shallowClone(&seq_val, allocator);
+                    defer vm.valueDeinit(&current, allocator);
+                    while (true) {
+                        switch (current) {
+                            .chunked_cons => {
+                                const ccd = current.chunked_cons;
+                                const chunk = ccd.chunk;
+                                var ci: usize = chunk.off;
+                                while (ci < chunk.end) : (ci += 1) {
+                                    try v.append(allocator, try vm.shallowClone(&chunk.items[ci], allocator));
+                                }
+                                const tail = try vm.shallowClone(&ccd.tail, allocator);
+                                vm.valueDeinit(&current, allocator);
+                                current = tail;
+                            },
+                            .lazy_seq => {
+                                // Force the lazy_seq to get the next chunked_cons
+                                const forced = try sequences.forceLazySeqGetResult(allocator, &current);
+                                vm.valueDeinit(&current, allocator);
+                                current = forced;
+                            },
+                            .nil => break,
+                            else => { vm.valueDeinit(&current, allocator); return error.TypeError; },
+                        }
+                    }
+                },
+                else => return error.TypeError,
+            }
+        },
+        else => return error.TypeError,
+    }
+    return try vm.vectorValue(allocator, v);
 }
 
 /// Create a function value from FnMetadata, capturing current environment.
