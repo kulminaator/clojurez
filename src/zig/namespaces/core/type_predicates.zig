@@ -97,7 +97,7 @@ pub fn core_char(self: *const Value, args: *const list.List, _: *Env) anyerror!V
         .character => vm.charValue(v.character),
         .string => {
             // Extract the first code point from the string
-            const s = v.string;
+            const s = v.string.slice();
             if (s.len == 0) return error.EmptyString;
             const view = std.unicode.Utf8View.init(s) catch return error.InvalidUtf8;
             var it = view.iterator();
@@ -210,10 +210,10 @@ pub fn core_keyword(self: *const Value, args: *const list.List, env_env: *Env) a
         const arg = args.items[0];
         if (std.meta.activeTag(arg) == .keyword) return arg;
         if (std.meta.activeTag(arg) == .symbol) {
-            return vm.keywordValue(allocator, arg.symbol);
+            return vm.keywordValue(allocator, arg.symbol.slice());
         }
         if (std.meta.activeTag(arg) == .string) {
-            return vm.keywordValue(allocator, arg.string);
+            return vm.keywordValue(allocator, arg.string.slice());
         }
     } else if (args.items.len == 2) {
         const ns = args.items[0];
@@ -221,16 +221,16 @@ pub fn core_keyword(self: *const Value, args: *const list.List, env_env: *Env) a
         var buf: std.ArrayList(u8) = .empty;
         errdefer buf.deinit(allocator);
         switch (std.meta.activeTag(ns)) {
-            .string => try buf.appendSlice(allocator, ns.string),
-            .symbol => try buf.appendSlice(allocator, ns.symbol),
-            .keyword => try buf.appendSlice(allocator, ns.keyword),
+            .string => try buf.appendSlice(allocator, ns.string.slice()),
+            .symbol => try buf.appendSlice(allocator, ns.symbol.slice()),
+            .keyword => try buf.appendSlice(allocator, ns.keyword.slice()),
             else => return error.TypeError,
         }
         try buf.appendSlice(allocator, "/");
         switch (std.meta.activeTag(name)) {
-            .string => try buf.appendSlice(allocator, name.string),
-            .symbol => try buf.appendSlice(allocator, name.symbol),
-            .keyword => try buf.appendSlice(allocator, name.keyword),
+            .string => try buf.appendSlice(allocator, name.string.slice()),
+            .symbol => try buf.appendSlice(allocator, name.symbol.slice()),
+            .keyword => try buf.appendSlice(allocator, name.keyword.slice()),
             else => return error.TypeError,
         }
         return vm.keywordValue(allocator, buf.items);
@@ -566,10 +566,10 @@ pub fn core_meta(self: *const Value, args: *const list.List, env_env: *Env) anye
             // Extract namespace name from :name field
             for (val.record.fields.items) |entry| {
                 if (std.meta.activeTag(entry.key) == .keyword and
-                    std.mem.eql(u8, entry.key.keyword, "name"))
+                    std.mem.eql(u8, entry.key.keyword.slice(), "name"))
                 {
                     if (std.meta.activeTag(entry.value) == .symbol) {
-                        const ns_name = entry.value.symbol;
+                        const ns_name = entry.value.symbol.slice();
                         // Look up metadata for this namespace in the ns manager
                         if (eval_mod.findNsManager(env_env)) |ns_mgr| {
                             const ns_env = ns_mgr.getNamespace(ns_name) orelse return vm.nilValue();
@@ -603,7 +603,7 @@ pub fn core_meta(self: *const Value, args: *const list.List, env_env: *Env) anye
                 var it = ns_env.entries.entryIterator();
                 while (it.next()) |entry| {
                     if (vm.equals(entry.val, val)) {
-                        const sym_name = entry.key.symbol;
+                        const sym_name = entry.key.symbol.slice();
                         if (ns_env.getMeta(sym_name)) |ns_meta| {
                             // Merge namespace-level metadata into function metadata
                             meta_map = try mergeMetaMaps(allocator, meta_map, ns_meta);
@@ -621,7 +621,7 @@ pub fn core_meta(self: *const Value, args: *const list.List, env_env: *Env) anye
 
     // For symbols, look up namespace-level metadata (Var metadata)
     if (std.meta.activeTag(val) == .symbol) {
-        const sym_name = val.symbol;
+        const sym_name = val.symbol.slice();
         if (eval_mod.findNsManager(env_env)) |ns_mgr| {
             const current_ns = ns_mgr.getCurrentNamespace();
             const ns_env = ns_mgr.getNamespace(current_ns) orelse env_env;
@@ -1353,7 +1353,7 @@ test "type_predicates::type: returns :string for string" {
     var result = core_type(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .keyword);
-    try std.testing.expect(std.mem.eql(u8, result.keyword, "string"));
+    try std.testing.expect(std.mem.eql(u8, result.keyword.slice(), "string"));
 }
 
 test "type_predicates::type: returns :integer for integer" {
@@ -1363,7 +1363,7 @@ test "type_predicates::type: returns :integer for integer" {
     var result = core_type(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .keyword);
-    try std.testing.expect(std.mem.eql(u8, result.keyword, "integer"));
+    try std.testing.expect(std.mem.eql(u8, result.keyword.slice(), "integer"));
 }
 
 test "type_predicates::type: returns :nil for nil" {
@@ -1373,7 +1373,7 @@ test "type_predicates::type: returns :nil for nil" {
     var result = core_type(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .keyword);
-    try std.testing.expect(std.mem.eql(u8, result.keyword, "nil"));
+    try std.testing.expect(std.mem.eql(u8, result.keyword.slice(), "nil"));
 }
 
 test "type_predicates::type: returns :bool for true" {
@@ -1383,7 +1383,7 @@ test "type_predicates::type: returns :bool for true" {
     var result = core_type(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .keyword);
-    try std.testing.expect(std.mem.eql(u8, result.keyword, "bool"));
+    try std.testing.expect(std.mem.eql(u8, result.keyword.slice(), "bool"));
 }
 
 test "type_predicates::type: returns :map for map" {
@@ -1397,7 +1397,7 @@ test "type_predicates::type: returns :map for map" {
     var result = core_type(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .keyword);
-    try std.testing.expect(std.mem.eql(u8, result.keyword, "map"));
+    try std.testing.expect(std.mem.eql(u8, result.keyword.slice(), "map"));
 }
 
 test "type_predicates::type: arity error" {

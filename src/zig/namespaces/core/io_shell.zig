@@ -74,10 +74,10 @@ fn getOptString(opts: Value, key: []const u8) ?[]const u8 {
     if (std.meta.activeTag(opts) != .map) return null;
     for (opts.map.entries.items) |entry| {
         if (std.meta.activeTag(entry.key) == .keyword and
-            std.mem.eql(u8, entry.key.keyword, key))
+            std.mem.eql(u8, entry.key.keyword.slice(), key))
         {
             if (std.meta.activeTag(entry.value) == .string) {
-                return entry.value.string;
+                return entry.value.string.slice();
             }
         }
     }
@@ -88,7 +88,7 @@ fn getOptInt(opts: Value, key: []const u8) ?i64 {
     if (std.meta.activeTag(opts) != .map) return null;
     for (opts.map.entries.items) |entry| {
         if (std.meta.activeTag(entry.key) == .keyword and
-            std.mem.eql(u8, entry.key.keyword, key))
+            std.mem.eql(u8, entry.key.keyword.slice(), key))
         {
             if (std.meta.activeTag(entry.value) == .integer) {
                 return entry.value.integer;
@@ -118,7 +118,7 @@ pub fn core_sh_execute_stream(self: *const Value, args: *const list.List, env_en
     };
     for (items) |arg| {
         if (std.meta.activeTag(arg) != .string) return error.TypeError;
-        try cmd.append(env_env.allocator, try env_env.allocator.dupe(u8, arg.string));
+        try cmd.append(env_env.allocator, try env_env.allocator.dupe(u8, arg.string.slice()));
     }
 
     const opts_map = if (args.items.len >= 2) args.items[1] else vm.nilValue();
@@ -277,7 +277,7 @@ pub fn core_sh_write_input(self: *const Value, args: *const list.List, env_env: 
     const in_file = handle.child.stdin orelse return error.NoStdin;
 
     var writer = in_file.writer(io, &[_]u8{});
-    try writer.interface.writeAll(data_val.string);
+    try writer.interface.writeAll(data_val.string.slice());
     try writer.flush();
 
     return vm.nilValue();

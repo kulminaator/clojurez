@@ -30,6 +30,45 @@ var debug_alloc_active: bool = false;
 var debug_alloc_count: usize = 0;
 var debug_alloc_limit: usize = 0;
 
+// Bytecode measurement counters
+pub var bytecode_fn_compiled: usize = 0;
+pub var bytecode_fn_skipped: usize = 0;
+pub var bytecode_executions: usize = 0;
+pub var ast_executions: usize = 0;
+pub var bytecode_total_instructions: usize = 0;
+
+/// Reset bytecode measurement counters.
+pub fn resetBytecodeStats() void {
+    bytecode_fn_compiled = 0;
+    bytecode_fn_skipped = 0;
+    bytecode_executions = 0;
+    ast_executions = 0;
+    bytecode_total_instructions = 0;
+}
+
+/// Print bytecode measurement stats to stderr.
+pub fn printBytecodeStats() void {
+    const total_compilations = bytecode_fn_compiled + bytecode_fn_skipped;
+    const total_executions = bytecode_executions + ast_executions;
+    const pct_compiled = if (total_compilations > 0)
+        @as(f64, @floatFromInt(bytecode_fn_compiled)) / @as(f64, @floatFromInt(total_compilations)) * 100.0
+    else 0.0;
+    const pct_executions = if (total_executions > 0)
+        @as(f64, @floatFromInt(bytecode_executions)) / @as(f64, @floatFromInt(total_executions)) * 100.0
+    else 0.0;
+    std.debug.print("\n=== Bytecode Measurement Stats ===\n", .{});
+    std.debug.print("Functions compiled to bytecode: {d}\n", .{bytecode_fn_compiled});
+    std.debug.print("Functions using AST interpreter: {d}\n", .{bytecode_fn_skipped});
+    std.debug.print("Total function definitions analyzed: {d}\n", .{total_compilations});
+    std.debug.print("Percent compiled to bytecode: {d}%\n", .{@as(i64, @intFromFloat(pct_compiled))});
+    std.debug.print("Total bytecode instructions generated: {d}\n", .{bytecode_total_instructions});
+    std.debug.print("Bytecode VM executions: {d}\n", .{bytecode_executions});
+    std.debug.print("AST interpreter executions: {d}\n", .{ast_executions});
+    std.debug.print("Total function executions: {d}\n", .{total_executions});
+    std.debug.print("Percent executed via bytecode: {d}%\n", .{@as(i64, @intFromFloat(pct_executions))});
+    std.debug.print("=== End Bytecode Stats ===\n\n", .{});
+}
+
 pub fn debugAllocValueStart(limit: usize) void {
     debug_alloc_active = true;
     debug_alloc_count = 0;
@@ -98,7 +137,7 @@ pub fn evalRecSlice(allocator: Allocator, items: []const Value, frame: *vm.Frame
     // (not wrapped in do) — the body items are the elements of that single form.
     const body_start: usize = if (items.len > 0 and
         std.meta.activeTag(items[0]) == .symbol and
-        std.mem.eql(u8, items[0].symbol, "do"))
+        std.mem.eql(u8, items[0].symbol.slice(), "do"))
         1
     else
         0;
@@ -111,12 +150,10 @@ pub fn evalRecSlice(allocator: Allocator, items: []const Value, frame: *vm.Frame
     // evaluate that form. This is a rare case — the common "do" path below
     // evaluates body_items as a sequence of forms.
     if (body_start == 0) {
-        // Wrap body_items into a stack-allocated list Value.
+        // Wrap body_items into a GC-allocated list Value.
         // The body_items are permanently rooted (part of function definition),
-        // so we just need a wrapper for evalRec to dispatch correctly.
-        const mutable_items = @constCast(body_items);
-        var list_data: vm.ListData = .{ .items = std.ArrayListUnmanaged(Value){ .items = mutable_items, .capacity = body_items.len }, .src_line = 0 };
-        const body_list_val: Value = .{ .list = &list_data };
+        // so listValueFromSlice shares the items array without copying.
+        const body_list_val = try vm.listValueFromSlice(allocator, body_items);
         return evalRec(allocator, &body_list_val, frame, depth);
     }
 
@@ -277,7 +314,7 @@ fn extractFnName(body: *const Value) []const u8 {
     if (std.meta.activeTag(body.*) == .list) {
         const items = body.*.list.items.items;
         if (items.len > 0 and std.meta.activeTag(items[0]) == .symbol) {
-            const sym = items[0].symbol;
+            const sym = items[0].symbol.slice();
             // Skip "do" and internal markers
             if (!std.mem.eql(u8, sym, "do") and
                 !std.mem.eql(u8, sym, "__protocol_dispatch__"))
@@ -614,39 +651,40 @@ pub fn evalRec(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth
             return .{ .value = form.* };
         },
         .symbol => {
-            if (std.mem.eql(u8, form.*.symbol, "quote") or
-                std.mem.eql(u8, form.*.symbol, "quasiquote") or
-                std.mem.eql(u8, form.*.symbol, "unquote") or
-                std.mem.eql(u8, form.*.symbol, "unquote-splicing"))
+            const sym_str = form.*.symbol.slice();
+            if (std.mem.eql(u8, sym_str, "quote") or
+                std.mem.eql(u8, sym_str, "quasiquote") or
+                std.mem.eql(u8, sym_str, "unquote") or
+                std.mem.eql(u8, sym_str, "unquote-splicing"))
             {
                 return .{ .value = form.* };
             }
             // Handle qualified symbols: alias/name or namespace/name
-            if (std.mem.indexOfScalar(u8, form.*.symbol, '/')) |slash_idx| {
-                const alias = form.*.symbol[0..slash_idx];
-                const name = form.*.symbol[slash_idx + 1 ..];
+            if (std.mem.indexOfScalar(u8, sym_str, '/')) |slash_idx| {
+                const alias = sym_str[0..slash_idx];
+                const name = sym_str[slash_idx + 1 ..];
                 const ns_mgr = findNsManager(frame.root_env) orelse {
-                    const val2 = frame.get(form.*.symbol);
+                    const val2 = frame.get(sym_str);
                     if (val2) |v| return .{ .value = v };
-                    std.debug.print("Undefined symbol: '{s}'\n", .{form.*.symbol});
+                    std.debug.print("Undefined symbol: '{s}'\n", .{sym_str});
                     return error.UndefinedSymbol;
                 };
                 const current_ns = ns_mgr.getCurrentNamespace();
                 const target_ns = ns_mgr.resolveAlias(current_ns, alias) orelse alias;
                 const target_env = ns_mgr.getNamespace(target_ns) orelse {
-                    const val3 = frame.get(form.*.symbol);
+                    const val3 = frame.get(sym_str);
                     if (val3) |v| return .{ .value = v };
-                    std.debug.print("Undefined symbol: '{s}'\n", .{form.*.symbol});
+                    std.debug.print("Undefined symbol: '{s}'\n", .{sym_str});
                     return error.UndefinedSymbol;
                 };
                 const val4 = target_env.get(name);
                 if (val4) |v| return .{ .value = v };
-                std.debug.print("Undefined symbol: '{s}'\n", .{form.*.symbol});
+                std.debug.print("Undefined symbol: '{s}'\n", .{sym_str});
                 return error.UndefinedSymbol;
             }
-            const val = frame.get(form.*.symbol);
+            const val = frame.get(sym_str);
             if (val) |v| return .{ .value = v };
-            std.debug.print("Undefined symbol: '{s}'\n", .{form.*.symbol});
+            std.debug.print("Undefined symbol: '{s}'\n", .{sym_str});
             return error.UndefinedSymbol;
         },
         .list => {
@@ -796,14 +834,14 @@ fn parseParams(allocator: Allocator, params: list.List) anyerror!ParsedParams {
     var found_amp = false;
     while (i < params.items.len) : (i += 1) {
         const item = params.items[i];
-        if (!found_amp and std.meta.activeTag(item) == .symbol and std.mem.eql(u8, item.symbol, "&")) {
+        if (!found_amp and std.meta.activeTag(item) == .symbol and std.mem.eql(u8, item.symbol.slice(), "&")) {
             found_amp = true;
             continue;
         }
         if (found_amp) {
             // The symbol after & is the rest parameter name
             if (std.meta.activeTag(item) != .symbol) return error.TypeError;
-            rest_name = try allocator.dupe(u8, item.symbol);
+            rest_name = try allocator.dupe(u8, item.symbol.slice());
             // No more params expected after rest
             break;
         } else {
@@ -827,7 +865,7 @@ fn evalList(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: u
 
     // Self-evaluating symbols (special forms) — dispatch via lookup table
     if (std.meta.activeTag(first) == .symbol) {
-        if (findSpecialForm(first.symbol)) |fn_ptr| {
+        if (findSpecialForm(first.symbol.slice())) |fn_ptr| {
             return try fn_ptr(allocator, l, frame, depth);
         }
     }
@@ -958,14 +996,27 @@ fn evalLet(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: u
     };
 
     var i: usize = 0;
-    while (i < items.len) : (i += 2) {
-        const sym = &items[i];
-        // Phase 3: Use evalRecDirect — Value by copy, no *Value allocation
+    while (i < items.len) {
+        const elem = items[i];
+        // Skip type hint symbols (starting with ^)
+        if (std.meta.activeTag(elem) == .symbol) {
+            const s = elem.symbol.slice();
+            if (s.len > 0 and s[0] == '^') {
+                i += 1;
+                continue;
+            }
+        }
+        // Binding name can be a symbol or a vector (destructuring pattern)
+        const is_binding_name = switch (std.meta.activeTag(elem)) {
+            .symbol, .vector, .list => true,
+            else => false,
+        };
+        if (!is_binding_name) return error.TypeError;
+        if (i + 1 >= items.len) return error.TypeError;
         const val = try evalRecDirect(allocator, &items[i + 1], child_frame, depth);
         // Bind using destructuring if sym is a vector pattern
-        try bindPatternFrame(allocator, sym.*, val, child_frame);
-        if (std.meta.activeTag(sym.*) == .symbol) {
-        }
+        try bindPatternFrame(allocator, elem, val, child_frame);
+        i += 2;
     }
 
     // Evaluate body forms, returning the last result.
@@ -1076,7 +1127,7 @@ fn evalLetFn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
         vm.valueDeinit(&fn_val, allocator);
 
         // Bind in new_env
-        try new_env.put(fname.symbol, persistent_fn);
+        try new_env.put(fname.symbol.slice(), persistent_fn);
     }
 
     // Create a child Frame with new_env as root_env for body evaluation
@@ -1103,7 +1154,7 @@ fn bindPattern(allocator: Allocator, pattern: Value, val: Value, env: *vm.Env) a
     switch (std.meta.activeTag(pattern)) {
         .symbol => {
             // Phase 7: val is already a copy, GC keeps data alive — no clone needed
-            try env.put(pattern.symbol, val);
+            try env.put(pattern.symbol.slice(), val);
         },
         .vector => {
             // Vector destructuring: [a b & rest] matches elements of val
@@ -1116,7 +1167,7 @@ fn bindPattern(allocator: Allocator, pattern: Value, val: Value, env: *vm.Env) a
             while (j < pattern.vector.items.items.len) : (j += 1) {
                 const pat_item = pattern.vector.items.items[j];
                 // Handle & rest (& is parsed as a symbol)
-                if (std.meta.activeTag(pat_item) == .symbol and std.mem.eql(u8, pat_item.symbol, "&")) {
+                if (std.meta.activeTag(pat_item) == .symbol and std.mem.eql(u8, pat_item.symbol.slice(), "&")) {
                     if (j + 1 < pattern.vector.items.items.len) {
                         const rest_sym = pattern.vector.items.items[j + 1];
                         // Collect remaining items into a list (starting from current position j)
@@ -1128,7 +1179,7 @@ fn bindPattern(allocator: Allocator, pattern: Value, val: Value, env: *vm.Env) a
                             try rest_list.append(allocator, vitems[k]);
                         }
                         if (std.meta.activeTag(rest_sym) == .symbol) {
-                            try env.put(rest_sym.symbol, try vm.listValue(allocator, rest_list));
+                            try env.put(rest_sym.symbol.slice(), try vm.listValue(allocator, rest_list));
                         }
                         j += 1; // Skip the rest symbol
                     }
@@ -1147,7 +1198,7 @@ fn bindPatternFrame(allocator: Allocator, pattern: Value, val: Value, frame: *vm
     switch (std.meta.activeTag(pattern)) {
         .symbol => {
             // Phase 7: val is already a copy, GC keeps data alive — no clone needed
-            try frame.put(pattern.symbol, val);
+            try frame.put(pattern.symbol.slice(), val);
         },
         .vector => {
             // Vector destructuring: [a b & rest] matches elements of val
@@ -1160,7 +1211,7 @@ fn bindPatternFrame(allocator: Allocator, pattern: Value, val: Value, frame: *vm
             while (j < pattern.vector.items.items.len) : (j += 1) {
                 const pat_item = pattern.vector.items.items[j];
                 // Handle & rest (& is parsed as a symbol)
-                if (std.meta.activeTag(pat_item) == .symbol and std.mem.eql(u8, pat_item.symbol, "&")) {
+                if (std.meta.activeTag(pat_item) == .symbol and std.mem.eql(u8, pat_item.symbol.slice(), "&")) {
                     if (j + 1 < pattern.vector.items.items.len) {
                         const rest_sym = pattern.vector.items.items[j + 1];
                         // Collect remaining items into a list (starting from current position j)
@@ -1172,7 +1223,7 @@ fn bindPatternFrame(allocator: Allocator, pattern: Value, val: Value, frame: *vm
                             try rest_list.append(allocator, vitems[k]);
                         }
                         if (std.meta.activeTag(rest_sym) == .symbol) {
-                            try frame.put(rest_sym.symbol, try vm.listValue(allocator, rest_list));
+                            try frame.put(rest_sym.symbol.slice(), try vm.listValue(allocator, rest_list));
                         }
                         j += 1; // Skip the rest symbol
                     }
@@ -1193,7 +1244,7 @@ fn evalCond(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
     while (i < clauses.len) : (i += 2) {
         const cond = clauses[i];
         // Handle :else clause — tail position
-        if (std.meta.activeTag(cond) == .keyword and std.mem.eql(u8, cond.keyword, "else")) {
+        if (std.meta.activeTag(cond) == .keyword and std.mem.eql(u8, cond.keyword.slice(), "else")) {
             if (i + 1 >= clauses.len) return error.ArityError;
             return try evalRec(allocator, &clauses[i + 1], frame, depth);
         }
@@ -1222,29 +1273,38 @@ fn evalLoop(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
         else => unreachable,
     };
 
-    // Extract binding names
-    var bind_names: std.ArrayList([]const u8) = .empty;
+    // Extract binding pairs, skipping type hints (symbols starting with ^).
+    // The parser does not attach type hints as metadata, so ^long i 0 becomes
+    // three elements [^long, i, 0] instead of [i-with-meta, 0].
+    var bind_pairs: std.ArrayList(struct { name: []const u8, val_idx: usize }) = .empty;
     defer {
-        for (bind_names.items) |name| allocator.free(name);
-        allocator.free(bind_names.items);
+        for (bind_pairs.items) |pair| allocator.free(pair.name);
+        allocator.free(bind_pairs.items);
     }
     var i: usize = 0;
-    while (i < bind_items.len) : (i += 2) {
-        const sym = bind_items[i];
-        if (std.meta.activeTag(sym) != .symbol) return error.TypeError;
-        try bind_names.append(allocator, try allocator.dupe(u8, sym.symbol));
+    while (i < bind_items.len) {
+        const elem = bind_items[i];
+        // Skip type hint symbols (starting with ^)
+        if (std.meta.activeTag(elem) == .symbol) {
+            const s = elem.symbol.slice();
+            if (s.len > 0 and s[0] == '^') {
+                i += 1;
+                continue;
+            }
+        }
+        if (std.meta.activeTag(elem) != .symbol) return error.TypeError;
+        if (i + 1 >= bind_items.len) return error.TypeError;
+        try bind_pairs.append(allocator, .{ .name = try allocator.dupe(u8, elem.symbol.slice()), .val_idx = i + 1 });
+        i += 2;
     }
 
     // Create child Frame for loop bindings
     const child_frame = try frame.createChild(allocator);
     defer child_frame.deinit(allocator);
 
-    i = 0;
-    while (i < bind_items.len) : (i += 2) {
-        const sym = bind_items[i];
-        // Phase 3: Use evalRecDirect — Value by copy, no *Value allocation
-        const val = try evalRecDirect(allocator, &bind_items[i + 1], child_frame, depth);
-        try child_frame.put(sym.symbol, val);
+    for (bind_pairs.items) |pair| {
+        const val = try evalRecDirect(allocator, &bind_items[pair.val_idx], child_frame, depth);
+        try child_frame.put(pair.name, val);
     }
 
     // Loop: evaluate body, check for recur marker, rebind and repeat
@@ -1262,10 +1322,10 @@ fn evalLoop(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
         // Check for recur marker: list starting with __recur__ symbol
         if (std.meta.activeTag(result) == .list and result.list.items.items.len > 0 and
             std.meta.activeTag(result.list.items.items[0]) == .symbol and
-            std.mem.eql(u8, result.list.items.items[0].symbol, "__recur__"))
+            std.mem.eql(u8, result.list.items.items[0].symbol.slice(), "__recur__"))
         {
             const recur_vals = result.list.items.items[1..];
-            if (recur_vals.len != bind_names.items.len) {
+            if (recur_vals.len != bind_pairs.items.len) {
                 vm.valueDeinit(&result, allocator);
                 return error.ArityError;
             }
@@ -1273,7 +1333,7 @@ fn evalLoop(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
             var j: usize = 0;
             while (j < recur_vals.len) : (j += 1) {
                 // Phase 7: recur_vals[j] is already a Value copy, no clone needed
-                try child_frame.put(bind_names.items[j], recur_vals[j]);
+                try child_frame.put(bind_pairs.items[j].name, recur_vals[j]);
             }
             vm.valueDeinit(&result, allocator);
             loop_depth += 1;
@@ -1321,6 +1381,100 @@ pub fn callWithEnvV(allocator: Allocator, op: *const Value, args_list: *const li
         .value => |v| try allocValue(allocator, v),
         .trampoline => unreachable,
     };
+}
+
+/// Direct bytecode-to-bytecode call optimization (Phase 11).
+/// Attempts to execute a function's bytecode directly, skipping the evaluator.
+/// Returns the result as *Value on success, or null if the function has no bytecode
+/// for the given argument count (caller should fall back to callWithEnvV).
+pub fn tryExecuteBytecodeCall(
+    allocator: Allocator,
+    fn_val: *const Value,
+    args: []const Value,
+    caller_env: *Env,
+) anyerror!?*Value {
+    _ = caller_env; // The called function's captured env has the right parent chain
+    // Only works for user-defined functions
+    if (std.meta.activeTag(fn_val.*) != .function) return null;
+
+    const fn_data = fn_val.*.function;
+    const arity = matchArityBytecode(fn_data, args.len) orelse return null;
+    const bc = arity.bytecode orelse return null;
+
+    // Clone the function's captured environment and bind parameters
+    const bc_env = try allocator.create(Env);
+    bc_env.* = try cloneFnEnv(allocator, fn_data.env);
+    try bindArityParamsEnvSlice(allocator, arity, args, bc_env);
+
+    // Execute the bytecode directly
+    const vm_result = try bytecode_mod.execute(allocator, bc, bc_env);
+    switch (vm_result) {
+        .value => |v| {
+            bc_env.deinit(allocator);
+            allocator.destroy(bc_env);
+            bytecode_executions += 1;
+            return v;
+        },
+        .trampoline => {
+            // Nested function call pushed a trampoline — fall back to evaluator
+            bc_env.deinit(allocator);
+            allocator.destroy(bc_env);
+            return null;
+        },
+    }
+}
+
+/// Match arity for bytecode call (returns pointer, not *const).
+pub fn matchArityBytecode(fn_data: *const vm.FnData, arg_count: usize) ?*const vm.Arity {
+    var i: usize = 0;
+    while (i < fn_data.arities.items.len) : (i += 1) {
+        const arity = &fn_data.arities.items[i];
+        const min_args = arity.params.items.len;
+        const has_rest = arity.rest_name != null;
+        if (has_rest) {
+            if (arg_count >= min_args) return arity;
+        } else {
+            if (arg_count == min_args) return arity;
+        }
+    }
+    return null;
+}
+
+/// Bind arity parameters from a Value slice (used by direct bytecode calls).
+pub fn bindArityParamsEnvSlice(
+    allocator: Allocator,
+    arity: *const vm.Arity,
+    args: []const Value,
+    new_env: *Env,
+) anyerror!void {
+    const min_args = arity.params.items.len;
+    const has_rest = arity.rest_name != null;
+
+    // Bind regular parameters
+    var j: usize = 0;
+    while (j < arity.params.items.len) : (j += 1) {
+        const param = arity.params.items[j];
+        try bindPattern(allocator, param, args[j], new_env);
+    }
+
+    // Bind rest parameter
+    if (has_rest) {
+        if (args.len > min_args) {
+            var rest_list: list.List = .empty;
+            errdefer rest_list.deinit(allocator);
+            var k: usize = min_args;
+            while (k < args.len) : (k += 1) {
+                try rest_list.append(allocator, try vm.shallowClone(&args[k], allocator));
+            }
+            try new_env.put(arity.rest_name.?, try vm.listValue(allocator, rest_list));
+        } else {
+            if (vm.cachedEmptyList()) |empty| {
+                try new_env.put(arity.rest_name.?, empty);
+            } else {
+                try new_env.put(arity.rest_name.?, try vm.listValue(allocator, .empty));
+            }
+        }
+    }
 }
 
 pub fn evalRecWithEnv(allocator: Allocator, form: *const Value, env: *Env, depth: usize) anyerror!EvalResult {
@@ -1388,7 +1542,7 @@ fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, 
     // Check for protocol dispatch marker
     if (arity.body.items.len >= 1 and
         std.meta.activeTag(arity.body.items[0]) == .symbol and
-        std.mem.eql(u8, arity.body.items[0].symbol, "__protocol_dispatch__"))
+        std.mem.eql(u8, arity.body.items[0].symbol.slice(), "__protocol_dispatch__"))
     {
         // Protocol dispatch still uses Env-based lookup
         const result = try protocols.dispatchProtocolMethod(allocator, args.*, child_frame.root_env, 0);
@@ -1410,6 +1564,8 @@ fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, 
                 allocator.destroy(bc_env);
                 child_frame.deinit(allocator);
                 // Phase 1: bytecode .value is *Value (bytecode still uses *Value), extract the Value
+                // Bytecode measurement
+                bytecode_executions += 1;
                 return .{ .value = v.* };
             },
             .trampoline => {
@@ -1417,8 +1573,13 @@ fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, 
                 // Fall back to AST interpreter for the trampoline case.
                 bc_env.deinit(allocator);
                 allocator.destroy(bc_env);
+                // Count the bytecode attempt (even though it fell through to AST)
+                bytecode_executions += 1;
             },
         }
+    } else {
+        // Bytecode measurement: AST path
+        ast_executions += 1;
     }
 
     // Phase 2: Store body as a slice reference — no cloning needed.
@@ -1581,20 +1742,21 @@ fn callKeyword(allocator: Allocator, op: *const Value, args: *const list.List) a
     _ = allocator;
     if (args.items.len != 1) return error.ArityError;
     const coll = args.items[0];
+    const op_kw = op.keyword.slice();
     if (std.meta.activeTag(coll) == .map) {
         for (coll.map.entries.items) |entry| {
-            if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, op.keyword)) {
+            if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword.slice(), op_kw)) {
                 return entry.value;  // Share - values in map are immutable
             }
         }
     } else if (std.meta.activeTag(coll) == .record) {
         for (coll.record.fields.items) |entry| {
-            if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, op.keyword)) {
+            if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword.slice(), op_kw)) {
                 return entry.value;
             }
         }
         for (coll.record.extmap.items) |entry| {
-            if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, op.keyword)) {
+            if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword.slice(), op_kw)) {
                 return entry.value;
             }
         }
@@ -1849,7 +2011,7 @@ fn looksLikeParamList(form: Value) bool {
     if (items.len == 0) return false;
     var found_amp = false;
     for (items) |item| {
-        if (std.meta.activeTag(item) == .symbol and std.mem.eql(u8, item.symbol, "&")) {
+        if (std.meta.activeTag(item) == .symbol and std.mem.eql(u8, item.symbol.slice(), "&")) {
             if (found_amp) return false; // duplicate &
             found_amp = true;
             continue;
@@ -1871,7 +2033,7 @@ fn evalCase(allocator: Allocator, forms: []const Value, frame: *vm.Frame, depth:
     var i: usize = 1;
     while (i < forms.len) : (i += 2) {
         const test_form = forms[i];
-        if (std.meta.activeTag(test_form) == .keyword and std.mem.eql(u8, test_form.keyword, "else")) {
+        if (std.meta.activeTag(test_form) == .keyword and std.mem.eql(u8, test_form.keyword.slice(), "else")) {
             if (i + 1 >= forms.len) return error.ArityError;
             // Body in tail position
             return try evalRec(allocator, &forms[i + 1], frame, depth);
@@ -1935,7 +2097,7 @@ fn evalDef(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: u
     // Phase 3: Use evalRecDirect — Value by copy, no *Value allocation
     const val = try evalRecDirect(allocator, &l.items[eval_idx], frame, depth + 1);
     const persistent_val = try vm.shallowClone(&val, allocator);
-    try bindInCurrentNamespace(frame.root_env, sym.symbol, persistent_val);
+    try bindInCurrentNamespace(frame.root_env, sym.symbol.slice(), persistent_val);
     // Phase 1: cloneGC returns *Value, extract the Value
     const ptr = try vm.cloneGC(&sym, allocator);
     return .{ .value = ptr.* };
@@ -2007,7 +2169,7 @@ fn evalDefn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
     var idx: usize = 2;
     var docstring: ?[]const u8 = null;
     if (idx < l.items.len and std.meta.activeTag(l.items[idx]) == .string) {
-        docstring = try allocator.dupe(u8, l.items[idx].string);
+        docstring = try allocator.dupe(u8, l.items[idx].string.slice());
         idx += 1;
     }
     if (idx >= l.items.len) return error.ArityError;
@@ -2035,15 +2197,21 @@ fn evalDefn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
     for (arities.items) |*a| {
         if (!bytecode_mod.containsUnhandledSpecialFormInList(a.body) and
             !bytecode_mod.containsDestructuring(a.params) and
-            !bytecode_mod.containsRealFunctionCallsInList(a.body))
+            !bytecode_mod.containsRealFunctionCallsInList(a.body, fname.symbol.slice()))
         {
-            const bc = try bytecode_mod.compile(allocator, a.body, "<defn>", frame.root_env);
+            const bc = try bytecode_mod.compile(allocator, a.body, "<defn>", frame.root_env, fname.symbol.slice());
             a.bytecode = try allocator.create(bytecode_mod.BytecodeProgram);
             a.bytecode.?.* = bc;
             // Register BytecodeProgram with GC so its internal arrays are scanned
             if (gc_mod.current_gc) |gc_inst| {
                 gc_inst.setObjectType(a.bytecode.?, gc_mod.GCObjectType.bytecode_program);
             }
+            // Bytecode measurement
+            bytecode_fn_compiled += 1;
+            bytecode_total_instructions += a.bytecode.?.instructions.items.len;
+        } else {
+            // Bytecode measurement
+            bytecode_fn_skipped += 1;
         }
     }
 
@@ -2063,7 +2231,13 @@ fn evalDefn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
     var fn_val = try vm.fnValueNamedWithDoc(allocator, arities, fn_env, false, null, docstring);
     const persistent_fn = try vm.shallowClone(&fn_val, allocator);
     vm.valueDeinit(&fn_val, allocator);
-    try bindInCurrentNamespace(frame.root_env, fname.symbol, persistent_fn);
+    // Set self_fn on bytecode programs for call_self support
+    for (arities.items) |*a| {
+        if (a.bytecode) |bc| {
+            bc.self_fn = persistent_fn;
+        }
+    }
+    try bindInCurrentNamespace(frame.root_env, fname.symbol.slice(), persistent_fn);
     // Phase 1: cloneGC returns *Value, extract the Value
     const ptr = try vm.cloneGC(&fname, allocator);
     return .{ .value = ptr.* };
@@ -2086,6 +2260,10 @@ fn evalFn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: us
         for (arities.items) |*a| {
             a.params.deinit(allocator);
             a.body.deinit(allocator);
+            if (a.bytecode) |bc| {
+                bc.deinit(allocator);
+                allocator.destroy(bc);
+            }
             if (a.rest_name) |rn| allocator.free(rn);
         }
         allocator.free(arities.items);
@@ -2098,10 +2276,37 @@ fn evalFn(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: us
 
     var fn_name_str: ?[]const u8 = null;
     if (fn_name) |name_sym| {
-        fn_name_str = try allocator.dupe(u8, name_sym.symbol);
+        fn_name_str = try allocator.dupe(u8, name_sym.symbol.slice());
+    }
+
+    // Compile each arity's body to bytecode (Phase 1: fn bytecode compilation).
+    // Skip if body contains unhandled special forms, destructuring, or real function calls.
+    for (arities.items) |*a| {
+        if (!bytecode_mod.containsUnhandledSpecialFormInList(a.body) and
+            !bytecode_mod.containsDestructuring(a.params) and
+            !bytecode_mod.containsRealFunctionCallsInList(a.body, fn_name_str))
+        {
+            const bc = try bytecode_mod.compile(allocator, a.body, "<fn>", fn_env.parent, fn_name_str);
+            a.bytecode = try allocator.create(bytecode_mod.BytecodeProgram);
+            a.bytecode.?.* = bc;
+            // Register BytecodeProgram with GC so its internal arrays are scanned
+            if (gc_mod.current_gc) |gc_inst| {
+                gc_inst.setObjectType(a.bytecode.?, gc_mod.GCObjectType.bytecode_program);
+            }
+            bytecode_fn_compiled += 1;
+            bytecode_total_instructions += a.bytecode.?.instructions.items.len;
+        } else {
+            bytecode_fn_skipped += 1;
+        }
     }
 
     const fn_val = try vm.fnValueNamed(allocator, arities, fn_env, false, fn_name_str);
+    // Set self_fn on bytecode programs for call_self support (self-recursive calls)
+    for (arities.items) |*a| {
+        if (a.bytecode) |bc| {
+            bc.self_fn = fn_val;
+        }
+    }
     // Phase 1: fnValueNamed returns Value by copy, no allocValue wrapper needed
     return .{ .value = fn_val };
 }
@@ -2115,7 +2320,7 @@ fn evalDefmacro(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dep
     var idx: usize = 2;
     var docstring: ?[]const u8 = null;
     if (idx < l.items.len and std.meta.activeTag(l.items[idx]) == .string) {
-        docstring = try allocator.dupe(u8, l.items[idx].string);
+        docstring = try allocator.dupe(u8, l.items[idx].string.slice());
         idx += 1;
     }
     if (idx >= l.items.len) return error.ArityError;
@@ -2146,7 +2351,7 @@ fn evalDefmacro(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dep
     var macro_fn = try vm.fnValueNamedWithDoc(allocator, arities, fn_env, true, null, docstring);
     const persistent_macro = try vm.shallowClone(&macro_fn, allocator);
     vm.valueDeinit(&macro_fn, allocator);
-    try bindInCurrentNamespace(frame.root_env, macro_name.symbol, persistent_macro);
+    try bindInCurrentNamespace(frame.root_env, macro_name.symbol.slice(), persistent_macro);
     // Phase 1: cloneGC returns *Value, extract the Value
     const ptr = try vm.cloneGC(&macro_name, allocator);
     return .{ .value = ptr.* };
@@ -2160,14 +2365,14 @@ fn evalSetBang(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dept
     // Verify the binding exists in the current frame's overlay.
     // set! can only modify local bindings (var, let, fn params).
     // Parent-level bindings are immutable from this frame's perspective.
-    if (!frame.hasInOverlay(sym.symbol)) {
+    if (!frame.hasInOverlay(sym.symbol.slice())) {
         return error.UndefinedSymbol;
     }
     // Phase 3: Use evalRecDirect — Value by copy, no *Value allocation
     const val = try evalRecDirect(allocator, &l.items[2], frame, depth + 1);
     const persistent_val = try vm.shallowClone(&val, allocator);
     // Write to current frame's overlay (not root namespace env)
-    try frame.put(sym.symbol, persistent_val);
+    try frame.put(sym.symbol.slice(), persistent_val);
     return .{ .value = val };
 }
 
@@ -2196,7 +2401,7 @@ fn evalVar(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: u
     } else vm.nilValue();
     const persistent_val = try vm.shallowClone(&val, allocator);
     // Write to current frame's overlay (local var)
-    try frame.put(sym.symbol, persistent_val);
+    try frame.put(sym.symbol.slice(), persistent_val);
     // Phase 1: cloneGC returns *Value, extract the Value
     const ptr = try vm.cloneGC(&sym, allocator);
     return .{ .value = ptr.* };
@@ -2321,7 +2526,7 @@ fn evalBinding(allocator: Allocator, l: *const list.List, frame: *vm.Frame, dept
     while (i < bindings.vector.items.items.len) : (i += 2) {
         const sym = bindings.vector.items.items[i];
         if (std.meta.activeTag(sym) != .symbol) return error.TypeError;
-        const sym_name = sym.symbol;
+        const sym_name = sym.symbol.slice();
 
         // Save old value if exists
         const old_val = ns_mgr.getDynamicVar(sym_name);
@@ -2420,7 +2625,7 @@ fn captureFrameEnv(allocator: Allocator, frame: *vm.Frame) anyerror!Env {
         while (it.next()) |entry| {
             if (std.meta.activeTag(entry.key) == .symbol) {
                 // Phase 7: entry.val is a Value copy from the overlay HAMT, no clone needed
-                try env.put(entry.key.symbol, entry.val);
+                try env.put(entry.key.symbol.slice(), entry.val);
             }
         }
     }

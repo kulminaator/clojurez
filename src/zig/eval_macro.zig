@@ -21,12 +21,12 @@ pub fn unquoteProcess(allocator: Allocator, form: Value, frame: *vm.Frame, depth
             if (form.list.items.items.len == 0) return try vm.listValue(allocator, list.empty());
             const first = form.list.items.items[0];
             if (std.meta.activeTag(first) == .symbol) {
-                if (std.mem.eql(u8, first.symbol, "unquote")) {
+                if (std.mem.eql(u8, first.symbol.slice(), "unquote")) {
                     if (form.list.items.items.len != 2) return error.ArityError;
                     // Phase 3: Use evalRecDirect — Value by copy, no *Value allocation
                     return eval.evalRecDirect(allocator, &form.list.items.items[1], frame, depth);
                 }
-                if (std.mem.eql(u8, first.symbol, "unquote-splicing")) {
+                if (std.mem.eql(u8, first.symbol.slice(), "unquote-splicing")) {
                     if (form.list.items.items.len != 2) return error.ArityError;
                     // Phase 3: Use evalRecDirect — Value by copy, no *Value allocation
                     const result_val = try eval.evalRecDirect(allocator, &form.list.items.items[1], frame, depth);
@@ -41,7 +41,7 @@ pub fn unquoteProcess(allocator: Allocator, form: Value, frame: *vm.Frame, depth
                 // Check for unquote-splicing: splice elements directly into result
                 if (std.meta.activeTag(item) == .list and item.list.items.items.len == 2) {
                     const uq_first = item.list.items.items[0];
-                    if (std.meta.activeTag(uq_first) == .symbol and std.mem.eql(u8, uq_first.symbol, "unquote-splicing")) {
+                    if (std.meta.activeTag(uq_first) == .symbol and std.mem.eql(u8, uq_first.symbol.slice(), "unquote-splicing")) {
                         // Phase 3: Use evalRecDirect — Value by copy, no *Value allocation
                         const splice_val = try eval.evalRecDirect(allocator, &item.list.items.items[1], frame, depth);
                         if (std.meta.activeTag(splice_val) == .list) {

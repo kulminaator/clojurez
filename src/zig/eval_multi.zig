@@ -28,7 +28,7 @@ pub fn evalDefmulti(allocator: Allocator, l: *const list.List, frame: *vm.Frame,
 
     const sym = l.items[1];
     if (std.meta.activeTag(sym) != .symbol) return error.TypeError;
-    const sym_name = sym.symbol;
+    const sym_name = sym.symbol.slice();
 
     // Determine if there's a docstring (string as second arg after name)
     // Signature: (defmulti name docstring? dispatch-fn & options)
@@ -45,7 +45,7 @@ pub fn evalDefmulti(allocator: Allocator, l: *const list.List, frame: *vm.Frame,
     // In Clojure, keywords are callable: (:key {:key :val}) => :val
     var dispatch_fn: Value = undefined;
     if (std.meta.activeTag(dispatch_fn_val) == .keyword) {
-        const kw_name = dispatch_fn_val.keyword;
+        const kw_name = dispatch_fn_val.keyword.slice();
         // Create a function: (fn [m] (get m keyword))
         const kw_val = try vm.keywordValue(allocator, kw_name);
         var fn_body: list.List = .empty;
@@ -69,7 +69,7 @@ pub fn evalDefmulti(allocator: Allocator, l: *const list.List, frame: *vm.Frame,
     while (i < l.items.len) : (i += 1) {
         const opt_key = l.items[i];
         if (std.meta.activeTag(opt_key) != .keyword) continue;
-        if (std.mem.eql(u8, opt_key.keyword, "default") and i + 1 < l.items.len) {
+        if (std.mem.eql(u8, opt_key.keyword.slice(), "default") and i + 1 < l.items.len) {
             // Phase 3: Use evalRecDirect — Value by copy, no *Value allocation
             const default_val = try eval.evalRecDirect(allocator, &l.items[i + 1], frame, depth + 1);
             mm_val.multimethod.default_dispatch = try vm.clone(&default_val, allocator);

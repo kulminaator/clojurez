@@ -65,7 +65,7 @@ pub fn core_ref(self: *const Value, args: *const list.List, env: *Env) anyerror!
     while (i < args.items.len) : (i += 1) {
         const arg = args.items[i];
         if (std.meta.activeTag(arg) != .keyword) continue;
-        if (std.mem.eql(u8, arg.keyword, "commutative") and i + 1 < args.items.len) {
+        if (std.mem.eql(u8, arg.keyword.slice(), "commutative") and i + 1 < args.items.len) {
             const val = args.items[i + 1];
             if (std.meta.activeTag(val) == .bool) {
                 commutative = val.bool;
@@ -389,7 +389,7 @@ pub fn core_commutative_q(self: *const Value, args: *const list.List, env: *Env)
         // Look up :commutative key in metadata map
         for (m.map.entries.items) |entry| {
             if (std.meta.activeTag(entry.key) == .keyword and
-                std.mem.eql(u8, entry.key.keyword, "commutative"))
+                std.mem.eql(u8, entry.key.keyword.slice(), "commutative"))
             {
                 return if (std.meta.activeTag(entry.value) == .bool)
                     entry.value

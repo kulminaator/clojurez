@@ -11,6 +11,7 @@ const helpers = @import("helpers.zig");
 const chunks = @import("chunks.zig");
 const test_utils = @import("test_utils.zig");
 const gc_mod = @import("../../gc.zig");
+const bytecode_mod = @import("../../bytecode.zig");
 const Allocator = std.mem.Allocator;
 
 /// Convert a UTF-8 string to a list of character values.
@@ -43,6 +44,17 @@ pub fn forceLazySeqHelper(allocator: Allocator, lazy: Value) anyerror!Value {
         var result: Value = undefined;
         if (thunk.custom_handler) |handler| {
             result = try forceLazySeqCustomHandler(allocator, handler, @constCast(&thunk.env), thunk);
+        } else if (thunk.bytecode) |bc_prog| {
+            // Phase 10: Execute bytecode body
+            var thunk_env = try thunk.env.clone(allocator);
+            const exec_result = try bytecode_mod.execute(allocator, bc_prog, &thunk_env);
+            switch (exec_result) {
+                .value => |v| {
+                    result = try vm.shallowClone(v, allocator);
+                    allocator.destroy(v);
+                },
+                .trampoline => return error.RuntimeError,
+            }
         } else {
             const cloned_body = try list.clone(&thunk.body, allocator);
             var thunk_env = try thunk.env.clone(allocator);
@@ -155,6 +167,17 @@ fn evalLazySeqThunk(allocator: Allocator, lazy: Value) anyerror!Value {
         var result: Value = undefined;
         if (thunk.custom_handler) |handler| {
             result = try forceLazySeqCustomHandler(allocator, handler, @constCast(&thunk.env), thunk);
+        } else if (thunk.bytecode) |bc_prog| {
+            // Phase 10: Execute bytecode body
+            var thunk_env = try thunk.env.clone(allocator);
+            const exec_result = try bytecode_mod.execute(allocator, bc_prog, &thunk_env);
+            switch (exec_result) {
+                .value => |v| {
+                    result = try vm.shallowClone(v, allocator);
+                    allocator.destroy(v);
+                },
+                .trampoline => return error.RuntimeError,
+            }
         } else {
             const cloned_body = try list.clone(&thunk.body, allocator);
             var thunk_env = try thunk.env.clone(allocator);
@@ -196,7 +219,7 @@ pub fn core_count(self: *const Value, args: *const list.List, env_env: *Env) any
         },
         .set => return vm.intValue(@as(i64, @intCast(args.items[0].set.items.items.len))),
         .queue => return vm.intValue(@as(i64, @intCast(args.items[0].queue.items.items.len))),
-        .string => return vm.intValue(@as(i64, @intCast(vm.utf8CodepointCount(args.items[0].string)))),
+        .string => return vm.intValue(@as(i64, @intCast(vm.utf8CodepointCount(args.items[0].string.slice())))),
         .cons => {
             // Count = 1 + count of tail (recursively)
             return countConsSeq(allocator, val);
@@ -290,7 +313,7 @@ pub fn core_first(self: *const Value, args: *const list.List, env_env: *Env) any
             return ccd.chunk.items[ccd.chunk.off];
         },
         .string => {
-            const s = val.string;
+            const s = val.string.slice();
             if (s.len == 0) return vm.nilValue();
             // Get the first UTF-8 code point as a char
             const cp_bytes = vm.utf8CodepointAt(s, 0) orelse return vm.nilValue();
@@ -363,7 +386,7 @@ pub fn core_rest(self: *const Value, args: *const list.List, env_env: *Env) anye
             return try core_seq(self, &seq_args, env_env);
         },
         .string => {
-            const s = val.string;
+            const s = val.string.slice();
             const codepoint_count = vm.utf8CodepointCount(s);
             if (codepoint_count <= 1) return try vm.listValue(std.heap.page_allocator, list.empty());
             // Convert remaining code points (from index 1) to a list of char values
@@ -390,6 +413,21 @@ pub fn forceLazySeqGetResult(allocator: Allocator, lazy: *const Value) anyerror!
         // Check for custom handler (bypasses Clojure evaluator)
         if (thunk.custom_handler) |handler| {
             return forceLazySeqCustomHandler(allocator, handler, @constCast(&thunk.env), thunk);
+        }
+
+        // Phase 10: Check for bytecode body
+        if (thunk.bytecode) |bc_prog| {
+            var thunk_env = try thunk.env.clone(allocator);
+            // Execute the bytecode program in the cloned environment
+            const result = try bytecode_mod.execute(allocator, bc_prog, &thunk_env);
+            switch (result) {
+                .value => |v| {
+                    const cloned = try vm.shallowClone(v, allocator);
+                    allocator.destroy(v);
+                    return cloned;
+                },
+                .trampoline => return error.RuntimeError,
+            }
         }
 
         const cloned_body = try list.clone(&thunk.body, allocator);
@@ -1023,7 +1061,7 @@ pub fn core_nth(self: *const Value, args: *const list.List, env_env: *Env) anyer
             return args.items[0].vector.items.items[@as(usize, @intCast(idx))];
         },
         .string => {
-            const s = args.items[0].string;
+            const s = args.items[0].string.slice();
             const codepoint_count = vm.utf8CodepointCount(s);
             if (idx < 0 or @as(usize, @intCast(idx)) >= codepoint_count) {
                 if (not_found) |nf| return nf;
@@ -1417,8 +1455,8 @@ pub fn core_gensym(self: *const Value, args: *const list.List, env_env: *Env) an
 
     // With prefix: gensym "x" => "x_N"
     const prefix = switch (std.meta.activeTag(args.items[0])) {
-        .string => args.items[0].string,
-        .symbol => args.items[0].symbol,
+        .string => args.items[0] .string.slice(),
+        .symbol => args.items[0] .symbol.slice(),
         else => return error.TypeError,
     };
     const name = try std.fmt.allocPrint(allocator, "{s}_{d}", .{ prefix, gensym_counter });
@@ -1488,7 +1526,7 @@ pub fn core_seq(self: *const Value, args: *const list.List, env_env: *Env) anyer
             // For strings, seq returns a list of character values (not the string itself)
             // This matches JVM Clojure: (seq "abc") => (\a \b \c)
             if (coll.string.len == 0) return vm.nilValue();
-            const char_list = try stringToCharList(allocator, coll.string);
+            const char_list = try stringToCharList(allocator, coll.string.slice());
             return try vm.listValue(allocator, char_list);
         },
         else => return vm.nilValue(),

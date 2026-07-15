@@ -104,8 +104,8 @@ pub fn core_file_stat(self: *const Value, args: *const list.List, env_env: *Env)
 
     const cwd = Dir.cwd();
     const io = std.Options.debug_io;
-    const stat_result = Dir.statFile(cwd, io, path.string, .{}) catch return vm.nilValue();
-    return try buildStatMap(env_env.allocator, path.string, stat_result);
+    const stat_result = Dir.statFile(cwd, io, path.string.slice(), .{}) catch return vm.nilValue();
+    return try buildStatMap(env_env.allocator, path.string.slice(), stat_result);
 }
 
 // ---- file-exists?: check if a path exists ----
@@ -119,7 +119,7 @@ pub fn core_file_exists(self: *const Value, args: *const list.List, env_env: *En
 
     const cwd = Dir.cwd();
     const io = std.Options.debug_io;
-    const exists = Dir.statFile(cwd, io, path.string, .{}) catch return vm.boolValue(false);
+    const exists = Dir.statFile(cwd, io, path.string.slice(), .{}) catch return vm.boolValue(false);
     _ = exists;
     return vm.boolValue(true);
 }
@@ -135,7 +135,7 @@ pub fn core_file_size(self: *const Value, args: *const list.List, env_env: *Env)
 
     const cwd = Dir.cwd();
     const io = std.Options.debug_io;
-    const stat_result = Dir.statFile(cwd, io, path.string, .{}) catch return vm.nilValue();
+    const stat_result = Dir.statFile(cwd, io, path.string.slice(), .{}) catch return vm.nilValue();
     return vm.intValue(@as(i64, @intCast(stat_result.size)));
 }
 
@@ -150,7 +150,7 @@ pub fn core_is_directory(self: *const Value, args: *const list.List, env_env: *E
 
     const cwd = Dir.cwd();
     const io = std.Options.debug_io;
-    const stat_result = Dir.statFile(cwd, io, path.string, .{}) catch return vm.boolValue(false);
+    const stat_result = Dir.statFile(cwd, io, path.string.slice(), .{}) catch return vm.boolValue(false);
     return vm.boolValue(stat_result.kind == .directory);
 }
 
@@ -165,7 +165,7 @@ pub fn core_is_file(self: *const Value, args: *const list.List, env_env: *Env) a
 
     const cwd = Dir.cwd();
     const io = std.Options.debug_io;
-    const stat_result = Dir.statFile(cwd, io, path.string, .{}) catch return vm.boolValue(false);
+    const stat_result = Dir.statFile(cwd, io, path.string.slice(), .{}) catch return vm.boolValue(false);
     return vm.boolValue(stat_result.kind == .file);
 }
 
@@ -180,7 +180,7 @@ pub fn core_is_symlink(self: *const Value, args: *const list.List, env_env: *Env
 
     const cwd = Dir.cwd();
     const io = std.Options.debug_io;
-    const stat_result = Dir.statFile(cwd, io, path.string, .{ .follow_symlinks = false }) catch return vm.boolValue(false);
+    const stat_result = Dir.statFile(cwd, io, path.string.slice(), .{ .follow_symlinks = false }) catch return vm.boolValue(false);
     return vm.boolValue(stat_result.kind == .sym_link);
 }
 
@@ -196,12 +196,12 @@ pub fn core_list_dir(self: *const Value, args: *const list.List, env_env: *Env) 
     const io = std.Options.debug_io;
     var target_dir: Dir = undefined;
 
-    if (std.mem.eql(u8, path.string, "/")) {
+    if (std.mem.eql(u8, path.string.slice(), "/")) {
         target_dir = try Dir.openDirAbsolute(io, "/", .{ .iterate = true });
-    } else if (std.mem.eql(u8, path.string, ".")) {
+    } else if (std.mem.eql(u8, path.string.slice(), ".")) {
         target_dir = try Dir.openDir(cwd, io, ".", .{ .iterate = true });
     } else {
-        target_dir = try Dir.openDir(cwd, io, path.string, .{ .iterate = true });
+        target_dir = try Dir.openDir(cwd, io, path.string.slice(), .{ .iterate = true });
     }
 
     var it = Dir.iterate(target_dir);
@@ -248,12 +248,12 @@ pub fn core_walk_dir(self: *const Value, args: *const list.List, env_env: *Env) 
     const cwd = Dir.cwd();
     const io = std.Options.debug_io;
     var start_dir: Dir = undefined;
-    if (std.mem.eql(u8, path.string, "/")) {
+    if (std.mem.eql(u8, path.string.slice(), "/")) {
         start_dir = try Dir.openDirAbsolute(io, "/", .{ .iterate = true });
-    } else if (std.mem.eql(u8, path.string, ".")) {
+    } else if (std.mem.eql(u8, path.string.slice(), ".")) {
         start_dir = try Dir.openDir(cwd, io, ".", .{ .iterate = true });
     } else {
-        start_dir = try Dir.openDir(cwd, io, path.string, .{ .iterate = true });
+        start_dir = try Dir.openDir(cwd, io, path.string.slice(), .{ .iterate = true });
     }
     var walker = Dir.walk(start_dir, env_env.allocator) catch return error.FileError;
     defer walker.deinit();
@@ -302,7 +302,7 @@ pub fn core_make_dir(self: *const Value, args: *const list.List, env_env: *Env) 
     const path = args.items[0];
     if (std.meta.activeTag(path) != .string) return error.TypeError;
 
-    const result = openDirForPath(env_env.allocator, path.string);
+    const result = openDirForPath(env_env.allocator, path.string.slice());
     if (result) |r| {
         const io = std.Options.debug_io;
         Dir.createDir(r[0], io, r[2], File.Permissions.default_dir) catch |err| {
@@ -323,7 +323,7 @@ pub fn core_make_parents(self: *const Value, args: *const list.List, _: *Env) an
 
     const cwd = Dir.cwd();
     const io = std.Options.debug_io;
-    _ = Dir.createDirPathStatus(cwd, io, path.string, File.Permissions.default_dir) catch |err| {
+    _ = Dir.createDirPathStatus(cwd, io, path.string.slice(), File.Permissions.default_dir) catch |err| {
         // PathAlreadyExists is acceptable
         if (!std.mem.eql(u8, @errorName(err), "PathAlreadyExists")) return err;
     };
@@ -341,7 +341,7 @@ pub fn core_delete_file(self: *const Value, args: *const list.List, _: *Env) any
 
     const cwd = Dir.cwd();
     const io = std.Options.debug_io;
-    Dir.deleteFile(cwd, io, path.string) catch |err| {
+    Dir.deleteFile(cwd, io, path.string.slice()) catch |err| {
         if (!std.mem.eql(u8, @errorName(err), "AccessDenied") and
             !std.mem.eql(u8, @errorName(err), "NotFound"))
         {
@@ -362,7 +362,7 @@ pub fn core_delete_dir(self: *const Value, args: *const list.List, _: *Env) anye
 
     const cwd = Dir.cwd();
     const io = std.Options.debug_io;
-    Dir.deleteDir(cwd, io, path.string) catch |err| {
+    Dir.deleteDir(cwd, io, path.string.slice()) catch |err| {
         if (!std.mem.eql(u8, @errorName(err), "DirectoryNotEmpty") and
             !std.mem.eql(u8, @errorName(err), "AccessDenied") and
             !std.mem.eql(u8, @errorName(err), "NotFound"))
@@ -384,7 +384,7 @@ pub fn core_delete_tree(self: *const Value, args: *const list.List, _: *Env) any
 
     const cwd = Dir.cwd();
     const io = std.Options.debug_io;
-    Dir.deleteTree(cwd, io, path.string) catch |err| {
+    Dir.deleteTree(cwd, io, path.string.slice()) catch |err| {
         if (!std.mem.eql(u8, @errorName(err), "AccessDenied") and
             !std.mem.eql(u8, @errorName(err), "NotFound"))
         {
@@ -407,7 +407,7 @@ pub fn core_rename(self: *const Value, args: *const list.List, _: *Env) anyerror
 
     const cwd = Dir.cwd();
     const io = std.Options.debug_io;
-    Dir.rename(cwd, src.string, cwd, dst.string, io) catch |err| {
+    Dir.rename(cwd, src.string.slice(), cwd, dst.string.slice(), io) catch |err| {
         if (!std.mem.eql(u8, @errorName(err), "AccessDenied") and
             !std.mem.eql(u8, @errorName(err), "NotFound"))
         {
@@ -430,7 +430,7 @@ pub fn core_copy_file(self: *const Value, args: *const list.List, _: *Env) anyer
 
     const cwd = Dir.cwd();
     const io = std.Options.debug_io;
-    Dir.copyFile(cwd, src.string, cwd, dst.string, io, .{}) catch |err| {
+    Dir.copyFile(cwd, src.string.slice(), cwd, dst.string.slice(), io, .{}) catch |err| {
         if (!std.mem.eql(u8, @errorName(err), "AccessDenied") and
             !std.mem.eql(u8, @errorName(err), "NotFound"))
         {
@@ -451,10 +451,10 @@ pub fn core_sym_link(self: *const Value, args: *const list.List, env_env: *Env) 
     if (std.meta.activeTag(target) != .string) return error.TypeError;
     if (std.meta.activeTag(link_path) != .string) return error.TypeError;
 
-    const result = openDirForPath(env_env.allocator, link_path.string);
+    const result = openDirForPath(env_env.allocator, link_path.string.slice());
     if (result) |r| {
         const io = std.Options.debug_io;
-        Dir.symLink(r[0], io, target.string, r[2], .{}) catch |err| {
+        Dir.symLink(r[0], io, target.string.slice(), r[2], .{}) catch |err| {
             if (!std.mem.eql(u8, @errorName(err), "PathAlreadyExists")) return err;
         };
     } else |err| return err;
@@ -473,7 +473,7 @@ pub fn core_read_link(self: *const Value, args: *const list.List, env_env: *Env)
     const cwd = Dir.cwd();
     const io = std.Options.debug_io;
     var buf: [1024]u8 = undefined;
-    const len = Dir.readLink(cwd, io, path.string, &buf) catch return vm.nilValue();
+    const len = Dir.readLink(cwd, io, path.string.slice(), &buf) catch return vm.nilValue();
     return try vm.stringValue(env_env.allocator, buf[0..len]);
 }
 
@@ -488,7 +488,7 @@ pub fn core_file_modified_time(self: *const Value, args: *const list.List, env_e
 
     const cwd = Dir.cwd();
     const io = std.Options.debug_io;
-    const stat_result = Dir.statFile(cwd, io, path.string, .{}) catch return vm.nilValue();
+    const stat_result = Dir.statFile(cwd, io, path.string.slice(), .{}) catch return vm.nilValue();
     return vm.intValue(@as(i64, @intCast(stat_result.mtime.nanoseconds)));
 }
 
@@ -503,9 +503,9 @@ pub fn core_file_parent(self: *const Value, args: *const list.List, env_env: *En
     var i: usize = path.string.len;
     while (i > 0) {
         i -= 1;
-        if (path.string[i] == '/') {
+        if (path.string.slice()[i] == '/') {
             if (i == 0) return try vm.stringValue(env_env.allocator, "/");
-            return try vm.stringValue(env_env.allocator, path.string[0..i]);
+            return try vm.stringValue(env_env.allocator, path.string.slice()[0..i]);
         }
     }
     return try vm.stringValue(env_env.allocator, ".");
@@ -522,13 +522,13 @@ pub fn core_file_name(self: *const Value, args: *const list.List, env_env: *Env)
     var i: usize = path.string.len;
     while (i > 0) {
         i -= 1;
-        if (path.string[i] == '/') {
+        if (path.string.slice()[i] == '/') {
             if (i + 1 >= path.string.len) return vm.nilValue();
-            return try vm.stringValue(env_env.allocator, path.string[i + 1 ..]);
+            return try vm.stringValue(env_env.allocator, path.string.slice()[i + 1 ..]);
         }
     }
     // No slash found — the whole string is the name
-    return try vm.stringValue(env_env.allocator, path.string);
+    return try vm.stringValue(env_env.allocator, path.string.slice());
 }
 
 // ---- absolute-path: convert a relative path to absolute ----
@@ -540,22 +540,22 @@ pub fn core_absolute_path(self: *const Value, args: *const list.List, env_env: *
     if (std.meta.activeTag(path) != .string) return error.TypeError;
 
     // If already absolute, return as-is
-    if (path.string.len > 0 and path.string[0] == '/') {
-        return try vm.stringValue(env_env.allocator, path.string);
+    if (path.string.len > 0 and path.string.slice()[0] == '/') {
+        return try vm.stringValue(env_env.allocator, path.string.slice());
     }
 
     // Get current working directory using getcwd syscall
     var cwd_buf: [4096]u8 = undefined;
     const cwd_len = std.os.linux.getcwd(&cwd_buf, cwd_buf.len);
     if (cwd_len == 0) {
-        return try vm.stringValue(env_env.allocator, path.string);
+        return try vm.stringValue(env_env.allocator, path.string.slice());
     }
     const cwd_str = cwd_buf[0..cwd_len];
     var result: std.ArrayListUnmanaged(u8) = .empty;
     defer env_env.allocator.free(result.items);
     try result.appendSlice(env_env.allocator, cwd_str);
     try result.append(env_env.allocator, '/');
-    try result.appendSlice(env_env.allocator, path.string);
+    try result.appendSlice(env_env.allocator, path.string.slice());
     return try vm.stringValue(env_env.allocator, result.items);
 }
 
@@ -600,7 +600,7 @@ pub fn core_sh_execute(self: *const Value, args: *const list.List, env_env: *Env
     };
     for (items) |arg| {
         if (std.meta.activeTag(arg) != .string) return error.TypeError;
-        try cmd.append(env_env.allocator, try env_env.allocator.dupe(u8, arg.string));
+        try cmd.append(env_env.allocator, try env_env.allocator.dupe(u8, arg.string.slice()));
     }
 
     const opts_map = if (args.items.len >= 2) args.items[1] else vm.nilValue();

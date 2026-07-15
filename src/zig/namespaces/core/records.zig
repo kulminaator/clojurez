@@ -116,7 +116,7 @@ pub fn core_record_ctor(self: *const Value, args: *const list.List, env: *Env) a
     if (std.meta.activeTag(type_name_val) != .string) {
         return makeErrorStr(allocator, "record-ctor: type name must be a string", .{});
     }
-    const type_name = type_name_val.string;
+    const type_name = type_name_val.string.slice();
 
     // Arg 1: fields map (keyword → value)
     const fields_map_val = args.items[1];
@@ -368,7 +368,7 @@ fn processRecordProtocolSpec(
     var sigs_kw = try vm.keywordValue(allocator, "sigs");
     defer vm.valueDeinit(&sigs_kw, allocator);
     if (getMapEntry(proto_ptr, sigs_kw) == null) {
-        return makeErrorStr(allocator, "defrecord: {s} is not a protocol", .{proto_sym.symbol});
+        return makeErrorStr(allocator, "defrecord: {s} is not a protocol", .{proto_sym.symbol.slice()});
     }
 
     // Build method map: group method definitions by name, build multi-arity fns
@@ -397,7 +397,7 @@ fn processRecordProtocolSpec(
         if (std.meta.activeTag(mname_sym) != .symbol) {
             return makeErrorStr(allocator, "defrecord: method name must be a symbol", .{});
         }
-        const mname = mname_sym.symbol;
+        const mname = mname_sym.symbol.slice();
 
         // Add to unique names if not already present
         var found = false;
@@ -423,7 +423,7 @@ fn processRecordProtocolSpec(
             const mdef = l.items[mi];
             const mname_sym = mdef.list.items.items[0];
             if (std.meta.activeTag(mname_sym) != .symbol) continue;
-            if (!std.mem.eql(u8, mname_sym.symbol, mname)) continue;
+            if (!std.mem.eql(u8, mname_sym.symbol.slice(), mname)) continue;
 
             // items[1:] of the method def: [params] body...
             // Build arity form: ([params] (let [field1 (get this :field1) ...] body...))
@@ -531,7 +531,7 @@ pub fn evalDefRecord(
     if (std.meta.activeTag(name_sym) != .symbol) {
         return makeErrorStr(allocator, "defrecord: name must be a symbol", .{});
     }
-    const record_name = name_sym.symbol;
+    const record_name = name_sym.symbol.slice();
 
     const fields_vec = l.items[2];
 
@@ -547,7 +547,7 @@ pub fn evalDefRecord(
             return makeErrorStr(allocator, "defrecord: fields must be symbols, got {s}", .{@tagName(std.meta.activeTag(field))});
         }
         for (reserved) |res| {
-            if (std.mem.eql(u8, field.symbol, res)) {
+            if (std.mem.eql(u8, field.symbol.slice(), res)) {
                 return makeErrorStr(allocator, "defrecord: '{s}' cannot be used as a field name", .{res});
             }
         }
@@ -566,7 +566,7 @@ pub fn evalDefRecord(
     var field_names: std.ArrayListUnmanaged([]const u8) = .empty;
     errdefer allocator.free(field_names.items);
     for (fields_vec.vector.items.items) |field| {
-        const fname = try allocator.dupe(u8, field.symbol);
+        const fname = try allocator.dupe(u8, field.symbol.slice());
         try field_names.append(allocator, fname);
     }
 

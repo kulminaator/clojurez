@@ -14,31 +14,6 @@ fn markPtr(ptr: anytype, ctx: *gc.ScanContext) void {
     ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(ptr))), ctx);
 }
 
-/// Check if a pointer is plausibly valid (non-null, not garbage like 0xffffffffffffffff).
-/// Used to guard against scanUnknownBlock misidentifying non-Value blocks.
-fn isValidPtr(ptr: anytype) bool {
-    const addr = @intFromPtr(ptr);
-    // Reject null pointers
-    if (addr == 0) return false;
-    // Reject obviously garbage pointers (all bits set, very small, etc.)
-    if (addr == std.math.maxInt(@TypeOf(addr))) return false;
-    // Reject pointers below minimum heap address (GC allocator starts well above this)
-    if (addr < 0x1000) return false;
-    return true;
-}
-
-/// Check if a pointer is both plausibly valid AND a real GC-tracked block.
-/// This is a stronger check than isValidPtr — it verifies the pointer
-/// corresponds to an actual GC allocation header.
-/// Used as a safety net when scanUnknownBlock might have misidentified a block.
-fn isValidGCPtr(ptr: anytype, ctx: *gc.ScanContext) bool {
-    if (!isValidPtr(ptr)) return false;
-    // Verify this pointer is a real GC-tracked block
-    const header = ctx.gc.findHeader(@as(*anyopaque, @ptrCast(@constCast(ptr))));
-    if (header == null) return false;
-    return true;
-}
-
 /// Main scan function — dispatched by the GC for each marked block.
 pub fn valueScanFn(obj: *anyopaque, ctx: *gc.ScanContext) void {
     const header = ctx.gc.findHeader(obj) orelse return;
@@ -61,11 +36,11 @@ pub fn valueScanFn(obj: *anyopaque, ctx: *gc.ScanContext) void {
         .env => scanEnv(obj, ctx),
         .namespace_manager => scanNamespaceManager(obj, ctx),
         .record_data => scanRecordData(obj, ctx),
-        .list_data => scanListData(obj, ctx),
-        .vector_data => scanVectorData(obj, ctx),
-        .map_data => scanMapData(obj, ctx),
-        .set_data => scanSetData(obj, ctx),
-        .queue_data => scanQueueData(obj, ctx),
+        .list_data => vm.scanListData(obj, ctx),
+        .vector_data => vm.scanVectorData(obj, ctx),
+        .map_data => vm.scanMapData(obj, ctx),
+        .set_data => vm.scanSetData(obj, ctx),
+        .queue_data => vm.scanQueueData(obj, ctx),
         .fn_arities => scanFnArities(obj, ctx, header.size),
         .string_data => {}, // raw string bytes — no child pointers to scan
         .bigint_limbs => {}, // raw u64 limbs — no child pointers to scan
@@ -175,7 +150,7 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
 
         .bigint => |bi_ptr| {
             // Safety net: verify pointer is a real GC-tracked block
-            if (!isValidGCPtr(bi_ptr, ctx)) return;
+            if (!gc.isValidGCPtr(bi_ptr, ctx)) return;
             // Mark the BigInt struct itself
             ctx.gc.markRecursive(bi_ptr, ctx);
             // Mark the limbs array inside BigInt
@@ -186,7 +161,7 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
 
         .ratio => |r_ptr| {
             // Safety net: verify pointer is a real GC-tracked block
-            if (!isValidGCPtr(r_ptr, ctx)) return;
+            if (!gc.isValidGCPtr(r_ptr, ctx)) return;
             // Mark the Ratio struct itself
             ctx.gc.markRecursive(r_ptr, ctx);
             // Mark the limbs arrays inside num and den BigInts
@@ -200,7 +175,7 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
 
         .decimal => |d_ptr| {
             // Safety net: verify pointer is a real GC-tracked block
-            if (!isValidGCPtr(d_ptr, ctx)) return;
+            if (!gc.isValidGCPtr(d_ptr, ctx)) return;
             // Mark the BigDecimal struct itself
             ctx.gc.markRecursive(d_ptr, ctx);
             // Mark the limbs array inside unscaled BigInt
@@ -210,72 +185,27 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         },
 
         .string => |s| {
-            if (s.len > 0) markPtr(s.ptr, ctx);
+            if (s.len > 0) markPtr(s.data, ctx);
         },
         .regex => |s| {
-            if (s.len > 0) markPtr(s.ptr, ctx);
+            if (s.len > 0) markPtr(s.data, ctx);
         },
         .symbol => |s| {
-            if (s.len > 0) markPtr(s.ptr, ctx);
+            if (s.len > 0) markPtr(s.data, ctx);
         },
         .keyword => |s| {
-            if (s.len > 0) markPtr(s.ptr, ctx);
+            if (s.len > 0) markPtr(s.data, ctx);
         },
 
-        .list => |data| {
-            // Safety net: verify pointer is a real GC-tracked block
-            if (!isValidGCPtr(data, ctx)) return;
-            // Mark the ListData wrapper struct itself so GC can find it
-            markPtr(data, ctx);
-            // Mark the items array buffer
-            if (data.items.items.len > 0) {
-                ctx.gc.markRecursive(data.items.items.ptr, ctx);
-            }
-        },
-        .vector => |data| {
-            // Safety net: verify pointer is a real GC-tracked block
-            if (!isValidGCPtr(data, ctx)) return;
-            // Mark the VectorData wrapper struct itself so GC can find it
-            markPtr(data, ctx);
-            // Mark the items array buffer
-            if (data.items.items.len > 0) {
-                ctx.gc.markRecursive(data.items.items.ptr, ctx);
-            }
-        },
-        .map => |data| {
-            // Safety net: verify pointer is a real GC-tracked block
-            if (!isValidGCPtr(data, ctx)) return;
-            // Mark the MapData wrapper struct itself so GC can find it
-            markPtr(data, ctx);
-            // Mark the entries array buffer
-            if (data.entries.items.len > 0) {
-                ctx.gc.markRecursive(data.entries.items.ptr, ctx);
-            }
-        },
-        .set => |data| {
-            // Safety net: verify pointer is a real GC-tracked block
-            if (!isValidGCPtr(data, ctx)) return;
-            // Mark the SetData wrapper struct itself so GC can find it
-            markPtr(data, ctx);
-            // Mark the items array buffer
-            if (data.items.items.len > 0) {
-                ctx.gc.markRecursive(data.items.items.ptr, ctx);
-            }
-        },
-        .queue => |data| {
-            // Safety net: verify pointer is a real GC-tracked block
-            if (!isValidGCPtr(data, ctx)) return;
-            // Mark the QueueData wrapper struct itself so GC can find it
-            markPtr(data, ctx);
-            // Mark the items array buffer
-            if (data.items.items.len > 0) {
-                ctx.gc.markRecursive(data.items.items.ptr, ctx);
-            }
+        .list, .vector, .map, .set, .queue => {
+            // Collection data structs (ListData, VectorData, etc.) are private
+            // in value.zig. Use the exported scan function to access their fields.
+            vm.scanValueCollectionChildren(val, ctx);
         },
 
         .function => |fn_data| {
             // Safety net: verify pointer is a real GC-tracked block
-            if (!isValidGCPtr(fn_data, ctx)) return;
+            if (!gc.isValidGCPtr(fn_data, ctx)) return;
             // Mark the FnData struct itself so GC can find arities and env
             ctx.gc.markRecursive(fn_data, ctx);
             // Mark the fn's name string (if GC-allocated)
@@ -334,53 +264,53 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
 
         .cons => |data| {
             // Safety net: verify pointer is a real GC-tracked block
-            if (!isValidGCPtr(data, ctx)) return;
+            if (!gc.isValidGCPtr(data, ctx)) return;
             // Mark the ConsData struct so GC can find head and tail
             ctx.gc.markRecursive(data, ctx);
         },
 
         .chunk => |data| {
             // Safety net: verify pointer is a real GC-tracked block
-            if (!isValidGCPtr(data, ctx)) return;
+            if (!gc.isValidGCPtr(data, ctx)) return;
             // Mark the ChunkData struct so GC can find the items array
             ctx.gc.markRecursive(data, ctx);
         },
 
         .chunked_cons => |data| {
             // Safety net: verify pointer is a real GC-tracked block
-            if (!isValidGCPtr(data, ctx)) return;
+            if (!gc.isValidGCPtr(data, ctx)) return;
             // Mark the ChunkedConsData struct so GC can find chunk and tail
             ctx.gc.markRecursive(data, ctx);
         },
 
         .atom => |data| {
             // Safety net: verify pointer is a real GC-tracked block
-            if (!isValidGCPtr(data, ctx)) return;
+            if (!gc.isValidGCPtr(data, ctx)) return;
             ctx.gc.markRecursive(data, ctx);
         },
 
         .future => |data| {
             // Safety net: verify pointer is a real GC-tracked block
-            if (!isValidGCPtr(data, ctx)) return;
+            if (!gc.isValidGCPtr(data, ctx)) return;
             ctx.gc.markRecursive(data, ctx);
         },
 
         .promise => |data| {
             // Safety net: verify pointer is a real GC-tracked block
-            if (!isValidGCPtr(data, ctx)) return;
+            if (!gc.isValidGCPtr(data, ctx)) return;
             ctx.gc.markRecursive(data, ctx);
         },
 
         .reduced => |data| {
             // Safety net: verify pointer is a real GC-tracked block
-            if (!isValidGCPtr(data, ctx)) return;
+            if (!gc.isValidGCPtr(data, ctx)) return;
             // Scan the wrapped value
             ctx.gc.markRecursive(data, ctx);
         },
 
         .record => |rd| {
             // Safety net: verify pointer is a real GC-tracked block
-            if (!isValidGCPtr(rd, ctx)) return;
+            if (!gc.isValidGCPtr(rd, ctx)) return;
             // Mark the RecordData block itself so it survives GC sweep
             markPtr(rd, ctx);
             // Then scan its children (type_name, fields, extmap, meta)
@@ -389,21 +319,21 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
 
         .exception => |ed| {
             // Safety net: verify pointer is a real GC-tracked block
-            if (!isValidGCPtr(ed, ctx)) return;
+            if (!gc.isValidGCPtr(ed, ctx)) return;
             // Mark the ExceptionData block itself so it survives GC sweep
             ctx.gc.markRecursive(ed, ctx);
         },
 
         .ref => |data| {
             // Safety net: verify pointer is a real GC-tracked block
-            if (!isValidGCPtr(data, ctx)) return;
+            if (!gc.isValidGCPtr(data, ctx)) return;
             // Mark the RefData block itself so GC can scan value + validator
             ctx.gc.markRecursive(data, ctx);
         },
 
         .multimethod => |data| {
             // Safety net: verify pointer is a real GC-tracked block
-            if (!isValidGCPtr(data, ctx)) return;
+            if (!gc.isValidGCPtr(data, ctx)) return;
             // Mark the MultimethodData block itself so GC can scan dispatch_fn + method_table
             ctx.gc.markRecursive(data, ctx);
         },
@@ -441,6 +371,12 @@ fn scanLazySeqThunk(thunk_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     // Mark map_fn (inline Value stored to avoid one env.put per thunk step).
     if (thunk.map_fn) |fn_val| {
         scanValueChildrenDirect(&fn_val, ctx);
+    }
+    // Phase 10: Mark bytecode program so GC doesn't free it.
+    if (thunk.bytecode) |bc| {
+        const bc_ptr: *anyopaque = @ptrCast(@constCast(bc));
+        ctx.gc.setObjectType(bc_ptr, gc.GCObjectType.bytecode_program);
+        ctx.gc.markRecursive(bc_ptr, ctx);
     }
 }
 
@@ -649,51 +585,6 @@ fn scanRecordData(rd_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     }
 }
 
-/// Scan ListData: { items: ArrayListUnmanaged(Value) }.
-fn scanListData(ld_ptr: *anyopaque, ctx: *gc.ScanContext) void {
-    const ld: *vm.ListData = @ptrCast(@alignCast(ld_ptr));
-    if (ld.items.items.len > 0) {
-        ctx.gc.setObjectType(ld.items.items.ptr, gc.GCObjectType.value_array);
-        ctx.gc.markRecursive(ld.items.items.ptr, ctx);
-    }
-}
-
-/// Scan VectorData: { items: ArrayListUnmanaged(Value) }.
-fn scanVectorData(vd_ptr: *anyopaque, ctx: *gc.ScanContext) void {
-    const vd: *vm.VectorData = @ptrCast(@alignCast(vd_ptr));
-    if (vd.items.items.len > 0) {
-        ctx.gc.setObjectType(vd.items.items.ptr, gc.GCObjectType.value_array);
-        ctx.gc.markRecursive(vd.items.items.ptr, ctx);
-    }
-}
-
-/// Scan MapData: { entries: ArrayListUnmanaged(MapEntry) }.
-fn scanMapData(md_ptr: *anyopaque, ctx: *gc.ScanContext) void {
-    const md: *vm.MapData = @ptrCast(@alignCast(md_ptr));
-    if (md.entries.items.len > 0) {
-        ctx.gc.setObjectType(md.entries.items.ptr, gc.GCObjectType.map_entries);
-        ctx.gc.markRecursive(md.entries.items.ptr, ctx);
-    }
-}
-
-/// Scan SetData: { items: ArrayListUnmanaged(Value) }.
-fn scanSetData(sd_ptr: *anyopaque, ctx: *gc.ScanContext) void {
-    const sd: *vm.SetData = @ptrCast(@alignCast(sd_ptr));
-    if (sd.items.items.len > 0) {
-        ctx.gc.setObjectType(sd.items.items.ptr, gc.GCObjectType.value_array);
-        ctx.gc.markRecursive(sd.items.items.ptr, ctx);
-    }
-}
-
-/// Scan QueueData: { items: ArrayListUnmanaged(Value) }.
-fn scanQueueData(qd_ptr: *anyopaque, ctx: *gc.ScanContext) void {
-    const qd: *vm.QueueData = @ptrCast(@alignCast(qd_ptr));
-    if (qd.items.items.len > 0) {
-        ctx.gc.setObjectType(qd.items.items.ptr, gc.GCObjectType.value_array);
-        ctx.gc.markRecursive(qd.items.items.ptr, ctx);
-    }
-}
-
 /// Scan array of Arity structs: { params: list.List, body: list.List, rest_name: ?[]const u8 }.
 fn scanFnArities(arities_ptr: *anyopaque, ctx: *gc.ScanContext, total_size: usize) void {
     const arity_size = @sizeOf(vm.Arity);
@@ -801,6 +692,10 @@ fn scanBytecodeProgram(bc_ptr: *anyopaque, ctx: *gc.ScanContext) void {
     // Mark fn_pool
     if (bc.fn_pool) |pool| {
         if (pool.len > 0) markPtr(pool.ptr, ctx);
+    }
+    // Mark self_fn (for call_self recursive calls)
+    if (bc.self_fn) |fn_val| {
+        ctx.gc.markRecursive(@as(*anyopaque, @ptrCast(@constCast(&fn_val))), ctx);
     }
 }
 

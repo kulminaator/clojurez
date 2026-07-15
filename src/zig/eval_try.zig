@@ -69,7 +69,7 @@ fn parseTryForm(allocator: Allocator, forms: []const Value) anyerror!ParsedTryFo
             const op = form.list.items.items[0];
 
             if (std.meta.activeTag(op) == .symbol) {
-                if (std.mem.eql(u8, op.symbol, "catch")) {
+                if (std.mem.eql(u8, op.symbol.slice(), "catch")) {
                     found_catch = true;
                     // Parse: (catch Type sym body*)
                     if (form.list.items.items.len < 4) return error.ArityError;
@@ -91,11 +91,11 @@ fn parseTryForm(allocator: Allocator, forms: []const Value) anyerror!ParsedTryFo
 
                     try catch_clauses.append(allocator, TryCatchClause{
                         .type_kw = type_kw,
-                        .sym = try allocator.dupe(u8, sym_form.symbol),
+                        .sym = try allocator.dupe(u8, sym_form.symbol.slice()),
                         .body = try vm.listValue(allocator, body_list),
                     });
 
-                } else if (std.mem.eql(u8, op.symbol, "finally")) {
+                } else if (std.mem.eql(u8, op.symbol.slice(), "finally")) {
                     found_finally = true;
                     // Parse: (finally body*)
                     for (form.list.items.items[1..]) |ff| {
@@ -128,9 +128,9 @@ fn parseTryForm(allocator: Allocator, forms: []const Value) anyerror!ParsedTryFo
 /// - Symbols: "foo/bar" → "foo/bar" (qualified, use as-is)
 fn resolveCatchType(allocator: Allocator, type_form: Value) anyerror![]const u8 {
     return switch (std.meta.activeTag(type_form)) {
-        .keyword => allocator.dupe(u8, type_form.keyword),
+        .keyword => allocator.dupe(u8, type_form.keyword.slice()),
         .symbol => blk: {
-            const sym = type_form.symbol;
+            const sym = type_form.symbol.slice();
             // If already qualified (contains /), use as-is
             if (std.mem.indexOfScalar(u8, sym, '/')) |_| {
                 break :blk try allocator.dupe(u8, sym);

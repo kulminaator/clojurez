@@ -24,7 +24,7 @@ pub fn core_re_pattern(self: *const Value, args: *const list.List, env: *Env) an
     if (std.meta.activeTag(arg) != .string) return error.TypeError;
 
     const allocator = env.allocator;
-    const s = arg.string;
+    const s = arg.string.slice();
 
     // Validate the pattern by parsing it
     var ast = try regexp.parseRegex(s, allocator);
@@ -47,8 +47,8 @@ pub fn core_re_matches(self: *const Value, args: *const list.List, env: *Env) an
     const allocator = env.allocator;
     var nfa = try getNfaFromPattern(allocator, pattern);
 
-    if (try regexp.nfaMatch(&nfa, s.string, allocator)) {
-        return try vm.stringValue(allocator, s.string);
+    if (try regexp.nfaMatch(&nfa, s.string.slice(), allocator)) {
+        return try vm.stringValue(allocator, s.string.slice());
     }
     return vm.nilValue();
 }
@@ -67,7 +67,7 @@ pub fn core_re_find(self: *const Value, args: *const list.List, env: *Env) anyer
     const allocator = env.allocator;
     var nfa = try getNfaFromPattern(allocator, pattern);
 
-    const str = s.string;
+    const str = s.string.slice();
     const n = vm.utf8CodepointCount(str);
 
     var start: usize = 0;
@@ -97,7 +97,7 @@ pub fn core_re_seq(self: *const Value, args: *const list.List, env: *Env) anyerr
     const allocator = env.allocator;
     var nfa = try getNfaFromPattern(allocator, pattern);
 
-    const str = s.string;
+    const str = s.string.slice();
     const n = vm.utf8CodepointCount(str);
     var matches = std.ArrayListUnmanaged(Value).empty;
     errdefer {
@@ -148,7 +148,7 @@ pub fn core_re_find_with_index(self: *const Value, args: *const list.List, env: 
     const allocator = env.allocator;
     var nfa = try getNfaFromPattern(allocator, pattern);
 
-    const str = s.string;
+    const str = s.string.slice();
     const n = vm.utf8CodepointCount(str);
 
     var start: usize = 0;
@@ -185,7 +185,7 @@ pub fn core_re_find_all(self: *const Value, args: *const list.List, env: *Env) a
     const allocator = env.allocator;
     var nfa = try getNfaFromPattern(allocator, pattern);
 
-    const str = s.string;
+    const str = s.string.slice();
     const n = vm.utf8CodepointCount(str);
     var results = std.ArrayListUnmanaged(Value).empty;
     errdefer {

@@ -67,9 +67,9 @@ pub fn exceptionIsA(child: []const u8, parent: []const u8) bool {
 
 fn typeToString(val: Value, allocator: Allocator) anyerror!?[]const u8 {
     return switch (std.meta.activeTag(val)) {
-        .keyword => try allocator.dupe(u8, val.keyword),
-        .symbol => try allocator.dupe(u8, val.symbol),
-        .string => try allocator.dupe(u8, val.string),
+        .keyword => try allocator.dupe(u8, val.keyword.slice()),
+        .symbol => try allocator.dupe(u8, val.symbol.slice()),
+        .string => try allocator.dupe(u8, val.string.slice()),
         else => null,
     };
 }
@@ -157,7 +157,7 @@ pub fn exInfo(self: *const Value, args: *const list.List, env: *Env) anyerror!Va
     // Message must be a string or nil
     var message: []const u8 = "";
     if (std.meta.activeTag(msg_val) == .string) {
-        message = msg_val.string;
+        message = msg_val.string.slice();
     } else if (std.meta.activeTag(msg_val) != .nil) {
         // Coerce to string via fmt
         const msg_str = try vm.fmt(msg_val, allocator);
@@ -174,12 +174,12 @@ pub fn exInfo(self: *const Value, args: *const list.List, env: *Env) anyerror!Va
     var type_kw: []const u8 = "clojure.lang/ExceptionInfo";
     for (data_val.map.entries.items) |entry| {
         if (std.meta.activeTag(entry.key) == .keyword and
-            std.mem.eql(u8, entry.key.keyword, "type"))
+            std.mem.eql(u8, entry.key.keyword.slice(), "type"))
         {
             type_kw = switch (std.meta.activeTag(entry.value)) {
-                .keyword => entry.value.keyword,
-                .string => entry.value.string,
-                .symbol => entry.value.symbol,
+                .keyword => entry.value.keyword.slice(),
+                .string => entry.value.string.slice(),
+                .symbol => entry.value.symbol.slice(),
                 else => "clojure.lang/ExceptionInfo",
             };
             break;

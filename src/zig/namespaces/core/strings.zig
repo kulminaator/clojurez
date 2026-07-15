@@ -46,7 +46,7 @@ fn tryToString(allocator: Allocator, val: *const Value, env: *Env) anyerror!?[]c
     const result = eval_mod.callWithEnvV(allocator, &impl_fn, &args, env, 0) catch return null;
 
     if (std.meta.activeTag(result.*) == .string) {
-        return try allocator.dupe(u8, result.*.string);
+        return try allocator.dupe(u8, result.*.string.slice());
     }
     vm.valueDeinit(&result.*, allocator);
     allocator.destroy(result);
@@ -77,7 +77,7 @@ pub fn core_str(self: *const Value, args: *const list.List, env_env: *Env) anyer
         }
         // Handle string type: strip quotes (write directly to buffer)
         if (std.meta.activeTag(arg) == .string) {
-            try buf.appendSlice(allocator, arg.string);
+            try buf.appendSlice(allocator, arg.string.slice());
             continue;
         }
         // All other types: use fmtToBuffer (writes directly to buffer, no intermediate allocation)
@@ -90,7 +90,7 @@ pub fn core_utf8_valid_q(self: *const Value, args: *const list.List, _: *Env) an
     _ = self;
     if (args.items.len != 1) return error.ArityError;
     if (std.meta.activeTag(args.items[0]) != .string) return error.TypeError;
-    return vm.boolValue(std.unicode.utf8ValidateSlice(args.items[0].string));
+    return vm.boolValue(std.unicode.utf8ValidateSlice(args.items[0].string.slice()));
 }
 
 /// subs - returns the substring of s beginning at start inclusive, and ending
@@ -101,7 +101,7 @@ pub fn core_subs(self: *const Value, args: *const list.List, env_env: *Env) anye
     if (args.items.len < 2 or args.items.len > 3) return error.ArityError;
     if (std.meta.activeTag(args.items[0]) != .string) return error.TypeError;
     const allocator = env_env.allocator;
-    const s = args.items[0].string;
+    const s = args.items[0].string.slice();
     const start = try helpers.toInt(args.items[1]);
     if (start < 0) return error.IndexOutOfBounds;
 
@@ -177,7 +177,7 @@ pub fn str_upper_case(self: *const Value, args: *const list.List, env_env: *Env)
     const arg = args.items[0];
     if (std.meta.activeTag(arg) != .string) return error.TypeError;
     const allocator = env_env.allocator;
-    const s = arg.string;
+    const s = arg.string.slice();
 
     var upper: std.ArrayList(u8) = .empty;
     errdefer upper.deinit(allocator);
@@ -200,7 +200,7 @@ pub fn str_lower_case(self: *const Value, args: *const list.List, env_env: *Env)
     const arg = args.items[0];
     if (std.meta.activeTag(arg) != .string) return error.TypeError;
     const allocator = env_env.allocator;
-    const s = arg.string;
+    const s = arg.string.slice();
 
     var lower: std.ArrayList(u8) = .empty;
     errdefer lower.deinit(allocator);
@@ -223,7 +223,7 @@ pub fn str_capitalize(self: *const Value, args: *const list.List, env_env: *Env)
     const arg = args.items[0];
     if (std.meta.activeTag(arg) != .string) return error.TypeError;
     const allocator = env_env.allocator;
-    const s = arg.string;
+    const s = arg.string.slice();
 
     if (s.len == 0) return vm.stringValue(allocator, "");
 
@@ -250,7 +250,7 @@ pub fn str_trim(self: *const Value, args: *const list.List, env_env: *Env) anyer
     const arg = args.items[0];
     if (std.meta.activeTag(arg) != .string) return error.TypeError;
     const allocator = env_env.allocator;
-    const s = arg.string;
+    const s = arg.string.slice();
 
     if (s.len == 0) return vm.stringValue(allocator, "");
 
@@ -300,7 +300,7 @@ pub fn str_triml(self: *const Value, args: *const list.List, env_env: *Env) anye
     const arg = args.items[0];
     if (std.meta.activeTag(arg) != .string) return error.TypeError;
     const allocator = env_env.allocator;
-    const s = arg.string;
+    const s = arg.string.slice();
 
     if (s.len == 0) return vm.stringValue(allocator, "");
 
@@ -335,7 +335,7 @@ pub fn str_trimr(self: *const Value, args: *const list.List, env_env: *Env) anye
     const arg = args.items[0];
     if (std.meta.activeTag(arg) != .string) return error.TypeError;
     const allocator = env_env.allocator;
-    const s = arg.string;
+    const s = arg.string.slice();
 
     if (s.len == 0) return vm.stringValue(allocator, "");
 
@@ -371,7 +371,7 @@ pub fn str_trim_newline(self: *const Value, args: *const list.List, env_env: *En
     const arg = args.items[0];
     if (std.meta.activeTag(arg) != .string) return error.TypeError;
     const allocator = env_env.allocator;
-    const s = arg.string;
+    const s = arg.string.slice();
 
     if (s.len == 0) return vm.stringValue(allocator, "");
 
@@ -400,7 +400,7 @@ pub fn str_blank_q(self: *const Value, args: *const list.List, env_env: *Env) an
     // nil is blank
     if (std.meta.activeTag(arg) == .nil) return vm.boolValue(true);
     if (std.meta.activeTag(arg) != .string) return error.TypeError;
-    const s = arg.string;
+    const s = arg.string.slice();
 
     if (s.len == 0) return vm.boolValue(true);
 
@@ -421,7 +421,7 @@ pub fn str_index_of(self: *const Value, args: *const list.List, env_env: *Env) a
     if (args.items.len < 2 or args.items.len > 3) return error.ArityError;
     const s_arg = args.items[0];
     if (std.meta.activeTag(s_arg) != .string) return error.TypeError;
-    const s = s_arg.string;
+    const s = s_arg.string.slice();
 
     const codepoint_count = vm.utf8CodepointCount(s);
 
@@ -440,7 +440,7 @@ pub fn str_index_of(self: *const Value, args: *const list.List, env_env: *Env) a
 
     // Search for substring
     if (std.meta.activeTag(args.items[1]) == .string) {
-        const needle = args.items[1].string;
+        const needle = args.items[1].string.slice();
         // Empty needle: return from_index clamped to codepoint count
         if (needle.len == 0) return vm.intValue(@as(i64, @intCast(from_index_clamped)));
 
@@ -505,7 +505,7 @@ pub fn str_last_index_of(self: *const Value, args: *const list.List, env_env: *E
     if (args.items.len < 2 or args.items.len > 3) return error.ArityError;
     const s_arg = args.items[0];
     if (std.meta.activeTag(s_arg) != .string) return error.TypeError;
-    const s = s_arg.string;
+    const s = s_arg.string.slice();
 
     const codepoint_count = vm.utf8CodepointCount(s);
 
@@ -532,7 +532,7 @@ pub fn str_last_index_of(self: *const Value, args: *const list.List, env_env: *E
 
     // Search for substring
     if (std.meta.activeTag(args.items[1]) == .string) {
-        const needle = args.items[1].string;
+        const needle = args.items[1].string.slice();
         if (needle.len == 0) return vm.intValue(@as(i64, @intCast(from_index_clamped)));
 
         // Find last occurrence where start byte <= byte_from.
@@ -609,8 +609,8 @@ pub fn str_starts_with_q(self: *const Value, args: *const list.List, _: *Env) an
     const s_arg = args.items[0];
     const substr_arg = args.items[1];
     if (std.meta.activeTag(s_arg) != .string or std.meta.activeTag(substr_arg) != .string) return error.TypeError;
-    const s = s_arg.string;
-    const substr = substr_arg.string;
+    const s = s_arg.string.slice();
+    const substr = substr_arg.string.slice();
     return vm.boolValue(std.mem.startsWith(u8, s, substr));
 }
 
@@ -621,8 +621,8 @@ pub fn str_ends_with_q(self: *const Value, args: *const list.List, _: *Env) anye
     const s_arg = args.items[0];
     const substr_arg = args.items[1];
     if (std.meta.activeTag(s_arg) != .string or std.meta.activeTag(substr_arg) != .string) return error.TypeError;
-    const s = s_arg.string;
-    const substr = substr_arg.string;
+    const s = s_arg.string.slice();
+    const substr = substr_arg.string.slice();
     return vm.boolValue(std.mem.endsWith(u8, s, substr));
 }
 
@@ -633,8 +633,8 @@ pub fn str_includes_q(self: *const Value, args: *const list.List, _: *Env) anyer
     const s_arg = args.items[0];
     const substr_arg = args.items[1];
     if (std.meta.activeTag(s_arg) != .string or std.meta.activeTag(substr_arg) != .string) return error.TypeError;
-    const s = s_arg.string;
-    const substr = substr_arg.string;
+    const s = s_arg.string.slice();
+    const substr = substr_arg.string.slice();
     return vm.boolValue(std.mem.indexOf(u8, s, substr) != null);
 }
 
@@ -669,7 +669,7 @@ test "strings::str: single string strips quotes" {
     var result = core_str(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
     try std.testing.expect(std.meta.activeTag(result) == .string);
-    try std.testing.expect(std.mem.eql(u8, result.string, "hello"));
+    try std.testing.expect(std.mem.eql(u8, result.string.slice(), "hello"));
 }
 
 test "strings::str: concatenates multiple values" {
@@ -682,7 +682,7 @@ test "strings::str: concatenates multiple values" {
     const args = makeArgs(&[_]Value{ s1, s2 });
     var result = core_str(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.string, "helloworld"));
+    try std.testing.expect(std.mem.eql(u8, result.string.slice(), "helloworld"));
 }
 
 test "strings::str: integer converted to string" {
@@ -691,7 +691,7 @@ test "strings::str: integer converted to string" {
     const args = makeArgs(&[_]Value{ vm.intValue(42) });
     var result = core_str(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.string, "42"));
+    try std.testing.expect(std.mem.eql(u8, result.string.slice(), "42"));
 }
 
 test "strings::str: no args returns empty string" {
@@ -700,7 +700,7 @@ test "strings::str: no args returns empty string" {
     const args = makeArgs(&[_]Value{});
     var result = core_str(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.string, ""));
+    try std.testing.expect(std.mem.eql(u8, result.string.slice(), ""));
 }
 
 test "strings::utf8_valid_q: valid string" {
@@ -731,7 +731,7 @@ test "strings::upper_case: basic" {
     const args = makeArgs(&[_]Value{ s });
     var result = str_upper_case(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.string, "HELLO"));
+    try std.testing.expect(std.mem.eql(u8, result.string.slice(), "HELLO"));
 }
 
 test "strings::lower_case: basic" {
@@ -742,7 +742,7 @@ test "strings::lower_case: basic" {
     const args = makeArgs(&[_]Value{ s });
     var result = str_lower_case(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.string, "hello"));
+    try std.testing.expect(std.mem.eql(u8, result.string.slice(), "hello"));
 }
 
 test "strings::capitalize: basic" {
@@ -753,7 +753,7 @@ test "strings::capitalize: basic" {
     const args = makeArgs(&[_]Value{ s });
     var result = str_capitalize(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.string, "Hello"));
+    try std.testing.expect(std.mem.eql(u8, result.string.slice(), "Hello"));
 }
 
 test "strings::capitalize: empty" {
@@ -764,7 +764,7 @@ test "strings::capitalize: empty" {
     const args = makeArgs(&[_]Value{ s });
     var result = str_capitalize(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.string, ""));
+    try std.testing.expect(std.mem.eql(u8, result.string.slice(), ""));
 }
 
 test "strings::trim: both sides" {
@@ -775,7 +775,7 @@ test "strings::trim: both sides" {
     const args = makeArgs(&[_]Value{ s });
     var result = str_trim(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.string, "hello"));
+    try std.testing.expect(std.mem.eql(u8, result.string.slice(), "hello"));
 }
 
 test "strings::trim: empty" {
@@ -786,7 +786,7 @@ test "strings::trim: empty" {
     const args = makeArgs(&[_]Value{ s });
     var result = str_trim(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.string, ""));
+    try std.testing.expect(std.mem.eql(u8, result.string.slice(), ""));
 }
 
 test "strings::trim: all whitespace" {
@@ -797,7 +797,7 @@ test "strings::trim: all whitespace" {
     const args = makeArgs(&[_]Value{ s });
     var result = str_trim(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.string, ""));
+    try std.testing.expect(std.mem.eql(u8, result.string.slice(), ""));
 }
 
 test "strings::triml: basic" {
@@ -808,7 +808,7 @@ test "strings::triml: basic" {
     const args = makeArgs(&[_]Value{ s });
     var result = str_triml(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.string, "hello  "));
+    try std.testing.expect(std.mem.eql(u8, result.string.slice(), "hello  "));
 }
 
 test "strings::trimr: basic" {
@@ -819,7 +819,7 @@ test "strings::trimr: basic" {
     const args = makeArgs(&[_]Value{ s });
     var result = str_trimr(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.string, "  hello"));
+    try std.testing.expect(std.mem.eql(u8, result.string.slice(), "  hello"));
 }
 
 test "strings::trim_newline: basic" {
@@ -830,7 +830,7 @@ test "strings::trim_newline: basic" {
     const args = makeArgs(&[_]Value{ s });
     var result = str_trim_newline(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.string, "hello"));
+    try std.testing.expect(std.mem.eql(u8, result.string.slice(), "hello"));
 }
 
 test "strings::trim_newline: cr" {
@@ -841,7 +841,7 @@ test "strings::trim_newline: cr" {
     const args = makeArgs(&[_]Value{ s });
     var result = str_trim_newline(testSelf(), &args, &a) catch unreachable;
     defer vm.valueDeinit(&result, std.heap.page_allocator);
-    try std.testing.expect(std.mem.eql(u8, result.string, "hello"));
+    try std.testing.expect(std.mem.eql(u8, result.string.slice(), "hello"));
 }
 
 test "strings::blank_q: nil" {

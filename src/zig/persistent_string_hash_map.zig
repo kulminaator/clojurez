@@ -67,7 +67,7 @@ pub fn PersistentStringHashMap(T: type) type {
 
             for (keys_list.items) |v| {
                 if (v.type == .symbol) {
-                    try result.append(allocator, v.symbol);
+                    try result.append(allocator, v.symbol.slice());
                 }
             }
             return result;
@@ -157,7 +157,7 @@ pub const StringHashMap = struct {
 
         for (keys_list.items) |v| {
             if (std.meta.activeTag(v) == .symbol) {
-                try result.append(allocator, v.symbol);
+                try result.append(allocator, v.symbol.slice());
             }
         }
         return result;

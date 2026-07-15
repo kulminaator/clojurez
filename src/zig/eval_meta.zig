@@ -22,7 +22,7 @@ pub fn evalAlterMetaBang(allocator: Allocator, l: *const list.List, frame: *vm.F
 
     const sym = sym_eval.*;
     if (std.meta.activeTag(sym) != .symbol) return error.TypeError;
-    const sym_name = sym.symbol;
+    const sym_name = sym.symbol.slice();
 
     // Evaluate the function f
     const fn_ptr = try eval.evalRecV(allocator, &l.items[2], frame, depth + 1);

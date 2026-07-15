@@ -35,7 +35,7 @@ pub fn core_set(self: *const Value, args: *const list.List, env_env: *Env) anyer
         .string => {
             // Strings are sequences of characters in Clojure
             // (set "abc") => #{\a \b \c}
-            const s = coll.string;
+            const s = coll.string.slice();
             const codepoint_count = vm.utf8CodepointCount(s);
             var idx: usize = 0;
             while (idx < codepoint_count) : (idx += 1) {

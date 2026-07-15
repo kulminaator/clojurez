@@ -607,6 +607,7 @@ Mark-and-sweep GC in `gc.zig` with type-aware scanning in `gc_scan.zig`.
 - Generational protection: blocks from current generation are never swept
 - Deferred sweep: `gc-sweep` called during evaluation defers actual freeing to safe points
 - **Thread-safe**: block list protected by atomic spinlock (`block_mutex`); GC collection blocked while child threads are active via `gc_lock`; slab allocator uses per-slab spinlocks for concurrent alloc/free; `active_thread_count` tracks running detached threads
+- If we implement new clojure data types then design them in a way that would force them to be allocated from the GC (like strings and symbols), this way we can't accidentally allocate them from stack or other odd places.
 
 **GC-tracked object types** (`GCObjectType`):
 - `value_cache` — pre-cached singleton values (nil, bool, small int, latin char, empty collections, E, PI)

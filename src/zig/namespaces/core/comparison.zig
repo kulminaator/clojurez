@@ -21,16 +21,10 @@ pub fn core_eq(self: *const Value, args: *const list.List, _: *Env) anyerror!Val
     return vm.boolValue(true);
 }
 
-pub fn core_not_eq(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
-    _ = self;
-    if (args.items.len < 2) return error.ArityError;
-    var i: usize = 1;
-    while (i < args.items.len) : (i += 1) {
-        if (vm.equals(args.items[0], args.items[i])) {
-            return vm.boolValue(false);
-        }
-    }
-    return vm.boolValue(true);
+pub fn core_not_eq(self: *const Value, args: *const list.List, env: *Env) anyerror!Value {
+    // not= is simply (not (= args...))
+    const eq_result = core_eq(self, args, env) catch return error.ArityError;
+    return vm.boolValue(!eq_result.bool);
 }
 
 pub fn core_less(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
@@ -138,15 +132,15 @@ pub fn core_compare(self: *const Value, args: *const list.List, _: *Env) anyerro
         // For strings, symbols, and keywords: do lexicographic comparison
         switch (std.meta.activeTag(a)) {
             .string => {
-                const cmp = compareStrings(a.string, b.string);
+                const cmp = compareStrings(a.string.slice(), b.string.slice());
                 return vm.intValue(cmp);
             },
             .symbol => {
-                const cmp = compareStrings(a.symbol, b.symbol);
+                const cmp = compareStrings(a.symbol.slice(), b.symbol.slice());
                 return vm.intValue(cmp);
             },
             .keyword => {
-                const cmp = compareStrings(a.keyword, b.keyword);
+                const cmp = compareStrings(a.keyword.slice(), b.keyword.slice());
                 return vm.intValue(cmp);
             },
             else => {},
