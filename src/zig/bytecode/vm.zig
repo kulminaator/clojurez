@@ -699,7 +699,14 @@ pub fn execute(
                     vmt.freeEntry(old_entry, allocator);
                     frame.binding_values[j - 1] = val_entry;
                 }
-                for (temp_vals.items) |ae| vmt.freeEntry(ae, allocator);
+                // IMPORTANT: Do NOT call freeEntry on temp_vals entries here.
+                // The StackEntry values were MOVED (copied by value) to frame.binding_values.
+                // For pointer entries, both temp_vals and binding_values share the same *Value.
+                // Calling freeEntry would null out the *Value, corrupting the binding.
+                // The GC allocator's free is a no-op anyway, but valueDeinit would still
+                // null out the Value, breaking the shared pointer.
+                // Just zero out the StackEntry slots and free the buffer.
+                for (temp_vals.items) |*ae| ae.* = StackEntry{ .integer = 0 };
                 temp_vals.deinit(allocator);
                 pc = frame.body_pc;
             },
