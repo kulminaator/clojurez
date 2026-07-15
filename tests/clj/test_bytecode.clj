@@ -1771,6 +1771,54 @@
   40)  ; 10+9+8+7+6 = 40
 
 ;; ============================================================
+;; let inside loop (Phase 11 preparation)
+;; ============================================================
+
+(defn __bc-loop-with-let [n]
+  (loop [i 0 s 0]
+    (if (>= i n)
+      s
+      (let [new-s (+ s i)
+            new-i (+ i 1)]
+        (recur new-i new-s)))))
+
+(check "bytecode: let inside loop basic"
+  (__bc-loop-with-let 10)
+  45)  ; sum of 0..9 = 45
+
+(check "bytecode: let inside loop zero"
+  (__bc-loop-with-let 0)
+  0)
+
+(check "bytecode: let inside loop one"
+  (__bc-loop-with-let 1)
+  0)  ; i=0 >= 1 is false, new-s=0+0=0, new-i=1, then i=1 >= 1 is true, return 0
+
+;; let inside loop with multiple let bindings
+(defn __bc-loop-let-multi [n]
+  (loop [i 0 result 1]
+    (if (>= i n)
+      result
+      (let [next-i (+ i 1)
+            next-result (* result (if (zero? next-i) 1 next-i))]
+        (recur next-i next-result)))))
+
+(check "bytecode: let inside loop factorial"
+  (__bc-loop-let-multi 5)
+  120)  ; 5! = 120
+
+;; typed bindings in loop (parser doesn't attach metadata, so ^long is a separate element)
+(defn __bc-loop-typed [n]
+  (loop [^long i 0]
+    (if (< i n)
+      (recur (inc i))
+      i)))
+
+(check "bytecode: loop with typed binding"
+  (__bc-loop-typed 10)
+  10)
+
+;; ============================================================
 ;; SUMMARY
 ;; ============================================================
 

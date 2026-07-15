@@ -56,14 +56,24 @@ pub fn compileLet(self: *Compiler, items: []const Value) anyerror!void {
     };
 
     var i: usize = 0;
-    while (i < bind_items.len) : (i += 2) {
-        const sym = bind_items[i];
+    while (i < bind_items.len) {
+        const elem = bind_items[i];
+        // Skip type hint symbols (starting with ^)
+        if (std.meta.activeTag(elem) == .symbol) {
+            const s = elem.symbol.slice();
+            if (s.len > 0 and s[0] == '^') {
+                i += 1;
+                continue;
+            }
+        }
+        if (i + 1 >= bind_items.len) return;
         const val = bind_items[i + 1];
         try self.compileForm(val);
-        if (std.meta.activeTag(sym) == .symbol) {
-            const sym_idx = try self.program.addSymbol(self.allocator, sym.symbol.slice());
+        if (std.meta.activeTag(elem) == .symbol) {
+            const sym_idx = try self.program.addSymbol(self.allocator, elem.symbol.slice());
             _ = try self.program.emit(self.allocator, .store_var, sym_idx);
         }
+        i += 2;
     }
 
     for (body) |form| {
@@ -411,20 +421,45 @@ pub fn compileLoop(self: *Compiler, items: []const Value) anyerror!void {
         },
     };
 
-    const binding_count = bind_items.len / 2;
-    var sym_indices: []usize = try self.allocator.alloc(usize, binding_count);
+    // Collect binding pairs, skipping type hints (symbols starting with ^).
+    // The parser does not attach type hints as metadata, so ^long i 0 becomes
+    // three elements [^long, i, 0] instead of [i-with-meta, 0].
+    var binding_pairs: std.ArrayListUnmanaged(struct { sym: []const u8, val: Value }) = .empty;
+    defer binding_pairs.deinit(self.allocator);
 
     var i: usize = 0;
-    while (i < bind_items.len) : (i += 2) {
-        const sym = bind_items[i];
+    while (i < bind_items.len) {
+        const elem = bind_items[i];
+        // Skip type hint symbols (starting with ^)
+        if (std.meta.activeTag(elem) == .symbol) {
+            const hint = elem.symbol.slice();
+            if (hint.len > 0 and hint[0] == '^') {
+                i += 1;
+                continue;
+            }
+        }
+        // This should be a symbol (binding name)
+        if (std.meta.activeTag(elem) != .symbol) {
+            _ = try self.program.emit0(self.allocator, .push_nil);
+            return;
+        }
+        if (i + 1 >= bind_items.len) {
+            _ = try self.program.emit0(self.allocator, .push_nil);
+            return;
+        }
+        const sym_name = elem.symbol.slice();
         const val = bind_items[i + 1];
-        if (std.meta.activeTag(sym) == .symbol) {
-            sym_indices[i / 2] = try self.program.addSymbol(self.allocator, sym.symbol.slice());
-        }
-        try self.compileForm(val);
-        if (std.meta.activeTag(sym) == .symbol) {
-            _ = try self.program.emit(self.allocator, .store_var, sym_indices[i / 2]);
-        }
+        try binding_pairs.append(self.allocator, .{ .sym = sym_name, .val = val });
+        i += 2;
+    }
+
+    var sym_indices: []usize = try self.allocator.alloc(usize, binding_pairs.items.len);
+    var bi: usize = 0;
+    while (bi < binding_pairs.items.len) : (bi += 1) {
+        const pair = binding_pairs.items[bi];
+        sym_indices[bi] = try self.program.addSymbol(self.allocator, pair.sym);
+        try self.compileForm(pair.val);
+        _ = try self.program.emit(self.allocator, .store_var, sym_indices[bi]);
     }
 
     const loop_info_idx = try self.program.addLoopInfo(self.allocator, self.program.instructions.items.len + 1, sym_indices);

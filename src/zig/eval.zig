@@ -996,14 +996,27 @@ fn evalLet(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: u
     };
 
     var i: usize = 0;
-    while (i < items.len) : (i += 2) {
-        const sym = &items[i];
-        // Phase 3: Use evalRecDirect — Value by copy, no *Value allocation
+    while (i < items.len) {
+        const elem = items[i];
+        // Skip type hint symbols (starting with ^)
+        if (std.meta.activeTag(elem) == .symbol) {
+            const s = elem.symbol.slice();
+            if (s.len > 0 and s[0] == '^') {
+                i += 1;
+                continue;
+            }
+        }
+        // Binding name can be a symbol or a vector (destructuring pattern)
+        const is_binding_name = switch (std.meta.activeTag(elem)) {
+            .symbol, .vector, .list => true,
+            else => false,
+        };
+        if (!is_binding_name) return error.TypeError;
+        if (i + 1 >= items.len) return error.TypeError;
         const val = try evalRecDirect(allocator, &items[i + 1], child_frame, depth);
         // Bind using destructuring if sym is a vector pattern
-        try bindPatternFrame(allocator, sym.*, val, child_frame);
-        if (std.meta.activeTag(sym.*) == .symbol) {
-        }
+        try bindPatternFrame(allocator, elem, val, child_frame);
+        i += 2;
     }
 
     // Evaluate body forms, returning the last result.
@@ -1260,29 +1273,38 @@ fn evalLoop(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
         else => unreachable,
     };
 
-    // Extract binding names
-    var bind_names: std.ArrayList([]const u8) = .empty;
+    // Extract binding pairs, skipping type hints (symbols starting with ^).
+    // The parser does not attach type hints as metadata, so ^long i 0 becomes
+    // three elements [^long, i, 0] instead of [i-with-meta, 0].
+    var bind_pairs: std.ArrayList(struct { name: []const u8, val_idx: usize }) = .empty;
     defer {
-        for (bind_names.items) |name| allocator.free(name);
-        allocator.free(bind_names.items);
+        for (bind_pairs.items) |pair| allocator.free(pair.name);
+        allocator.free(bind_pairs.items);
     }
     var i: usize = 0;
-    while (i < bind_items.len) : (i += 2) {
-        const sym = bind_items[i];
-        if (std.meta.activeTag(sym) != .symbol) return error.TypeError;
-        try bind_names.append(allocator, try allocator.dupe(u8, sym.symbol.slice()));
+    while (i < bind_items.len) {
+        const elem = bind_items[i];
+        // Skip type hint symbols (starting with ^)
+        if (std.meta.activeTag(elem) == .symbol) {
+            const s = elem.symbol.slice();
+            if (s.len > 0 and s[0] == '^') {
+                i += 1;
+                continue;
+            }
+        }
+        if (std.meta.activeTag(elem) != .symbol) return error.TypeError;
+        if (i + 1 >= bind_items.len) return error.TypeError;
+        try bind_pairs.append(allocator, .{ .name = try allocator.dupe(u8, elem.symbol.slice()), .val_idx = i + 1 });
+        i += 2;
     }
 
     // Create child Frame for loop bindings
     const child_frame = try frame.createChild(allocator);
     defer child_frame.deinit(allocator);
 
-    i = 0;
-    while (i < bind_items.len) : (i += 2) {
-        const sym = bind_items[i];
-        // Phase 3: Use evalRecDirect — Value by copy, no *Value allocation
-        const val = try evalRecDirect(allocator, &bind_items[i + 1], child_frame, depth);
-        try child_frame.put(sym.symbol.slice(), val);
+    for (bind_pairs.items) |pair| {
+        const val = try evalRecDirect(allocator, &bind_items[pair.val_idx], child_frame, depth);
+        try child_frame.put(pair.name, val);
     }
 
     // Loop: evaluate body, check for recur marker, rebind and repeat
@@ -1303,7 +1325,7 @@ fn evalLoop(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
             std.mem.eql(u8, result.list.items.items[0].symbol.slice(), "__recur__"))
         {
             const recur_vals = result.list.items.items[1..];
-            if (recur_vals.len != bind_names.items.len) {
+            if (recur_vals.len != bind_pairs.items.len) {
                 vm.valueDeinit(&result, allocator);
                 return error.ArityError;
             }
@@ -1311,7 +1333,7 @@ fn evalLoop(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth: 
             var j: usize = 0;
             while (j < recur_vals.len) : (j += 1) {
                 // Phase 7: recur_vals[j] is already a Value copy, no clone needed
-                try child_frame.put(bind_names.items[j], recur_vals[j]);
+                try child_frame.put(bind_pairs.items[j].name, recur_vals[j]);
             }
             vm.valueDeinit(&result, allocator);
             loop_depth += 1;
