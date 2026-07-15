@@ -1279,3 +1279,69 @@ test "gc_invariant: shallowClone does not allocate" {
     // Block count should be unchanged — shallowClone is a no-op struct copy
     try std.testing.expectEqual(blocks_before, gc.block_count);
 }
+
+test "gc_invariant: reducedValue pointer is tracked by GC" {
+    const allocator = std.heap.page_allocator;
+    var gc = gc_mod.GC.init(allocator);
+    defer gc.deinit();
+    const prev_gc = gc_mod.current_gc;
+    gc_mod.current_gc = &gc;
+    defer gc_mod.current_gc = prev_gc;
+    const gc_alloc = gc.allocator();
+
+    // Create a reduced value
+    const inner_val = intValue(42);
+    const reduced = try vm.reducedValue(gc_alloc, inner_val);
+
+    // The *Value pointer inside the reduced wrapper should be GC-tracked
+    switch (reduced) {
+        .reduced => |ptr| {
+            _ = gc.findHeader(@as(*anyopaque, @ptrCast(ptr))) orelse {
+                return error.GCInvariantViolation;
+            };
+        },
+        else => unreachable,
+    }
+}
+
+test "gc_invariant: cloneGC pointer is tracked by GC" {
+    const allocator = std.heap.page_allocator;
+    var gc = gc_mod.GC.init(allocator);
+    defer gc.deinit();
+    const prev_gc = gc_mod.current_gc;
+    gc_mod.current_gc = &gc;
+    defer gc_mod.current_gc = prev_gc;
+    const gc_alloc = gc.allocator();
+
+    // Create a value to clone
+    const val = intValue(42);
+
+    // cloneGC should return a *Value that is GC-tracked
+    const cloned = try vm.cloneGC(&val, gc_alloc);
+    defer gc_alloc.destroy(cloned);
+
+    _ = gc.findHeader(@as(*anyopaque, @ptrCast(cloned))) orelse {
+        return error.GCInvariantViolation;
+    };
+}
+
+test "gc_invariant: shareGC pointer is tracked by GC" {
+    const allocator = std.heap.page_allocator;
+    var gc = gc_mod.GC.init(allocator);
+    defer gc.deinit();
+    const prev_gc = gc_mod.current_gc;
+    gc_mod.current_gc = &gc;
+    defer gc_mod.current_gc = prev_gc;
+    const gc_alloc = gc.allocator();
+
+    // Create a value to share
+    const val = intValue(42);
+
+    // shareGC should return a *Value that is GC-tracked
+    const shared = try vm.shareGC(&val, gc_alloc);
+    defer gc_alloc.destroy(shared);
+
+    _ = gc.findHeader(@as(*anyopaque, @ptrCast(shared))) orelse {
+        return error.GCInvariantViolation;
+    };
+}

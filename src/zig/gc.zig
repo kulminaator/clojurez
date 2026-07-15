@@ -104,6 +104,30 @@ pub const ScanContext = struct {
     scan_fn: ScanFn,
 };
 
+/// Check if a pointer is plausibly valid (non-null, not garbage like 0xffffffffffffffff).
+/// Used to guard against scanUnknownBlock misidentifying non-Value blocks.
+pub fn isValidPtr(ptr: anytype) bool {
+    const addr = @intFromPtr(ptr);
+    // Reject null pointers
+    if (addr == 0) return false;
+    // Reject obviously garbage pointers (all bits set, very small, etc.)
+    if (addr == std.math.maxInt(@TypeOf(addr))) return false;
+    // Reject pointers below minimum heap address (GC allocator starts well above this)
+    if (addr < 0x1000) return false;
+    return true;
+}
+
+/// Check if a pointer is both plausibly valid AND a real GC-tracked block.
+/// This is a stronger check than isValidPtr — it verifies the pointer
+/// corresponds to an actual GC allocation header.
+pub fn isValidGCPtr(ptr: anytype, ctx: *ScanContext) bool {
+    if (!isValidPtr(ptr)) return false;
+    // Verify this pointer is a real GC-tracked block
+    const header = ctx.gc.findHeader(@as(*anyopaque, @ptrCast(@constCast(ptr))));
+    if (header == null) return false;
+    return true;
+}
+
 /// Entry in the thread roots list. Each child thread registers its root frame
 /// here so the GC can mark it during collection even though the frame is not
 /// reachable from the main thread's evaluation context.

@@ -150,12 +150,10 @@ pub fn evalRecSlice(allocator: Allocator, items: []const Value, frame: *vm.Frame
     // evaluate that form. This is a rare case — the common "do" path below
     // evaluates body_items as a sequence of forms.
     if (body_start == 0) {
-        // Wrap body_items into a stack-allocated list Value.
+        // Wrap body_items into a GC-allocated list Value.
         // The body_items are permanently rooted (part of function definition),
-        // so we just need a wrapper for evalRec to dispatch correctly.
-        const mutable_items = @constCast(body_items);
-        var list_data: vm.ListData = .{ .items = std.ArrayListUnmanaged(Value){ .items = mutable_items, .capacity = body_items.len }, .src_line = 0 };
-        const body_list_val: Value = .{ .list = &list_data };
+        // so listValueFromSlice shares the items array without copying.
+        const body_list_val = try vm.listValueFromSlice(allocator, body_items);
         return evalRec(allocator, &body_list_val, frame, depth);
     }
 

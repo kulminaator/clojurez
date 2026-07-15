@@ -67,6 +67,39 @@ else
 fi
 echo ""
 
+# Check 5: Flag direct pointer struct construction outside value.zig
+# These structs are large (64-256+ bytes) with atomic fields, allocator fields,
+# nested ArrayLists. Accidental stack allocation is impractical, but we lint
+# to prevent any future violations.
+# Types: FnData, AtomData, FutureData, PromiseData, RecordData, ExceptionData,
+#        RefData, MultimethodData, ConsData, ChunkData, ChunkedConsData, LazySeqThunk
+echo "Check 5: Direct pointer struct construction outside value.zig"
+VIOLATIONS=$(grep -rn 'FnData{\|AtomData{\|FutureData{\|PromiseData{\|RecordData{\|ExceptionData{\|RefData{\|MultimethodData{\|ConsData{\|ChunkData{\|ChunkedConsData{\|LazySeqThunk{' \
+    "$SRC_DIR" --include="*.zig" 2>/dev/null | grep -v 'value\.zig\|test_' || true)
+if [ -n "$VIOLATIONS" ]; then
+    echo "  FAIL: Found direct pointer struct construction:"
+    echo "$VIOLATIONS" | sed 's/^/    /'
+    FAIL=1
+else
+    echo "  PASS: No direct pointer struct construction outside value.zig"
+fi
+echo ""
+
+# Check 6: Flag direct collection data construction outside value.zig
+# ListData, VectorData, MapData, SetData, QueueData are private (Phase 6).
+# This lint check catches any code that somehow bypasses the compile-time enforcement.
+echo "Check 6: Direct collection data construction outside value.zig"
+VIOLATIONS=$(grep -rn 'ListData{\|VectorData{\|MapData{\|SetData{\|QueueData{' \
+    "$SRC_DIR" --include="*.zig" 2>/dev/null | grep -v 'value\.zig\|test_' || true)
+if [ -n "$VIOLATIONS" ]; then
+    echo "  FAIL: Found direct collection data construction:"
+    echo "$VIOLATIONS" | sed 's/^/    /'
+    FAIL=1
+else
+    echo "  PASS: No direct collection data construction outside value.zig"
+fi
+echo ""
+
 # Summary
 if [ $FAIL -eq 0 ]; then
     echo "RESULT: All GC invariant checks passed."

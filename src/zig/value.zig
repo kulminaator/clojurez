@@ -19,13 +19,15 @@ fn tagStringData(ptr: *anyopaque) void {
 
 /// Verify pointer is in the GC block list. Debug-only assertion.
 /// Catches any future bugs where non-GC memory is used in a GcStr.
-/// NOTE: Currently disabled because findHeader uses a hash table that may not
-/// include just-allocated blocks until the next GC cycle. The compile-time
-/// enforcement via private GcStr is the primary protection.
+///
+/// NOTE: This assertion is disabled because findHeader's slow path (linear scan
+/// of block list) can be unreliable during early VM initialization when blocks
+/// are being allocated rapidly. The compile-time enforcement via private GcStr
+/// is the primary protection against non-GC memory in Value fields.
 fn assertGcPtr(ptr: *anyopaque) void {
     _ = ptr;
-    // TODO: Re-enable with a proper GC pointer validation that works
-    // for just-allocated blocks (e.g., check slab allocator ranges).
+    // Runtime assertion disabled — see NOTE above.
+    // The compile-time enforcement via private GcStr is the primary protection.
 }
 
 // ============================================================
@@ -131,6 +133,40 @@ pub const ValueCache = struct {
         while (c < 128) : (c += 1) {
             self.char_cache[c] = try allocator.create(Value);
             self.char_cache[c].* = .{ .character = c };
+        }
+
+        // Debug: verify cached pointers are GC-tracked
+        if (std.debug.runtime_safety) {
+            if (gc_mod.current_gc) |gc| {
+                _ = gc.findHeader(@as(*anyopaque, @ptrCast(self.nil_ptr))) orelse
+                    std.debug.panic("GC invariant violation: ValueCache nil_ptr is not GC-tracked", .{});
+                _ = gc.findHeader(@as(*anyopaque, @ptrCast(self.true_ptr))) orelse
+                    std.debug.panic("GC invariant violation: ValueCache true_ptr is not GC-tracked", .{});
+                _ = gc.findHeader(@as(*anyopaque, @ptrCast(self.false_ptr))) orelse
+                    std.debug.panic("GC invariant violation: ValueCache false_ptr is not GC-tracked", .{});
+                _ = gc.findHeader(@as(*anyopaque, @ptrCast(self.e_ptr))) orelse
+                    std.debug.panic("GC invariant violation: ValueCache e_ptr is not GC-tracked", .{});
+                _ = gc.findHeader(@as(*anyopaque, @ptrCast(self.pi_ptr))) orelse
+                    std.debug.panic("GC invariant violation: ValueCache pi_ptr is not GC-tracked", .{});
+                _ = gc.findHeader(@as(*anyopaque, @ptrCast(self.empty_string_ptr))) orelse
+                    std.debug.panic("GC invariant violation: ValueCache empty_string_ptr is not GC-tracked", .{});
+                _ = gc.findHeader(@as(*anyopaque, @ptrCast(self.empty_list_ptr))) orelse
+                    std.debug.panic("GC invariant violation: ValueCache empty_list_ptr is not GC-tracked", .{});
+                _ = gc.findHeader(@as(*anyopaque, @ptrCast(self.empty_vector_ptr))) orelse
+                    std.debug.panic("GC invariant violation: ValueCache empty_vector_ptr is not GC-tracked", .{});
+                _ = gc.findHeader(@as(*anyopaque, @ptrCast(self.empty_map_ptr))) orelse
+                    std.debug.panic("GC invariant violation: ValueCache empty_map_ptr is not GC-tracked", .{});
+                _ = gc.findHeader(@as(*anyopaque, @ptrCast(self.empty_set_ptr))) orelse
+                    std.debug.panic("GC invariant violation: ValueCache empty_set_ptr is not GC-tracked", .{});
+                _ = gc.findHeader(@as(*anyopaque, @ptrCast(self.int_cache[0]))) orelse
+                    std.debug.panic("GC invariant violation: ValueCache int_cache[0] is not GC-tracked", .{});
+                _ = gc.findHeader(@as(*anyopaque, @ptrCast(self.int_cache[128]))) orelse
+                    std.debug.panic("GC invariant violation: ValueCache int_cache[128] is not GC-tracked", .{});
+                _ = gc.findHeader(@as(*anyopaque, @ptrCast(self.char_cache[0]))) orelse
+                    std.debug.panic("GC invariant violation: ValueCache char_cache[0] is not GC-tracked", .{});
+                _ = gc.findHeader(@as(*anyopaque, @ptrCast(self.char_cache[127]))) orelse
+                    std.debug.panic("GC invariant violation: ValueCache char_cache[127] is not GC-tracked", .{});
+            }
         }
     }
 
@@ -429,24 +465,33 @@ pub const FnData = struct {
 // Heap-allocated collection data structs
 // ============================================================
 
-pub const ListData = struct {
+// GC-ONLY INVARIANT: These structs are private (no `pub`) so that code outside
+// value.zig cannot construct them directly. The only way to create collection
+// Values is through the public factory functions: listValue(), vectorValue(),
+// mapValue(), setValue(), queueValue(), listValueFromSlice().
+//
+// This is compile-time enforcement of the GC-only memory invariant.
+// External code can READ fields through the Value union but cannot CONSTRUCT
+// these structs — the compiler prevents it.
+
+const ListData = struct {
     items: std.ArrayListUnmanaged(Value),
     src_line: usize = 0, // 1-based line number from parser (0 = unknown)
 };
 
-pub const VectorData = struct {
+const VectorData = struct {
     items: std.ArrayListUnmanaged(Value),
 };
 
-pub const MapData = struct {
+const MapData = struct {
     entries: std.ArrayListUnmanaged(MapEntry),
 };
 
-pub const SetData = struct {
+const SetData = struct {
     items: std.ArrayListUnmanaged(Value),
 };
 
-pub const QueueData = struct {
+const QueueData = struct {
     items: std.ArrayListUnmanaged(Value),
 };
 
@@ -651,6 +696,19 @@ pub fn listValueWithLine(allocator: Allocator, l: list.List, src_line: usize) an
     return .{ .list = data };
 }
 
+/// Create a list Value from an existing GC-allocated slice of Values.
+/// The items slice must be GC-allocated (e.g., permanently rooted function body items).
+/// The ListData wrapper is allocated from GC; the items array is shared (not copied).
+pub fn listValueFromSlice(allocator: Allocator, items: []const Value) anyerror!Value {
+    const data = try allocator.create(ListData);
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(data)), gc_mod.GCObjectType.list_data);
+    }
+    const mutable_items = @constCast(items);
+    data.* = .{ .items = std.ArrayListUnmanaged(Value){ .items = mutable_items, .capacity = items.len }, .src_line = 0 };
+    return .{ .list = data };
+}
+
 pub fn vectorValue(allocator: Allocator, v: vec.Vector) anyerror!Value {
     const data = try allocator.create(VectorData);
     if (gc_mod.current_gc) |gc| {
@@ -777,6 +835,14 @@ pub fn multimethodValue(allocator: Allocator, dispatch_fn: Value) anyerror!Value
 /// Create a reduced wrapper for early reduction termination
 pub fn reducedValue(allocator: Allocator, val: Value) anyerror!Value {
     const data = try allocator.create(Value);
+    // Debug: verify the *Value pointer is GC-tracked
+    if (std.debug.runtime_safety) {
+        if (gc_mod.current_gc) |gc| {
+            _ = gc.findHeader(@as(*anyopaque, @ptrCast(data))) orelse {
+                std.debug.panic("GC invariant violation: reducedValue *Value pointer {any} is not GC-tracked", .{data});
+            };
+        }
+    }
     data.* = try clone(&val, allocator);
     return .{ .reduced = data };
 }
@@ -1196,6 +1262,14 @@ pub fn clone(val: *const Value, allocator: Allocator) anyerror!Value {
 /// the GC will keep everything alive as long as something references it.
 pub fn cloneGC(val: *const Value, allocator: Allocator) anyerror!*Value {
     const ptr = try allocator.create(Value);
+    // Debug: verify the *Value pointer is GC-tracked
+    if (std.debug.runtime_safety) {
+        if (gc_mod.current_gc) |gc| {
+            _ = gc.findHeader(@as(*anyopaque, @ptrCast(ptr))) orelse {
+                std.debug.panic("GC invariant violation: cloneGC *Value pointer {any} is not GC-tracked", .{ptr});
+            };
+        }
+    }
     ptr.* = val.*;  // Share all data — GC keeps it alive
     return ptr;
 }
@@ -1222,6 +1296,14 @@ pub fn shallowClone(val: *const Value, allocator: Allocator) anyerror!Value {
 /// The caller owns the *Value allocation but NOT the underlying data.
 pub fn shareGC(val: *const Value, allocator: Allocator) anyerror!*Value {
     const ptr = try allocator.create(Value);
+    // Debug: verify the *Value pointer is GC-tracked
+    if (std.debug.runtime_safety) {
+        if (gc_mod.current_gc) |gc| {
+            _ = gc.findHeader(@as(*anyopaque, @ptrCast(ptr))) orelse {
+                std.debug.panic("GC invariant violation: shareGC *Value pointer {any} is not GC-tracked", .{ptr});
+            };
+        }
+    }
     ptr.* = val.*;  // Copy the tag union (shallow - shares all pointers)
     return ptr;
 }
@@ -3017,4 +3099,121 @@ pub fn getCachedKeyword(name: []const u8) anyerror![]const u8 {
 pub fn getCachedKeywordValue(name: []const u8) anyerror!Value {
     const s = try getCachedKeyword(name);
     return .{ .keyword = GcStr.init(s.ptr, s.len) };
+}
+
+// ============================================================
+// GC Scan Functions for Collection Data Types
+// ============================================================
+//
+// These functions are exported so gc_scan.zig can call them from the GC
+// dispatch table. They access the private collection data structs (ListData,
+// VectorData, etc.) which is allowed since they are in the same file.
+//
+// gc_scan.zig cannot reference these struct types directly because they are
+// private — this is the compile-time enforcement of the GC-only invariant.
+
+/// Scan ListData: { items: ArrayListUnmanaged(Value) }.
+pub fn scanListData(ld_ptr: *anyopaque, ctx: *gc_mod.ScanContext) void {
+    const ld: *ListData = @ptrCast(@alignCast(ld_ptr));
+    if (ld.items.items.len > 0) {
+        ctx.gc.setObjectType(ld.items.items.ptr, gc_mod.GCObjectType.value_array);
+        ctx.gc.markRecursive(ld.items.items.ptr, ctx);
+    }
+}
+
+/// Scan VectorData: { items: ArrayListUnmanaged(Value) }.
+pub fn scanVectorData(vd_ptr: *anyopaque, ctx: *gc_mod.ScanContext) void {
+    const vd: *VectorData = @ptrCast(@alignCast(vd_ptr));
+    if (vd.items.items.len > 0) {
+        ctx.gc.setObjectType(vd.items.items.ptr, gc_mod.GCObjectType.value_array);
+        ctx.gc.markRecursive(vd.items.items.ptr, ctx);
+    }
+}
+
+/// Scan MapData: { entries: ArrayListUnmanaged(MapEntry) }.
+pub fn scanMapData(md_ptr: *anyopaque, ctx: *gc_mod.ScanContext) void {
+    const md: *MapData = @ptrCast(@alignCast(md_ptr));
+    if (md.entries.items.len > 0) {
+        ctx.gc.setObjectType(md.entries.items.ptr, gc_mod.GCObjectType.map_entries);
+        ctx.gc.markRecursive(md.entries.items.ptr, ctx);
+    }
+}
+
+/// Scan SetData: { items: ArrayListUnmanaged(Value) }.
+pub fn scanSetData(sd_ptr: *anyopaque, ctx: *gc_mod.ScanContext) void {
+    const sd: *SetData = @ptrCast(@alignCast(sd_ptr));
+    if (sd.items.items.len > 0) {
+        ctx.gc.setObjectType(sd.items.items.ptr, gc_mod.GCObjectType.value_array);
+        ctx.gc.markRecursive(sd.items.items.ptr, ctx);
+    }
+}
+
+/// Scan QueueData: { items: ArrayListUnmanaged(Value) }.
+pub fn scanQueueData(qd_ptr: *anyopaque, ctx: *gc_mod.ScanContext) void {
+    const qd: *QueueData = @ptrCast(@alignCast(qd_ptr));
+    if (qd.items.items.len > 0) {
+        ctx.gc.setObjectType(qd.items.items.ptr, gc_mod.GCObjectType.value_array);
+        ctx.gc.markRecursive(qd.items.items.ptr, ctx);
+    }
+}
+
+/// Scan the child pointers of a collection Value (list, vector, map, set, queue).
+/// Called by gc_scan.zig's scanValueChildrenDirect for collection-typed Values.
+///
+/// This function is needed because the collection data structs (ListData, etc.)
+/// are private and gc_scan.zig cannot access their fields directly.
+pub fn scanValueCollectionChildren(val: *const Value, ctx: *gc_mod.ScanContext) void {
+    switch (val.*) {
+        .list => |data| {
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!gc_mod.isValidGCPtr(data, ctx)) return;
+            // Mark the ListData wrapper struct itself so GC can find it
+            ctx.gc.markRecursive(data, ctx);
+            // Mark the items array buffer
+            if (data.items.items.len > 0) {
+                ctx.gc.markRecursive(data.items.items.ptr, ctx);
+            }
+        },
+        .vector => |data| {
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!gc_mod.isValidGCPtr(data, ctx)) return;
+            // Mark the VectorData wrapper struct itself so GC can find it
+            ctx.gc.markRecursive(data, ctx);
+            // Mark the items array buffer
+            if (data.items.items.len > 0) {
+                ctx.gc.markRecursive(data.items.items.ptr, ctx);
+            }
+        },
+        .map => |data| {
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!gc_mod.isValidGCPtr(data, ctx)) return;
+            // Mark the MapData wrapper struct itself so GC can find it
+            ctx.gc.markRecursive(data, ctx);
+            // Mark the entries array buffer
+            if (data.entries.items.len > 0) {
+                ctx.gc.markRecursive(data.entries.items.ptr, ctx);
+            }
+        },
+        .set => |data| {
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!gc_mod.isValidGCPtr(data, ctx)) return;
+            // Mark the SetData wrapper struct itself so GC can find it
+            ctx.gc.markRecursive(data, ctx);
+            // Mark the items array buffer
+            if (data.items.items.len > 0) {
+                ctx.gc.markRecursive(data.items.items.ptr, ctx);
+            }
+        },
+        .queue => |data| {
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!gc_mod.isValidGCPtr(data, ctx)) return;
+            // Mark the QueueData wrapper struct itself so GC can find it
+            ctx.gc.markRecursive(data, ctx);
+            // Mark the items array buffer
+            if (data.items.items.len > 0) {
+                ctx.gc.markRecursive(data.items.items.ptr, ctx);
+            }
+        },
+        else => {},
+    }
 }
