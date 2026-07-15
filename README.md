@@ -2,6 +2,9 @@
 
 A Clojure interpreter written in Zig. No JVM required.
 
+## TL;DR
+A small clojure (1MB) runtim in Zig.
+
 ## Quick Start
 
 Clone the project then build it.
@@ -36,7 +39,7 @@ Type `(quit)`, `(exit)`, or press `CTRL+D` to exit the REPL.
 
 | Binary | Size | Use |
 |--------|------|-----|
-| `clojurez` | ~30MB | Debug (full safety checks) |
+| `clojurez` | ~45MB or ~11MB | Debug (full safety checks) or ReleaseSafe versions |
 | `clojurez-medium` | ~1MB | ReleaseSmall |
 | `clojurez-mini` | ~1MB | ReleaseSmall + stripped |
 
