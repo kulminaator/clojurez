@@ -1819,6 +1819,181 @@
   10)
 
 ;; ============================================================
+;; PHASE 11: bytecode-to-bytecode calls
+;; Tests that bytecode functions can call other bytecode-eligible
+;; functions (inc, dec, abs, max, min, etc.) via the direct
+;; bytecode call path (skipping the evaluator).
+;; ============================================================
+
+;; Call inc from bytecode (inc is bytecode-eligible: (+ x 1))
+(defn __bc-call-inc [x] (inc x))
+
+(check "bytecode: call inc from bytecode"
+  (__bc-call-inc 5)
+  6)
+
+(check "bytecode: call inc from bytecode with zero"
+  (__bc-call-inc 0)
+  1)
+
+(check "bytecode: call inc from bytecode with negative"
+  (__bc-call-inc -3)
+  -2)
+
+;; Call dec from bytecode
+(defn __bc-call-dec [x] (dec x))
+
+(check "bytecode: call dec from bytecode"
+  (__bc-call-dec 10)
+  9)
+
+;; Call abs from bytecode (abs is bytecode-eligible)
+(defn __bc-call-abs [x] (abs x))
+
+(check "bytecode: call abs from bytecode positive"
+  (__bc-call-abs 5)
+  5)
+
+(check "bytecode: call abs from bytecode negative"
+  (__bc-call-abs -7)
+  7)
+
+;; Call max from bytecode
+(defn __bc-call-max [x y] (max x y))
+
+(check "bytecode: call max from bytecode"
+  (__bc-call-max 3 7)
+  7)
+
+(check "bytecode: call max from bytecode equal"
+  (__bc-call-max 5 5)
+  5)
+
+;; Call min from bytecode
+(defn __bc-call-min [x y] (min x y))
+
+(check "bytecode: call min from bytecode"
+  (__bc-call-min 3 7)
+  3)
+
+;; Chain multiple bytecode-eligible function calls
+(defn __bc-chain-inc-dec [x] (dec (inc x)))
+
+(check "bytecode: chain inc then dec"
+  (__bc-chain-inc-dec 10)
+  10)
+
+;; Call identity from bytecode
+(defn __bc-call-identity [x] (identity x))
+
+(check "bytecode: call identity from bytecode"
+  (__bc-call-identity 42)
+  42)
+
+;; Call even? from bytecode
+(defn __bc-call-even [x] (even? x))
+
+(check "bytecode: call even? from bytecode true"
+  (__bc-call-even 4)
+  true)
+
+(check "bytecode: call even? from bytecode false"
+  (__bc-call-even 3)
+  false)
+
+;; Call odd? from bytecode
+(defn __bc-call-odd [x] (odd? x))
+
+(check "bytecode: call odd? from bytecode true"
+  (__bc-call-odd 3)
+  true)
+
+(check "bytecode: call odd? from bytecode false"
+  (__bc-call-odd 4)
+  false)
+
+;; Call zero? from bytecode
+(defn __bc-call-zero [x] (zero? x))
+
+(check "bytecode: call zero? from bytecode true"
+  (__bc-call-zero 0)
+  true)
+
+(check "bytecode: call zero? from bytecode false"
+  (__bc-call-zero 5)
+  false)
+
+;; Call pos? from bytecode
+(defn __bc-call-pos [x] (pos? x))
+
+(check "bytecode: call pos? from bytecode true"
+  (__bc-call-pos 1)
+  true)
+
+(check "bytecode: call pos? from bytecode false"
+  (__bc-call-pos -1)
+  false)
+
+;; Call neg? from bytecode
+(defn __bc-call-neg [x] (neg? x))
+
+(check "bytecode: call neg? from bytecode true"
+  (__bc-call-neg -1)
+  true)
+
+(check "bytecode: call neg? from bytecode false"
+  (__bc-call-neg 1)
+  false)
+
+;; Call compare from bytecode
+(defn __bc-call-compare [x y] (compare x y))
+
+(check "bytecode: call compare from bytecode less"
+  (__bc-call-compare 3 5)
+  -1)
+
+(check "bytecode: call compare from bytecode equal"
+  (__bc-call-compare 5 5)
+  0)
+
+(check "bytecode: call compare from bytecode greater"
+  (__bc-call-compare 7 3)
+  1)
+
+;; Call mod from bytecode
+(defn __bc-call-mod [x y] (mod x y))
+
+(check "bytecode: call mod from bytecode"
+  (__bc-call-mod 10 3)
+  1)
+
+;; Call quot from bytecode
+(defn __bc-call-quot [x y] (quot x y))
+
+(check "bytecode: call quot from bytecode"
+  (__bc-call-quot 10 3)
+  3)
+
+;; Call rem from bytecode
+(defn __bc-call-rem [x y] (rem x y))
+
+(check "bytecode: call rem from bytecode"
+  (__bc-call-rem 10 3)
+  1)
+
+;; Complex expression calling multiple bytecode-eligible functions
+(defn __bc-complex-expr [x y]
+  (+ (max x y) (min x y) (abs (- x y))))
+
+(check "bytecode: complex expr with max/min/abs"
+  (__bc-complex-expr 3 7)
+  14)  ; max(3,7)=7 + min(3,7)=3 + abs(3-7)=4 = 14
+
+(check "bytecode: complex expr with max/min/abs swapped"
+  (__bc-complex-expr 7 3)
+  14)  ; max(7,3)=7 + min(7,3)=3 + abs(7-3)=4 = 14
+
+;; ============================================================
 ;; SUMMARY
 ;; ============================================================
 

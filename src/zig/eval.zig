@@ -1383,6 +1383,100 @@ pub fn callWithEnvV(allocator: Allocator, op: *const Value, args_list: *const li
     };
 }
 
+/// Direct bytecode-to-bytecode call optimization (Phase 11).
+/// Attempts to execute a function's bytecode directly, skipping the evaluator.
+/// Returns the result as *Value on success, or null if the function has no bytecode
+/// for the given argument count (caller should fall back to callWithEnvV).
+pub fn tryExecuteBytecodeCall(
+    allocator: Allocator,
+    fn_val: *const Value,
+    args: []const Value,
+    caller_env: *Env,
+) anyerror!?*Value {
+    _ = caller_env; // The called function's captured env has the right parent chain
+    // Only works for user-defined functions
+    if (std.meta.activeTag(fn_val.*) != .function) return null;
+
+    const fn_data = fn_val.*.function;
+    const arity = matchArityBytecode(fn_data, args.len) orelse return null;
+    const bc = arity.bytecode orelse return null;
+
+    // Clone the function's captured environment and bind parameters
+    const bc_env = try allocator.create(Env);
+    bc_env.* = try cloneFnEnv(allocator, fn_data.env);
+    try bindArityParamsEnvSlice(allocator, arity, args, bc_env);
+
+    // Execute the bytecode directly
+    const vm_result = try bytecode_mod.execute(allocator, bc, bc_env);
+    switch (vm_result) {
+        .value => |v| {
+            bc_env.deinit(allocator);
+            allocator.destroy(bc_env);
+            bytecode_executions += 1;
+            return v;
+        },
+        .trampoline => {
+            // Nested function call pushed a trampoline — fall back to evaluator
+            bc_env.deinit(allocator);
+            allocator.destroy(bc_env);
+            return null;
+        },
+    }
+}
+
+/// Match arity for bytecode call (returns pointer, not *const).
+pub fn matchArityBytecode(fn_data: *const vm.FnData, arg_count: usize) ?*const vm.Arity {
+    var i: usize = 0;
+    while (i < fn_data.arities.items.len) : (i += 1) {
+        const arity = &fn_data.arities.items[i];
+        const min_args = arity.params.items.len;
+        const has_rest = arity.rest_name != null;
+        if (has_rest) {
+            if (arg_count >= min_args) return arity;
+        } else {
+            if (arg_count == min_args) return arity;
+        }
+    }
+    return null;
+}
+
+/// Bind arity parameters from a Value slice (used by direct bytecode calls).
+pub fn bindArityParamsEnvSlice(
+    allocator: Allocator,
+    arity: *const vm.Arity,
+    args: []const Value,
+    new_env: *Env,
+) anyerror!void {
+    const min_args = arity.params.items.len;
+    const has_rest = arity.rest_name != null;
+
+    // Bind regular parameters
+    var j: usize = 0;
+    while (j < arity.params.items.len) : (j += 1) {
+        const param = arity.params.items[j];
+        try bindPattern(allocator, param, args[j], new_env);
+    }
+
+    // Bind rest parameter
+    if (has_rest) {
+        if (args.len > min_args) {
+            var rest_list: list.List = .empty;
+            errdefer rest_list.deinit(allocator);
+            var k: usize = min_args;
+            while (k < args.len) : (k += 1) {
+                try rest_list.append(allocator, try vm.shallowClone(&args[k], allocator));
+            }
+            try new_env.put(arity.rest_name.?, try vm.listValue(allocator, rest_list));
+        } else {
+            if (vm.cachedEmptyList()) |empty| {
+                try new_env.put(arity.rest_name.?, empty);
+            } else {
+                try new_env.put(arity.rest_name.?, try vm.listValue(allocator, .empty));
+            }
+        }
+    }
+}
+
 pub fn evalRecWithEnv(allocator: Allocator, form: *const Value, env: *Env, depth: usize) anyerror!EvalResult {
     const frame = try createRootFrame(allocator, env);
     // Use detachFromParent instead of deinit: child frames on trampoline may reference this

@@ -187,27 +187,49 @@ pub fn execute(
                     try temp_args.append(allocator, arg_entry);
                 }
 
-                var args: list.List = .empty;
-                var remaining_count: usize = temp_args.items.len;
+                // Convert StackEntry args to Value slice (reversed to original order)
+                var arg_vals: std.ArrayListUnmanaged(Value) = .empty;
                 errdefer {
-                    args.deinit(allocator);
-                    for (temp_args.items[0..remaining_count]) |ae| vmt.freeEntry(ae, allocator);
+                    for (arg_vals.items) |*v| vm.valueDeinit(v, allocator);
+                    allocator.free(arg_vals.items);
+                    for (temp_args.items) |ae| vmt.freeEntry(ae, allocator);
                     allocator.free(temp_args.items);
                 }
                 var j: usize = temp_args.items.len;
                 while (j > 0) : (j -= 1) {
-                    remaining_count -= 1;
                     const arg_entry = temp_args.items[j - 1];
                     const arg_val = arg_entry.toValueConst();
-                    const cloned = try vm.shallowClone(&arg_val, allocator);
-                    try args.append(allocator, cloned);
+                    try arg_vals.append(allocator, try vm.shallowClone(&arg_val, allocator));
                 }
+                // Free temp_args early — arg_vals now owns the values
+                for (temp_args.items) |ae| vmt.freeEntry(ae, allocator);
                 allocator.free(temp_args.items);
 
                 const fn_val = fn_entry.toValueConst();
-                // Use callWithEnvV to disable trampolining and evaluate directly.
-                // This handles nested function calls within bytecode without
-                // requiring trampoline support in the VM.
+
+                // Phase 11: Try direct bytecode-to-bytecode call first.
+                // This skips the evaluator layer for bytecode targets.
+                if (try eval_mod.tryExecuteBytecodeCall(
+                    allocator, &fn_val, arg_vals.items, env,
+                )) |result_ptr| {
+                    // Direct bytecode call succeeded — free arg_vals and push result
+                    for (arg_vals.items) |*v| vm.valueDeinit(v, allocator);
+                    allocator.free(arg_vals.items);
+                    const result_ptr2 = try eval_mod.allocValue(allocator, result_ptr.*);
+                    try stack.pushPtr(result_ptr2);
+                    continue;
+                }
+
+                // Fall back to evaluator for non-bytecode functions
+                // Build list.List from arg_vals for callWithEnvV
+                var args: list.List = .empty;
+                errdefer args.deinit(allocator);
+                for (arg_vals.items) |arg_val| {
+                    try args.append(allocator, try vm.shallowClone(&arg_val, allocator));
+                }
+                for (arg_vals.items) |*v| vm.valueDeinit(v, allocator);
+                allocator.free(arg_vals.items);
+
                 const result_ptr = try eval_mod.callWithEnvV(allocator, &fn_val, &args, env, 0);
                 const result_val = try vm.shallowClone(result_ptr, allocator);
                 allocator.destroy(result_ptr);
