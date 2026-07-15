@@ -79,6 +79,46 @@ The VM supports multithreading via `future` and `future-call`, which spawn detac
 
 ---
 
+## 0.6 GC Memory Invariant
+
+**All Clojure value data MUST come from the GC allocator. Nothing must be allocated from the Zig stack.**
+
+This is a hard, non-negotiable rule. Values can be passed to other threads, captured in closures, and stored in parent frames — stack memory would be freed, causing use-after-free.
+
+### How the invariant is enforced
+
+The `Value` type uses private wrapper types (e.g., `GcStr`) to make it **compile-time impossible** to construct heap-backed fields from non-GC memory:
+
+- `string`, `symbol`, `keyword`, `regex` fields use `GcStr` — a private struct only constructable through factory functions in `value.zig`
+- Code outside `value.zig` that tries `Value{ .string = some_slice }` gets a compile error: `GcStr` is not accessible
+
+### Rules
+
+- **Use factory functions**: `stringValue()`, `symValue()`, `keywordValue()`, `regexValue()`, `listValue()`, `vectorValue()`, `mapValue()`, etc.
+- **Never construct `Value{ .string = ... }` directly** — the compiler will reject it
+- **Never construct `GcStr` directly** — it is private to `value.zig`
+- **For hash map lookup keys**: use `phm.sym(name)` which memoizes symbol values via `sym_cache`, avoiding repeated allocations
+- **The GC scanner only tracks GC-allocated blocks** — non-GC pointers are silently skipped (memory leak, not crash)
+
+### Violation symptoms
+
+- Use-after-free, dangling pointers
+- GC scanner crashes or sweeps live data
+- Namespace aliases silently failing (key points to freed stack memory)
+- Memory corruption in multithreaded code
+
+### `shallowClone` is a no-op
+
+Since all Value data is GC-managed and immutable, `shallowClone(val, allocator)` is a simple struct copy (`return val.*`). No duplication is needed — the GC keeps all shared data alive. The `allocator` parameter is unused.
+
+### Guardrails
+
+- **Lint check**: `tests/lint_gc_invariants.sh` — runs grep-based checks for violations
+- **Unit tests**: `test "gc_invariant: ..."` tests in `test_value.zig` verify GC tracking
+- Run these regularly to catch regressions early
+
+---
+
 ## 1. Code Size Limits
 
 **No Zig source file may exceed 2,000 lines. No single function may exceed 80 lines.**
