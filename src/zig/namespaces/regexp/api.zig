@@ -24,7 +24,7 @@ pub fn core_re_pattern(self: *const Value, args: *const list.List, env: *Env) an
     // If already a map with :pattern, return it as-is
     if (std.meta.activeTag(arg) == .map) {
         for (arg.map.entries.items) |entry| {
-            if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, "pattern")) {
+            if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword.slice(), "pattern")) {
                 return try vm.shallowClone(&arg, env.allocator);
             }
         }
@@ -32,7 +32,7 @@ pub fn core_re_pattern(self: *const Value, args: *const list.List, env: *Env) an
     if (std.meta.activeTag(arg) != .string) return error.TypeError;
 
     const allocator = env.allocator;
-    const s = arg.string;
+    const s = arg.string.slice();
 
     // Validate the pattern by parsing it (we store the string and re-parse on use)
     var ast = try regexp.parseRegex(s, allocator);
@@ -69,8 +69,8 @@ pub fn core_re_matches(self: *const Value, args: *const list.List, env: *Env) an
     var nfa = try getNfaFromPattern(allocator, pattern);
     defer nfa.deinit(allocator);
 
-    if (try regexp.nfaMatch(&nfa, s.string, allocator)) {
-        return try vm.stringValue(allocator, s.string);
+    if (try regexp.nfaMatch(&nfa, s.string.slice(), allocator)) {
+        return try vm.stringValue(allocator, s.string.slice());
     }
     return vm.nilValue();
 }
@@ -90,7 +90,7 @@ pub fn core_re_find(self: *const Value, args: *const list.List, env: *Env) anyer
     var nfa = try getNfaFromPattern(allocator, pattern);
     defer nfa.deinit(allocator);
 
-    const str = s.string;
+    const str = s.string.slice();
     const n = vm.utf8CodepointCount(str);
 
     var start: usize = 0;
@@ -121,7 +121,7 @@ pub fn core_re_seq(self: *const Value, args: *const list.List, env: *Env) anyerr
     var nfa = try getNfaFromPattern(allocator, pattern);
     defer nfa.deinit(allocator);
 
-    const str = s.string;
+    const str = s.string.slice();
     const n = vm.utf8CodepointCount(str);
     var matches = std.ArrayListUnmanaged(Value).empty;
     errdefer {
@@ -173,7 +173,7 @@ pub fn core_re_split(self: *const Value, args: *const list.List, env: *Env) anye
     var nfa = try getNfaFromPattern(allocator, pattern);
     defer nfa.deinit(allocator);
 
-    const str = s.string;
+    const str = s.string.slice();
     const n = vm.utf8CodepointCount(str);
     var parts = std.ArrayListUnmanaged(Value).empty;
     errdefer {
@@ -224,7 +224,7 @@ pub fn core_re_replace(self: *const Value, args: *const list.List, env: *Env) an
     var nfa = try getNfaFromPattern(allocator, pattern);
     defer nfa.deinit(allocator);
 
-    const str = s.string;
+    const str = s.string.slice();
     const n = vm.utf8CodepointCount(str);
 
     var start: usize = 0;
@@ -279,7 +279,7 @@ pub fn core_re_replace_all(self: *const Value, args: *const list.List, env: *Env
     var nfa = try getNfaFromPattern(allocator, pattern);
     defer nfa.deinit(allocator);
 
-    const str = s.string;
+    const str = s.string.slice();
     const n = vm.utf8CodepointCount(str);
 
     var buf: std.ArrayList(u8) = .empty;
@@ -340,7 +340,7 @@ fn getNfaFromPattern(allocator: Allocator, pattern: Value) anyerror!regexp.Nfa {
 // ============================================================
 
 fn getReplacementString(allocator: Allocator, v: Value) anyerror![]const u8 {
-    if (std.meta.activeTag(v) == .string) return v.string;
+    if (std.meta.activeTag(v) == .string) return v.string.slice();
     return vm.fmt(v, allocator);
 }
 

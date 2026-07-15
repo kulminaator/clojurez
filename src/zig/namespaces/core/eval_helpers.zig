@@ -60,7 +60,7 @@ fn bindPattern(allocator: Allocator, pattern: Value, val: Value, env: *vm.Env) a
         .symbol => {
             // In GC model, val is passed by copy and GC keeps underlying data alive.
             // No clone needed — the HAMT stores a Value referencing the same GC-tracked data.
-            try env.put(pattern.symbol, val);
+            try env.put(pattern.symbol.slice(), val);
         },
         .vector => {
             // Vector destructuring: [a b & rest] matches elements of val
@@ -73,7 +73,7 @@ fn bindPattern(allocator: Allocator, pattern: Value, val: Value, env: *vm.Env) a
             while (j < pattern.vector.items.items.len) : (j += 1) {
                 const pat_item = pattern.vector.items.items[j];
                 // Handle & rest (& is parsed as a symbol)
-                if (std.meta.activeTag(pat_item) == .symbol and std.mem.eql(u8, pat_item.symbol, "&")) {
+                if (std.meta.activeTag(pat_item) == .symbol and std.mem.eql(u8, pat_item.symbol.slice(), "&")) {
                     if (j + 1 < pattern.vector.items.items.len) {
                         const rest_sym = pattern.vector.items.items[j + 1];
                         // Collect remaining items into a list (starting from current position j)
@@ -84,7 +84,7 @@ fn bindPattern(allocator: Allocator, pattern: Value, val: Value, env: *vm.Env) a
                             try rest_list.append(allocator, vitems[k]);
                         }
                         if (std.meta.activeTag(rest_sym) == .symbol) {
-                            try env.put(rest_sym.symbol, try vm.listValue(allocator, rest_list));
+                            try env.put(rest_sym.symbol.slice(), try vm.listValue(allocator, rest_list));
                         }
                         j += 1; // Skip the rest symbol
                     }
@@ -104,7 +104,7 @@ fn bindPattern(allocator: Allocator, pattern: Value, val: Value, env: *vm.Env) a
             var j: usize = 0;
             while (j < pattern.list.items.items.len) : (j += 1) {
                 const pat_item = pattern.list.items.items[j];
-                if (std.meta.activeTag(pat_item) == .symbol and std.mem.eql(u8, pat_item.symbol, "&")) {
+                if (std.meta.activeTag(pat_item) == .symbol and std.mem.eql(u8, pat_item.symbol.slice(), "&")) {
                     if (j + 1 < pattern.list.items.items.len) {
                         const rest_sym = pattern.list.items.items[j + 1];
                         var rest_list: list.List = .empty;
@@ -114,7 +114,7 @@ fn bindPattern(allocator: Allocator, pattern: Value, val: Value, env: *vm.Env) a
                             try rest_list.append(allocator, vitems[k]);
                         }
                         if (std.meta.activeTag(rest_sym) == .symbol) {
-                            try env.put(rest_sym.symbol, try vm.listValue(allocator, rest_list));
+                            try env.put(rest_sym.symbol.slice(), try vm.listValue(allocator, rest_list));
                         }
                         j += 1;
                     }
@@ -140,13 +140,13 @@ pub fn parseParams(allocator: Allocator, params: list.List) anyerror!ParsedParam
     var found_amp = false;
     while (i < params.items.len) : (i += 1) {
         const item = params.items[i];
-        if (!found_amp and std.meta.activeTag(item) == .symbol and std.mem.eql(u8, item.symbol, "&")) {
+        if (!found_amp and std.meta.activeTag(item) == .symbol and std.mem.eql(u8, item.symbol.slice(), "&")) {
             found_amp = true;
             continue;
         }
         if (found_amp) {
             if (std.meta.activeTag(item) != .symbol) return error.TypeError;
-            rest_name = try allocator.dupe(u8, item.symbol);
+            rest_name = try allocator.dupe(u8, item.symbol.slice());
             break;
         } else {
             try regular_params.append(allocator, item);
@@ -201,7 +201,7 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args: []const Value, e
                     var body_call: list.List = undefined;
                     if (arity.body.items.len >= 2 and
                         std.meta.activeTag(arity.body.items[0]) == .symbol and
-                        std.mem.eql(u8, arity.body.items[0].symbol, "do") and
+                        std.mem.eql(u8, arity.body.items[0].symbol.slice(), "do") and
                         std.meta.activeTag(arity.body.items[1]) == .list)
                     {
                         body_call = arity.body.items[1].list.items;
@@ -215,8 +215,8 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args: []const Value, e
                         const body_arg0 = &body_call.items[1];
                         const body_arg1 = &body_call.items[2];
                         if (std.meta.activeTag(body_arg0.*) == .symbol and std.meta.activeTag(body_arg1.*) == .symbol and
-                            std.mem.eql(u8, body_arg0.symbol, arity.params.items[0].symbol) and
-                            std.mem.eql(u8, body_arg1.symbol, arity.params.items[1].symbol))
+                            std.mem.eql(u8, body_arg0.symbol.slice(), arity.params.items[0].symbol.slice()) and
+                            std.mem.eql(u8, body_arg1.symbol.slice(), arity.params.items[1].symbol.slice()))
                         {
                             // Resolve operator from function's definition env (has ns_manager)
                             // Phase 4: Use evalFormDirect — Value by copy, no *Value allocation
@@ -236,12 +236,12 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args: []const Value, e
             if (arity.params.items.len == 1 and arity.rest_name == null and arg_count == 1 and
                 std.meta.activeTag(arity.params.items[0]) == .symbol)
             {
-                const param_name = arity.params.items[0].symbol;
+                const param_name = arity.params.items[0].symbol.slice();
 
                 // --- Pattern 1: body is bare param symbol → identity ---
                 if (arity.body.items.len == 1 and
                     std.meta.activeTag(arity.body.items[0]) == .symbol and
-                    std.mem.eql(u8, arity.body.items[0].symbol, param_name))
+                    std.mem.eql(u8, arity.body.items[0].symbol.slice(), param_name))
                 {
                     // identity: return the argument directly (no clone needed — GC keeps data alive)
                     return try allocBuiltinResult(allocator, args[0]);
@@ -252,7 +252,7 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args: []const Value, e
                 var body_call: list.List = undefined;
                 if (arity.body.items.len >= 2 and
                     std.meta.activeTag(arity.body.items[0]) == .symbol and
-                    std.mem.eql(u8, arity.body.items[0].symbol, "do") and
+                    std.mem.eql(u8, arity.body.items[0].symbol.slice(), "do") and
                     std.meta.activeTag(arity.body.items[1]) == .list)
                 {
                     body_call = arity.body.items[1].list.items;
@@ -269,7 +269,7 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args: []const Value, e
                         // --- Pattern 2: (op param) → e.g. not, boolean ---
                         const body_arg0 = &body_call.items[1];
                         if (std.meta.activeTag(body_arg0.*) == .symbol and
-                            std.mem.eql(u8, body_arg0.symbol, param_name))
+                            std.mem.eql(u8, body_arg0.symbol.slice(), param_name))
                         {
                             // Resolve operator from function's definition env (has ns_manager)
                             // Phase 4: Use evalFormDirect — Value by copy, no *Value allocation
@@ -287,9 +287,9 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args: []const Value, e
                         const body_arg0 = &body_call.items[1];
                         const body_arg1 = &body_call.items[2];
                         const arg0_is_param = std.meta.activeTag(body_arg0.*) == .symbol and
-                            std.mem.eql(u8, body_arg0.symbol, param_name);
+                            std.mem.eql(u8, body_arg0.symbol.slice(), param_name);
                         const arg1_is_param = std.meta.activeTag(body_arg1.*) == .symbol and
-                            std.mem.eql(u8, body_arg1.symbol, param_name);
+                            std.mem.eql(u8, body_arg1.symbol.slice(), param_name);
                         const arg0_is_literal = std.meta.activeTag(body_arg0.*) != .symbol and
                             std.meta.activeTag(body_arg0.*) != .list;
                         const arg1_is_literal = std.meta.activeTag(body_arg1.*) != .symbol and
@@ -364,7 +364,7 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args: []const Value, e
             // Check for protocol dispatch marker in body
             if (arity.body.items.len >= 1 and
                 std.meta.activeTag(arity.body.items[0]) == .symbol and
-                std.mem.eql(u8, arity.body.items[0].symbol, "__protocol_dispatch__"))
+                std.mem.eql(u8, arity.body.items[0].symbol.slice(), "__protocol_dispatch__"))
             {
                 const protocols_mod = @import("../../namespaces/core/protocols.zig");
                 const args_wrapper = list.List{ .items = @constCast(args), .capacity = args.len };
@@ -408,18 +408,18 @@ pub fn callBuiltin(allocator: Allocator, f: *const Value, args: []const Value, e
             const coll = &args[0];
             if (std.meta.activeTag(coll.*) == .map) {
                 for (coll.map.entries.items) |entry| {
-                    if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, f.keyword)) {
+                    if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword.slice(), f.keyword.slice())) {
                         return try allocBuiltinResult(allocator, entry.value);
                     }
                 }
             } else if (std.meta.activeTag(coll.*) == .record) {
                 for (coll.record.fields.items) |entry| {
-                    if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, f.keyword)) {
+                    if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword.slice(), f.keyword.slice())) {
                         return try allocBuiltinResult(allocator, entry.value);
                     }
                 }
                 for (coll.record.extmap.items) |entry| {
-                    if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, f.keyword)) {
+                    if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword.slice(), f.keyword.slice())) {
                         return try allocBuiltinResult(allocator, entry.value);
                     }
                 }
@@ -499,7 +499,7 @@ pub fn evalBody(allocator: Allocator, body: *const list.List, env: *vm.Env) anye
     // For partial/comp/fnil/juxt functions, body starts with the actual form.
     if (body.items.len >= 1 and
         std.meta.activeTag(body.items[0]) == .symbol and
-        std.mem.eql(u8, body.items[0].symbol, "do"))
+        std.mem.eql(u8, body.items[0].symbol.slice(), "do"))
     {
         // Common case: skip "do" and evaluate body forms directly.
         // The body is part of the function definition (immutable, permanently rooted).
@@ -571,7 +571,7 @@ fn evalSelfRef(form: *const Value) *const Value {
 /// Returns *const Value pointing directly into the HAMT node.
 /// Mirrors evalSymbol's logic but avoids shallowClone + allocBuiltinResult.
 fn resolveSymbolRef(form: *const Value, env: *vm.Env) anyerror!*const Value {
-    const sym = form.symbol;
+    const sym = form.symbol.slice();
     // Handle qualified symbols: alias/name or namespace/name
     if (std.mem.indexOfScalar(u8, sym, '/')) |slash_idx| {
         return resolveQualifiedSymbolRef(sym, slash_idx, env);
@@ -625,10 +625,10 @@ fn fallbackSymbolLookupRef(sym: []const u8, env: *vm.Env) anyerror!*const Value 
 /// Handles qualified symbols (alias/name or namespace/name) and unqualified symbols.
 fn evalSymbol(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Value {
     // Handle qualified symbols: alias/name or namespace/name
-    if (std.mem.indexOfScalar(u8, form.symbol, '/')) |slash_idx| {
-        return evalQualifiedSymbol(allocator, form.symbol, slash_idx, env);
+    if (std.mem.indexOfScalar(u8, form.symbol.slice(), '/')) |slash_idx| {
+        return evalQualifiedSymbol(allocator, form.symbol.slice(), slash_idx, env);
     }
-    return evalUnqualifiedSymbol(allocator, form.symbol, env);
+    return evalUnqualifiedSymbol(allocator, form.symbol.slice(), env);
 }
 
 fn evalQualifiedSymbol(allocator: Allocator, sym: []const u8, slash_idx: usize, env: *vm.Env) anyerror!*Value {
@@ -668,20 +668,20 @@ fn evalList(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Va
 
     const first = &items[0];
     if (std.meta.activeTag(first.*) == .symbol) {
-        if (std.mem.eql(u8, first.symbol, "quote")) return evalQuote(allocator, form);
-        if (std.mem.eql(u8, first.symbol, "quasiquote")) return evalQuasiquote(allocator, form, env);
-        if (std.mem.eql(u8, first.symbol, "do")) return evalDo(allocator, form, env);
-        if (std.mem.eql(u8, first.symbol, "if")) return evalIf(allocator, form, env);
-        if (std.mem.eql(u8, first.symbol, "when")) return evalWhen(allocator, form, env);
-        if (std.mem.eql(u8, first.symbol, "and")) return evalAnd(allocator, form, env);
-        if (std.mem.eql(u8, first.symbol, "or")) return evalOr(allocator, form, env);
-        if (std.mem.eql(u8, first.symbol, "cond")) return evalCond(allocator, form, env);
-        if (std.mem.eql(u8, first.symbol, "let")) return evalLet(allocator, form, env);
-        if (std.mem.eql(u8, first.symbol, "fn")) return evalFn(allocator, form, env);
-        if (std.mem.eql(u8, first.symbol, "lazy-seq")) return evalLazySeq(allocator, form, env);
-        if (std.mem.eql(u8, first.symbol, "loop")) return evalLoop(allocator, form, env);
-        if (std.mem.eql(u8, first.symbol, "recur")) return evalRecur(allocator, form, env);
-        if (std.mem.eql(u8, first.symbol, "__protocol_dispatch__")) return evalProtocolDispatch(allocator, form, env);
+        if (std.mem.eql(u8, first.symbol.slice(), "quote")) return evalQuote(allocator, form);
+        if (std.mem.eql(u8, first.symbol.slice(), "quasiquote")) return evalQuasiquote(allocator, form, env);
+        if (std.mem.eql(u8, first.symbol.slice(), "do")) return evalDo(allocator, form, env);
+        if (std.mem.eql(u8, first.symbol.slice(), "if")) return evalIf(allocator, form, env);
+        if (std.mem.eql(u8, first.symbol.slice(), "when")) return evalWhen(allocator, form, env);
+        if (std.mem.eql(u8, first.symbol.slice(), "and")) return evalAnd(allocator, form, env);
+        if (std.mem.eql(u8, first.symbol.slice(), "or")) return evalOr(allocator, form, env);
+        if (std.mem.eql(u8, first.symbol.slice(), "cond")) return evalCond(allocator, form, env);
+        if (std.mem.eql(u8, first.symbol.slice(), "let")) return evalLet(allocator, form, env);
+        if (std.mem.eql(u8, first.symbol.slice(), "fn")) return evalFn(allocator, form, env);
+        if (std.mem.eql(u8, first.symbol.slice(), "lazy-seq")) return evalLazySeq(allocator, form, env);
+        if (std.mem.eql(u8, first.symbol.slice(), "loop")) return evalLoop(allocator, form, env);
+        if (std.mem.eql(u8, first.symbol.slice(), "recur")) return evalRecur(allocator, form, env);
+        if (std.mem.eql(u8, first.symbol.slice(), "__protocol_dispatch__")) return evalProtocolDispatch(allocator, form, env);
     }
 
     // Non-special-form: evaluate as function call
@@ -860,7 +860,7 @@ fn evalLoop(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Va
     while (i < bind_items.len) : (i += 2) {
         const sym = &bind_items[i];
         if (std.meta.activeTag(sym.*) != .symbol) return error.TypeError;
-        try bind_names.append(allocator, try allocator.dupe(u8, sym.symbol));
+        try bind_names.append(allocator, try allocator.dupe(u8, sym.symbol.slice()));
     }
 
     // Evaluate initial bindings and create env
@@ -871,7 +871,7 @@ fn evalLoop(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Va
         const sym = &bind_items[i];
         // Phase 4: Use evalFormDirect — Value by copy, no *Value allocation
         const val = try evalFormDirect(allocator, &bind_items[i + 1], &loop_env);
-        try loop_env.put(sym.symbol, val);
+        try loop_env.put(sym.symbol.slice(), val);
     }
 
     // Push loop context for recur (stack-based for nested loops)
@@ -928,7 +928,7 @@ fn evalFn(allocator: Allocator, form: *const Value, env: *vm.Env) anyerror!*Valu
     // Skip optional name for self-reference
     var fn_name: ?[]const u8 = null;
     if (std.meta.activeTag(form.list.items.items[idx]) == .symbol) {
-        fn_name = try allocator.dupe(u8, form.list.items.items[idx].symbol);
+        fn_name = try allocator.dupe(u8, form.list.items.items[idx].symbol.slice());
         idx += 1;
     }
     if (idx >= form.list.items.items.len) return error.ArityError;
@@ -1158,7 +1158,7 @@ pub fn core_macroexpand_1(self: *const Value, args: *const list.List, env_env: *
     // Resolve the operator
     var op: Value = undefined;
     if (std.meta.activeTag(first.*) == .symbol) {
-        if (env_env.get(first.*.symbol)) |v| {
+        if (env_env.get(first.*.symbol.slice())) |v| {
             op = v;
         } else {
             // Symbol not found - return form unchanged
@@ -1214,7 +1214,7 @@ pub fn core_macroexpand(self: *const Value, args: *const list.List, env_env: *vm
             return expanded;
         }
         // Check if the expanded first element is a macro
-        if (env_env.get(exp_first.symbol)) |v| {
+        if (env_env.get(exp_first.symbol.slice())) |v| {
             if (std.meta.activeTag(v) == .function and v.function.is_macro) {
                 current = expanded;
                 continue;

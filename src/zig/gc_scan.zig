@@ -210,16 +210,16 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         },
 
         .string => |s| {
-            if (s.len > 0) markPtr(s.ptr, ctx);
+            if (s.len > 0) markPtr(s.data, ctx);
         },
         .regex => |s| {
-            if (s.len > 0) markPtr(s.ptr, ctx);
+            if (s.len > 0) markPtr(s.data, ctx);
         },
         .symbol => |s| {
-            if (s.len > 0) markPtr(s.ptr, ctx);
+            if (s.len > 0) markPtr(s.data, ctx);
         },
         .keyword => |s| {
-            if (s.len > 0) markPtr(s.ptr, ctx);
+            if (s.len > 0) markPtr(s.data, ctx);
         },
 
         .list => |data| {

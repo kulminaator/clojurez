@@ -219,7 +219,7 @@ pub fn core_count(self: *const Value, args: *const list.List, env_env: *Env) any
         },
         .set => return vm.intValue(@as(i64, @intCast(args.items[0].set.items.items.len))),
         .queue => return vm.intValue(@as(i64, @intCast(args.items[0].queue.items.items.len))),
-        .string => return vm.intValue(@as(i64, @intCast(vm.utf8CodepointCount(args.items[0].string)))),
+        .string => return vm.intValue(@as(i64, @intCast(vm.utf8CodepointCount(args.items[0].string.slice())))),
         .cons => {
             // Count = 1 + count of tail (recursively)
             return countConsSeq(allocator, val);
@@ -313,7 +313,7 @@ pub fn core_first(self: *const Value, args: *const list.List, env_env: *Env) any
             return ccd.chunk.items[ccd.chunk.off];
         },
         .string => {
-            const s = val.string;
+            const s = val.string.slice();
             if (s.len == 0) return vm.nilValue();
             // Get the first UTF-8 code point as a char
             const cp_bytes = vm.utf8CodepointAt(s, 0) orelse return vm.nilValue();
@@ -386,7 +386,7 @@ pub fn core_rest(self: *const Value, args: *const list.List, env_env: *Env) anye
             return try core_seq(self, &seq_args, env_env);
         },
         .string => {
-            const s = val.string;
+            const s = val.string.slice();
             const codepoint_count = vm.utf8CodepointCount(s);
             if (codepoint_count <= 1) return try vm.listValue(std.heap.page_allocator, list.empty());
             // Convert remaining code points (from index 1) to a list of char values
@@ -1061,7 +1061,7 @@ pub fn core_nth(self: *const Value, args: *const list.List, env_env: *Env) anyer
             return args.items[0].vector.items.items[@as(usize, @intCast(idx))];
         },
         .string => {
-            const s = args.items[0].string;
+            const s = args.items[0].string.slice();
             const codepoint_count = vm.utf8CodepointCount(s);
             if (idx < 0 or @as(usize, @intCast(idx)) >= codepoint_count) {
                 if (not_found) |nf| return nf;
@@ -1455,8 +1455,8 @@ pub fn core_gensym(self: *const Value, args: *const list.List, env_env: *Env) an
 
     // With prefix: gensym "x" => "x_N"
     const prefix = switch (std.meta.activeTag(args.items[0])) {
-        .string => args.items[0].string,
-        .symbol => args.items[0].symbol,
+        .string => args.items[0] .string.slice(),
+        .symbol => args.items[0] .symbol.slice(),
         else => return error.TypeError,
     };
     const name = try std.fmt.allocPrint(allocator, "{s}_{d}", .{ prefix, gensym_counter });
@@ -1526,7 +1526,7 @@ pub fn core_seq(self: *const Value, args: *const list.List, env_env: *Env) anyer
             // For strings, seq returns a list of character values (not the string itself)
             // This matches JVM Clojure: (seq "abc") => (\a \b \c)
             if (coll.string.len == 0) return vm.nilValue();
-            const char_list = try stringToCharList(allocator, coll.string);
+            const char_list = try stringToCharList(allocator, coll.string.slice());
             return try vm.listValue(allocator, char_list);
         },
         else => return vm.nilValue(),

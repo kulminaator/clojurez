@@ -132,15 +132,15 @@ pub fn core_compare(self: *const Value, args: *const list.List, _: *Env) anyerro
         // For strings, symbols, and keywords: do lexicographic comparison
         switch (std.meta.activeTag(a)) {
             .string => {
-                const cmp = compareStrings(a.string, b.string);
+                const cmp = compareStrings(a.string.slice(), b.string.slice());
                 return vm.intValue(cmp);
             },
             .symbol => {
-                const cmp = compareStrings(a.symbol, b.symbol);
+                const cmp = compareStrings(a.symbol.slice(), b.symbol.slice());
                 return vm.intValue(cmp);
             },
             .keyword => {
-                const cmp = compareStrings(a.keyword, b.keyword);
+                const cmp = compareStrings(a.keyword.slice(), b.keyword.slice());
                 return vm.intValue(cmp);
             },
             else => {},

@@ -150,7 +150,7 @@ pub const Compiler = struct {
                 _ = try self.program.emit(self.allocator, .push_const, idx);
             },
             .symbol => |s| {
-                const sym_idx = try self.program.addSymbol(self.allocator, s);
+                const sym_idx = try self.program.addSymbol(self.allocator, s.slice());
                 _ = try self.program.emit(self.allocator, .load_var, sym_idx);
             },
             .list => try self.compileList(form.list.items),
@@ -174,7 +174,7 @@ pub const Compiler = struct {
         const first = l.items[0];
 
         if (std.meta.activeTag(first) == .symbol) {
-            const sym = first.symbol;
+            const sym = first.symbol.slice();
 
             if (std.mem.eql(u8, sym, "quote")) {
                 if (l.items.len == 2) {
@@ -196,7 +196,7 @@ pub const Compiler = struct {
             if (std.mem.eql(u8, sym, "set!")) {
                 if (l.items.len == 3 and std.meta.activeTag(l.items[1]) == .symbol) {
                     try self.compileForm(l.items[2]);
-                    const sym_idx = try self.program.addSymbol(self.allocator, l.items[1].symbol);
+                    const sym_idx = try self.program.addSymbol(self.allocator, l.items[1].symbol.slice());
                     _ = try self.program.emit(self.allocator, .store_var, sym_idx);
                     return;
                 }
@@ -270,7 +270,7 @@ pub const Compiler = struct {
     /// Compile a function call: (fn arg1 arg2 ...).
     pub fn compileFunctionCall(self: *Compiler, items: []const Value) anyerror!void {
         if (items.len > 0 and std.meta.activeTag(items[0]) == .symbol) {
-            const op_name = items[0].symbol;
+            const op_name = items[0].symbol.slice();
 
             const all_simple = blk: {
                 for (items[1..]) |arg| {
@@ -758,7 +758,7 @@ pub const Compiler = struct {
         // Check for self-recursive call
         if (std.meta.activeTag(items[0]) == .symbol) {
             if (self.fn_name) |fname| {
-                const op_name = items[0].symbol;
+                const op_name = items[0].symbol.slice();
                 if (std.mem.eql(u8, op_name, fname)) {
                     _ = try self.program.emit(self.allocator, .call_self, n);
                     return;
@@ -767,7 +767,7 @@ pub const Compiler = struct {
         }
 
         if (std.meta.activeTag(items[0]) == .symbol) {
-            const op_name = items[0].symbol;
+            const op_name = items[0].symbol.slice();
             if (!try self.tryResolveAndEmitLoad(op_name)) {
                 const sym_idx = try self.program.addSymbol(self.allocator, op_name);
                 _ = try self.program.emit(self.allocator, .load_var, sym_idx);
@@ -882,7 +882,7 @@ pub const Compiler = struct {
         const first = l.items[0];
         if (std.meta.activeTag(first) != .symbol) return null;
 
-        const op_val = env.get(first.symbol);
+        const op_val = env.get(first.symbol.slice());
         if (op_val == null) return null;
         if (std.meta.activeTag(op_val.?) != .function) return null;
         if (!op_val.?.function.is_macro) return null;
@@ -928,7 +928,7 @@ pub fn compile(allocator: Allocator, ast: list.List, source_file: []const u8, en
 
     var forms = ast.items;
     if (forms.len > 0 and std.meta.activeTag(forms[0]) == .symbol and
-        std.mem.eql(u8, forms[0].symbol, "do"))
+        std.mem.eql(u8, forms[0].symbol.slice(), "do"))
     {
         forms = forms[1..];
     }

@@ -442,9 +442,9 @@ pub const BytecodeProgram = struct {
             .bool => |b| std.debug.print("{}", .{b}),
             .integer => |i| std.debug.print("{}", .{i}),
             .float => |f| std.debug.print("{}", .{f}),
-            .string => |s| std.debug.print("\"{s}\"", .{s}),
-            .symbol => |s| std.debug.print("'{s}", .{s}),
-            .keyword => |s| std.debug.print(":{s}", .{s}),
+            .string => |s| std.debug.print("\"{s}\"", .{s.slice()}),
+            .symbol => |s| std.debug.print("'{s}", .{s.slice()}),
+            .keyword => |s| std.debug.print(":{s}", .{s.slice()}),
             .character => |c| std.debug.print("\\{}", .{c}),
             else => std.debug.print("<{}>", .{@tagName(v)}),
         }

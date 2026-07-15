@@ -239,7 +239,7 @@ pub fn vmFirst(allocator: Allocator, val: Value) anyerror!Value {
             return ccd.chunk.items[ccd.chunk.off];
         },
         .string => {
-            const s = v.string;
+            const s = v.string.slice();
             if (s.len == 0) return vm.nilValue();
             const cp_bytes = vm.utf8CodepointAt(s, 0) orelse return vm.nilValue();
             const cp = std.unicode.utf8Decode(cp_bytes) catch return vm.nilValue();
@@ -290,7 +290,7 @@ pub fn vmRest(allocator: Allocator, val: Value) anyerror!Value {
             return try vmSeq(allocator, tail);
         },
         .string => {
-            const s = v.string;
+            const s = v.string.slice();
             const codepoint_count = vm.utf8CodepointCount(s);
             if (codepoint_count <= 1) return try vm.listValue(allocator, list.empty());
             var result: list.List = .empty;
@@ -315,7 +315,7 @@ pub fn vmCount(allocator: Allocator, val: Value) anyerror!Value {
         .map => return vm.intValue(@as(i64, @intCast(val.map.entries.items.len))),
         .set => return vm.intValue(@as(i64, @intCast(val.set.items.items.len))),
         .queue => return vm.intValue(@as(i64, @intCast(val.queue.items.items.len))),
-        .string => return vm.intValue(@as(i64, @intCast(vm.utf8CodepointCount(val.string)))),
+        .string => return vm.intValue(@as(i64, @intCast(vm.utf8CodepointCount(val.string.slice())))),
         .cons => {
             var count: i64 = 0;
             var current = try vm.shallowClone(&val, allocator);
@@ -560,7 +560,7 @@ pub fn vmNth(allocator: Allocator, coll: Value, idx_val: Value) anyerror!Value {
             return try vm.shallowClone(&coll.vector.items.items[idx], allocator);
         },
         .string => {
-            const cp_bytes = vm.utf8CodepointAt(coll.string, idx) orelse return error.IndexOutOfBounds;
+            const cp_bytes = vm.utf8CodepointAt(coll.string.slice(), idx) orelse return error.IndexOutOfBounds;
             const cp = std.unicode.utf8Decode(cp_bytes) catch return error.TypeError;
             return vm.charValue(cp);
         },
@@ -640,13 +640,14 @@ pub fn vmSeq(allocator: Allocator, val: Value) anyerror!Value {
             return try vm.listValue(allocator, l);
         },
         .string => {
-            if (v.string.len == 0) return vm.nilValue();
+            const str_slice = v.string.slice();
+            if (str_slice.len == 0) return vm.nilValue();
             var l: list.List = .empty;
             errdefer l.deinit(allocator);
             var i: usize = 0;
-            while (i < v.string.len) {
-                const cp_len = std.unicode.utf8ByteSequenceLength(v.string[i]) catch break;
-                const cp_bytes = v.string[i .. i + cp_len];
+            while (i < str_slice.len) {
+                const cp_len = std.unicode.utf8ByteSequenceLength(str_slice[i]) catch break;
+                const cp_bytes = str_slice[i .. i + cp_len];
                 const cp = std.unicode.utf8Decode(cp_bytes) catch break;
                 try l.append(allocator, vm.charValue(cp));
                 i += cp_len;
@@ -749,7 +750,7 @@ pub fn vmStrN(allocator: Allocator, values: []const Value) anyerror!Value {
         }
         // Handle string type: append directly
         if (std.meta.activeTag(arg) == .string) {
-            try buf.appendSlice(allocator, arg.string);
+            try buf.appendSlice(allocator, arg.string.slice());
             continue;
         }
         // All other types: use fmtToBuffer
@@ -936,9 +937,9 @@ pub fn vmMakeKeyword(allocator: Allocator, parts: []const Value) anyerror!Value 
     if (parts.len == 0 or parts.len > 2) return error.ArityError;
     const name_val = parts[parts.len - 1];
     const name_str = switch (name_val) {
-        .string => |s| s,
-        .symbol => |s| s,
-        .keyword => |s| s,
+        .string => |s| s.slice(),
+        .symbol => |s| s.slice(),
+        .keyword => |s| s.slice(),
         else => return error.TypeError,
     };
 
@@ -948,9 +949,9 @@ pub fn vmMakeKeyword(allocator: Allocator, parts: []const Value) anyerror!Value 
             return vm.keywordValue(allocator, name_str);
         }
         const ns_str = switch (ns_val) {
-            .string => |s| s,
-            .symbol => |s| s,
-            .keyword => |s| s,
+            .string => |s| s.slice(),
+            .symbol => |s| s.slice(),
+            .keyword => |s| s.slice(),
             else => return error.TypeError,
         };
         var buf: std.ArrayList(u8) = .empty;
@@ -969,9 +970,9 @@ pub fn vmMakeSymbol(allocator: Allocator, parts: []const Value) anyerror!Value {
     if (parts.len == 0 or parts.len > 2) return error.ArityError;
     const name_val = parts[parts.len - 1];
     const name_str = switch (name_val) {
-        .string => |s| s,
-        .symbol => |s| s,
-        .keyword => |s| s,
+        .string => |s| s.slice(),
+        .symbol => |s| s.slice(),
+        .keyword => |s| s.slice(),
         else => return error.TypeError,
     };
 
@@ -981,9 +982,9 @@ pub fn vmMakeSymbol(allocator: Allocator, parts: []const Value) anyerror!Value {
             return vm.symValue(allocator, name_str);
         }
         const ns_str = switch (ns_val) {
-            .string => |s| s,
-            .symbol => |s| s,
-            .keyword => |s| s,
+            .string => |s| s.slice(),
+            .symbol => |s| s.slice(),
+            .keyword => |s| s.slice(),
             else => return error.TypeError,
         };
         var buf: std.ArrayList(u8) = .empty;

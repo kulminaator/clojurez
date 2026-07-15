@@ -734,14 +734,14 @@ pub fn nfaMatchLenAt(nfa: *const Nfa, s: []const u8, allocator: Allocator, start
 
 pub fn extractPatternString(pattern: Value) anyerror![]const u8 {
     return switch (std.meta.activeTag(pattern)) {
-        .string => pattern.string,
-        .regex => pattern.regex,
+        .string => pattern.string.slice(),
+        .regex => pattern.regex.slice(),
         .map => {
             // Legacy support: old {:pattern "..."} map format
             for (pattern.map.entries.items) |entry| {
-                if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, "pattern")) {
+                if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword.slice(), "pattern")) {
                     if (std.meta.activeTag(entry.value) == .string) {
-                        return entry.value.string;
+                        return entry.value.string.slice();
                     }
                 }
             }

@@ -63,7 +63,7 @@ pub fn isSafeBytecodeArg(form: Value) bool {
             const lst_items = form.list.items.items;
             if (lst_items.len == 0) return true;
             if (std.meta.activeTag(lst_items[0]) == .symbol) {
-                const op = lst_items[0].symbol;
+                const op = lst_items[0].symbol.slice();
                 if (isBytecodeOptimizableOperator(op) or isBytecodeSpecialForm(op)) {
                     for (lst_items) |item| {
                         if (!isSafeBytecodeArg(item)) return false;
@@ -301,13 +301,13 @@ fn containsRealFunctionCallsHelper(form: Value, fn_name: ?[]const u8) bool {
             const lst_items = form.list.items.items;
             if (lst_items.len == 0) return false;
             if (std.meta.activeTag(lst_items[0]) == .symbol) {
-                if (isBytecodeOptimizableOperator(lst_items[0].symbol)) {
+                if (isBytecodeOptimizableOperator(lst_items[0].symbol.slice())) {
                     for (lst_items[1..]) |arg| {
                         if (containsRealFunctionCallsHelper(arg, fn_name)) return true;
                     }
                     return false;
                 }
-                if (isBytecodeSpecialForm(lst_items[0].symbol)) {
+                if (isBytecodeSpecialForm(lst_items[0].symbol.slice())) {
                     for (lst_items[1..]) |arg| {
                         if (containsRealFunctionCallsHelper(arg, fn_name)) return true;
                     }
@@ -315,7 +315,7 @@ fn containsRealFunctionCallsHelper(form: Value, fn_name: ?[]const u8) bool {
                 }
                 // Self-recursive call — not a "real" function call
                 if (fn_name) |fname| {
-                    if (std.mem.eql(u8, lst_items[0].symbol, fname)) {
+                    if (std.mem.eql(u8, lst_items[0].symbol.slice(), fname)) {
                         for (lst_items[1..]) |arg| {
                             if (containsRealFunctionCallsHelper(arg, fn_name)) return true;
                         }
@@ -377,7 +377,7 @@ pub fn containsUnhandledSpecialFormHelper(form: Value) bool {
             const lst_items = form.list.items.items;
             if (lst_items.len == 0) return false;
             if (std.meta.activeTag(lst_items[0]) == .symbol) {
-                const sym = lst_items[0].symbol;
+                const sym = lst_items[0].symbol.slice();
                 if (std.mem.eql(u8, sym, "binding") or
                     std.mem.eql(u8, sym, "dorun") or
                     std.mem.eql(u8, sym, "doall") or
@@ -435,7 +435,7 @@ pub fn looksLikeParamList(form: Value) bool {
     if (items.len == 0) return false;
     var found_amp = false;
     for (items) |item| {
-        if (std.meta.activeTag(item) == .symbol and std.mem.eql(u8, item.symbol, "&")) {
+        if (std.meta.activeTag(item) == .symbol and std.mem.eql(u8, item.symbol.slice(), "&")) {
             if (found_amp) return false;
             found_amp = true;
             continue;
@@ -459,13 +459,13 @@ pub fn parseParams(allocator: Allocator, params: list.List) anyerror!ParsedParam
     var found_amp = false;
     while (i < params.items.len) : (i += 1) {
         const item = params.items[i];
-        if (!found_amp and std.meta.activeTag(item) == .symbol and std.mem.eql(u8, item.symbol, "&")) {
+        if (!found_amp and std.meta.activeTag(item) == .symbol and std.mem.eql(u8, item.symbol.slice(), "&")) {
             found_amp = true;
             continue;
         }
         if (found_amp) {
             if (std.meta.activeTag(item) != .symbol) return error.TypeError;
-            rest_name = try allocator.dupe(u8, item.symbol);
+            rest_name = try allocator.dupe(u8, item.symbol.slice());
             break;
         } else {
             try regular_params.append(allocator, try vm.shallowClone(&item, allocator));

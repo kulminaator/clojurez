@@ -61,7 +61,7 @@ pub fn compileLet(self: *Compiler, items: []const Value) anyerror!void {
         const val = bind_items[i + 1];
         try self.compileForm(val);
         if (std.meta.activeTag(sym) == .symbol) {
-            const sym_idx = try self.program.addSymbol(self.allocator, sym.symbol);
+            const sym_idx = try self.program.addSymbol(self.allocator, sym.symbol.slice());
             _ = try self.program.emit(self.allocator, .store_var, sym_idx);
         }
     }
@@ -78,7 +78,7 @@ pub fn compileFn(self: *Compiler, items: []const Value) anyerror!void {
     var fn_name: ?[]const u8 = null;
 
     if (std.meta.activeTag(items[idx]) == .symbol) {
-        fn_name = try self.allocator.dupe(u8, items[idx].symbol);
+        fn_name = try self.allocator.dupe(u8, items[idx].symbol.slice());
         idx += 1;
     }
 
@@ -274,7 +274,7 @@ pub fn compileCond(self: *Compiler, items: []const Value) anyerror!void {
     while (i < clauses.len) : (i += 2) {
         const cond_test = clauses[i];
         const is_else = std.meta.activeTag(cond_test) == .keyword and
-            std.mem.eql(u8, cond_test.keyword, "else");
+            std.mem.eql(u8, cond_test.keyword.slice(), "else");
         try clause_starts.append(self.allocator, self.program.instructions.items.len);
         if (is_else) {
             if (i + 1 < clauses.len) {
@@ -375,7 +375,7 @@ pub fn compileWhenFirst(self: *Compiler, items: []const Value) anyerror!void {
     // Compile (first coll) and store in sym
     try self.compileForm(coll);
     _ = try self.program.emit0(self.allocator, .first);
-    const sym_idx = try self.program.addSymbol(self.allocator, sym.symbol);
+    const sym_idx = try self.program.addSymbol(self.allocator, sym.symbol.slice());
     _ = try self.program.emit(self.allocator, .store_var, sym_idx);
 
     // if sym then body else nil
@@ -419,7 +419,7 @@ pub fn compileLoop(self: *Compiler, items: []const Value) anyerror!void {
         const sym = bind_items[i];
         const val = bind_items[i + 1];
         if (std.meta.activeTag(sym) == .symbol) {
-            sym_indices[i / 2] = try self.program.addSymbol(self.allocator, sym.symbol);
+            sym_indices[i / 2] = try self.program.addSymbol(self.allocator, sym.symbol.slice());
         }
         try self.compileForm(val);
         if (std.meta.activeTag(sym) == .symbol) {
@@ -470,7 +470,7 @@ pub fn compileCase(self: *Compiler, items: []const Value) anyerror!void {
     while (i < clauses.len) : (i += 2) {
         const test_form = clauses[i];
         const is_else = std.meta.activeTag(test_form) == .keyword and
-            std.mem.eql(u8, test_form.keyword, "else");
+            std.mem.eql(u8, test_form.keyword.slice(), "else");
 
         try clause_starts.append(self.allocator, self.program.instructions.items.len);
 
@@ -494,7 +494,7 @@ pub fn compileCase(self: *Compiler, items: []const Value) anyerror!void {
 
     const has_else = clauses.len >= 2 and
         std.meta.activeTag(clauses[clauses.len - 2]) == .keyword and
-        std.mem.eql(u8, clauses[clauses.len - 2].keyword, "else");
+        std.mem.eql(u8, clauses[clauses.len - 2].keyword.slice(), "else");
     const nil_pc: ?usize = if (!has_else) blk: {
         const pc = self.program.instructions.items.len;
         _ = try self.program.emit0(self.allocator, .push_nil);
@@ -543,7 +543,7 @@ pub fn compileIfLet(self: *Compiler, items: []const Value) anyerror!void {
 
     // Compile test value and store in sym
     try self.compileForm(test_form);
-    const sym_idx = try self.program.addSymbol(self.allocator, sym.symbol);
+    const sym_idx = try self.program.addSymbol(self.allocator, sym.symbol.slice());
     _ = try self.program.emit(self.allocator, .store_var, sym_idx);
 
     // if sym then then_form else else_form
@@ -587,7 +587,7 @@ pub fn compileWhenLet(self: *Compiler, items: []const Value) anyerror!void {
 
     // Compile test value and store in sym
     try self.compileForm(test_form);
-    const sym_idx = try self.program.addSymbol(self.allocator, sym.symbol);
+    const sym_idx = try self.program.addSymbol(self.allocator, sym.symbol.slice());
     _ = try self.program.emit(self.allocator, .store_var, sym_idx);
 
     // if sym then body else nil
@@ -629,7 +629,7 @@ pub fn compileWhenSome(self: *Compiler, items: []const Value) anyerror!void {
 
     // Compile test value and store in sym
     try self.compileForm(test_form);
-    const sym_idx = try self.program.addSymbol(self.allocator, sym.symbol);
+    const sym_idx = try self.program.addSymbol(self.allocator, sym.symbol.slice());
     _ = try self.program.emit(self.allocator, .store_var, sym_idx);
 
     // if (not (nil? sym)) then body else nil
@@ -688,7 +688,7 @@ pub fn compileLetFn(self: *Compiler, items: []const Value) anyerror!void {
 
         try self.compileForm(try vm.listValue(self.allocator, fn_form));
 
-        const sym_idx = try self.program.addSymbol(self.allocator, fname.symbol);
+        const sym_idx = try self.program.addSymbol(self.allocator, fname.symbol.slice());
         _ = try self.program.emit(self.allocator, .store_var, sym_idx);
     }
 
@@ -886,7 +886,7 @@ fn compileQuasiquoteForm(self: *Compiler, form: Value) anyerror!void {
             // Check for nested quasiquote: (quasiquote x)
             // e.g. `(~`(a b)) — the inner `(a b)` is a quasiquote
             if (std.meta.activeTag(lst_items[0]) == .symbol and
-                std.mem.eql(u8, lst_items[0].symbol, "quasiquote"))
+                std.mem.eql(u8, lst_items[0].symbol.slice(), "quasiquote"))
             {
                 if (lst_items.len >= 2) {
                     try compileQuasiquoteForm(self, lst_items[1]);
@@ -896,7 +896,7 @@ fn compileQuasiquoteForm(self: *Compiler, form: Value) anyerror!void {
             // Check for unquote-splicing at top level: (~@ x)
             const first = lst_items[0];
             if (std.meta.activeTag(first) == .symbol and
-                std.mem.eql(u8, first.symbol, "unquote-splicing"))
+                std.mem.eql(u8, first.symbol.slice(), "unquote-splicing"))
             {
                 if (lst_items.len >= 2) {
                     try self.compileForm(lst_items[1]);
@@ -933,7 +933,7 @@ fn isUnquoteSplicing(form: Value) bool {
     const lst_items = form.list.items.items;
     if (lst_items.len < 2) return false;
     if (std.meta.activeTag(lst_items[0]) != .symbol) return false;
-    return std.mem.eql(u8, lst_items[0].symbol, "unquote-splicing");
+    return std.mem.eql(u8, lst_items[0].symbol.slice(), "unquote-splicing");
 }
 
 /// Check if a list form is (unquote x).
@@ -942,7 +942,7 @@ fn isUnquote(form: Value) bool {
     const lst_items = form.list.items.items;
     if (lst_items.len < 2) return false;
     if (std.meta.activeTag(lst_items[0]) != .symbol) return false;
-    return std.mem.eql(u8, lst_items[0].symbol, "unquote");
+    return std.mem.eql(u8, lst_items[0].symbol.slice(), "unquote");
 }
 
 /// Compile a quasiquote list's elements, handling ~ and ~@.

@@ -100,7 +100,7 @@ pub fn core_map(self: *const Value, args: *const list.List, env_env: *Env) anyer
     // Strings are sequences of characters in Clojure
     // Convert string to char list, then map over it
     if (std.meta.activeTag(coll) == .string) {
-        const s = coll.string;
+        const s = coll.string.slice();
         const char_list = try sequences.stringToCharList(allocator, s);
         const list_val = try vm.listValue(allocator, char_list);
         // Recurse with the char list as the collection
@@ -297,7 +297,7 @@ pub fn core_reduce(self: *const Value, args: *const list.List, env_env: *Env) an
         .string => {
             // Strings are sequences of characters in Clojure
             // Convert string to char list, then reduce over it
-            const char_list = try sequences.stringToCharList(allocator, coll.string);
+            const char_list = try sequences.stringToCharList(allocator, coll.string.slice());
             items = char_list.items;
             owned_items = char_list;
         },
@@ -369,7 +369,7 @@ fn detectIntReduceOp(f: Value) ?IntReduceOp {
             var body_call: list.List = undefined;
             if (arity.body.items.len >= 2 and
                 std.meta.activeTag(arity.body.items[0]) == .symbol and
-                std.mem.eql(u8, arity.body.items[0].symbol, "do") and
+                std.mem.eql(u8, arity.body.items[0].symbol.slice(), "do") and
                 std.meta.activeTag(arity.body.items[1]) == .list)
             {
                 body_call = arity.body.items[1].list.items;
@@ -383,12 +383,12 @@ fn detectIntReduceOp(f: Value) ?IntReduceOp {
             const body_arg0 = &body_call.items[1];
             const body_arg1 = &body_call.items[2];
             if (std.meta.activeTag(body_arg0.*) != .symbol or std.meta.activeTag(body_arg1.*) != .symbol) continue;
-            if (!std.mem.eql(u8, body_arg0.symbol, arity.params.items[0].symbol)) continue;
-            if (!std.mem.eql(u8, body_arg1.symbol, arity.params.items[1].symbol)) continue;
+            if (!std.mem.eql(u8, body_arg0.symbol.slice(), arity.params.items[0].symbol.slice())) continue;
+            if (!std.mem.eql(u8, body_arg1.symbol.slice(), arity.params.items[1].symbol.slice())) continue;
             // Check if the operator is a symbol resolving to a known builtin
             const body_op = &body_call.items[0];
             if (std.meta.activeTag(body_op.*) != .symbol) continue;
-            const op_name = body_op.symbol;
+            const op_name = body_op.symbol.slice();
             if (std.mem.eql(u8, op_name, "+") or std.mem.eql(u8, op_name, "zig.core/+")) return .add;
             if (std.mem.eql(u8, op_name, "-") or std.mem.eql(u8, op_name, "zig.core/-")) return .sub;
             if (std.mem.eql(u8, op_name, "*") or std.mem.eql(u8, op_name, "zig.core/*")) return .mul;
@@ -845,7 +845,7 @@ pub fn core_filter(self: *const Value, args: *const list.List, env_env: *Env) an
     // Strings are sequences of characters in Clojure
     // Convert string to char list, then filter over it
     if (std.meta.activeTag(coll) == .string) {
-        const s = coll.string;
+        const s = coll.string.slice();
         const char_list = try sequences.stringToCharList(allocator, s);
         const list_val = try vm.listValue(allocator, char_list);
         var new_args: list.List = .empty;

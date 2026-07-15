@@ -85,29 +85,18 @@ fn newSubNodesArrayLen(allocator: Allocator, len: usize) []?*Node {
 /// data is on page_allocator (never freed).
 pub fn isCachedSymbol(val: Value) bool {
     if (std.meta.activeTag(val) != .symbol) return false;
-    const s = val.symbol;
+    const s = val.symbol.slice();
     // Acquire spinlock to protect sym_cache from concurrent access
     while (sym_cache_mutex.cmpxchgStrong(0, 1, .acq_rel, .monotonic) != null) {}
     defer sym_cache_mutex.store(0, .release);
     return sym_cache.get(s) != null;
 }
 
-/// Clone a Value only if it owns data that needs independent ownership.
-/// For cached symbols and immediate types, returns the Value as-is (no allocation).
-/// For all other types, delegates to vm.shallowClone.
-fn safeClone(val: Value, allocator: Allocator) anyerror!Value {
-    // Cached symbols are safe to share — no clone needed
-    if (isCachedSymbol(val)) return val;
-    // Immediate types: no heap data to clone, just copy the Value union.
-    // This avoids the shallowClone call overhead (switch + function call).
-    // Note: ValueCache provides *Value pointers for collections (ArrayList),
-    // but HAMT stores Value by value. These are Value unions, not pointers.
-    // shallowClone for these types already returns val.* (no alloc),
-    // so we shortcut here to skip the function call entirely.
-    switch (val) {
-        .nil, .bool, .integer, .float => return val,
-        else => return vm.shallowClone(&val, allocator),
-    }
+/// Clone a Value. Since all Value data is GC-managed and immutable,
+/// a struct copy is safe — no allocation needed.
+pub fn safeClone(val: Value, allocator: Allocator) anyerror!Value {
+    _ = allocator; // No allocation needed — all data is GC-tracked
+    return val;
 }
 
 // ============================================================
@@ -360,11 +349,11 @@ pub fn valueHash(val: Value) i32 {
         .bigint => |bi| hashBigInt(bi.*),
         .ratio => |r| hashBigInt(r.num) ^ hashBigInt(r.den),
         .decimal => |d| hashBigInt(d.unscaled),
-        .string => |s| hashString(s),
-        .regex => |s| hashString(s),
+        .string => |s| hashString(s.slice()),
+        .regex => |s| hashString(s.slice()),
         .character => |c| @as(i32, @intCast(c)),
-        .symbol => |s| hashString(s),
-        .keyword => |s| hashKeyword(s),
+        .symbol => |s| hashString(s.slice()),
+        .keyword => |s| hashKeyword(s.slice()),
         .list => |data| hashCollection(data.items.items),
         .vector => |data| hashCollection(data.items.items),
         .map => |data| hashMapEntries(data.entries.items),
@@ -1957,9 +1946,9 @@ pub fn sym(s: []const u8) Value {
     }
     const allocator = std.heap.page_allocator;
     // Duplicate the key string so sym_cache owns it (original may be GC-allocated)
-    const key_copy = allocator.dupe(u8, s) catch return Value{ .symbol = s };
-    const owned = allocator.dupe(u8, s) catch return Value{ .symbol = s };
-    const val = Value{ .symbol = owned };
+    const key_copy = allocator.dupe(u8, s) catch return vm.symValueOwned(s);
+    const owned = allocator.dupe(u8, s) catch return vm.symValueOwned(s);
+    const val = vm.symValueOwned(owned);
     sym_cache.put(allocator, key_copy, val) catch { allocator.free(key_copy); return val; };
     return val;
 }
@@ -2303,8 +2292,8 @@ test "persistent_hash_map::hash consistency" {
     defer std.heap.page_allocator.free(sv1);
     defer std.heap.page_allocator.free(sv2);
 
-    const str1 = Value{ .string = sv1 };
-    const str2 = Value{ .string = sv2 };
+    const str1 = vm.stringValueOwned(sv1);
+    const str2 = vm.stringValueOwned(sv2);
     try std.testing.expect(valueHash(str1) == valueHash(str2));
 }
 

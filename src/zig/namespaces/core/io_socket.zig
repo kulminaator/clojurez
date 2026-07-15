@@ -357,7 +357,7 @@ fn getOptInt(opts: Value, key: []const u8) ?i64 {
     if (std.meta.activeTag(opts) != .map) return null;
     for (opts.map.entries.items) |entry| {
         if (std.meta.activeTag(entry.key) == .keyword and
-            std.mem.eql(u8, entry.key.keyword, key))
+            std.mem.eql(u8, entry.key.keyword.slice(), key))
         {
             if (std.meta.activeTag(entry.value) == .integer) {
                 return entry.value.integer;
@@ -371,10 +371,10 @@ fn getOptString(opts: Value, key: []const u8) ?[]const u8 {
     if (std.meta.activeTag(opts) != .map) return null;
     for (opts.map.entries.items) |entry| {
         if (std.meta.activeTag(entry.key) == .keyword and
-            std.mem.eql(u8, entry.key.keyword, key))
+            std.mem.eql(u8, entry.key.keyword.slice(), key))
         {
             if (std.meta.activeTag(entry.value) == .string) {
-                return entry.value.string;
+                return entry.value.string.slice();
             }
         }
     }
@@ -385,7 +385,7 @@ fn getOptBool(opts: Value, key: []const u8) bool {
     if (std.meta.activeTag(opts) != .map) return false;
     for (opts.map.entries.items) |entry| {
         if (std.meta.activeTag(entry.key) == .keyword and
-            std.mem.eql(u8, entry.key.keyword, key))
+            std.mem.eql(u8, entry.key.keyword.slice(), key))
         {
             if (std.meta.activeTag(entry.value) == .bool) {
                 return entry.value.bool;
@@ -476,7 +476,7 @@ pub fn core_open_client_socket(self: *const Value, args: *const list.List, env_e
     if (std.meta.activeTag(host_val) != .string) return error.TypeError;
     if (std.meta.activeTag(port_val) != .integer) return error.TypeError;
 
-    const host = host_val.string;
+    const host = host_val.string.slice();
     const port = @as(u16, @intCast(port_val.integer));
     const opts = if (args.items.len >= 3) args.items[2] else vm.nilValue();
     const buf_size = if (getOptInt(opts, "buffer-size")) |bs| @as(usize, @intCast(bs)) else 4096;
@@ -700,7 +700,7 @@ pub fn core_listen_server_socket(self: *const Value, args: *const list.List, env
     if (std.meta.activeTag(host_val) != .string) return error.TypeError;
     if (std.meta.activeTag(port_val) != .integer) return error.TypeError;
 
-    const host = host_val.string;
+    const host = host_val.string.slice();
     const port = @as(u16, @intCast(port_val.integer));
     const opts = if (args.items.len >= 3) args.items[2] else vm.nilValue();
     const buf_size = if (getOptInt(opts, "buffer-size")) |bs| @as(usize, @intCast(bs)) else 4096;
@@ -912,9 +912,9 @@ pub fn core_udp_send(self: *const Value, args: *const list.List, env_env: *Env) 
     }
     if (handle.kind != .udp) return error.TypeError;
 
-    const host = host_val.string;
+    const host = host_val.string.slice();
     const port = @as(u16, @intCast(port_val.integer));
-    const data = data_val.string;
+    const data = data_val.string.slice();
 
     // Empty data: nothing to send, return nil
     if (data.len == 0) return vm.nilValue();

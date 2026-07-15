@@ -168,7 +168,7 @@ pub fn core_debug_type_snapshot_diff(self: *const Value, args: *const list.List,
 pub fn core_debug_type_snapshot_print(self: *const Value, args: *const list.List, _: *Env) anyerror!Value {
     _ = self;
     if (args.items.len != 2) return error.ArityError;
-    const label = args.items[0].string;
+    const label = args.items[0].string.slice();
     const snap_ptr: usize = @intCast(args.items[1].integer);
     const snapshot: *gc_mod.DebugTypeSnapshot = @alignCast(@ptrCast(@as(*anyopaque, @ptrFromInt(snap_ptr))));
     gc_mod.debugTypeSnapshotPrint(label, snapshot.*);

@@ -43,7 +43,7 @@ fn buildNsMap(allocator: Allocator, ns_name: []const u8, ns_env: *Env, ns_mgr: *
     }
     var it = ns_env.entries.entryIterator();
     while (it.next()) |entry| {
-        const sym_name = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol else continue;
+        const sym_name = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol.slice() else continue;
         // Skip referred names — interns are only owned vars
         if (eval_ns.isReferredName(ns_env.referred_names.items, sym_name)) continue;
         try interns_map.append(allocator, .{
@@ -67,7 +67,7 @@ fn buildNsMap(allocator: Allocator, ns_name: []const u8, ns_env: *Env, ns_mgr: *
     }
     var it2 = ns_env.entries.entryIterator();
     while (it2.next()) |entry| {
-        const sym_name = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol else continue;
+        const sym_name = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol.slice() else continue;
         // Only include referred names
         if (!eval_ns.isReferredName(ns_env.referred_names.items, sym_name)) continue;
         try refers_map.append(allocator, .{
@@ -91,14 +91,14 @@ fn buildNsMap(allocator: Allocator, ns_name: []const u8, ns_env: *Env, ns_mgr: *
     }
     var it3 = ns_mgr.aliases.entryIterator();
     while (it3.next()) |entry| {
-        const composite_key = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol else continue;
+        const composite_key = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol.slice() else continue;
         // Parse "ns_name/alias_name" composite key
         if (std.mem.indexOfScalar(u8, composite_key, '/')) |slash_idx| {
             const key_ns_name = composite_key[0..slash_idx];
             const alias_name = composite_key[slash_idx + 1 ..];
             if (std.mem.eql(u8, key_ns_name, ns_name)) {
                 // This alias belongs to our namespace
-                const target_ns = if (std.meta.activeTag(entry.val) == .string) entry.val.string else continue;
+                const target_ns = if (std.meta.activeTag(entry.val) == .string) entry.val.string.slice() else continue;
                 try aliases_map.append(allocator, .{
                     .key = try vm.symValue(allocator, alias_name),
                     .value = try vm.symValue(allocator, target_ns),
@@ -144,7 +144,7 @@ pub fn buildNsRecord(allocator: Allocator, ns_name: []const u8, ns_env: *Env, ns
     }
     var it = ns_env.entries.entryIterator();
     while (it.next()) |entry| {
-        const sym_name = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol else continue;
+        const sym_name = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol.slice() else continue;
         if (eval_ns.isReferredName(ns_env.referred_names.items, sym_name)) continue;
         try interns_map.append(allocator, .{
             .key = try vm.symValue(allocator, sym_name),
@@ -167,7 +167,7 @@ pub fn buildNsRecord(allocator: Allocator, ns_name: []const u8, ns_env: *Env, ns
     }
     var it2 = ns_env.entries.entryIterator();
     while (it2.next()) |entry| {
-        const sym_name = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol else continue;
+        const sym_name = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol.slice() else continue;
         if (!eval_ns.isReferredName(ns_env.referred_names.items, sym_name)) continue;
         try refers_map.append(allocator, .{
             .key = try vm.symValue(allocator, sym_name),
@@ -190,12 +190,12 @@ pub fn buildNsRecord(allocator: Allocator, ns_name: []const u8, ns_env: *Env, ns
     }
     var it3 = ns_mgr.aliases.entryIterator();
     while (it3.next()) |entry| {
-        const composite_key = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol else continue;
+        const composite_key = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol.slice() else continue;
         if (std.mem.indexOfScalar(u8, composite_key, '/')) |slash_idx| {
             const key_ns_name = composite_key[0..slash_idx];
             const alias_name = composite_key[slash_idx + 1 ..];
             if (std.mem.eql(u8, key_ns_name, ns_name)) {
-                const target_ns = if (std.meta.activeTag(entry.val) == .string) entry.val.string else continue;
+                const target_ns = if (std.meta.activeTag(entry.val) == .string) entry.val.string.slice() else continue;
                 try aliases_map.append(allocator, .{
                     .key = try vm.symValue(allocator, alias_name),
                     .value = try vm.symValue(allocator, target_ns),
@@ -215,11 +215,11 @@ pub fn buildNsRecord(allocator: Allocator, ns_name: []const u8, ns_env: *Env, ns
 /// Extract namespace name from a namespace argument (symbol, ns-map, or ns-record).
 fn extractNsNameFromArg(arg: Value) ?[]const u8 {
     return switch (std.meta.activeTag(arg)) {
-        .symbol => arg.symbol,
+        .symbol => arg.symbol.slice(),
         .map => blk: {
             for (arg.map.entries.items) |entry| {
-                if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, "name")) {
-                    if (std.meta.activeTag(entry.value) == .symbol) break :blk entry.value.symbol;
+                if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword.slice(), "name")) {
+                    if (std.meta.activeTag(entry.value) == .symbol) break :blk entry.value.symbol.slice();
                     break :blk "";
                 }
             }
@@ -227,8 +227,8 @@ fn extractNsNameFromArg(arg: Value) ?[]const u8 {
         },
         .record => blk: {
             for (arg.record.fields.items) |entry| {
-                if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, "name")) {
-                    if (std.meta.activeTag(entry.value) == .symbol) break :blk entry.value.symbol;
+                if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword.slice(), "name")) {
+                    if (std.meta.activeTag(entry.value) == .symbol) break :blk entry.value.symbol.slice();
                     break :blk "";
                 }
             }
@@ -266,7 +266,7 @@ pub fn core_create_ns(self: *const Value, args: *const list.List, env_env: *Env)
 
     const arg = args.items[0];
     if (std.meta.activeTag(arg) != .symbol) return error.TypeError;
-    const ns_name = arg.symbol;
+    const ns_name = arg.symbol.slice();
 
     const ns_mgr = eval_ns.findNsManager(env_env) orelse return error.TypeError;
 
@@ -302,7 +302,7 @@ pub fn core_all_ns(self: *const Value, args: *const list.List, env_env: *Env) an
 
     var it = ns_mgr.namespaces.entryIterator();
     while (it.next()) |entry| {
-        const ns_name = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol else continue;
+        const ns_name = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol.slice() else continue;
         const ns_env = entry.val;
         if (std.meta.activeTag(ns_env) != .wrapped) continue;
         const env_ptr: *Env = vm.unwrapPtr(*Env, ns_env);
@@ -335,19 +335,19 @@ pub fn core_the_ns(self: *const Value, args: *const list.List, env_env: *Env) an
 /// Returns null if the argument is not a valid namespace reference.
 fn extractNsName(arg: Value) ?[]const u8 {
     return switch (std.meta.activeTag(arg)) {
-        .symbol => arg.symbol,
+        .symbol => arg.symbol.slice(),
         .map => blk: {
             for (arg.map.entries.items) |entry| {
-                if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, "name")) {
-                    if (std.meta.activeTag(entry.value) == .symbol) break :blk entry.value.symbol;
+                if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword.slice(), "name")) {
+                    if (std.meta.activeTag(entry.value) == .symbol) break :blk entry.value.symbol.slice();
                 }
             }
             break :blk null;
         },
         .record => blk: {
             for (arg.record.fields.items) |entry| {
-                if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, "name")) {
-                    if (std.meta.activeTag(entry.value) == .symbol) break :blk entry.value.symbol;
+                if (std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword.slice(), "name")) {
+                    if (std.meta.activeTag(entry.value) == .symbol) break :blk entry.value.symbol.slice();
                 }
             }
             break :blk null;
@@ -368,12 +368,12 @@ fn buildAliasesMap(allocator: Allocator, ns_name: []const u8, ns_mgr: *vm.Namesp
     }
     var it = ns_mgr.aliases.entryIterator();
     while (it.next()) |entry| {
-        const composite_key = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol else continue;
+        const composite_key = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol.slice() else continue;
         if (std.mem.indexOfScalar(u8, composite_key, '/')) |slash_idx| {
             const key_ns_name = composite_key[0..slash_idx];
             const alias_name = composite_key[slash_idx + 1 ..];
             if (std.mem.eql(u8, key_ns_name, ns_name)) {
-                const target_ns = if (std.meta.activeTag(entry.val) == .string) entry.val.string else continue;
+                const target_ns = if (std.meta.activeTag(entry.val) == .string) entry.val.string.slice() else continue;
                 try aliases_map.append(allocator, .{
                     .key = try vm.symValue(allocator, alias_name),
                     .value = try vm.symValue(allocator, target_ns),
@@ -405,7 +405,7 @@ pub fn core_ns_resolve(self: *const Value, args: *const list.List, env_env: *Env
     const ns_env = ns_mgr.getNamespace(ns_name) orelse return vm.nilValue();
 
     // Get the symbol name to resolve
-    const sym_str = if (std.meta.activeTag(sym_arg) == .symbol) sym_arg.symbol else return vm.nilValue();
+    const sym_str = if (std.meta.activeTag(sym_arg) == .symbol) sym_arg.symbol.slice() else return vm.nilValue();
 
     // Check for qualified symbol (contains '/')
     if (std.mem.indexOfScalar(u8, sym_str, '/')) |slash_idx| {
@@ -456,20 +456,20 @@ pub fn core_refer(self: *const Value, args: *const list.List, env_env: *Env) any
         i += 1;
         const val = args.items[i];
 
-        if (std.mem.eql(u8, kw.keyword, "exclude")) {
+        if (std.mem.eql(u8, kw.keyword.slice(), "exclude")) {
             exclude_syms = switch (std.meta.activeTag(val)) {
                 .list => val.list.items.items,
                 .vector => val.vector.items.items,
                 else => continue,
             };
-        } else if (std.mem.eql(u8, kw.keyword, "only")) {
+        } else if (std.mem.eql(u8, kw.keyword.slice(), "only")) {
             refer_syms = switch (std.meta.activeTag(val)) {
                 .list => val.list.items.items,
                 .vector => val.vector.items.items,
                 else => continue,
             };
-        } else if (std.mem.eql(u8, kw.keyword, "refer")) {
-            if (std.meta.activeTag(val) == .keyword and std.mem.eql(u8, val.keyword, "all")) {
+        } else if (std.mem.eql(u8, kw.keyword.slice(), "refer")) {
+            if (std.meta.activeTag(val) == .keyword and std.mem.eql(u8, val.keyword.slice(), "all")) {
                 refer_all = true;
             } else {
                 refer_syms = switch (std.meta.activeTag(val)) {
@@ -478,7 +478,7 @@ pub fn core_refer(self: *const Value, args: *const list.List, env_env: *Env) any
                     else => continue,
                 };
             }
-        } else if (std.mem.eql(u8, kw.keyword, "rename")) {
+        } else if (std.mem.eql(u8, kw.keyword.slice(), "rename")) {
             if (std.meta.activeTag(val) == .map) {
                 rename_map = val.map.entries;
             }
@@ -502,7 +502,7 @@ pub fn core_alias(self: *const Value, args: *const list.List, env_env: *Env) any
     const ns_mgr = eval_ns.findNsManager(env_env) orelse return error.TypeError;
     const current_ns = ns_mgr.getCurrentNamespace();
 
-    try ns_mgr.addAlias(current_ns, alias_sym.symbol, ns_sym.symbol);
+    try ns_mgr.addAlias(current_ns, alias_sym.symbol.slice(), ns_sym.symbol.slice());
     return vm.nilValue();
 }
 
@@ -536,7 +536,7 @@ pub fn core_ns_unalias(self: *const Value, args: *const list.List, env_env: *Env
     const ns_mgr = eval_ns.findNsManager(env_env) orelse return error.TypeError;
     _ = ns_mgr.getNamespace(ns_name) orelse return error.TypeError;
 
-    try ns_mgr.removeAlias(ns_name, alias_arg.symbol);
+    try ns_mgr.removeAlias(ns_name, alias_arg.symbol.slice());
     return vm.nilValue();
 }
 
@@ -557,7 +557,7 @@ pub fn core_require(self: *const Value, args: *const list.List, env_env: *Env) a
 
         // Handle simple symbol: (require 'my.lib)
         if (std.meta.activeTag(arg) == .symbol) {
-            const ns_name = arg.symbol;
+            const ns_name = arg.symbol.slice();
             try eval_ns.loadNamespaceFile(allocator, ns_mgr, ns_name, env_env);
             try ns_mgr.addLoadedLib(ns_name);
             continue;
@@ -565,7 +565,7 @@ pub fn core_require(self: *const Value, args: *const list.List, env_env: *Env) a
 
         // Handle simple string: (require "my.lib")
         if (std.meta.activeTag(arg) == .string) {
-            const ns_name = arg.string;
+            const ns_name = arg.string.slice();
             try eval_ns.loadNamespaceFile(allocator, ns_mgr, ns_name, env_env);
             try ns_mgr.addLoadedLib(ns_name);
             continue;
@@ -577,7 +577,7 @@ pub fn core_require(self: *const Value, args: *const list.List, env_env: *Env) a
             if (items.len < 1) continue;
             const ns_sym = items[0];
             if (std.meta.activeTag(ns_sym) != .symbol) continue;
-            const ns_name = ns_sym.symbol;
+            const ns_name = ns_sym.symbol.slice();
 
             // Parse options from the vector
             var alias: ?[]const u8 = null;
@@ -591,10 +591,10 @@ pub fn core_require(self: *const Value, args: *const list.List, env_env: *Env) a
                 if (std.meta.activeTag(items[k]) == .keyword) {
                     if (k + 1 >= items.len) break;
                     k += 1;
-                    if (std.mem.eql(u8, items[k - 1].keyword, "as")) {
-                        if (std.meta.activeTag(items[k]) == .symbol) alias = items[k].symbol;
-                    } else if (std.mem.eql(u8, items[k - 1].keyword, "refer")) {
-                        if (std.meta.activeTag(items[k]) == .keyword and std.mem.eql(u8, items[k].keyword, "all")) {
+                    if (std.mem.eql(u8, items[k - 1].keyword.slice(), "as")) {
+                        if (std.meta.activeTag(items[k]) == .symbol) alias = items[k].symbol.slice();
+                    } else if (std.mem.eql(u8, items[k - 1].keyword.slice(), "refer")) {
+                        if (std.meta.activeTag(items[k]) == .keyword and std.mem.eql(u8, items[k].keyword.slice(), "all")) {
                             refer_all = true;
                         } else {
                             refer_syms = switch (std.meta.activeTag(items[k])) {
@@ -603,13 +603,13 @@ pub fn core_require(self: *const Value, args: *const list.List, env_env: *Env) a
                                 else => continue,
                             };
                         }
-                    } else if (std.mem.eql(u8, items[k - 1].keyword, "exclude")) {
+                    } else if (std.mem.eql(u8, items[k - 1].keyword.slice(), "exclude")) {
                         exclude_syms = switch (std.meta.activeTag(items[k])) {
                             .list => items[k].list.items.items,
                             .vector => items[k].vector.items.items,
                             else => continue,
                         };
-                    } else if (std.mem.eql(u8, items[k - 1].keyword, "rename")) {
+                    } else if (std.mem.eql(u8, items[k - 1].keyword.slice(), "rename")) {
                         if (std.meta.activeTag(items[k]) == .map) rename_map = items[k].map.entries;
                     }
                 }
@@ -642,7 +642,7 @@ pub fn core_require(self: *const Value, args: *const list.List, env_env: *Env) a
             if (list_items.len < 1) continue;
             const prefix_sym = list_items[0];
             if (std.meta.activeTag(prefix_sym) != .symbol) continue;
-            const prefix = prefix_sym.symbol;
+            const prefix = prefix_sym.symbol.slice();
 
             var j: usize = 1;
             while (j < list_items.len) : (j += 1) {
@@ -650,7 +650,7 @@ pub fn core_require(self: *const Value, args: *const list.List, env_env: *Env) a
 
                 // Simple suffix: (clojure zip) → clojure.zip
                 if (std.meta.activeTag(suffix_item) == .symbol) {
-                    const full_ns = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ prefix, suffix_item.symbol });
+                    const full_ns = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ prefix, suffix_item.symbol.slice() });
                     try eval_ns.loadNamespaceFile(allocator, ns_mgr, full_ns, env_env);
                     try ns_mgr.addLoadedLib(full_ns);
                     allocator.free(full_ns);
@@ -663,7 +663,7 @@ pub fn core_require(self: *const Value, args: *const list.List, env_env: *Env) a
                     if (vec_items.len < 1) continue;
                     const suffix_sym = vec_items[0];
                     if (std.meta.activeTag(suffix_sym) != .symbol) continue;
-                    const full_ns = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ prefix, suffix_sym.symbol });
+                    const full_ns = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ prefix, suffix_sym.symbol.slice() });
 
                     // Parse options from the vector
                     var alias: ?[]const u8 = null;
@@ -677,10 +677,10 @@ pub fn core_require(self: *const Value, args: *const list.List, env_env: *Env) a
                         if (std.meta.activeTag(vec_items[k]) == .keyword) {
                             if (k + 1 >= vec_items.len) break;
                             k += 1;
-                            if (std.mem.eql(u8, vec_items[k - 1].keyword, "as")) {
-                                if (std.meta.activeTag(vec_items[k]) == .symbol) alias = vec_items[k].symbol;
-                            } else if (std.mem.eql(u8, vec_items[k - 1].keyword, "refer")) {
-                                if (std.meta.activeTag(vec_items[k]) == .keyword and std.mem.eql(u8, vec_items[k].keyword, "all")) {
+                            if (std.mem.eql(u8, vec_items[k - 1].keyword.slice(), "as")) {
+                                if (std.meta.activeTag(vec_items[k]) == .symbol) alias = vec_items[k].symbol.slice();
+                            } else if (std.mem.eql(u8, vec_items[k - 1].keyword.slice(), "refer")) {
+                                if (std.meta.activeTag(vec_items[k]) == .keyword and std.mem.eql(u8, vec_items[k].keyword.slice(), "all")) {
                                     refer_all = true;
                                 } else {
                                     refer_syms = switch (std.meta.activeTag(vec_items[k])) {
@@ -689,13 +689,13 @@ pub fn core_require(self: *const Value, args: *const list.List, env_env: *Env) a
                                         else => continue,
                                     };
                                 }
-                            } else if (std.mem.eql(u8, vec_items[k - 1].keyword, "exclude")) {
+                            } else if (std.mem.eql(u8, vec_items[k - 1].keyword.slice(), "exclude")) {
                                 exclude_syms = switch (std.meta.activeTag(vec_items[k])) {
                                     .list => vec_items[k].list.items.items,
                                     .vector => vec_items[k].vector.items.items,
                                     else => continue,
                                 };
-                            } else if (std.mem.eql(u8, vec_items[k - 1].keyword, "rename")) {
+                            } else if (std.mem.eql(u8, vec_items[k - 1].keyword.slice(), "rename")) {
                                 if (std.meta.activeTag(vec_items[k]) == .map) rename_map = vec_items[k].map.entries;
                             }
                         }
@@ -708,9 +708,9 @@ pub fn core_require(self: *const Value, args: *const list.List, env_env: *Env) a
                         var last_dot: usize = 0;
                         var d: usize = 0;
                         while (d < suffix_sym.symbol.len) : (d += 1) {
-                            if (suffix_sym.symbol[d] == '.') last_dot = d + 1;
+                            if (suffix_sym.symbol.slice()[d] == '.') last_dot = d + 1;
                         }
-                        break :blk if (last_dot > 0 and last_dot < suffix_sym.symbol.len) suffix_sym.symbol[last_dot..] else suffix_sym.symbol;
+                        break :blk if (last_dot > 0 and last_dot < suffix_sym.symbol.len) suffix_sym.symbol.slice()[last_dot..] else suffix_sym.symbol.slice();
                     };
                     try ns_mgr.addAlias(current_ns, effective_alias, full_ns);
 
@@ -762,7 +762,7 @@ pub fn core_resolve(self: *const Value, args: *const list.List, env_env: *Env) a
     const ns_env = ns_mgr.getNamespace(current_ns) orelse return vm.nilValue();
 
     const sym_arg = args.items[0];
-    const sym_str = if (std.meta.activeTag(sym_arg) == .symbol) sym_arg.symbol else return vm.nilValue();
+    const sym_str = if (std.meta.activeTag(sym_arg) == .symbol) sym_arg.symbol.slice() else return vm.nilValue();
     const allocator = env_env.allocator;
     _ = allocator;
 
@@ -795,7 +795,7 @@ fn buildInternsMap(allocator: Allocator, ns_env: *const Env) anyerror!Value {
     }
     var it = ns_env.entries.entryIterator();
     while (it.next()) |entry| {
-        const sym_name = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol else continue;
+        const sym_name = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol.slice() else continue;
         // Skip referred names — interns are only owned vars
         if (eval_ns.isReferredName(ns_env.referred_names.items, sym_name)) continue;
         // Skip symbols not owned by this namespace (e.g. copied from zig.core)
@@ -823,7 +823,7 @@ fn buildRefersMap(allocator: Allocator, ns_env: *const Env) anyerror!Value {
     }
     var it = ns_env.entries.entryIterator();
     while (it.next()) |entry| {
-        const sym_name = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol else continue;
+        const sym_name = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol.slice() else continue;
         // Only include referred names
         if (!eval_ns.isReferredName(ns_env.referred_names.items, sym_name)) continue;
         try refers_map.append(allocator, .{
@@ -908,7 +908,7 @@ pub fn core_ns_map(self: *const Value, args: *const list.List, env_env: *Env) an
     // Add interns (owned vars)
     var it = ns_env.entries.entryIterator();
     while (it.next()) |entry| {
-        const sym_name = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol else continue;
+        const sym_name = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol.slice() else continue;
         try result_map.append(allocator, .{
             .key = try vm.symValue(allocator, sym_name),
             .value = entry.val,
@@ -918,12 +918,12 @@ pub fn core_ns_map(self: *const Value, args: *const list.List, env_env: *Env) an
     // Add aliases (as symbol → symbol mappings)
     var it2 = ns_mgr.aliases.entryIterator();
     while (it2.next()) |entry| {
-        const composite_key = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol else continue;
+        const composite_key = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol.slice() else continue;
         if (std.mem.indexOfScalar(u8, composite_key, '/')) |slash_idx| {
             const key_ns_name = composite_key[0..slash_idx];
             const alias_name = composite_key[slash_idx + 1 ..];
             if (std.mem.eql(u8, key_ns_name, ns_name)) {
-                const target_ns = if (std.meta.activeTag(entry.val) == .string) entry.val.string else continue;
+                const target_ns = if (std.meta.activeTag(entry.val) == .string) entry.val.string.slice() else continue;
                 try result_map.append(allocator, .{
                     .key = try vm.symValue(allocator, alias_name),
                     .value = try vm.symValue(allocator, target_ns),
@@ -950,13 +950,13 @@ pub fn core_ns_unmap(self: *const Value, args: *const list.List, env_env: *Env) 
     const ns_env = ns_mgr.getNamespace(ns_name) orelse return error.TypeError;
 
     // Remove from the HAMT
-    const key = phm.sym(sym_arg.symbol);
+    const key = phm.sym(sym_arg.symbol.slice());
     ns_env.entries = try ns_env.entries.mapWithout(ns_env.allocator, key);
 
     // Also remove from referred_names if present
     var i: usize = 0;
     while (i < ns_env.referred_names.items.len) : (i += 1) {
-        if (std.mem.eql(u8, ns_env.referred_names.items[i], sym_arg.symbol)) {
+        if (std.mem.eql(u8, ns_env.referred_names.items[i], sym_arg.symbol.slice())) {
             ns_env.allocator.free(ns_env.referred_names.items[i]);
             // Remove from the list by shifting
             const remaining = ns_env.referred_names.items.len - i - 1;
@@ -990,11 +990,11 @@ pub fn core_intern(self: *const Value, args: *const list.List, env_env: *Env) an
     // If value provided, set it
     if (args.items.len == 3) {
         const val = args.items[2];
-        try ns_env.put(sym_arg.symbol, val);
+        try ns_env.put(sym_arg.symbol.slice(), val);
     }
 
     // Return the symbol (we don't have Var objects)
-    return try vm.symValue(allocator, sym_arg.symbol);
+    return try vm.symValue(allocator, sym_arg.symbol.slice());
 }
 
 /// load-string: (load-string s) → result-of-last-form
@@ -1006,7 +1006,7 @@ pub fn core_load_string(self: *const Value, args: *const list.List, env_env: *En
 
     const str_arg = args.items[0];
     if (std.meta.activeTag(str_arg) != .string) return error.TypeError;
-    const source = str_arg.string;
+    const source = str_arg.string.slice();
 
     // Parse the string
     var p = try parser.Parser.init(allocator, source);
@@ -1043,7 +1043,7 @@ pub fn core_remove_ns(self: *const Value, args: *const list.List, env_env: *Env)
 
     const ns_arg = args.items[0];
     if (std.meta.activeTag(ns_arg) != .symbol) return error.TypeError;
-    const ns_name = ns_arg.symbol;
+    const ns_name = ns_arg.symbol.slice();
 
     // Cannot remove clojure.core or user
     if (std.mem.eql(u8, ns_name, "clojure.core") or std.mem.eql(u8, ns_name, "user")) {
@@ -1074,7 +1074,7 @@ pub fn core_remove_ns(self: *const Value, args: *const list.List, env_env: *Env)
 
     var it = ns_mgr.aliases.entryIterator();
     while (it.next()) |entry| {
-        const composite_key = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol else continue;
+        const composite_key = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol.slice() else continue;
         if (std.mem.startsWith(u8, composite_key, prefix)) {
             const owned = try allocator.dupe(u8, composite_key);
             try keys_to_remove.append(allocator, owned);
@@ -1109,10 +1109,10 @@ pub fn core_ns_get_meta(self: *const Value, args: *const list.List, env: *Env) a
     if (eval_mod.findNsManager(env)) |ns_mgr| {
         const current_ns = ns_mgr.getCurrentNamespace();
         const ns_env = ns_mgr.getNamespace(current_ns) orelse env;
-        if (ns_env.getMeta(sym.symbol)) |meta| {
+        if (ns_env.getMeta(sym.symbol.slice())) |meta| {
             return meta;
         }
-    } else if (env.getMeta(sym.symbol)) |meta| {
+    } else if (env.getMeta(sym.symbol.slice())) |meta| {
         return meta;
     }
     return vm.nilValue();

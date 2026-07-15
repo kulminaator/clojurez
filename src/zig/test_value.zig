@@ -65,7 +65,7 @@ test "value::stringValue: creates string" {
     var v = try stringValue(a, "hello");
     defer vm.valueDeinit(&v, a);
     try std.testing.expect(std.meta.activeTag(v) == .string);
-    try std.testing.expect(std.mem.eql(u8, v.string, "hello"));
+    try std.testing.expect(std.mem.eql(u8, v.string.slice(), "hello"));
 }
 
 test "value::stringValue: rejects invalid UTF-8" {
@@ -79,7 +79,7 @@ test "value::symValue: creates symbol" {
     var v = try symValue(a, "foo-bar");
     defer vm.valueDeinit(&v, a);
     try std.testing.expect(std.meta.activeTag(v) == .symbol);
-    try std.testing.expect(std.mem.eql(u8, v.symbol, "foo-bar"));
+    try std.testing.expect(std.mem.eql(u8, v.symbol.slice(), "foo-bar"));
 }
 
 test "value::keywordValue: creates keyword" {
@@ -87,7 +87,7 @@ test "value::keywordValue: creates keyword" {
     var v = try keywordValue(a, "foo");
     defer vm.valueDeinit(&v, a);
     try std.testing.expect(std.meta.activeTag(v) == .keyword);
-    try std.testing.expect(std.mem.eql(u8, v.keyword, "foo"));
+    try std.testing.expect(std.mem.eql(u8, v.keyword.slice(), "foo"));
 }
 
 test "value::isTruthy: nil is falsy" {
@@ -430,7 +430,7 @@ test "value::clone: string round-trip" {
     var c = try vm.clone(&v, a);
     defer vm.valueDeinit(&v, a);
     defer vm.valueDeinit(&c, a);
-    try std.testing.expect(std.mem.eql(u8, c.string, "test"));
+    try std.testing.expect(std.mem.eql(u8, c.string.slice(), "test"));
 }
 
 test "value::clone: atom shares data" {
@@ -1141,4 +1141,141 @@ test "frame::put: allows after child is removed" {
         try std.testing.expectEqual(@as(i64, 99), child.get("x").?.integer);
     }
     gc.freeAllBlocks();
+}
+
+// ============================================================
+// GC Invariant Tests — Phase 5 guardrails
+// Verify that all Clojure value data comes from the GC allocator.
+// ============================================================
+
+test "gc_invariant: string values are tracked by GC" {
+    const allocator = std.heap.page_allocator;
+    var gc = gc_mod.GC.init(allocator);
+    defer gc.deinit();
+    const prev_gc = gc_mod.current_gc;
+    gc_mod.current_gc = &gc;
+    defer gc_mod.current_gc = prev_gc;
+    const gc_alloc = gc.allocator();
+
+    const val = try stringValue(gc_alloc, "hello world");
+    // Verify the string data pointer is in the GC block list
+    const header = gc.findHeader(@as(*anyopaque, @ptrCast(@constCast(val.string.data))));
+    try std.testing.expect(header != null);
+    try std.testing.expectEqual(gc_mod.GCObjectType.string_data, header.?.obj_type);
+}
+
+test "gc_invariant: symbol values are tracked by GC" {
+    const allocator = std.heap.page_allocator;
+    var gc = gc_mod.GC.init(allocator);
+    defer gc.deinit();
+    const prev_gc = gc_mod.current_gc;
+    gc_mod.current_gc = &gc;
+    defer gc_mod.current_gc = prev_gc;
+    const gc_alloc = gc.allocator();
+
+    const val = try symValue(gc_alloc, "my-symbol");
+    const header = gc.findHeader(@as(*anyopaque, @ptrCast(@constCast(val.symbol.data))));
+    try std.testing.expect(header != null);
+    try std.testing.expectEqual(gc_mod.GCObjectType.string_data, header.?.obj_type);
+}
+
+test "gc_invariant: keyword values are tracked by GC" {
+    const allocator = std.heap.page_allocator;
+    var gc = gc_mod.GC.init(allocator);
+    defer gc.deinit();
+    const prev_gc = gc_mod.current_gc;
+    gc_mod.current_gc = &gc;
+    defer gc_mod.current_gc = prev_gc;
+    const gc_alloc = gc.allocator();
+
+    const val = try keywordValue(gc_alloc, "my-keyword");
+    const header = gc.findHeader(@as(*anyopaque, @ptrCast(@constCast(val.keyword.data))));
+    try std.testing.expect(header != null);
+    try std.testing.expectEqual(gc_mod.GCObjectType.string_data, header.?.obj_type);
+}
+
+test "gc_invariant: regex values are tracked by GC" {
+    const allocator = std.heap.page_allocator;
+    var gc = gc_mod.GC.init(allocator);
+    defer gc.deinit();
+    const prev_gc = gc_mod.current_gc;
+    gc_mod.current_gc = &gc;
+    defer gc_mod.current_gc = prev_gc;
+    const gc_alloc = gc.allocator();
+
+    const val = try vm.regexValue(gc_alloc, "[a-z]+");
+    const header = gc.findHeader(@as(*anyopaque, @ptrCast(@constCast(val.regex.data))));
+    try std.testing.expect(header != null);
+    try std.testing.expectEqual(gc_mod.GCObjectType.string_data, header.?.obj_type);
+}
+
+test "gc_invariant: list items array is tracked by GC" {
+    const allocator = std.heap.page_allocator;
+    var gc = gc_mod.GC.init(allocator);
+    defer gc.deinit();
+    const prev_gc = gc_mod.current_gc;
+    gc_mod.current_gc = &gc;
+    defer gc_mod.current_gc = prev_gc;
+    const gc_alloc = gc.allocator();
+
+    var items = list.empty();
+    try items.append(gc_alloc, intValue(42));
+    try items.append(gc_alloc, intValue(99));
+    const val = try listValue(gc_alloc, items);
+
+    // The items array should be tracked by GC
+    if (val.list.items.items.len > 0) {
+        const header = gc.findHeader(@as(*anyopaque, @ptrCast(@constCast(val.list.items.items.ptr))));
+        try std.testing.expect(header != null);
+    }
+}
+
+test "gc_invariant: vector items array is tracked by GC" {
+    const allocator = std.heap.page_allocator;
+    var gc = gc_mod.GC.init(allocator);
+    defer gc.deinit();
+    const prev_gc = gc_mod.current_gc;
+    gc_mod.current_gc = &gc;
+    defer gc_mod.current_gc = prev_gc;
+    const gc_alloc = gc.allocator();
+
+    var items = vec.empty();
+    try items.append(gc_alloc, intValue(42));
+    try items.append(gc_alloc, intValue(99));
+    const val = try vectorValue(gc_alloc, items);
+
+    if (val.vector.items.items.len > 0) {
+        const header = gc.findHeader(@as(*anyopaque, @ptrCast(@constCast(val.vector.items.items.ptr))));
+        try std.testing.expect(header != null);
+    }
+}
+
+test "gc_invariant: shallowClone does not allocate" {
+    const allocator = std.heap.page_allocator;
+    var gc = gc_mod.GC.init(allocator);
+    defer gc.deinit();
+    const prev_gc = gc_mod.current_gc;
+    gc_mod.current_gc = &gc;
+    defer gc_mod.current_gc = prev_gc;
+    const gc_alloc = gc.allocator();
+
+    // Create values first (these allocate)
+    const str_val = try stringValue(gc_alloc, "test");
+    const sym_val = try symValue(gc_alloc, "test-sym");
+    const kw_val = try keywordValue(gc_alloc, "test-kw");
+    const int_val = intValue(42);
+    const nil_val = nilValue();
+
+    // Record block count AFTER creating values
+    const blocks_before = gc.block_count;
+
+    // shallowClone should not allocate anything
+    _ = try vm.shallowClone(&str_val, gc_alloc);
+    _ = try vm.shallowClone(&sym_val, gc_alloc);
+    _ = try vm.shallowClone(&kw_val, gc_alloc);
+    _ = try vm.shallowClone(&int_val, gc_alloc);
+    _ = try vm.shallowClone(&nil_val, gc_alloc);
+
+    // Block count should be unchanged — shallowClone is a no-op struct copy
+    try std.testing.expectEqual(blocks_before, gc.block_count);
 }

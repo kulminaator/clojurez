@@ -437,10 +437,10 @@ fn copyBuiltinsToNamespace(root_env: *Env, target_env: *Env) anyerror!void {
     while (it.next()) |entry| {
         if (std.meta.activeTag(entry.val) == .builtin_fn) {
             // Skip zig-only functions that should not leak into clojure.core
-            if (std.meta.activeTag(entry.key) == .symbol and std.mem.eql(u8, entry.key.symbol, "temp-dir")) continue;
+            if (std.meta.activeTag(entry.key) == .symbol and std.mem.eql(u8, entry.key.symbol.slice(), "temp-dir")) continue;
             // builtinFnValue is just a function pointer — clone is trivial
             if (std.meta.activeTag(entry.key) == .symbol) {
-                try target_env.put(entry.key.symbol, vm.builtinFnValue(entry.val.builtin_fn));
+                try target_env.put(entry.key.symbol.slice(), vm.builtinFnValue(entry.val.builtin_fn));
             }
         }
     }

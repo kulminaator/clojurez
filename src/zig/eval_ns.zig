@@ -27,7 +27,7 @@ pub fn evalNs(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyer
 
     const ns_name_sym = l.items[1];
     if (std.meta.activeTag(ns_name_sym) != .symbol) return error.TypeError;
-    const ns_name = ns_name_sym.symbol;
+    const ns_name = ns_name_sym.symbol.slice();
 
     // Find the namespace manager
     const ns_mgr = findNsManager(env) orelse return vm.nilValue();
@@ -69,9 +69,9 @@ pub fn evalNs(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyer
 
         // :refer-clojure is accepted syntactically but not fully enforced.
         // The parent chain already gives access to all clojure.core functions.
-        if (std.mem.eql(u8, clause_keyword.keyword, "refer-clojure")) continue;
+        if (std.mem.eql(u8, clause_keyword.keyword.slice(), "refer-clojure")) continue;
 
-        if (std.mem.eql(u8, clause_keyword.keyword, "require")) {
+        if (std.mem.eql(u8, clause_keyword.keyword.slice(), "require")) {
             // Process :require clause
             var j: usize = 1;
             while (j < clause.list.items.items.len) : (j += 1) {
@@ -83,7 +83,7 @@ pub fn evalNs(allocator: Allocator, l: list.List, env: *Env, depth: usize) anyer
                     try processPrefixList(allocator, ns_mgr, ns_env, ns_name, req_item.list.items.items, false, env);
                 }
             }
-        } else if (std.mem.eql(u8, clause_keyword.keyword, "use")) {
+        } else if (std.mem.eql(u8, clause_keyword.keyword.slice(), "use")) {
             // :use is like :require but with :refer :all by default
             var j: usize = 1;
             while (j < clause.list.items.items.len) : (j += 1) {
@@ -116,7 +116,7 @@ fn processRequireItem(
     if (req_items.len < 1) return;
     const req_ns_sym = req_items[0];
     if (std.meta.activeTag(req_ns_sym) != .symbol) return;
-    const req_ns_name = req_ns_sym.symbol;
+    const req_ns_name = req_ns_sym.symbol.slice();
 
     // Parse options from the vector
     var alias: ?[]const u8 = null;
@@ -130,23 +130,23 @@ fn processRequireItem(
         if (std.meta.activeTag(req_items[k]) != .keyword) continue;
         if (k + 1 >= req_items.len) break;
         k += 1;
-        if (std.mem.eql(u8, req_items[k - 1].keyword, "as")) {
-            if (std.meta.activeTag(req_items[k]) == .symbol) alias = req_items[k].symbol;
-        } else if (std.mem.eql(u8, req_items[k - 1].keyword, "refer")) {
-            if (std.meta.activeTag(req_items[k]) == .keyword and std.mem.eql(u8, req_items[k].keyword, "all")) {
+        if (std.mem.eql(u8, req_items[k - 1].keyword.slice(), "as")) {
+            if (std.meta.activeTag(req_items[k]) == .symbol) alias = req_items[k].symbol.slice();
+        } else if (std.mem.eql(u8, req_items[k - 1].keyword.slice(), "refer")) {
+            if (std.meta.activeTag(req_items[k]) == .keyword and std.mem.eql(u8, req_items[k].keyword.slice(), "all")) {
                 refer_all = true;
             } else if (std.meta.activeTag(req_items[k]) == .list) {
                 refer_syms = req_items[k].list.items.items;
             } else if (std.meta.activeTag(req_items[k]) == .vector) {
                 refer_syms = req_items[k].vector.items.items;
             }
-        } else if (std.mem.eql(u8, req_items[k - 1].keyword, "exclude")) {
+        } else if (std.mem.eql(u8, req_items[k - 1].keyword.slice(), "exclude")) {
             if (std.meta.activeTag(req_items[k]) == .list) {
                 exclude_syms = req_items[k].list.items.items;
             } else if (std.meta.activeTag(req_items[k]) == .vector) {
                 exclude_syms = req_items[k].vector.items.items;
             }
-        } else if (std.mem.eql(u8, req_items[k - 1].keyword, "rename")) {
+        } else if (std.mem.eql(u8, req_items[k - 1].keyword.slice(), "rename")) {
             if (std.meta.activeTag(req_items[k]) == .map) rename_map = req_items[k].map.entries;
         }
     }
@@ -185,7 +185,7 @@ fn processPrefixList(
     if (list_items.len < 1) return;
     const prefix_sym = list_items[0];
     if (std.meta.activeTag(prefix_sym) != .symbol) return;
-    const prefix = prefix_sym.symbol;
+    const prefix = prefix_sym.symbol.slice();
 
     var j: usize = 1;
     while (j < list_items.len) : (j += 1) {
@@ -193,7 +193,7 @@ fn processPrefixList(
 
         // Simple suffix: (clojure zip) → clojure.zip
         if (std.meta.activeTag(suffix_item) == .symbol) {
-            const full_ns = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ prefix, suffix_item.symbol });
+            const full_ns = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ prefix, suffix_item.symbol.slice() });
             defer allocator.free(full_ns);
 
             var last_dot: usize = 0;
@@ -211,7 +211,7 @@ fn processPrefixList(
         if (std.meta.activeTag(suffix_item) == .vector and suffix_item.vector.items.items.len >= 1) {
             const suffix_sym = suffix_item.vector.items.items[0];
             if (std.meta.activeTag(suffix_sym) == .symbol) {
-                const full_ns = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ prefix, suffix_sym.symbol });
+                const full_ns = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ prefix, suffix_sym.symbol.slice() });
                 defer allocator.free(full_ns);
 
                 // Parse options from the vector
@@ -226,23 +226,23 @@ fn processPrefixList(
                     if (std.meta.activeTag(suffix_item.vector.items.items[k]) != .keyword) continue;
                     if (k + 1 >= suffix_item.vector.items.items.len) break;
                     k += 1;
-                    if (std.mem.eql(u8, suffix_item.vector.items.items[k - 1].keyword, "as")) {
-                        if (std.meta.activeTag(suffix_item.vector.items.items[k]) == .symbol) alias = suffix_item.vector.items.items[k].symbol;
-                    } else if (std.mem.eql(u8, suffix_item.vector.items.items[k - 1].keyword, "refer")) {
-                        if (std.meta.activeTag(suffix_item.vector.items.items[k]) == .keyword and std.mem.eql(u8, suffix_item.vector.items.items[k].keyword, "all")) {
+                    if (std.mem.eql(u8, suffix_item.vector.items.items[k - 1].keyword.slice(), "as")) {
+                        if (std.meta.activeTag(suffix_item.vector.items.items[k]) == .symbol) alias = suffix_item.vector.items.items[k].symbol.slice();
+                    } else if (std.mem.eql(u8, suffix_item.vector.items.items[k - 1].keyword.slice(), "refer")) {
+                        if (std.meta.activeTag(suffix_item.vector.items.items[k]) == .keyword and std.mem.eql(u8, suffix_item.vector.items.items[k].keyword.slice(), "all")) {
                             refer_all = true;
                         } else if (std.meta.activeTag(suffix_item.vector.items.items[k]) == .list) {
                             refer_syms = suffix_item.vector.items.items[k].list.items.items;
                         } else if (std.meta.activeTag(suffix_item.vector.items.items[k]) == .vector) {
                             refer_syms = suffix_item.vector.items.items[k].vector.items.items;
                         }
-                    } else if (std.mem.eql(u8, suffix_item.vector.items.items[k - 1].keyword, "exclude")) {
+                    } else if (std.mem.eql(u8, suffix_item.vector.items.items[k - 1].keyword.slice(), "exclude")) {
                         if (std.meta.activeTag(suffix_item.vector.items.items[k]) == .list) {
                             exclude_syms = suffix_item.vector.items.items[k].list.items.items;
                         } else if (std.meta.activeTag(suffix_item.vector.items.items[k]) == .vector) {
                             exclude_syms = suffix_item.vector.items.items[k].vector.items.items;
                         }
-                    } else if (std.mem.eql(u8, suffix_item.vector.items.items[k - 1].keyword, "rename")) {
+                    } else if (std.mem.eql(u8, suffix_item.vector.items.items[k - 1].keyword.slice(), "rename")) {
                         if (std.meta.activeTag(suffix_item.vector.items.items[k]) == .map) rename_map = suffix_item.vector.items.items[k].map.entries;
                     }
                 }
@@ -255,9 +255,9 @@ fn processPrefixList(
                     var last_dot: usize = 0;
                     var d2: usize = 0;
                     while (d2 < suffix_sym.symbol.len) : (d2 += 1) {
-                        if (suffix_sym.symbol[d2] == '.') last_dot = d2 + 1;
+                        if (suffix_sym.symbol.slice()[d2] == '.') last_dot = d2 + 1;
                     }
-                    break :blk if (last_dot > 0 and last_dot < suffix_sym.symbol.len) suffix_sym.symbol[last_dot..] else suffix_sym.symbol;
+                    break :blk if (last_dot > 0 and last_dot < suffix_sym.symbol.len) suffix_sym.symbol.slice()[last_dot..] else suffix_sym.symbol.slice();
                 };
 
                 try ns_mgr.addAlias(target_ns_name, effective_alias, full_ns);
@@ -293,7 +293,7 @@ pub fn referVars(
 ) anyerror!void {
     var it = source_ns.entries.entryIterator();
     while (it.next()) |entry| {
-        const sym_name = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol else continue;
+        const sym_name = if (std.meta.activeTag(entry.key) == .symbol) entry.key.symbol.slice() else continue;
         const sym_val = entry.val;
 
         // Skip vars that were themselves referred into source_ns (not owned).
@@ -304,7 +304,7 @@ pub fn referVars(
         if (exclude_syms) |excl| {
             var excluded = false;
             for (excl) |ex| {
-                if (std.meta.activeTag(ex) == .symbol and std.mem.eql(u8, ex.symbol, sym_name)) {
+                if (std.meta.activeTag(ex) == .symbol and std.mem.eql(u8, ex.symbol.slice(), sym_name)) {
                     excluded = true;
                     break;
                 }
@@ -317,7 +317,7 @@ pub fn referVars(
             if (!refer_all) {
                 var found = false;
                 for (refs) |r| {
-                    if (std.meta.activeTag(r) == .symbol and std.mem.eql(u8, r.symbol, sym_name)) {
+                    if (std.meta.activeTag(r) == .symbol and std.mem.eql(u8, r.symbol.slice(), sym_name)) {
                         found = true;
                         break;
                     }
@@ -333,9 +333,9 @@ pub fn referVars(
         const local_name = blk: {
             if (rename_map) |rmap| {
                 for (rmap.items) |me| {
-                    if (std.meta.activeTag(me.key) == .symbol and std.mem.eql(u8, me.key.symbol, sym_name)) {
+                    if (std.meta.activeTag(me.key) == .symbol and std.mem.eql(u8, me.key.symbol.slice(), sym_name)) {
                         if (std.meta.activeTag(me.value) == .symbol) {
-                            break :blk me.value.symbol;
+                            break :blk me.value.symbol.slice();
                         }
                         break;
                     }
@@ -423,13 +423,13 @@ pub fn evalInNs(allocator: Allocator, l: list.List, env: *Env, depth: usize) any
     if (std.meta.activeTag(ns_name_sym) == .list) {
         const qlist = &ns_name_sym.list.items;
         if (qlist.items.len == 2 and std.meta.activeTag(qlist.items[0]) == .symbol and
-            std.mem.eql(u8, qlist.items[0].symbol, "quote") and
+            std.mem.eql(u8, qlist.items[0].symbol.slice(), "quote") and
             std.meta.activeTag(qlist.items[1]) == .symbol) {
             ns_name_sym = qlist.items[1];
         }
     }
     if (std.meta.activeTag(ns_name_sym) != .symbol) return error.TypeError;
-    const ns_name = ns_name_sym.symbol;
+    const ns_name = ns_name_sym.symbol.slice();
 
     // Find the namespace manager
     const ns_mgr = findNsManager(env) orelse return vm.nilValue();

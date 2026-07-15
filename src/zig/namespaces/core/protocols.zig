@@ -95,9 +95,9 @@ pub fn dispatchProtocolMethod(
     const method_kw_val = mut_env.get("__method_kw") orelse
         return makeErrorStr(allocator, "error: protocol dispatch missing __method_kw", .{});
 
-    const proto_ns = proto_ns_val.string;
-    const proto_name = proto_name_val.string;
-    const method_kw = method_kw_val.string;
+    const proto_ns = proto_ns_val.string.slice();
+    const proto_name = proto_name_val.string.slice();
+    const method_kw = method_kw_val.string.slice();
 
     // Look up the protocol map from the namespace (dynamic lookup)
     const ns_mgr = eval.findNsManager(proto_env) orelse
@@ -151,7 +151,7 @@ pub fn evalDefProtocol(
 
     const name_sym = l.items[1];
     if (std.meta.activeTag(name_sym) != .symbol) return error.TypeError;
-    const proto_name = name_sym.symbol;
+    const proto_name = name_sym.symbol.slice();
 
     // Parse opts+sigs
     var idx: usize = 2;
@@ -159,7 +159,7 @@ pub fn evalDefProtocol(
 
     // Skip optional docstring
     if (idx < l.items.len and std.meta.activeTag(l.items[idx]) == .string) {
-        docstring = try allocator.dupe(u8, l.items[idx].string);
+        docstring = try allocator.dupe(u8, l.items[idx].string.slice());
         idx += 1;
     }
 
@@ -198,7 +198,7 @@ pub fn evalDefProtocol(
         const sig_list = sig.list;
         const mname_sym = sig_list.items.items[0];
         if (std.meta.activeTag(mname_sym) != .symbol) return error.TypeError;
-        const mname = mname_sym.symbol;
+        const mname = mname_sym.symbol.slice();
 
         // Check for duplicate method names
         for (method_names.items) |existing| {
@@ -230,7 +230,7 @@ pub fn evalDefProtocol(
                     if (!first_param) try buf.append(allocator, ' ');
                     first_param = false;
                     if (std.meta.activeTag(param) == .symbol) {
-                        try buf.appendSlice(allocator, param.symbol);
+                        try buf.appendSlice(allocator, param.symbol.slice());
                     } else {
                         try buf.appendSlice(allocator, "x");
                     }
@@ -238,7 +238,7 @@ pub fn evalDefProtocol(
                 try buf.append(allocator, ')');
                 try arglists.append(allocator, try allocator.dupe(u8, buf.items));
             } else if (std.meta.activeTag(item) == .string) {
-                method_doc = try allocator.dupe(u8, item.string);
+                method_doc = try allocator.dupe(u8, item.string.slice());
             }
         }
 
@@ -548,7 +548,7 @@ pub fn evalExtend(
         if (std.meta.activeTag(var_sym_val) != .symbol) {
             return makeErrorStr(allocator, "extend: protocol :var is not a symbol", .{});
         }
-        const proto_name = var_sym_val.symbol;
+        const proto_name = var_sym_val.symbol.slice();
 
         // Get the namespace from the protocol's :var or find it
         // We need to find which namespace has this protocol
@@ -566,7 +566,7 @@ pub fn evalExtend(
                     _ = found;
                     proto_ns_env = ns_env_ptr;
                     if (std.meta.activeTag(ns_entry.key) == .symbol) {
-                        proto_ns_name = ns_entry.key.symbol;
+                        proto_ns_name = ns_entry.key.symbol.slice();
                     }
                     break;
                 }
@@ -681,7 +681,7 @@ fn updateProtocolImpls(
     }
     for (protocol_val.map.entries.items) |entry| {
         // Skip :impls — we'll add our own
-        const is_impls = std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword, "impls");
+        const is_impls = std.meta.activeTag(entry.key) == .keyword and std.mem.eql(u8, entry.key.keyword.slice(), "impls");
         if (!is_impls) {
             try new_protocol.append(allocator, .{
                 .key = entry.key,
@@ -704,8 +704,8 @@ fn formatValueShort(v: Value) []const u8 {
         .nil => "nil",
         .bool => if (v.bool) "true" else "false",
         .string => "(string)",
-        .symbol => v.symbol,
-        .keyword => v.keyword,
+        .symbol => v.symbol.slice(),
+        .keyword => v.keyword.slice(),
         else => @tagName(std.meta.activeTag(v)),
     };
 }
@@ -787,7 +787,7 @@ pub fn evalExtendType(
             if (std.meta.activeTag(mdef) != .list or mdef.list.items.items.len < 2) return error.TypeError;
             const mname_sym = mdef.list.items.items[0];
             if (std.meta.activeTag(mname_sym) != .symbol) return error.TypeError;
-            const mname = mname_sym.symbol;
+            const mname = mname_sym.symbol.slice();
 
             // Add to unique names if not already present
             var found = false;
@@ -814,7 +814,7 @@ pub fn evalExtendType(
                 const mdef = l.items[mi];
                 const mname_sym = mdef.list.items.items[0];
                 if (std.meta.activeTag(mname_sym) != .symbol) continue;
-                if (!std.mem.eql(u8, mname_sym.symbol, mname)) continue;
+                if (!std.mem.eql(u8, mname_sym.symbol.slice(), mname)) continue;
 
                 // items[1:] of the method def: [params] body...
                 // Build arity form: ([params] body...)
@@ -926,7 +926,7 @@ pub fn evalExtendProtocol(
             if (std.meta.activeTag(mdef) != .list or mdef.list.items.items.len < 2) return error.TypeError;
             const mname_sym = mdef.list.items.items[0];
             if (std.meta.activeTag(mname_sym) != .symbol) return error.TypeError;
-            const mname = mname_sym.symbol;
+            const mname = mname_sym.symbol.slice();
 
             var found = false;
             for (unique_names.items) |existing| {
@@ -949,7 +949,7 @@ pub fn evalExtendProtocol(
                 const mdef = l.items[mi];
                 const mname_sym = mdef.list.items.items[0];
                 if (std.meta.activeTag(mname_sym) != .symbol) continue;
-                if (!std.mem.eql(u8, mname_sym.symbol, mname)) continue;
+                if (!std.mem.eql(u8, mname_sym.symbol.slice(), mname)) continue;
 
                 // items[1:] of the method def: [params] body...
                 const def_items = mdef.list.items.items[1..];

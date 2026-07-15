@@ -230,7 +230,7 @@ pub fn core_last(self: *const Value, args: *const list.List, env_env: *Env) anye
             return coll.list.items.items[coll.list.items.items.len - 1];
         },
         .string => {
-            const s = coll.string;
+            const s = coll.string.slice();
             if (s.len == 0) return vm.nilValue();
             // Get the last UTF-8 code point
             const codepoint_count = vm.utf8CodepointCount(s);

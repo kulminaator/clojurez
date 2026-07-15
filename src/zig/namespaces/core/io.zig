@@ -178,7 +178,7 @@ pub fn core_slurp(self: *const Value, args: *const list.List, env_env: *Env) any
     if (std.meta.activeTag(filename) != .string) return error.TypeError;
 
     const cwd = std.Io.Dir.cwd();
-    const file = std.Io.Dir.openFile(cwd, std.Options.debug_io, filename.string, .{}) catch {
+    const file = std.Io.Dir.openFile(cwd, std.Options.debug_io, filename.string.slice(), .{}) catch {
         return error.FileError;
     };
     defer std.Io.File.close(file, std.Options.debug_io);
@@ -199,7 +199,7 @@ pub fn core_spit(self: *const Value, args: *const list.List, env_env: *Env) anye
     var i: usize = 1;
     while (i < args.items.len) : (i += 1) {
         const arg = args.items[i];
-        if (std.meta.activeTag(arg) == .keyword and std.mem.eql(u8, arg.keyword, "append")) {
+        if (std.meta.activeTag(arg) == .keyword and std.mem.eql(u8, arg.keyword.slice(), "append")) {
             if (i + 1 < args.items.len) {
                 const next_arg = args.items[i + 1];
                 append_mode = vm.isTruthy(next_arg);
@@ -217,7 +217,7 @@ pub fn core_spit(self: *const Value, args: *const list.List, env_env: *Env) anye
         const arg = args.items[i];
         if (std.meta.activeTag(arg) == .keyword) {
             // Skip option values (e.g. the true/false after :append)
-            if (std.mem.eql(u8, arg.keyword, "append") and i + 1 < args.items.len) {
+            if (std.mem.eql(u8, arg.keyword.slice(), "append") and i + 1 < args.items.len) {
                 i += 1;
             }
             continue;
@@ -233,15 +233,15 @@ pub fn core_spit(self: *const Value, args: *const list.List, env_env: *Env) anye
 
     const cwd = std.Io.Dir.cwd();
     const file = if (append_mode)
-        try std.Io.Dir.createFile(cwd, std.Options.debug_io, filename.string, .{ .truncate = false })
+        try std.Io.Dir.createFile(cwd, std.Options.debug_io, filename.string.slice(), .{ .truncate = false })
     else
-        try std.Io.Dir.createFile(cwd, std.Options.debug_io, filename.string, .{});
+        try std.Io.Dir.createFile(cwd, std.Options.debug_io, filename.string.slice(), .{});
     defer std.Io.File.close(file, std.Options.debug_io);
 
     var writer = file.writer(std.Options.debug_io, &[_]u8{});
     // In append mode, seek to end of file before writing
     if (append_mode) {
-        const stat = std.Io.Dir.statFile(cwd, std.Options.debug_io, filename.string, .{}) catch null;
+        const stat = std.Io.Dir.statFile(cwd, std.Options.debug_io, filename.string.slice(), .{}) catch null;
         if (stat) |s| {
             writer.seekTo(@as(u64, @intCast(s.size))) catch {};
         }
@@ -268,7 +268,7 @@ pub fn core_read_string(self: *const Value, args: *const list.List, env_env: *En
     const input = args.items[0];
     if (std.meta.activeTag(input) != .string) return error.TypeError;
 
-    var p = try parser.Parser.init(env_env.allocator, input.string);
+    var p = try parser.Parser.init(env_env.allocator, input.string.slice());
     defer p.deinit();
 
     const form = try p.parse();
@@ -284,7 +284,7 @@ pub fn core_load_file(self: *const Value, args: *const list.List, env_env: *Env)
 
     // Open and read the file
     const cwd = std.Io.Dir.cwd();
-    var file = std.Io.Dir.openFile(cwd, std.Options.debug_io, filename.string, .{}) catch {
+    var file = std.Io.Dir.openFile(cwd, std.Options.debug_io, filename.string.slice(), .{}) catch {
         return error.FileError;
     };
     defer std.Io.File.close(file, std.Options.debug_io);

@@ -178,7 +178,7 @@ fn parseBufferSize(opts: Value) usize {
     if (std.meta.activeTag(opts) != .map) return 4096;
     for (opts.map.entries.items) |entry| {
         if (std.meta.activeTag(entry.key) == .keyword and
-            std.mem.eql(u8, entry.key.keyword, "buffer-size"))
+            std.mem.eql(u8, entry.key.keyword.slice(), "buffer-size"))
         {
             if (std.meta.activeTag(entry.value) == .integer) {
                 return @as(usize, @intCast(entry.value.integer));
@@ -196,7 +196,7 @@ fn parseAppend(opts: Value) bool {
     if (std.meta.activeTag(opts) != .map) return false;
     for (opts.map.entries.items) |entry| {
         if (std.meta.activeTag(entry.key) == .keyword and
-            std.mem.eql(u8, entry.key.keyword, "append"))
+            std.mem.eql(u8, entry.key.keyword.slice(), "append"))
         {
             if (std.meta.activeTag(entry.value) == .bool) {
                 return entry.value.bool;
@@ -242,7 +242,7 @@ pub fn core_open_input_stream(self: *const Value, args: *const list.List, env_en
     const opts = if (args.items.len >= 2) args.items[1] else vm.nilValue();
     const buf_size = parseBufferSize(opts);
 
-    const file = try openFileForReading(path.string);
+    const file = try openFileForReading(path.string.slice());
     const allocator = env_env.allocator;
     const buffer = try allocator.alloc(u8, buf_size);
 
@@ -268,7 +268,7 @@ pub fn core_open_output_stream(self: *const Value, args: *const list.List, env_e
     const buf_size = parseBufferSize(opts);
     const append = parseAppend(opts);
 
-    const file = try openFileForWriting(path.string, append);
+    const file = try openFileForWriting(path.string.slice(), append);
     const allocator = env_env.allocator;
     const buffer = try allocator.alloc(u8, buf_size);
 
@@ -278,7 +278,7 @@ pub fn core_open_output_stream(self: *const Value, args: *const list.List, env_e
     if (append) {
         const cwd = Dir.cwd();
         const io = std.Options.debug_io;
-        if (Dir.statFile(cwd, io, path.string, .{}) catch null) |stat| {
+        if (Dir.statFile(cwd, io, path.string.slice(), .{}) catch null) |stat| {
             handle.data.output_stream.offset = @as(i64, @intCast(stat.size));
         }
     }
@@ -398,7 +398,7 @@ pub fn core_write_bytes(self: *const Value, args: *const list.List, env_env: *En
                     }
                     const socket_io = io_socket.getIo(allocator);
                     io_socket.writeBytesToStream(
-                        stream, socket_io, socket_handle.buffer, data_val.string,
+                        stream, socket_io, socket_handle.buffer, data_val.string.slice(),
                     ) catch |err| {
                         return io_socket.throwSocketException(
                             allocator, err, "Write bytes to socket",
@@ -432,13 +432,13 @@ pub fn core_write_bytes(self: *const Value, args: *const list.List, env_env: *En
         // In append mode, use positional write at tracked offset.
         // file.stat() on an open handle fails on Windows, so we rely on
         // the offset tracked across writes (initialized from file size at open time).
-        try os_data.file.writePositionalAll(io, data_val.string, @as(u64, @intCast(os_data.offset)));
+        try os_data.file.writePositionalAll(io, data_val.string.slice(), @as(u64, @intCast(os_data.offset)));
     } else {
         var writer = os_data.file.writer(io, os_data.buffer);
         writer.seekTo(@as(u64, @intCast(os_data.offset))) catch |err| {
             std.log.err("[io_stream] write-bytes seekTo({}) failed: {s}", .{ os_data.offset, @errorName(err) });
         };
-        try writer.interface.writeAll(data_val.string);
+        try writer.interface.writeAll(data_val.string.slice());
         try writer.flush();
     }
     os_data.offset += @as(i64, @intCast(data_val.string.len));
@@ -459,7 +459,7 @@ pub fn core_open_reader(self: *const Value, args: *const list.List, env_env: *En
     const opts = if (args.items.len >= 2) args.items[1] else vm.nilValue();
     const buf_size = parseBufferSize(opts);
 
-    const file = try openFileForReading(path.string);
+    const file = try openFileForReading(path.string.slice());
     const allocator = env_env.allocator;
     const buffer = try allocator.alloc(u8, buf_size);
 
@@ -490,7 +490,7 @@ pub fn core_open_writer(self: *const Value, args: *const list.List, env_env: *En
     const buf_size = parseBufferSize(opts);
     const append = parseAppend(opts);
 
-    const file = try openFileForWriting(path.string, append);
+    const file = try openFileForWriting(path.string.slice(), append);
     const allocator = env_env.allocator;
     const buffer = try allocator.alloc(u8, buf_size);
 
@@ -500,7 +500,7 @@ pub fn core_open_writer(self: *const Value, args: *const list.List, env_env: *En
     if (append) {
         const cwd = Dir.cwd();
         const io = std.Options.debug_io;
-        if (Dir.statFile(cwd, io, path.string, .{}) catch null) |stat| {
+        if (Dir.statFile(cwd, io, path.string.slice(), .{}) catch null) |stat| {
             stream_handle.data.output_stream.offset = @as(i64, @intCast(stat.size));
         }
     }
@@ -640,7 +640,7 @@ pub fn core_write_string(self: *const Value, args: *const list.List, env_env: *E
                     }
                     const socket_io = io_socket.getIo(allocator);
                     io_socket.writeBytesToStream(
-                        stream, socket_io, socket_handle.buffer, text_val.string,
+                        stream, socket_io, socket_handle.buffer, text_val.string.slice(),
                     ) catch |err| {
                         return io_socket.throwSocketException(
                             allocator, err, "Write string to socket",
@@ -674,13 +674,13 @@ pub fn core_write_string(self: *const Value, args: *const list.List, env_env: *E
         // In append mode, use positional write at tracked offset.
         // file.stat() on an open handle fails on Windows, so we rely on
         // the offset tracked across writes (initialized from file size at open time).
-        try os_data.file.writePositionalAll(io, text_val.string, @as(u64, @intCast(os_data.offset)));
+        try os_data.file.writePositionalAll(io, text_val.string.slice(), @as(u64, @intCast(os_data.offset)));
     } else {
         var file_writer = os_data.file.writer(io, os_data.buffer);
         file_writer.seekTo(@as(u64, @intCast(os_data.offset))) catch |err| {
             std.log.err("[io_stream] write-string seekTo({}) failed: {s}", .{ os_data.offset, @errorName(err) });
         };
-        try file_writer.interface.writeAll(text_val.string);
+        try file_writer.interface.writeAll(text_val.string.slice());
         try file_writer.flush();
     }
     os_data.offset += @as(i64, @intCast(text_val.string.len));
