@@ -2845,7 +2845,11 @@ pub const NamespaceManager = struct {
             gc_inst.setObjectType(@as(*anyopaque, @ptrCast(mgr)), gc_mod.GCObjectType.namespace_manager);
         }
         mgr.current_ns = try allocator.dupe(u8, "user");
-        _ = try mgr.createNamespace("user");
+        const user_ns = try mgr.createNamespace("user");
+        // Register user namespace as permanent root — it must never be swept by GC.
+        if (gc_mod.current_gc) |gc_inst| {
+            gc_inst.addPermanentRoot(@as(*anyopaque, @ptrCast(user_ns)));
+        }
         return mgr;
     }
 
