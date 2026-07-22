@@ -22,6 +22,7 @@
 (load-file "tests/clj/test_shell_samples.clj")
 (load-file "tests/clj/test_shell_zig_io.clj")
 (load-file "tests/clj/test_shell_debug.clj")
+(load-file "tests/clj/test_shell_bytecode_gen.clj")
 
 ;; ---- Run all suites ----
 ;; Each test file calls (run-all) independently when loaded.

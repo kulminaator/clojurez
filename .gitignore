@@ -10,3 +10,4 @@ src/zig/namespaces/*.clj
 tmp/
 *.swp
 .idea
+.acme-manager

@@ -33,12 +33,10 @@ pub fn core_gc_sweep(self: *const Value, args: *const list.List, _: *Env) anyerr
             return vm.nilValue();
         }
 
-        // Mark phase runs now; sweep is deferred to next safe point
-        // to avoid freeing in-flight evaluation state.
-        gc.setSweepEnabled(false);
+        // Do full mark + sweep immediately with reduced generational protection.
+        // Only protect the current generation (objects allocated during this collect).
+        // This allows sweeping of truly unreachable objects from previous generations.
         gc.collect(gc_scan.valueScanFn);
-        gc.setSweepEnabled(true);
-        gc.manual_sweep_pending = true;
     }
     return vm.nilValue();
 }

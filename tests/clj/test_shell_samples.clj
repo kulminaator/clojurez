@@ -4,6 +4,14 @@
 
 (def-suite shell-samples)
 
+;; ---- Fibonacci Sample ----
+
+(test "fibonacci sample" (fn []
+  (test-cmd "fibonacci"
+    ["tests/complex-samples/sample_1_fibonacci/core.clj"]
+    {:expected-out "(0 1 1 2 3 5 8 13 21 34)"
+     :timeout 30})))
+
 ;; ---- Hanoi Sample ----
 
 (test "hanoi sample" (fn []
@@ -12,14 +20,6 @@
       ["tests/complex-samples/sample_2_hanoi/hanoi/core.clj"]
       {:expected-out expected
        :timeout 30}))))
-
-;; ---- Fibonacci Sample ----
-
-(test "fibonacci sample" (fn []
-  (test-cmd "fibonacci"
-    ["tests/complex-samples/sample_1_fibonacci/core.clj"]
-    {:expected-out "(0 1 1 2 3 5 8 13 21 34)"
-     :timeout 30})))
 
 ;; ---- Namespace Sample ----
 
@@ -40,5 +40,27 @@
         out-lines (clojure.string/split-lines (:out result))
         last-line (clojure.string/trim (last out-lines))]
     (check "gc-stress/out" last-line expected))))
+
+;; ---- GC Stress with regex Sample ----
+;; Original test uses "tail -1" to get only the last line
+
+(test "regex gc stress sample" (fn []
+  (let [expected (clojure.string/trim (slurp "tests/complex-samples/sample_5_regex_gc/expected_output.txt"))
+        result (run-cmd ["tests/complex-samples/sample_5_regex_gc/core.clj"] {:timeout 30})
+        out-lines (clojure.string/split-lines (:out result))
+        last-line (clojure.string/trim (last out-lines))]
+    (check "gc-stress/out" last-line expected))))
+
+
+;; ---- GC advanced cleanup test ----
+;; Original test uses "tail -1" to get only the last line
+
+(test "regex gc stress sample" (fn []
+  (let [expected (clojure.string/trim (slurp "tests/complex-samples/sample_6_gc_execution_paths/expected_output.txt"))
+        result (run-cmd ["tests/complex-samples/sample_6_gc_execution_paths/core.clj"] {:timeout 30})
+        out-lines (clojure.string/split-lines (:out result))
+        last-line (clojure.string/trim (last out-lines))]
+    (check "gc-stress/out" last-line expected))))
+
 
 (run-all)

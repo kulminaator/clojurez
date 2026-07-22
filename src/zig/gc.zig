@@ -464,6 +464,9 @@ pub const GC = struct {
     // we can't safely free in-flight values (stack-local pointers the GC can't see).
     // Instead, we mark and defer the actual sweep to the next safe point.
     manual_sweep_pending: bool = false,
+    // Aggressive sweep: when true, bypass generational protection during sweep.
+    // Used for manual gc-sweep calls where the user explicitly wants cleanup.
+    aggressive_sweep: bool = false,
 
     // Generational sweep protection: blocks allocated in the current generation
     // are never swept, even if unreachable. This protects in-flight evaluation
@@ -992,14 +995,21 @@ pub const GC = struct {
 
         while (block) |b| {
             const next = b.next;
-            // Generational protection: never sweep blocks from the current,
-            // previous, or second-previous generation. This provides safety
-            // for multithreaded access where child threads may hold references
-            // to blocks that the GC's mark phase can't discover (e.g., HAMT
-            // nodes reachable through stack-allocated Env structs in child threads).
-            // A block must be at least 3 generations old to be swept.
-            const protected_gen = if (self.generation > 1) self.generation - 2 else 0;
-            if (!b.marked and b.generation < protected_gen) {
+            // Generational protection: never sweep blocks from the current
+            // generation. This provides safety for in-flight evaluation state.
+            // Blocks from previous generations can be swept if not marked.
+            // When aggressive_sweep is true (manual gc-sweep), also allow
+            // sweeping of previous generations.
+            const gen_protected = blk: {
+                if (self.aggressive_sweep) {
+                    // Only protect current generation during aggressive sweep
+                    break :blk b.generation >= self.generation;
+                }
+                // Normal sweep: protect current and previous generation
+                const protected_gen = if (self.generation > 0) self.generation - 1 else 0;
+                break :blk b.generation >= protected_gen;
+            };
+            if (!b.marked and !gen_protected) {
                 // Remove from linked list
                 if (b.prev) |prev| {
                     prev.next = b.next;
@@ -1107,6 +1117,8 @@ pub fn freeAllBlocks(self: *Self) void {
                 self.auto_gc_pending = false;
                 self.manual_sweep_pending = false;
                 self.collect(fn_ptr);
+                // Reset aggressive_sweep after the collect is done
+                self.aggressive_sweep = false;
             }
         }
     }
@@ -1122,6 +1134,8 @@ pub fn freeAllBlocks(self: *Self) void {
             if (self.scan_fn) |fn_ptr| {
                 self.manual_sweep_pending = false;
                 self.collect(fn_ptr);
+                // Reset aggressive_sweep after the collect is done
+                self.aggressive_sweep = false;
             }
         }
     }
