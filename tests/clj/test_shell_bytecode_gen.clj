@@ -103,4 +103,32 @@
     (check-true "bcode-help/Usage" (clojure.string/includes? out "Usage"))
     (check-true "bcode-help/generate-bytecode" (clojure.string/includes? out "--generate-bytecode")))))
 
+(test "recursive function compiles with CALL_SELF" (fn []
+  (let [result (run-cmd ["--generate-bytecode" "-e" "(defn rec [n] (if (= n 0) 1 (rec (dec n))))"] {:timeout 10})
+        out (:out result)]
+    (check-true "bcode-rec/CALL_SELF" (clojure.string/includes? out "CALL_SELF"))
+    (check-false "bcode-rec/no-skip" (clojure.string/includes? out "Skipping")))))
+
+(test "recursive function with namespaced builtin compiles after P2S1" (fn []
+  (let [result (run-cmd ["--generate-bytecode" "-e" "(defn rec-stats [n] (if (= n 0) (zig.core/gc-stats) (rec-stats (dec n))))"] {:timeout 10})
+        out (:out result)]
+    (check-true "bcode-rec-builtin/CALL_SELF" (clojure.string/includes? out "CALL_SELF"))
+    (check-true "bcode-rec-builtin/CALL_N" (clojure.string/includes? out "CALL_N"))
+    (check-false "bcode-rec-builtin/no-skip" (clojure.string/includes? out "Skipping")))))
+
+(test "nested function call in arithmetic" (fn []
+  (let [result (run-cmd ["--generate-bytecode" "-e" "(defn test [x] (inc (dec x)))"] {:timeout 10})
+        out (:out result)]
+    (check-true "bcode-nested/ADD" (clojure.string/includes? out "ADD"))
+    (check-true "bcode-nested/SUB" (clojure.string/includes? out "SUB")))))
+
+;; Test --generate-bytecode with recursive function that calls builtins
+(test "generate-bytecode recursive with builtin call" (fn []
+  (test-cmd "rec-builtin" ["--generate-bytecode" "-e" "(defn f [n] (if (= n 0) (str \"done\") (f (dec n))))"]
+    {:expected-out-contains "CALL_SELF"})))
+
+(test "generate-bytecode recursive with namespaced call" (fn []
+  (test-cmd "rec-namespaced" ["--generate-bytecode" "-e" "(defn f [n] (if (= n 0) (zig.core/gc-stats) (f (dec n))))"]
+    {:expected-out-contains "CALL_N"})))
+
 (run-all)

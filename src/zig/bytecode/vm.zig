@@ -182,92 +182,128 @@ pub fn execute(
                     const arg_entry = stack.pop() orelse {
                         for (temp_args.items) |ae| vmt.freeEntry(ae, allocator);
                         allocator.free(temp_args.items);
+                        vmt.freeEntry(fn_entry, allocator);
                         return error.BytecodeError;
                     };
                     try temp_args.append(allocator, arg_entry);
                 }
 
-                // Convert StackEntry args to Value slice (reversed to original order)
-                var arg_vals: std.ArrayListUnmanaged(Value) = .empty;
-                errdefer {
-                    for (arg_vals.items) |*v| vm.valueDeinit(v, allocator);
-                    allocator.free(arg_vals.items);
+                // Convert StackEntry args to Value slice (reversed to original order).
+                // Scoped block: temp_args is freed before exit, so its errdefer
+                // doesn't escape into the rest of this handler.
+                {
+                    var arg_vals: std.ArrayListUnmanaged(Value) = .empty;
+                    errdefer {
+                        for (arg_vals.items) |*v| vm.valueDeinit(v, allocator);
+                        allocator.free(arg_vals.items);
+                    }
+                    var j: usize = temp_args.items.len;
+                    while (j > 0) : (j -= 1) {
+                        const arg_entry = temp_args.items[j - 1];
+                        const arg_val = arg_entry.toValueConst();
+                        try arg_vals.append(allocator, try vm.shallowClone(&arg_val, allocator));
+                    }
+                    // Free temp_args before leaving scope — arg_vals now owns the values
                     for (temp_args.items) |ae| vmt.freeEntry(ae, allocator);
                     allocator.free(temp_args.items);
-                }
-                var j: usize = temp_args.items.len;
-                while (j > 0) : (j -= 1) {
-                    const arg_entry = temp_args.items[j - 1];
-                    const arg_val = arg_entry.toValueConst();
-                    try arg_vals.append(allocator, try vm.shallowClone(&arg_val, allocator));
-                }
-                // Free temp_args early — arg_vals now owns the values
-                for (temp_args.items) |ae| vmt.freeEntry(ae, allocator);
-                allocator.free(temp_args.items);
 
-                const fn_val = fn_entry.toValueConst();
+                    // --- After this point: fn_entry + arg_vals must be cleaned up ---
+                    var arg_vals_freed = false;
+                    errdefer {
+                        if (arg_vals_freed) {}
+                        for (arg_vals.items) |*v| vm.valueDeinit(v, allocator);
+                        allocator.free(arg_vals.items);
+                    }
+                    var fn_entry_freed = false;
+                    errdefer {
+                        if (fn_entry_freed) {}
+                        switch (fn_entry) {
+                            .pointer => |v| {
+                                vm.valueDeinit(v, allocator);
+                                allocator.destroy(v);
+                            },
+                            .integer, .float => {},
+                        }
+                    }
 
-                // Phase 11: Try direct bytecode-to-bytecode call first.
-                // This skips the evaluator layer for bytecode targets.
-                if (try eval_mod.tryExecuteBytecodeCall(
-                    allocator, &fn_val, arg_vals.items, env,
-                )) |result_ptr| {
-                    // Direct bytecode call succeeded — free arg_vals and push result
+                    const fn_val = fn_entry.toValueConst();
+
+                    // Phase 11: Try direct bytecode-to-bytecode call first.
+                    // This skips the evaluator layer for bytecode targets.
+                    if (try eval_mod.tryExecuteBytecodeCall(
+                        allocator, &fn_val, arg_vals.items, env,
+                    )) |result_ptr| {
+                        // Direct bytecode call succeeded — manually clean up
+                        for (arg_vals.items) |*v| vm.valueDeinit(v, allocator);
+                        allocator.free(arg_vals.items);
+                        arg_vals_freed = true;
+                        arg_vals = .empty;
+                        switch (fn_entry) {
+                            .pointer => |v| {
+                                vm.valueDeinit(v, allocator);
+                                allocator.destroy(v);
+                            },
+                            .integer, .float => {},
+                        }
+                        fn_entry_freed = true;
+                        const result_ptr2 = try eval_mod.allocValue(allocator, result_ptr.*);
+                        try stack.pushPtr(result_ptr2);
+                        continue;
+                    }
+
+                    // Fall back to evaluator for non-bytecode functions
+                    // Build list.List from arg_vals for callWithEnvV
+                    var args: list.List = .empty;
+                    errdefer args.deinit(allocator);
+                    for (arg_vals.items) |arg_val| {
+                        try args.append(allocator, try vm.shallowClone(&arg_val, allocator));
+                    }
+                    // Manually clean up arg_vals and fn_entry before calling
                     for (arg_vals.items) |*v| vm.valueDeinit(v, allocator);
                     allocator.free(arg_vals.items);
-                    const result_ptr2 = try eval_mod.allocValue(allocator, result_ptr.*);
-                    try stack.pushPtr(result_ptr2);
-                    continue;
-                }
+                    arg_vals_freed = true;
+                    arg_vals = .empty;
+                    switch (fn_entry) {
+                        .pointer => |v| {
+                            vm.valueDeinit(v, allocator);
+                            allocator.destroy(v);
+                        },
+                        .integer, .float => {},
+                    }
+                    fn_entry_freed = true;
 
-                // Fall back to evaluator for non-bytecode functions
-                // Build list.List from arg_vals for callWithEnvV
-                var args: list.List = .empty;
-                errdefer args.deinit(allocator);
-                for (arg_vals.items) |arg_val| {
-                    try args.append(allocator, try vm.shallowClone(&arg_val, allocator));
+                    const result_ptr = try eval_mod.callWithEnvV(allocator, &fn_val, &args, env, 0);
+                    {
+                        var result_val = try vm.shallowClone(result_ptr, allocator);
+                        errdefer vm.valueDeinit(&result_val, allocator);
+                        allocator.destroy(result_ptr);
+                        const result_ptr2 = try eval_mod.allocValue(allocator, result_val);
+                        try stack.pushPtr(result_ptr2);
+                    }
                 }
-                for (arg_vals.items) |*v| vm.valueDeinit(v, allocator);
-                allocator.free(arg_vals.items);
-
-                const result_ptr = try eval_mod.callWithEnvV(allocator, &fn_val, &args, env, 0);
-                const result_val = try vm.shallowClone(result_ptr, allocator);
-                allocator.destroy(result_ptr);
-                const result_ptr2 = try eval_mod.allocValue(allocator, result_val);
-                try stack.pushPtr(result_ptr2);
             },
 
             .call_self => {
                 const n = inst.operand;
                 const self_fn_val = program.self_fn orelse return error.BytecodeError;
 
+                // Pop args from stack (reversed order due to LIFO)
                 var temp_args: std.ArrayListUnmanaged(StackEntry) = .empty;
                 var i: usize = 0;
                 while (i < n) : (i += 1) {
-                    const arg_entry = stack.pop() orelse {
-                        for (temp_args.items) |ae| vmt.freeEntry(ae, allocator);
-                        allocator.free(temp_args.items);
-                        return error.BytecodeError;
-                    };
+                    const arg_entry = stack.pop() orelse return error.BytecodeError;
                     try temp_args.append(allocator, arg_entry);
                 }
 
+                // Build args list in correct order (reverse of stack order)
                 var args: list.List = .empty;
-                var remaining_count: usize = temp_args.items.len;
-                errdefer {
-                    args.deinit(allocator);
-                    for (temp_args.items[0..remaining_count]) |ae| vmt.freeEntry(ae, allocator);
-                    allocator.free(temp_args.items);
-                }
                 var j: usize = temp_args.items.len;
                 while (j > 0) : (j -= 1) {
-                    remaining_count -= 1;
                     const arg_entry = temp_args.items[j - 1];
                     const arg_val = arg_entry.toValueConst();
-                    const cloned = try vm.shallowClone(&arg_val, allocator);
-                    try args.append(allocator, cloned);
+                    try args.append(allocator, try vm.shallowClone(&arg_val, allocator));
                 }
-                allocator.free(temp_args.items);
+                // GC handles cleanup of temp_args and args — no manual freeing needed
 
                 const call_result = try eval_mod.callWithEnv(allocator, &self_fn_val, &args, env, 0);
 

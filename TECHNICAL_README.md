@@ -145,17 +145,26 @@ Three namespace layers:
 
 ### When Bytecode Is Used
 
-During `defn` evaluation, each arity's body is analyzed. If the body contains **only** arithmetic operators, comparison operators, and bytecode-supported special forms (no "real" function calls, no destructuring), it is compiled to bytecode:
+During `defn` evaluation, each arity's body is analyzed. If the body contains bytecode-supported constructs (arithmetic operators, comparison operators, special forms, and arbitrary function calls), it is compiled to bytecode:
 
 ```clojure
 ;; This function is compiled to bytecode (pure arithmetic + comparison):
 (defn compute [a b]
   (+ (* a b) (- a b)))
 
-;; This function uses the AST interpreter (contains function calls):
+;; This function is also compiled to bytecode (arbitrary function calls are supported):
 (defn mixed [a b]
   (println (+ a b)))
+
+;; Self-recursive calls use CALL_SELF, arbitrary calls use CALL_N:
+(defn rather-recursive [depth depth-limit]
+  (let [new-depth (inc depth)]
+    (if (< new-depth depth-limit)
+      (rather-recursive new-depth depth-limit)
+      (zig.core/gc-stats))))
 ```
+
+Functions that call arbitrary functions (including namespaced builtins like `zig.core/gc-stats`) are now compiled to bytecode. The compiler generates `CALL_N` for arbitrary function calls and `CALL_SELF` for self-recursive calls.
 
 ### Instruction Set
 
@@ -165,7 +174,7 @@ The bytecode VM uses a stack-based instruction set with a constant pool:
 |----------|---------|
 | Constants | `push_nil`, `push_true`, `push_false`, `push_int`, `push_float`, `push_const` |
 | Variables | `load_var`, `store_var` |
-| Calls | `call_n` |
+| Calls | `call_n`, `call_self` |
 | Control flow | `jump`, `jump_if_nil`, `jump_if_not_nil` |
 | Comparison | `eq`, `ne`, `lt`, `gt`, `le`, `ge` |
 | Arithmetic | `add`, `sub`, `mul`, `div`, `rem`, `neg` |

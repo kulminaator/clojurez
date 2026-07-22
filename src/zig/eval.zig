@@ -1403,6 +1403,10 @@ pub fn tryExecuteBytecodeCall(
 
     // Clone the function's captured environment and bind parameters
     const bc_env = try allocator.create(Env);
+    errdefer {
+        bc_env.deinit(allocator);
+        allocator.destroy(bc_env);
+    }
     bc_env.* = try cloneFnEnv(allocator, fn_data.env);
     try bindArityParamsEnvSlice(allocator, arity, args, bc_env);
 

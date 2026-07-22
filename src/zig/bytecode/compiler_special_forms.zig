@@ -217,22 +217,21 @@ pub fn compileAnd(self: *Compiler, items: []const Value) anyerror!void {
         return;
     }
     const tmp_idx = try self.program.addSymbol(self.allocator, "__and_tmp");
+    // Track which jump_if_nil instructions we emit, so we only patch ours.
+    var jump_indices: std.ArrayListUnmanaged(usize) = .empty;
+    defer jump_indices.deinit(self.allocator);
     for (forms) |form| {
         try self.compileForm(form);
         _ = try self.program.emit(self.allocator, .store_var, tmp_idx);
         _ = try self.program.emit(self.allocator, .load_var, tmp_idx);
-        _ = try self.program.emit(self.allocator, .jump_if_nil, 0);
+        const jump_pc = try self.program.emit(self.allocator, .jump_if_nil, 0);
+        try jump_indices.append(self.allocator, jump_pc);
     }
     const end_pc = self.program.instructions.items.len;
     _ = try self.program.emit(self.allocator, .load_var, tmp_idx);
-    var i: usize = end_pc;
-    while (i > 0) : (i -= 1) {
-        if (self.program.instructions.items[i].opcode == .jump_if_nil) {
-            self.program.instructions.items[i].operand = end_pc;
-        }
-    }
-    if (end_pc > 0 and self.program.instructions.items[0].opcode == .jump_if_nil) {
-        self.program.instructions.items[0].operand = end_pc;
+    // Patch only the jump_if_nil instructions we emitted.
+    for (jump_indices.items) |idx| {
+        self.program.instructions.items[idx].operand = end_pc;
     }
 }
 
@@ -248,22 +247,21 @@ pub fn compileOr(self: *Compiler, items: []const Value) anyerror!void {
         return;
     }
     const tmp_idx = try self.program.addSymbol(self.allocator, "__or_tmp");
+    // Track which jump_if_not_nil instructions we emit, so we only patch ours.
+    var jump_indices: std.ArrayListUnmanaged(usize) = .empty;
+    defer jump_indices.deinit(self.allocator);
     for (forms) |form| {
         try self.compileForm(form);
         _ = try self.program.emit(self.allocator, .store_var, tmp_idx);
         _ = try self.program.emit(self.allocator, .load_var, tmp_idx);
-        _ = try self.program.emit(self.allocator, .jump_if_not_nil, 0);
+        const jump_pc = try self.program.emit(self.allocator, .jump_if_not_nil, 0);
+        try jump_indices.append(self.allocator, jump_pc);
     }
     const end_pc = self.program.instructions.items.len;
     _ = try self.program.emit(self.allocator, .load_var, tmp_idx);
-    var i: usize = end_pc;
-    while (i > 0) : (i -= 1) {
-        if (self.program.instructions.items[i].opcode == .jump_if_not_nil) {
-            self.program.instructions.items[i].operand = end_pc;
-        }
-    }
-    if (end_pc > 0 and self.program.instructions.items[0].opcode == .jump_if_not_nil) {
-        self.program.instructions.items[0].operand = end_pc;
+    // Patch only the jump_if_not_nil instructions we emitted.
+    for (jump_indices.items) |idx| {
+        self.program.instructions.items[idx].operand = end_pc;
     }
 }
 

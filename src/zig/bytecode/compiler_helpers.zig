@@ -284,6 +284,13 @@ pub fn isBytecodeSpecialForm(sym: []const u8) bool {
 
 /// Check if a list contains any REAL function calls (not arithmetic/comparison).
 /// fn_name is the enclosing function name — self-calls are not "real" function calls.
+///
+/// Namespaced calls (e.g. zig.core/gc-stats) are allowed because the compiler
+/// can resolve them at compile time via tryResolveAndEmitLoad. Non-namespaced
+/// arbitrary calls are blocked since the compiler cannot resolve them.
+///
+/// Arbitrary calls inside loop/recur are fully supported — the bytecode compiler
+/// generates correct jump targets for loop/recur regardless of CALL_N presence.
 pub fn containsRealFunctionCallsInList(l: list.List, fn_name: ?[]const u8) bool {
     return containsRealFunctionCallsInItems(l.items, fn_name);
 }
@@ -323,6 +330,20 @@ fn containsRealFunctionCallsHelper(form: Value, fn_name: ?[]const u8) bool {
                     }
                 }
             }
+            // Arbitrary function call: only allow namespaced calls (e.g. zig.core/gc-stats)
+            // which the compiler can resolve at compile time via tryResolveAndEmitLoad.
+            // Plain symbols without '/' cannot be resolved and would fail at runtime.
+            if (std.meta.activeTag(lst_items[0]) == .symbol) {
+                const sym_slice = lst_items[0].symbol.slice();
+                if (std.mem.indexOfScalar(u8, sym_slice, '/') != null) {
+                    // Namespaced call: compiler can resolve this
+                    for (lst_items[1..]) |arg| {
+                        if (containsRealFunctionCallsHelper(arg, fn_name)) return true;
+                    }
+                    return false;
+                }
+            }
+            // Non-namespaced arbitrary call: blocked (compiler can't resolve at compile time)
             return true;
         },
         .vector => {
@@ -382,7 +403,42 @@ pub fn containsUnhandledSpecialFormHelper(form: Value) bool {
                     std.mem.eql(u8, sym, "dorun") or
                     std.mem.eql(u8, sym, "doall") or
                     std.mem.eql(u8, sym, "cond->") or
-                    std.mem.eql(u8, sym, "cond->>"))
+                    std.mem.eql(u8, sym, "cond->>") or
+                    // Special forms not handled by bytecode compiler
+                    std.mem.eql(u8, sym, "throw") or
+                    std.mem.eql(u8, sym, "try") or
+                    std.mem.eql(u8, sym, "dosync") or
+                    std.mem.eql(u8, sym, "def") or
+                    std.mem.eql(u8, sym, "defn") or
+                    std.mem.eql(u8, sym, "defn-") or
+                    std.mem.eql(u8, sym, "defmacro") or
+                    std.mem.eql(u8, sym, "defprotocol") or
+                    std.mem.eql(u8, sym, "extend") or
+                    std.mem.eql(u8, sym, "extend-type") or
+                    std.mem.eql(u8, sym, "extend-protocol") or
+                    std.mem.eql(u8, sym, "defrecord") or
+                    std.mem.eql(u8, sym, "alter-meta!") or
+                    std.mem.eql(u8, sym, "ns") or
+                    std.mem.eql(u8, sym, "in-ns") or
+                    std.mem.eql(u8, sym, "defmulti") or
+                    std.mem.eql(u8, sym, "defmethod") or
+                    // Lazy-seq producers that don't work correctly via CALL_N
+                    std.mem.eql(u8, sym, "filter") or
+                    std.mem.eql(u8, sym, "remove") or
+                    std.mem.eql(u8, sym, "take") or
+                    std.mem.eql(u8, sym, "take-while") or
+                    std.mem.eql(u8, sym, "drop") or
+                    std.mem.eql(u8, sym, "drop-while") or
+                    std.mem.eql(u8, sym, "iterate") or
+                    std.mem.eql(u8, sym, "cycle") or
+                    std.mem.eql(u8, sym, "repeatedly") or
+                    std.mem.eql(u8, sym, "interleave") or
+                    std.mem.eql(u8, sym, "interpose") or
+                    std.mem.eql(u8, sym, "repeat") or
+                    std.mem.eql(u8, sym, "tree-seq") or
+                    std.mem.eql(u8, sym, "partition") or
+                    std.mem.eql(u8, sym, "partition-all") or
+                    std.mem.eql(u8, sym, "partition-by"))
                 {
                     return true;
                 }

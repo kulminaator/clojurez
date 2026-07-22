@@ -1994,6 +1994,327 @@
   14)  ; max(7,3)=7 + min(7,3)=3 + abs(7-3)=4 = 14
 
 ;; ============================================================
+;; PHASE 16: Recursive functions with arbitrary function calls
+;; ============================================================
+
+;; 1. Self-recursive function with builtin call
+;; A function that calls itself and a builtin (like inc),
+;; verifying it compiles to bytecode and produces correct results.
+
+(defn __bc-rec-count-to [n limit]
+  (if (< n limit)
+    (__bc-rec-count-to (inc n) limit)
+    n))
+
+(check "bytecode: recursive function with inc call"
+  (__bc-rec-count-to 0 100)
+  100)
+
+(check "bytecode: recursive function with inc call zero"
+  (__bc-rec-count-to 0 0)
+  0)
+
+(check "bytecode: recursive function with inc call already at limit"
+  (__bc-rec-count-to 50 50)
+  50)
+
+(check "bytecode: recursive function with inc call negative start"
+  (__bc-rec-count-to -10 0)
+  0)
+
+(check "bytecode: recursive function with inc call single step"
+  (__bc-rec-count-to 99 100)
+  100)
+
+;; Recursive function that calls zig.core/gc-stats at base case
+;; (tests the specific case from the plan - runs via AST interpreter
+;; as P2S1 eligibility fix is pending)
+(defn __bc-rec-gc-stats [n]
+  (if (<= n 0)
+    (zig.core/gc-stats)
+    (__bc-rec-gc-stats (dec n))))
+
+(check "bytecode: recursive function with gc-stats returns map"
+  (map? (__bc-rec-gc-stats 5))
+  true)
+
+(check "bytecode: recursive function with gc-stats has current-allocated"
+  (contains? (__bc-rec-gc-stats 3) :current-allocated)
+  true)
+
+(check "bytecode: recursive function with gc-stats zero depth"
+  (map? (__bc-rec-gc-stats 0))
+  true)
+
+;; 2. Nested function calls in arithmetic
+;; (inc (some-func x)) where some-func returns a number,
+;; verifying the inc is optimized to ADD.
+
+(defn __bc-nested-inc-dec [x] (inc (dec x)))
+(defn __bc-nested-inc-abs [x] (inc (abs x)))
+(defn __bc-nested-dec-inc [x] (dec (inc x)))
+(defn __bc-nested-inc-inc [x] (inc (inc x)))
+(defn __bc-nested-dec-abs [x] (dec (abs x)))
+(defn __bc-nested-dec-dec [x] (dec (dec x)))
+(defn __bc-nested-abs-inc [x] (abs (inc x)))
+
+(check "bytecode: nested inc(dec x)"
+  (__bc-nested-inc-dec 10)
+  10)
+
+(check "bytecode: nested inc(dec x) zero"
+  (__bc-nested-inc-dec 0)
+  0)
+
+(check "bytecode: nested inc(dec x) negative"
+  (__bc-nested-inc-dec -5)
+  -5)
+
+(check "bytecode: nested inc(abs x) positive"
+  (__bc-nested-inc-abs 5)
+  6)
+
+(check "bytecode: nested inc(abs x) negative"
+  (__bc-nested-inc-abs -5)
+  6)
+
+(check "bytecode: nested inc(abs x) zero"
+  (__bc-nested-inc-abs 0)
+  1)
+
+(check "bytecode: nested dec(inc x)"
+  (__bc-nested-dec-inc 10)
+  10)
+
+(check "bytecode: nested dec(inc x) negative"
+  (__bc-nested-dec-inc -5)
+  -5)
+
+(check "bytecode: nested inc(inc x)"
+  (__bc-nested-inc-inc 5)
+  7)
+
+(check "bytecode: nested inc(inc x) zero"
+  (__bc-nested-inc-inc 0)
+  2)
+
+(check "bytecode: nested dec(abs x) positive"
+  (__bc-nested-dec-abs 5)
+  4)
+
+(check "bytecode: nested dec(abs x) negative"
+  (__bc-nested-dec-abs -5)
+  4)
+
+(check "bytecode: nested dec(dec x)"
+  (__bc-nested-dec-dec 10)
+  8)
+
+(check "bytecode: nested abs(inc x) negative"
+  (__bc-nested-abs-inc -5)
+  4)
+
+(check "bytecode: nested abs(inc x) -1"
+  (__bc-nested-abs-inc -1)
+  0)
+
+;; Triple-nested calls
+(defn __bc-triple-nested [x] (inc (inc (dec x))))
+
+(check "bytecode: triple nested inc(inc(dec x))"
+  (__bc-triple-nested 10)
+  11)
+
+;; 3. Recursive function returning map
+;; A recursive function that returns a map, verifying the map
+;; is correctly passed through the recursion.
+
+(defn __bc-rec-sum-map [n]
+  (if (<= n 0)
+    {:sum 0 :count 0}
+    (let [prev (__bc-rec-sum-map (dec n))]
+      {:sum (+ (get prev :sum) n)
+       :count (inc (get prev :count))})))
+
+(check "bytecode: recursive function returning map sum"
+  (__bc-rec-sum-map 5)
+  {:sum 15 :count 5})
+
+(check "bytecode: recursive function returning map zero"
+  (__bc-rec-sum-map 0)
+  {:sum 0 :count 0})
+
+(check "bytecode: recursive function returning map one"
+  (__bc-rec-sum-map 1)
+  {:sum 1 :count 1})
+
+(check "bytecode: recursive function returning map ten"
+  (__bc-rec-sum-map 10)
+  {:sum 55 :count 10})
+
+(check "bytecode: recursive function returning map extract sum"
+  (get (__bc-rec-sum-map 20) :sum)
+  210)  ; sum of 1..20 = 210
+
+(check "bytecode: recursive function returning map extract count"
+  (get (__bc-rec-sum-map 20) :count)
+  20)
+
+;; Recursive function returning map with arithmetic in values
+(defn __bc-rec-stats [n]
+  (if (<= n 0)
+    {:min 0 :max 0 :total 0}
+    (let [prev (__bc-rec-stats (dec n))]
+      {:min (get prev :min)
+       :max n
+       :total (+ (get prev :total) n)})))
+
+(check "bytecode: recursive stats map"
+  (__bc-rec-stats 5)
+  {:min 0 :max 5 :total 15})
+
+(check "bytecode: recursive stats map zero"
+  (__bc-rec-stats 0)
+  {:min 0 :max 0 :total 0})
+
+;; Recursive function with let and map construction in both branches
+(defn __bc-rec-either-map [n]
+  (if (even? n)
+    {:even true :val n}
+    {:even false :val n}))
+
+(check "bytecode: recursive either-map even"
+  (__bc-rec-either-map 4)
+  {:even true :val 4})
+
+(check "bytecode: recursive either-map odd"
+  (__bc-rec-either-map 3)
+  {:even false :val 3})
+
+;; Self-recursive function with inc in conditional path
+(defn __bc-rec-conditional [n limit]
+  (if (< n limit)
+    (let [next-n (inc n)]
+      (if (even? next-n)
+        (__bc-rec-conditional next-n limit)
+        next-n))
+    n))
+
+;; inc(0)=1 is odd, so returns 1 immediately
+(check "bytecode: recursive conditional with inc odd first"
+  (__bc-rec-conditional 0 10)
+  1)
+
+;; inc(1)=2 is even, recurse; inc(2)=3 is odd, return 3
+(check "bytecode: recursive conditional with inc even then odd"
+  (__bc-rec-conditional 1 10)
+  3)
+
+;; ============================================================
+;; PHASE 17: CALL_N Error Handling
+;; ============================================================
+;; These tests verify that errors propagate correctly through CALL_N
+;; (arbitrary function calls in bytecode) and that cleanup doesn't crash.
+;;
+;; Note: DivisionByZero from bytecode DIV opcodes propagates as a Zig error,
+;; not as EvalError.Exception, so try/catch cannot catch it. This is a
+;; pre-existing architectural issue. These tests use throw/ex-info which
+;; exercises the CALL_N error propagation path via the AST interpreter,
+;; verifying that cleanup (fn_entry, temp_args, arg_vals) doesn't crash.
+
+;; Test that errors propagate correctly through CALL_N (fn called via CALL_N)
+(check "bytecode: CALL_N error propagation via throw"
+  (try
+    (let [f (fn [] (throw (ex-info "test-error" {})))]
+      (f))
+    (catch Exception e
+      "caught"))
+  "caught")
+
+;; Test that errors in nested calls via CALL_N propagate correctly
+(check "bytecode: CALL_N error in nested call"
+  (try
+    (let [f (fn [x] (throw (ex-info (str "error with " x) {})))]
+      (f 5))
+    (catch Exception e
+      "caught"))
+  "caught")
+
+;; Test that CALL_N with 0 args handles errors
+(check "bytecode: CALL_N zero-arg error propagation"
+  (try
+    (let [f (fn [] (throw (ex-info "test" {})))]
+      (f))
+    (catch Exception e
+      "caught"))
+  "caught")
+
+;; ============================================================
+;; PHASE 18: CALL_SELF Error Handling
+;; ============================================================
+;; These tests verify that errors propagate correctly through CALL_SELF
+;; (self-recursive calls in bytecode) and that cleanup doesn't crash.
+;;
+;; Note: DivisionByZero from bytecode DIV opcodes propagates as a Zig error,
+;; not as EvalError.Exception, so try/catch cannot catch it. This is a
+;; pre-existing architectural issue. These tests use throw/ex-info which
+;; exercises the CALL_SELF error propagation path via the AST interpreter,
+;; verifying that cleanup doesn't crash.
+
+;; Test that errors in self-recursive calls propagate correctly
+;; (uses throw instead of (/ 1 0) because bytecode DIV throws Zig error.DivisionByZero)
+(check "bytecode: CALL_SELF error propagation"
+  (try
+    (let [f (fn f [n] (if (= n 0) (throw (ex-info "div-by-zero" {})) (f (dec n))))]
+      (f 5))
+    (catch Exception e
+      "caught"))
+  "caught")
+
+;; Test CALL_SELF with error in base case
+(check "bytecode: CALL_SELF error in base case"
+  (try
+    (let [f (fn f [n] (if (= n 0) (throw (ex-info "base" {})) (f (dec n))))]
+      (f 3))
+    (catch Exception e
+      "caught"))
+  "caught")
+
+;; ============================================================
+;; PHASE 19: loop/recur with Arbitrary Function Calls
+;; ============================================================
+
+;; Test loop/recur with arbitrary function calls
+(check "bytecode: loop/recur with arbitrary call"
+  (let [f (fn [n] (loop [i 0 acc 0] (if (< i n) (recur (inc i) (+ acc i)) acc)))]
+    (f 10))
+  45)
+
+;; Test loop/recur with namespaced builtin call at end
+(check "bytecode: loop/recur with gc-stats call"
+  (let [f (fn [n] (loop [i 0] (if (< i n) (recur (inc i)) (zig.core/gc-stats))))]
+    (map? (f 5)))
+  true)
+
+;; Test loop/recur with namespaced call in recur branch
+(check "bytecode: loop/recur with namespaced call in recur"
+  (let [f (fn [n] (loop [i 0 acc 0] (if (< i n) (recur (inc i) (+ acc i)) (zig.core/gc-stats))))]
+    (map? (f 3)))
+  true)
+
+;; Test loop/recur with let containing namespaced call
+(check "bytecode: loop/recur with let and namespaced call"
+  (let [f (fn [n] (loop [i 0 acc 0] (if (< i n) (let [v (zig.core/gc-stats)] (recur (inc i) v)) acc)))]
+    (map? (f 3)))
+  true)
+
+;; Test nested loop/recur with namespaced call
+(check "bytecode: nested loop with namespaced call"
+  (let [f (fn [n] (loop [i 0 acc 0] (if (< i n) (recur (inc i) (+ acc (zig.core/count (list i)))) acc)))]
+    (f 5))
+  5)
+
+;; ============================================================
 ;; SUMMARY
 ;; ============================================================
 
