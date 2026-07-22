@@ -771,7 +771,77 @@ Build copies `src/clj/core.clj` → `src/zig/namespaces/core/clj/core.clj`, `src
 ./zig-out/bin/clojurez --parse-debug myfile.clj
 ```
 
-Runs the file through the parser only (no evaluation). Reports form nesting, open/close events, and syntax errors.
+Runs the file through the parser only (no evaluation). Reports form nesting, open/close events, and syntax errors. Use this first when a `.clj` file fails to load to isolate syntax errors from runtime errors. For bytecode-level debugging, see `--generate-bytecode` below.
+
+### Bytecode disassembly
+
+```bash
+./zig-out/bin/clojurez --generate-bytecode -e '(defn add [a b] (+ a b))'
+./zig-out/bin/clojurez --generate-bytecode my_file.clj
+```
+
+Compiles Clojure source to bytecode and prints a human-readable disassembly **without executing any code**. This is useful for:
+
+- **Debugging bytecode compilation issues** — see exactly which instructions are generated for a given form
+- **Inspecting generated instructions** — verify the bytecode compiler produces correct sequences for arithmetic, comparisons, control flow, and special forms
+- **Learning about the bytecode VM** — understand how Clojure expressions map to stack-based opcodes
+
+**Usage examples:**
+
+```bash
+# Disassemble a simple function
+./zig-out/bin/clojurez --generate-bytecode -e '(defn add [a b] (+ a b))'
+
+# Disassemble an entire file
+./zig-out/bin/clojurez --generate-bytecode my_file.clj
+
+# Disassemble an expression
+./zig-out/bin/clojurez --generate-bytecode -e '(+ 1 2 3)'
+
+# Multi-arity function (each arity gets its own section)
+./zig-out/bin/clojurez --generate-bytecode -e '(defn foo ([] 0) ([x] x) ([x y] (+ x y)))'
+```
+
+**Output format:**
+
+Each compiled function or expression produces a section with the following structure:
+
+```
+=== Function: add (arity 0, params: [a b]) ===
+Constants: 0, Symbols: 2, Instructions: 4
+Constant Pool: (empty)
+Symbol Pool:
+0: a
+1: b
+Disassembly:
+0000: LOAD_VAR\t'a'
+0001: LOAD_VAR\t'b'
+0002: ADD\t
+0003: STOP
+```
+
+- **Header** — function name (or "Anonymous function" / "Expression N"), arity index, and parameter list
+- **Summary line** — counts of constants, symbols, and instructions
+- **Constant Pool** — indexed list of literal values (integers, floats, strings, keywords, etc.) referenced by the bytecode. Integer literals for `PUSH_INT` are shown directly, not via pool indices.
+- **Symbol Pool** — indexed list of variable names used by `LOAD_VAR` and `STORE_VAR` instructions
+- **Disassembly** — instruction listing with program counter (PC), opcode name, and operand. Jump targets show the destination PC. Constant pool references show both the index and the resolved value.
+
+**When bytecode is generated:**
+
+Only functions with bodies containing bytecode-supported constructs are compiled. Supported constructs include: arithmetic operators (`+`, `-`, `*`, `/`, `rem`, `neg`), comparison operators (`=`, `!=`, `<`, `>`, `<=`, `>=`), and bytecode-supported special forms (`if`, `let`, `loop`/`recur`, `do`).
+
+Functions with unsupported constructs (real function calls like `println`, destructuring, `map`, `filter`, etc.) are skipped with a message:
+
+```
+Skipping defn mixed (arity 0, params: [x]): body contains constructs not supported by bytecode compiler
+```
+
+Multi-arity functions compile each arity independently — eligible arities are disassembled, ineligible arities are skipped.
+
+**Incompatible options:**
+
+- `--generate-bytecode` cannot be combined with `-m` (main namespace execution)
+- `--generate-bytecode` requires either `-e` or a filename as input
 
 ### Debug output
 
@@ -781,6 +851,16 @@ CLJVM_DEBUG=gc,eval ./zig-out/bin/clojurez -e '(+ 1 2 3)'
 ```
 
 Categories: `gc`, `eval`, or `all`/`1`/`true` for everything.
+
+### Related debugging tools
+
+| Tool | Purpose |
+|------|---------|
+| `--parse-debug` | Syntax-level debugging — isolate parser errors from runtime errors |
+| `--generate-bytecode` | Bytecode-level debugging — inspect compiled instructions without execution |
+| `CLJVM_DEBUG` | Runtime debugging — trace GC, evaluation, and other VM operations |
+| `CLJVM_GC_VERBOSE=1` | Verbose GC logging — track allocation and collection |
+| `CLJVM_GC_SWEEP=0` | Disable GC sweep — useful for debugging use-after-free issues |
 
 ## Documentation Requirements
 

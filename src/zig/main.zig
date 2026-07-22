@@ -33,6 +33,9 @@ const sequences = @import("namespaces/core/sequences.zig");
 const phm = @import("persistent_hash_map.zig");
 const exception = @import("exception.zig");
 const timeout_mod = @import("timeout.zig");
+const bytecode_mod = @import("bytecode.zig");
+const bytecode_disasm = @import("bytecode_disasm.zig");
+const bchelpers = @import("namespaces/core/helpers.zig");
 
 const Allocator = std.mem.Allocator;
 
@@ -88,10 +91,12 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
     // Record the earliest possible stack pointer baseline.
     stack_stats.recordAppBaseline();
 
-    // --parse-debug and --timeout: handle BEFORE any VM initialization.
+    // --parse-debug, --timeout, --generate-bytecode: handle BEFORE any VM initialization.
     // --parse-debug needs only a simple allocator — no GC, no namespaces, no library loading.
     // --timeout is parsed early so we can start the watchdog before evaluation begins.
+    // --generate-bytecode is parsed early to record the flag (full VM needed later).
     var timeout_secs: usize = 0;
+    var generate_bytecode: bool = false;
     {
         var args_it = std.process.Args.Iterator.initAllocator(init.args, std.heap.page_allocator) catch unreachable;
         _ = args_it.next(); // skip program name
@@ -116,6 +121,8 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
                     std.debug.print("Error: --timeout requires a positive integer (seconds)\n", .{});
                     std.process.exit(1);
                 }
+            } else if (std.mem.eql(u8, arg, "--generate-bytecode")) {
+                generate_bytecode = true;
             }
         }
     }
@@ -366,6 +373,8 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
 
     var classpath_set = false;
     var main_ns: ?[]const u8 = null;
+    var gen_bc_expr: ?[]const u8 = null;
+    var gen_bc_file: ?[]const u8 = null;
     var i: usize = 0;
     while (i < arg_count) : (i += 1) {
         const arg = it.next() orelse break;
@@ -375,9 +384,13 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
                 try writeStderr("Error: missing expression after -e\n");
                 std.process.exit(1);
             };
-            try runExpression(allocator, expr, user_env);
-            // Collect after function returns so local vars are out of scope
-            if (gc_mod.current_gc) |gc| gc.collect(gc_scan.valueScanFn);
+            if (generate_bytecode) {
+                gen_bc_expr = expr;
+            } else {
+                try runExpression(allocator, expr, user_env);
+                // Collect after function returns so local vars are out of scope
+                if (gc_mod.current_gc) |gc| gc.collect(gc_scan.valueScanFn);
+            }
         } else if (std.mem.eql(u8, arg, "-cp") or std.mem.eql(u8, arg, "--classpath")) {
             const cp = it.next() orelse {
                 try writeStderr("Error: missing classpath after -cp\n");
@@ -397,6 +410,8 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
         } else if (std.mem.eql(u8, arg, "--timeout")) {
             // Already parsed in early pass — skip the value argument
             _ = it.next();
+        } else if (std.mem.eql(u8, arg, "--generate-bytecode")) {
+            // Already parsed in early pass — no action needed here
         } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
             printUsage() catch {};
             std.process.exit(0);
@@ -404,10 +419,37 @@ pub fn main(init: std.process.Init.Minimal) anyerror!void {
             try repl.runRepl(allocator, user_env);
         } else {
             // Treat as a file to execute
-            try runFile(allocator, arg, user_env);
-            // For file execution, skip post-run GC — OS reclaims all memory on exit.
-            // The GC deinit is now O(1) (just resets pointers, no individual block freeing).
+            if (generate_bytecode) {
+                gen_bc_file = arg;
+            } else {
+                try runFile(allocator, arg, user_env);
+                // For file execution, skip post-run GC — OS reclaims all memory on exit.
+                // The GC deinit is now O(1) (just resets pointers, no individual block freeing).
+            }
         }
+    }
+
+    // Handle --generate-bytecode after argument parsing
+    if (generate_bytecode) {
+        // --generate-bytecode is incompatible with -m (main namespace execution)
+        if (main_ns != null) {
+            try writeStderr("Error: --generate-bytecode is incompatible with -m\n");
+            std.process.exit(1);
+        }
+        if (gen_bc_expr) |expr| {
+            try runGenerateBytecode(allocator, expr, "<string>", user_env);
+        } else if (gen_bc_file) |filename| {
+            const cwd = std.Io.Dir.cwd();
+            var file = try std.Io.Dir.openFile(cwd, std.Options.debug_io, filename, .{});
+            defer std.Io.File.close(file, std.Options.debug_io);
+            var reader = file.reader(std.Options.debug_io, &[_]u8{});
+            const content = try reader.interface.allocRemaining(allocator, std.Io.Limit.limited(1024 * 1024));
+            try runGenerateBytecode(allocator, content, filename, user_env);
+        } else {
+            try writeStderr("Error: --generate-bytecode requires -e or a file argument\n");
+            std.process.exit(1);
+        }
+        return;
     }
 
     // If -m was specified, execute the main function
@@ -953,6 +995,287 @@ fn registerPermanentRoots(
     }
 }
 
+/// Main entry point for --generate-bytecode.
+/// Parses source code and generates bytecode disassembly without evaluation.
+fn runGenerateBytecode(
+    allocator: Allocator,
+    source: []const u8,
+    filename: []const u8,
+    env: *Env,
+) anyerror!void {
+    var p = try parser.Parser.init(allocator, source);
+    defer p.deinit();
+
+    const forms = try p.parseAll();
+    var form_idx: usize = 0;
+    for (forms.items) |form| {
+        if (std.meta.activeTag(form) == .list and form.list.items.items.len > 0) {
+            const items = form.list.items.items;
+            if (std.meta.activeTag(items[0]) == .symbol) {
+                const head = items[0].symbol.slice();
+                if (std.mem.eql(u8, head, "defn") or std.mem.eql(u8, head, "defn-")) {
+                    try handleDefnForm(allocator, form, filename, env);
+                    form_idx += 1;
+                    continue;
+                }
+                if (std.mem.eql(u8, head, "fn")) {
+                    try handleFnForm(allocator, form, filename, env);
+                    form_idx += 1;
+                    continue;
+                }
+            }
+        }
+        try compileExpression(allocator, form, form_idx, filename, env);
+        form_idx += 1;
+    }
+}
+
+/// Format parameter list for display in bytecode labels.
+/// Returns a string like "a b" or "a b & rest".
+fn formatParamsForLabel(allocator: Allocator, params: list.List) anyerror![]const u8 {
+    var result: std.ArrayListUnmanaged(u8) = .empty;
+    defer allocator.free(result.items);
+
+    var found_amp = false;
+    var first = true;
+    var i: usize = 0;
+    while (i < params.items.len) : (i += 1) {
+        const item = params.items[i];
+        if (!found_amp and std.meta.activeTag(item) == .symbol and
+            std.mem.eql(u8, item.symbol.slice(), "&"))
+        {
+            found_amp = true;
+            continue;
+        }
+        if (std.meta.activeTag(item) == .symbol) {
+            if (!first) try result.append(allocator, ' ');
+            try result.appendSlice(allocator, item.symbol.slice());
+            first = false;
+        }
+    }
+    return allocator.dupe(u8, result.items);
+}
+
+/// Handle a defn or defn- form: extract name and arities, compile each eligible body.
+fn handleDefnForm(
+    allocator: Allocator,
+    form: Value,
+    filename: []const u8,
+    env: *Env,
+) anyerror!void {
+    const items = form.list.items.items;
+    if (items.len < 3) {
+        try writeStdout("Skipping: malformed defn form (too few elements)\n");
+        return;
+    }
+
+    const fname = items[1];
+    const name = if (std.meta.activeTag(fname) == .symbol) fname.symbol.slice() else "?";
+
+    // Skip optional docstring
+    var idx: usize = 2;
+    if (idx < items.len and std.meta.activeTag(items[idx]) == .string) {
+        idx += 1;
+    }
+    // Skip optional metadata map
+    if (idx < items.len and std.meta.activeTag(items[idx]) == .map) {
+        idx += 1;
+    }
+    if (idx >= items.len) {
+        const msg = try std.fmt.allocPrint(allocator, "Skipping defn {s}: no body found\n", .{name});
+        defer allocator.free(msg);
+        try writeStdout(msg);
+        return;
+    }
+
+    // Extract arity forms and compile each
+    var arity_idx: usize = 0;
+    while (idx < items.len) {
+        const arity_form = items[idx];
+        idx += 1;
+        const result = extractArityFromForm(allocator, arity_form, items, idx, items.len);
+        idx = result.new_idx;
+        var params_list = result.params_list;
+        const body_forms = result.body_forms;
+
+        if (body_forms.len == 0) {
+            params_list.deinit(allocator);
+            arity_idx += 1;
+            continue;
+        }
+
+        // Build label with params info
+        const params_str = try formatParamsForLabel(allocator, params_list);
+        defer allocator.free(params_str);
+
+        // Check bytecode eligibility
+        var body_list = try bchelpers.listFromSlice(allocator, body_forms);
+        defer body_list.deinit(allocator);
+
+        if (bytecode_mod.containsUnhandledSpecialFormInList(body_list) or
+            bytecode_mod.containsDestructuring(params_list))
+        {
+            const msg = try std.fmt.allocPrint(allocator, "Skipping defn {s} (arity {d}, params: [{s}]): body contains constructs not supported by bytecode compiler\n", .{ name, arity_idx, params_str });
+            defer allocator.free(msg);
+            try writeStdout(msg);
+        } else if (bytecode_mod.containsRealFunctionCallsInList(body_list, name)) {
+            const msg = try std.fmt.allocPrint(allocator, "Skipping defn {s} (arity {d}, params: [{s}]): body contains constructs not supported by bytecode compiler\n", .{ name, arity_idx, params_str });
+            defer allocator.free(msg);
+            try writeStdout(msg);
+        } else {
+            var program = try bytecode_mod.compile(allocator, body_list, filename, env, name);
+            const label = try std.fmt.allocPrint(allocator, "Function: {s} (arity {d}, params: [{s}])", .{ name, arity_idx, params_str });
+            defer allocator.free(label);
+            try bytecode_disasm.disassemble(allocator, &program, label);
+            program.deinit(allocator);
+        }
+        params_list.deinit(allocator);
+        arity_idx += 1;
+    }
+}
+
+/// Check if a form looks like a parameter list (vector/list of symbols with optional &).
+fn looksLikeParamList(form: Value) bool {
+    const form_items = switch (std.meta.activeTag(form)) {
+        .vector => form.vector.items.items,
+        .list => form.list.items.items,
+        else => return false,
+    };
+    if (form_items.len == 0) return false;
+    var found_amp = false;
+    for (form_items) |item| {
+        if (std.meta.activeTag(item) == .symbol and std.mem.eql(u8, item.symbol.slice(), "&")) {
+            if (found_amp) return false;
+            found_amp = true;
+            continue;
+        }
+        if (std.meta.activeTag(item) != .symbol) return false;
+    }
+    return true;
+}
+
+/// Extract a single arity from a defn/fn form.
+/// Returns params list, body forms slice, and updated index.
+fn extractArityFromForm(
+    allocator: Allocator,
+    arity_form: Value,
+    items: []const Value,
+    idx: usize,
+    end: usize,
+) struct { params_list: list.List, body_forms: []const Value, new_idx: usize } {
+    if (std.meta.activeTag(arity_form) == .vector) {
+        // Flattened: [params] body1 body2
+        const params_list = bchelpers.listFromVector(allocator, arity_form.vector.items) catch {
+            return .{ .params_list = .empty, .body_forms = &.{}, .new_idx = idx };
+        };
+        const body_start = idx;
+        var i = idx;
+        while (i < end) {
+            // Only stop at vectors that look like param lists (not data vectors in body)
+            if (std.meta.activeTag(items[i]) == .vector and
+                looksLikeParamList(items[i]) and
+                i + 1 < end)
+            {
+                break;
+            }
+            i += 1;
+        }
+        return .{ .params_list = params_list, .body_forms = items[body_start..i], .new_idx = i };
+    } else if (std.meta.activeTag(arity_form) == .list) {
+        // Wrapped: ([params] body1 body2)
+        const inner = arity_form.list.items.items;
+        if (inner.len > 0 and std.meta.activeTag(inner[0]) == .vector) {
+            const params_list = bchelpers.listFromVector(allocator, inner[0].vector.items) catch {
+                return .{ .params_list = .empty, .body_forms = &.{}, .new_idx = idx };
+            };
+            return .{ .params_list = params_list, .body_forms = inner[1..], .new_idx = idx };
+        }
+    }
+    return .{ .params_list = .empty, .body_forms = &.{}, .new_idx = idx };
+}
+
+/// Handle an fn form: extract arities, compile each eligible body.
+fn handleFnForm(
+    allocator: Allocator,
+    form: Value,
+    filename: []const u8,
+    env: *Env,
+) anyerror!void {
+    const items = form.list.items.items;
+    if (items.len < 2) {
+        try writeStdout("Skipping: malformed fn form (too few elements)\n");
+        return;
+    }
+
+    var idx: usize = 1;
+    var arity_idx: usize = 0;
+    while (idx < items.len) {
+        const arity_form = items[idx];
+        idx += 1;
+        const result = extractArityFromForm(allocator, arity_form, items, idx, items.len);
+        idx = result.new_idx;
+        var params_list = result.params_list;
+        const body_forms = result.body_forms;
+
+        if (body_forms.len == 0) {
+            params_list.deinit(allocator);
+            arity_idx += 1;
+            continue;
+        }
+
+        // Build label with params info
+        const params_str = try formatParamsForLabel(allocator, params_list);
+        defer allocator.free(params_str);
+
+        // Check bytecode eligibility
+        var body_list = try bchelpers.listFromSlice(allocator, body_forms);
+        defer body_list.deinit(allocator);
+
+        if (bytecode_mod.containsUnhandledSpecialFormInList(body_list) or
+            bytecode_mod.containsDestructuring(params_list) or
+            bytecode_mod.containsRealFunctionCallsInList(body_list, "anonymous"))
+        {
+            const msg = try std.fmt.allocPrint(allocator, "Skipping anonymous fn (arity {d}, params: [{s}]): body contains constructs not supported by bytecode compiler\n", .{ arity_idx, params_str });
+            defer allocator.free(msg);
+            try writeStdout(msg);
+        } else {
+            var program = try bytecode_mod.compile(allocator, body_list, filename, env, null);
+            const label = try std.fmt.allocPrint(allocator, "Anonymous function (arity {d}, params: [{s}])", .{ arity_idx, params_str });
+            defer allocator.free(label);
+            try bytecode_disasm.disassemble(allocator, &program, label);
+            program.deinit(allocator);
+        }
+        params_list.deinit(allocator);
+        arity_idx += 1;
+    }
+}
+
+/// Compile an arbitrary expression form to bytecode and disassemble.
+fn compileExpression(
+    allocator: Allocator,
+    form: Value,
+    form_idx: usize,
+    filename: []const u8,
+    env: *Env,
+) anyerror!void {
+    var expr_list: list.List = .empty;
+    defer expr_list.deinit(allocator);
+    try expr_list.append(allocator, form);
+
+    const label = try std.fmt.allocPrint(allocator, "Expression {d}", .{form_idx});
+    defer allocator.free(label);
+
+    var program = bytecode_mod.compile(allocator, expr_list, filename, env, null) catch |err| {
+        const msg = try std.fmt.allocPrint(allocator, "Cannot compile to bytecode: form {d} contains unsupported constructs ({s})\n", .{ form_idx, @errorName(err) });
+        defer allocator.free(msg);
+        try writeStdout(msg);
+        return;
+    };
+    defer program.deinit(allocator);
+
+    try bytecode_disasm.disassemble(allocator, &program, label);
+}
+
 fn printUsage() anyerror!void {
     try writeStdout(
         \\Usage: clojure-vm [OPTIONS] [FILE]
@@ -961,6 +1284,7 @@ fn printUsage() anyerror!void {
         \\  -e, --eval EXPR   Evaluate expression and exit
         \\  --repl            Start interactive REPL
         \\  --timeout N       Terminate after N seconds (exit code 124)
+        \\  --generate-bytecode  Compile input to bytecode and print disassembly (no execution)
         \\  -h, --help        Show this help message
         \\
         \\If no options are given, starts an interactive REPL.
