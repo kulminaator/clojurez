@@ -647,7 +647,7 @@ pub fn evalRecDirectWithEnv(allocator: Allocator, form: *const Value, env: *Env,
 pub fn evalRec(allocator: Allocator, form: *const Value, frame: *vm.Frame, depth: usize) anyerror!EvalResult {
     switch (form.*) {
         // Phase 1: Literals — return by copy, no allocation. The form is AST (immutable, rooted).
-        .nil, .bool, .integer, .float, .bigint, .ratio, .decimal, .string, .regex, .character, .keyword, .set, .queue, .chunk, .chunked_cons, .atom, .future, .promise, .reduced, .wrapped, .record, .exception, .ref, .multimethod => {
+        .nil, .bool, .integer, .float, .bigint, .ratio, .decimal, .string, .regex, .character, .keyword, .set, .queue, .chunk, .chunked_cons, .atom, .future, .promise, .reduced, .wrapped, .record, .exception, .ref, .multimethod, .agent => {
             return .{ .value = form.* };
         },
         .symbol => {
@@ -1561,7 +1561,20 @@ fn callFunction(allocator: Allocator, op: *const Value, args: *const list.List, 
         const bc_env = try allocator.create(Env);
         bc_env.* = try cloneFnEnv(allocator, fn_data.env);
         try bindArityParamsEnv(allocator, arity, args, bc_env);
-        const vm_result = try bytecode_mod.execute(allocator, bc, bc_env);
+        const vm_result = bytecode_mod.execute(allocator, bc, bc_env) catch |err| {
+            bc_env.deinit(allocator);
+            allocator.destroy(bc_env);
+            child_frame.deinit(allocator);
+            // Convert division by zero to ArithmeticException (like callBuiltinFn does)
+            if (err == error.DivisionByZero) {
+                const empty_map = vm.cachedEmptyMap() orelse return err;
+                const ex = try vm.exceptionValue(allocator, "Divide by zero", empty_map.map, null, "clojure.lang/ArithmeticException");
+                current_exception = ex.exception;
+                exception_thrown = true;
+                return EvalError.Exception;
+            }
+            return err;
+        };
         switch (vm_result) {
             .value => |v| {
                 bc_env.deinit(allocator);
@@ -2454,6 +2467,13 @@ fn evalDeref(allocator: Allocator, l: *const list.List, frame: *vm.Frame, depth:
         const result = try threading.core_deref_promise(testSelf(), &deref_args, frame.root_env);
         // Phase 1: core_deref_promise returns Value by copy, no allocValue wrapper needed
         return .{ .value = result };
+    }
+    if (std.meta.activeTag(arg_val) == .agent) {
+        // Deref an agent — return current value
+        const data = arg_val.agent;
+        const val = try vm.shallowClone(&data.value, allocator);
+        // Phase 1: shallowClone returns Value by copy, no allocValue wrapper needed
+        return .{ .value = val };
     }
     // Phase 1: nilValue returns Value by copy, no allocValue wrapper needed
     return .{ .value = vm.nilValue() };

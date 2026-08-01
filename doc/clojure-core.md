@@ -14,10 +14,17 @@
 - [>=](#>=)
 - [NaN?](#NaN?)
 - [abs](#abs)
+- [add-watch](#add-watch)
+- [agent](#agent)
+- [agent-error](#agent-error)
+- [agent-errors](#agent-errors)
+- [agent?](#agent?)
 - [apply](#apply)
 - [assoc](#assoc)
 - [assoc-in](#assoc-in)
 - [atom](#atom)
+- [await](#await)
+- [await-for](#await-for)
 - [bigdec](#bigdec)
 - [bigint](#bigint)
 - [bit-and](#bit-and)
@@ -37,6 +44,7 @@
 - [byte](#byte)
 - [cat](#cat)
 - [class](#class)
+- [clear-agent-errors](#clear-agent-errors)
 - [coll?](#coll?)
 - [comp](#comp)
 - [comparator](#comparator)
@@ -74,6 +82,8 @@
 - [empty](#empty)
 - [empty?](#empty?)
 - [ensure-reduced](#ensure-reduced)
+- [error-handler](#error-handler)
+- [error-mode](#error-mode)
 - [eval](#eval)
 - [even?](#even?)
 - [every-pred](#every-pred)
@@ -105,6 +115,7 @@
 - [gensym](#gensym)
 - [get](#get)
 - [get-in](#get-in)
+- [get-validator](#get-validator)
 - [group-by](#group-by)
 - [hash-map](#hash-map)
 - [hash-set](#hash-set)
@@ -213,6 +224,7 @@
 - [regex?](#regex?)
 - [rem](#rem)
 - [remove](#remove)
+- [remove-watch](#remove-watch)
 - [repeat](#repeat)
 - [repeatedly](#repeatedly)
 - [replace](#replace)
@@ -220,16 +232,23 @@
 - [requiring-resolve](#requiring-resolve)
 - [reset!](#reset!)
 - [rest](#rest)
+- [restart-agent](#restart-agent)
 - [reverse](#reverse)
 - [satisfies?](#satisfies?)
 - [second](#second)
 - [select-keys](#select-keys)
+- [send](#send)
+- [send-off](#send-off)
 - [seq](#seq)
 - [sequential?](#sequential?)
 - [set](#set)
+- [set-error-handler!](#set-error-handler!)
+- [set-error-mode!](#set-error-mode!)
+- [set-validator!](#set-validator!)
 - [set?](#set?)
 - [short](#short)
 - [shuffle](#shuffle)
+- [shutdown-agents](#shutdown-agents)
 - [sleep](#sleep)
 - [slurp](#slurp)
 - [some](#some)
@@ -369,6 +388,50 @@ Returns the absolute value of a.
 
 ---
 
+## add-watch
+
+[(agent key f)]
+
+Adds a watch function to an agent. The watch function will be called with
+   (key agent old-value new-value) after each successful state change.
+   Returns the agent.
+
+---
+
+## agent
+
+[(initial-value) (initial-value & opts)]
+
+Creates and returns an agent with an initial value and (optionally) additional
+   specifications using a map or keyed list.
+   Options: :error-handler, :error-mode, :validator, :meta.
+
+---
+
+## agent-error
+
+[(agent)]
+
+Returns the most recent error for the agent, if any.
+
+---
+
+## agent-errors
+
+[(agent)]
+
+Returns all errors for the agent.
+
+---
+
+## agent?
+
+[(x)]
+
+Returns true if x is an agent.
+
+---
+
 ## apply
 
 [(fn & args)]
@@ -400,6 +463,23 @@ Associates a value in a nested associative structure, where ks is a
 [(v)]
 
 Creates and returns an Atom with an initial value and no validators or watchers.
+
+---
+
+## await
+
+[(& agents)]
+
+Blocks until all supplied agents have processed their actions.
+
+---
+
+## await-for
+
+[(timeout & agents)]
+
+Blocks until all supplied agents have processed their actions, or until the timeout
+   (in milliseconds) is reached. Returns true if all actions completed, false on timeout.
 
 ---
 
@@ -552,6 +632,14 @@ Concatenate the contents of each collection into one sequence.
 [(x)]
 
 Returns the class of x. In ClojureZ, returns the type keyword.
+
+---
+
+## clear-agent-errors
+
+[(agent)]
+
+Clears the errors of the agent and allows it to process again.
 
 ---
 
@@ -723,9 +811,9 @@ Returns the denominator of x, which must be an integer, bigint, or ratio.
 
 [(v)]
 
-Returns the current value of the atom, future, promise, or var.
+Returns the current value of the atom, future, promise, agent, or var.
    For futures and promises, blocks until the computation completes.
-   For atoms, returns the current value.
+   For atoms and agents, returns the current value.
 
 ---
 
@@ -868,6 +956,22 @@ Returns true if coll has no items. Different from (not coll) because both
 [(v)]
 
 If v is a Reduced wrapper, returns it. Otherwise wraps v in Reduced.
+
+---
+
+## error-handler
+
+[(agent)]
+
+Returns the error handler of the agent, if any.
+
+---
+
+## error-mode
+
+[(agent)]
+
+Returns the error mode of the agent (:fail or :continue).
 
 ---
 
@@ -1134,6 +1238,14 @@ Returns the value mapped to key, not-found (nil) if not present.
 
 Returns the value in a nested associative structure,
    where ks is a sequence of keys. Returns nil if the key is not present.
+
+---
+
+## get-validator
+
+[(agent)]
+
+Returns the validator of the agent, if any.
 
 ---
 
@@ -2047,6 +2159,14 @@ Returns a lazy sequence of the items in coll for which (pred item) returns logic
 
 ---
 
+## remove-watch
+
+[(agent key)]
+
+Removes a watch function from an agent by key. Returns the agent.
+
+---
+
 ## repeat
 
 [(x) (n x)]
@@ -2105,6 +2225,14 @@ Returns a possibly-empty sequence of the items after the first.
 
 ---
 
+## restart-agent
+
+[(agent new-value) (agent new-value & opts)]
+
+Restarts a failed agent with a new value. Optionally clears pending actions.
+
+---
+
 ## reverse
 
 [(coll)]
@@ -2137,6 +2265,24 @@ Returns a map containing only those entries in map whose key is in keys
 
 ---
 
+## send
+
+[(agent f) (agent f & args)]
+
+Schedules an action to be performed on the agent. The action is a function
+   of (agent-state & args). Returns the agent.
+
+---
+
+## send-off
+
+[(agent f) (agent f & args)]
+
+Like send, but uses a separate thread pool suitable for blocking I/O or other
+   blocking operations. The action is a function of (agent-state & args). Returns the agent.
+
+---
+
 ## seq
 
 [(coll)]
@@ -2161,6 +2307,32 @@ Returns a set of the items in coll.
 
 ---
 
+## set-error-handler!
+
+[(agent handler)]
+
+Sets the error handler of the agent.
+
+---
+
+## set-error-mode!
+
+[(agent mode)]
+
+Sets the error mode of the agent.
+
+---
+
+## set-validator!
+
+[(agent validator)]
+
+Sets the validator for the agent. Validator is a function that takes
+   the current value and returns truthy if valid. nil removes the validator.
+   Validates the current value before setting the new validator.
+
+---
+
 ## set?
 
 [(x)]
@@ -2182,6 +2354,14 @@ Coerce to short (truncates to 16 bits).
 [(coll)]
 
 Return a random permutation of coll. Uses Fisher-Yates shuffle.
+
+---
+
+## shutdown-agents
+
+[()]
+
+Shuts down all agent thread pools. Agents can no longer process actions.
 
 ---
 

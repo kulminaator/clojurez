@@ -31,6 +31,7 @@ const namespace = @import("namespace.zig");
 const ref = @import("../../ref.zig");
 const eval_multi = @import("../../eval_multi.zig");
 const threading = @import("threading.zig");
+const agents = @import("agents.zig");
 
 // ---- Collection predicates (empty?, not-empty, seq) ----
 
@@ -376,6 +377,7 @@ pub fn registerCoreFunctions(env: *Env) anyerror!void {
     try gc_builtins.registerGCFunctions(env);
     try regexp_core.registerRegexpFunctions(env);
     try threading.registerThreadingFunctions(env);
+    try agents.registerAgentFunctions(env);
 
     // Collection predicates (kept here)
     try env.put("empty?", vm.builtinFnValue(core_empty_q));

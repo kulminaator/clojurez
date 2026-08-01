@@ -18,7 +18,7 @@ pub fn isSimpleBytecodeForm(form: Value) bool {
         .bigint, .ratio, .decimal, .regex, .character => true,
         .function, .builtin_fn, .atom, .lazy_seq, .cons, .reduced,
         .future, .promise, .record, .chunk, .chunked_cons, .wrapped, .exception,
-        .ref, .multimethod => true,
+        .ref, .multimethod, .agent => true,
         .list => false,
         .vector => {
             for (form.vector.items.items) |item| {
@@ -58,7 +58,7 @@ pub fn isSafeBytecodeArg(form: Value) bool {
         .bigint, .ratio, .decimal, .regex, .character => true,
         .function, .builtin_fn, .atom, .lazy_seq, .cons, .reduced,
         .future, .promise, .record, .chunk, .chunked_cons, .wrapped, .exception,
-        .ref, .multimethod => true,
+        .ref, .multimethod, .agent => true,
         .list => {
             const lst_items = form.list.items.items;
             if (lst_items.len == 0) return true;

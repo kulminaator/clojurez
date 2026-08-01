@@ -1345,3 +1345,76 @@ test "gc_invariant: shareGC pointer is tracked by GC" {
         return error.GCInvariantViolation;
     };
 }
+
+// ============================================================
+// Agent GC Invariant Tests
+// ============================================================
+
+test "agent::agentValue: creates agent with correct type" {
+    const allocator = std.heap.page_allocator;
+    var gc = gc_mod.GC.init(allocator);
+    defer gc.deinit();
+    const prev_gc = gc_mod.current_gc;
+    gc_mod.current_gc = &gc;
+    defer gc_mod.current_gc = prev_gc;
+    const gc_alloc = gc.allocator();
+
+    const initial = intValue(42);
+    const val = try vm.agentValue(gc_alloc, initial);
+
+    // Verify the value tag is .agent
+    try std.testing.expect(std.meta.activeTag(val) == .agent);
+}
+
+test "agent::agentValue: GC type is set correctly" {
+    const allocator = std.heap.page_allocator;
+    var gc = gc_mod.GC.init(allocator);
+    defer gc.deinit();
+    const prev_gc = gc_mod.current_gc;
+    gc_mod.current_gc = &gc;
+    defer gc_mod.current_gc = prev_gc;
+    const gc_alloc = gc.allocator();
+
+    const initial = intValue(100);
+    const val = try vm.agentValue(gc_alloc, initial);
+
+    // Verify the AgentData pointer is GC-tracked with correct type
+    const header = gc.findHeader(@as(*anyopaque, @ptrCast(val.agent)));
+    try std.testing.expect(header != null);
+    try std.testing.expectEqual(gc_mod.GCObjectType.agent_data, header.?.obj_type);
+}
+
+test "agent::agentValue: initial value is cloned" {
+    const allocator = std.heap.page_allocator;
+    var gc = gc_mod.GC.init(allocator);
+    defer gc.deinit();
+    const prev_gc = gc_mod.current_gc;
+    gc_mod.current_gc = &gc;
+    defer gc_mod.current_gc = prev_gc;
+    const gc_alloc = gc.allocator();
+
+    const initial = intValue(42);
+    const val = try vm.agentValue(gc_alloc, initial);
+
+    // Verify the agent's internal value matches the initial
+    try std.testing.expectEqual(vm.Type.integer, std.meta.activeTag(val.agent.value));
+    try std.testing.expectEqual(@as(i64, 42), val.agent.value.integer);
+}
+
+test "agent::agentValueShared: creates shared agent reference" {
+    const allocator = std.heap.page_allocator;
+    var gc = gc_mod.GC.init(allocator);
+    defer gc.deinit();
+    const prev_gc = gc_mod.current_gc;
+    gc_mod.current_gc = &gc;
+    defer gc_mod.current_gc = prev_gc;
+    const gc_alloc = gc.allocator();
+
+    const initial = intValue(99);
+    const val = try vm.agentValue(gc_alloc, initial);
+    const shared = vm.agentValueShared(val.agent);
+
+    // Shared reference points to same AgentData
+    try std.testing.expect(std.meta.activeTag(shared) == .agent);
+    try std.testing.expect(val.agent == shared.agent);
+}

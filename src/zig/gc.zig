@@ -71,6 +71,7 @@ pub const GCObjectType = enum(u8) {
     ref_data = 35,           // RefData — STM reference value
     multimethod_data = 36,   // MultimethodData — multimethod dispatch
     small_map = 37,          // SmallMap — linear array for small PersistentHashMaps (≤8 entries)
+    agent_data = 38,         // AgentData — agent for async state updates
 };
 
 const Header = struct {
@@ -314,9 +315,9 @@ fn debugPrintAlloc(size: usize, return_addr: usize) void {
 /// Snapshot of block counts and bytes by GC object type.
 pub const DebugTypeSnapshot = struct {
     /// Count of blocks per type (indexed by GCObjectType integer value).
-    counts: [38]usize = .{0} ** 38,
+    counts: [39]usize = .{0} ** 39,
     /// Total bytes per type.
-    bytes: [38]usize = .{0} ** 38,
+    bytes: [39]usize = .{0} ** 39,
     /// Total alloc-count at time of snapshot.
     alloc_count: usize = 0,
     /// Total current-allocated at time of snapshot.
@@ -353,7 +354,7 @@ pub fn debugTypeSnapshotDiff(before: DebugTypeSnapshot, after: DebugTypeSnapshot
         "bigint_limbs", "bigint_data", "ratio_data", "decimal_data",
         "bytecode_program", "chunk_data", "chunked_cons_data", "frame",
         "value_cache", "exception_data", "ref_data", "multimethod_data",
-        "small_map",
+        "small_map", "agent_data",
     };
 
     std.log.err("\n=== ALLOCATION DIFF (type | before | after | delta count | delta bytes) ===\n", .{});
@@ -389,7 +390,7 @@ pub fn debugTypeSnapshotPrint(label: []const u8, snapshot: DebugTypeSnapshot) vo
         "bigint_limbs", "bigint_data", "ratio_data", "decimal_data",
         "bytecode_program", "chunk_data", "chunked_cons_data", "frame",
         "value_cache", "exception_data", "ref_data", "multimethod_data",
-        "small_map",
+        "small_map", "agent_data",
     };
 
     std.log.err("\n=== TYPE SNAPSHOT: {s} (alloc-count={d}, current-allocated={d}) ===\n",

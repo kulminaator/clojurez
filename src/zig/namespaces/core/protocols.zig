@@ -56,6 +56,7 @@ pub fn typeKeyword(v: Value) []const u8 {
         .exception => "exception",
         .ref => "ref",
         .multimethod => "multimethod",
+        .agent => "agent",
     };
 }
 

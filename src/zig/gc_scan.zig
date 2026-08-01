@@ -55,6 +55,7 @@ pub fn valueScanFn(obj: *anyopaque, ctx: *gc.ScanContext) void {
         .exception_data => scanExceptionData(obj, ctx),
         .ref_data => scanRefData(obj, ctx),
         .multimethod_data => scanMultimethodData(obj, ctx),
+        .agent_data => scanAgentData(obj, ctx),
     }
 }
 
@@ -137,7 +138,7 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
         .string, .regex, .character, .symbol, .keyword,
         .list, .vector, .map, .set, .queue, .function, .builtin_fn,
         .lazy_seq, .cons, .chunk, .chunked_cons, .atom, .future, .promise, .reduced, .wrapped, .record, .exception,
-        .ref, .multimethod,
+        .ref, .multimethod, .agent,
     };
     var is_valid = false;
     for (valid_types) |vt| {
@@ -335,6 +336,12 @@ pub fn scanValueChildrenDirect(val: *const Value, ctx: *gc.ScanContext) void {
             // Safety net: verify pointer is a real GC-tracked block
             if (!gc.isValidGCPtr(data, ctx)) return;
             // Mark the MultimethodData block itself so GC can scan dispatch_fn + method_table
+            ctx.gc.markRecursive(data, ctx);
+        },
+        .agent => |data| {
+            // Safety net: verify pointer is a real GC-tracked block
+            if (!gc.isValidGCPtr(data, ctx)) return;
+            // Mark the AgentData block itself so GC can scan value, handlers, watches, etc.
             ctx.gc.markRecursive(data, ctx);
         },
     }
@@ -879,5 +886,41 @@ fn scanMultimethodData(mm_ptr: *anyopaque, ctx: *gc.ScanContext) void {
         for (pair.items) |val| {
             scanValueChildrenDirect(&val, ctx);
         }
+    }
+}
+
+/// Scan AgentData — agent for async state updates.
+/// Marks: value, error_handler, validator, queued actions, watch functions, error list.
+fn scanAgentData(agent_ptr: *anyopaque, ctx: *gc.ScanContext) void {
+    const ad: *vm.AgentData = @ptrCast(@alignCast(agent_ptr));
+    // Mark the current value
+    scanValueChildrenDirect(&ad.value, ctx);
+    // Mark error handler if present
+    if (ad.error_handler) |v| {
+        scanValueChildrenDirect(&v, ctx);
+    }
+    // Mark validator if present
+    if (ad.validator) |v| {
+        scanValueChildrenDirect(&v, ctx);
+    }
+    // Mark most recent error if present
+    if (ad.agent_error) |v| {
+        scanValueChildrenDirect(&v, ctx);
+    }
+    // Mark queued actions (fn_val and args)
+    for (ad.action_queue.items) |action| {
+        scanValueChildrenDirect(&action.fn_val, ctx);
+        for (action.args.items) |arg| {
+            scanValueChildrenDirect(&arg, ctx);
+        }
+    }
+    // Mark watch function values
+    var watch_it = ad.watches.iterator();
+    while (watch_it.next()) |entry| {
+        scanValueChildrenDirect(&entry.value_ptr.fn_val, ctx);
+    }
+    // Mark accumulated errors list
+    for (ad.agent_errors_list.items) |err| {
+        scanValueChildrenDirect(&err, ctx);
     }
 }

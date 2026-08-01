@@ -275,6 +275,7 @@ pub const Type = enum {
     exception,  // ExceptionData — runtime exception value
     ref,       // RefData — STM reference
     multimethod, // MultimethodData — multimethod dispatch
+    agent,     // AgentData — agent for async state updates
 };
 
 // ============================================================
@@ -435,6 +436,83 @@ pub const MultimethodData = struct {
     allocator: Allocator,
 };
 
+// ============================================================
+// Agent support — async state updates via queued actions
+// ============================================================
+
+/// Error mode for agents: :fail stops processing on error, :continue skips failed actions.
+pub const AgentErrorMode = enum(u8) {
+    fail = 0,
+    continue_ = 1,
+};
+
+/// A queued action: a function and its extra arguments.
+pub const AgentAction = struct {
+    fn_val: Value,
+    args: std.ArrayListUnmanaged(Value) = .empty,
+};
+
+/// A watch entry: a watch function keyed by a keyword string.
+pub const AgentWatchEntry = struct {
+    fn_val: Value,
+};
+
+/// AgentData — agent for asynchronous state updates.
+/// Actions are queued and processed in order by a worker thread.
+/// Protected by a per-agent mutex for serialization and a condition variable for await.
+pub const AgentData = struct {
+    value: Value,
+    mutex: std.Io.Mutex = std.Io.Mutex.init,
+    cond: std.Io.Condition = std.Io.Condition.init,
+    action_queue: std.ArrayListUnmanaged(AgentAction) = .empty,
+    action_count: usize = 0,         // actions queued or currently processing (for await)
+    error_mode: AgentErrorMode = .fail,
+    error_handler: ?Value = null,
+    validator: ?Value = null,
+    watches: std.StringHashMapUnmanaged(AgentWatchEntry) = .empty,
+    agent_error: ?Value = null,
+    agent_errors_list: std.ArrayListUnmanaged(Value) = .empty,
+    failed: bool = false,
+    shutdown: bool = false,
+    allocator: Allocator,
+
+    /// Helper: get an Io instance for mutex/cond operations.
+    fn getIo() std.Io {
+        return std.Io.Threaded.global_single_threaded.io();
+    }
+
+    /// Acquire the agent mutex (blocking).
+    pub fn acquire(self: *AgentData) void {
+        _ = self.mutex.lock(getIo()) catch {};
+    }
+
+    /// Try to acquire the agent mutex (non-blocking).
+    /// Returns true if acquired, false if already locked.
+    pub fn tryAcquire(self: *AgentData) bool {
+        return self.mutex.tryLock();
+    }
+
+    /// Release the agent mutex.
+    pub fn release(self: *AgentData) void {
+        self.mutex.unlock(getIo());
+    }
+
+    /// Wait on the condition variable until predicate returns true.
+    /// Must be called while holding the mutex.
+    pub fn waitWhile(self: *AgentData, predicate: fn (*const AgentData) bool) void {
+        const io = getIo();
+        while (predicate(self)) {
+            _ = self.cond.wait(io, &self.mutex) catch {};
+        }
+    }
+
+    /// Signal all waiters on the condition variable.
+    /// Must be called while holding the mutex.
+    pub fn signalAll(self: *AgentData) void {
+        self.cond.broadcast(getIo());
+    }
+};
+
 /// Cons cell data: heap-allocated, contains head, tail, and the allocator used.
 pub const ConsData = struct {
     head: Value,
@@ -570,6 +648,7 @@ pub const Value = union(Type) {
     exception: *ExceptionData,
     ref: *RefData,
     multimethod: *MultimethodData,
+    agent: *AgentData,
 };
 
 // ============================================================
@@ -830,6 +909,25 @@ pub fn multimethodValue(allocator: Allocator, dispatch_fn: Value) anyerror!Value
         gc.setObjectType(@as(*anyopaque, @ptrCast(data)), gc_mod.GCObjectType.multimethod_data);
     }
     return .{ .multimethod = data };
+}
+
+/// Create an agent value with the given initial value.
+/// The agent uses a per-agent atomic spinlock for serializing action processing.
+pub fn agentValue(allocator: Allocator, initial: Value) anyerror!Value {
+    const data = try allocator.create(AgentData);
+    data.* = .{
+        .value = try clone(&initial, allocator),
+        .allocator = allocator,
+    };
+    if (gc_mod.current_gc) |gc| {
+        gc.setObjectType(@as(*anyopaque, @ptrCast(data)), gc_mod.GCObjectType.agent_data);
+    }
+    return .{ .agent = data };
+}
+
+/// Create an agent value that shares an existing AgentData (for cloning).
+pub fn agentValueShared(data: *AgentData) Value {
+    return .{ .agent = data };
 }
 
 /// Create a reduced wrapper for early reduction termination
@@ -1125,6 +1223,10 @@ pub fn clone(val: *const Value, allocator: Allocator) anyerror!Value {
         .promise => |data| {
             return promiseValueShared(data);
         },
+        .agent => |data| {
+            // Agents are shared (like atoms/futures) — share the data pointer
+            return agentValueShared(data);
+        },
         .function => |fn_data| {
             var cloned_arities: std.ArrayListUnmanaged(Arity) = .empty;
             errdefer {
@@ -1395,6 +1497,7 @@ pub fn equals(val: Value, other: Value) bool {
         .promise => return false,
         .ref => return false, // identity-based like atoms
         .multimethod => return false, // identity-based
+        .agent => return false, // identity-based like atoms
         .function => |a| return a == other.function, // identity-based
         .reduced => |s_data| {
             return equals(s_data.*, other.reduced.*);
@@ -1572,6 +1675,11 @@ pub fn fmt(val: Value, allocator: Allocator) anyerror![]const u8 {
             defer allocator.free(fn_str);
             return try std.fmt.allocPrint(allocator, "#multimethod({s})", .{fn_str});
         },
+        .agent => |data| {
+            const inner_str = try fmt(data.value, allocator);
+            defer allocator.free(inner_str);
+            return try std.fmt.allocPrint(allocator, "#agent({s})", .{inner_str});
+        },
     };
 }
 
@@ -1694,6 +1802,11 @@ pub fn fmtToBuffer(val: Value, buf: *std.ArrayListUnmanaged(u8), allocator: Allo
         .multimethod => |data| {
             try buf.appendSlice(allocator, "#multimethod(");
             try fmtToBuffer(data.dispatch_fn, buf, allocator);
+            try buf.append(allocator, ')');
+        },
+        .agent => |data| {
+            try buf.appendSlice(allocator, "#agent(");
+            try fmtToBuffer(data.value, buf, allocator);
             try buf.append(allocator, ')');
         },
     };
