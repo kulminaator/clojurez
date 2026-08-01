@@ -383,6 +383,7 @@ pub fn valueHash(val: Value) i32 {
         .exception => hashIdentity(),
         .ref => hashIdentity(),
         .multimethod => hashIdentity(),
+        .agent => hashIdentity(),
     };
 }
 

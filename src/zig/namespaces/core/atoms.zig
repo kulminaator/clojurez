@@ -17,7 +17,12 @@ pub fn core_deref(self: *const Value, args: *const list.List, env_env: *Env) any
         const data = arg.atom;
         return data.value;
     }
-    // For non-atoms, return as-is
+    // Extract value from agent
+    if (std.meta.activeTag(arg) == .agent) {
+        const data = arg.agent;
+        return data.value;
+    }
+    // For non-atoms/non-agents, return as-is
     return arg;
 }
 

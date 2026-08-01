@@ -37,6 +37,7 @@ const test_persistent_string_hash_map = @import("persistent_string_hash_map.zig"
 const test_debug = @import("debug.zig");
 const test_stack_stats = @import("stack_stats.zig");
 const test_threading = @import("namespaces/core/threading.zig");
+const test_agents = @import("namespaces/core/agents.zig");
 const test_bytecode = @import("bytecode.zig");
 const test_io_socket = @import("namespaces/core/io_socket.zig");
 const test_bytecode_disasm = @import("bytecode_disasm.zig");
@@ -79,6 +80,7 @@ comptime {
     _ = test_debug;
     _ = test_stack_stats;
     _ = test_threading;
+    _ = test_agents;
     _ = test_bytecode;
     _ = test_io_socket;
     _ = test_bytecode_disasm;

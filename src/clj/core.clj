@@ -1341,6 +1341,114 @@
   [v]
   (zig.core/atom v))
 
+;; ---- Agents ----
+
+(defn agent
+  "Creates and returns an agent with an initial value and (optionally) additional
+   specifications using a map or keyed list.
+   Options: :error-handler, :error-mode, :validator, :meta."
+  ([initial-value] (zig.core/agent initial-value))
+  ([initial-value & opts] (apply zig.core/agent (concat (list initial-value) opts))))
+
+(defn agent?
+  "Returns true if x is an agent."
+  [x]
+  (zig.core/agent? x))
+
+(defn send
+  "Schedules an action to be performed on the agent. The action is a function
+   of (agent-state & args). Returns the agent."
+  ([agent f] (zig.core/send agent f))
+  ([agent f & args] (apply zig.core/send (concat (list agent f) args))))
+
+(defn send-off
+  "Like send, but uses a separate thread pool suitable for blocking I/O or other
+   blocking operations. The action is a function of (agent-state & args). Returns the agent."
+  ([agent f] (zig.core/send-off agent f))
+  ([agent f & args] (apply zig.core/send-off (concat (list agent f) args))))
+
+(defn await
+  "Blocks until all supplied agents have processed their actions."
+  [& agents]
+  (apply zig.core/await agents))
+
+(defn await-for
+  "Blocks until all supplied agents have processed their actions, or until the timeout
+   (in milliseconds) is reached. Returns true if all actions completed, false on timeout."
+  [timeout & agents]
+  (apply zig.core/await-for (concat (list timeout) agents)))
+
+(defn agent-error
+  "Returns the most recent error for the agent, if any."
+  [agent]
+  (zig.core/agent-error agent))
+
+(defn agent-errors
+  "Returns all errors for the agent."
+  [agent]
+  (zig.core/agent-errors agent))
+
+(defn error-mode
+  "Returns the error mode of the agent (:fail or :continue)."
+  [agent]
+  (zig.core/error-mode agent))
+
+(defn error-handler
+  "Returns the error handler of the agent, if any."
+  [agent]
+  (zig.core/error-handler agent))
+
+(defn set-error-mode!
+  "Sets the error mode of the agent."
+  [agent mode]
+  (zig.core/set-error-mode! agent mode))
+
+(defn set-error-handler!
+  "Sets the error handler of the agent."
+  [agent handler]
+  (zig.core/set-error-handler! agent handler))
+
+(defn clear-agent-errors
+  "Clears the errors of the agent and allows it to process again."
+  [agent]
+  (zig.core/clear-agent-errors agent))
+
+(defn restart-agent
+  "Restarts a failed agent with a new value. Optionally clears pending actions."
+  ([agent new-value]
+   (zig.core/restart-agent agent new-value))
+  ([agent new-value & opts]
+   (apply zig.core/restart-agent (concat (list agent new-value) opts))))
+
+(defn set-validator!
+  "Sets the validator for the agent. Validator is a function that takes
+   the current value and returns truthy if valid. nil removes the validator.
+   Validates the current value before setting the new validator."
+  [agent validator]
+  (zig.core/set-validator! agent validator))
+
+(defn get-validator
+  "Returns the validator of the agent, if any."
+  [agent]
+  (zig.core/get-validator agent))
+
+(defn add-watch
+  "Adds a watch function to an agent. The watch function will be called with
+   (key agent old-value new-value) after each successful state change.
+   Returns the agent."
+  [agent key f]
+  (zig.core/add-watch agent key f))
+
+(defn remove-watch
+  "Removes a watch function from an agent by key. Returns the agent."
+  [agent key]
+  (zig.core/remove-watch agent key))
+
+(defn shutdown-agents
+  "Shuts down all agent thread pools. Agents can no longer process actions."
+  []
+  (zig.core/shutdown-agents))
+
 ;; ---- Bitwise operations ----
 
 (defn bit-and
@@ -1449,9 +1557,9 @@
   (zig.core/reset! a new-val))
 
 (defn deref
-  "Returns the current value of the atom, future, promise, or var.
+  "Returns the current value of the atom, future, promise, agent, or var.
    For futures and promises, blocks until the computation completes.
-   For atoms, returns the current value."
+   For atoms and agents, returns the current value."
   [v]
   (cond
     (future? v) (zig.core/deref-future v)
